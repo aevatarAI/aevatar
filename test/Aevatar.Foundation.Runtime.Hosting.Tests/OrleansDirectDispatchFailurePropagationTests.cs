@@ -80,7 +80,13 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             var dispatchPort = host.Services.GetRequiredService<IActorDispatchPort>();
             var envelope = CreateEnvelope("always-fail-retry-exhausted");
-            envelope.Metadata[RuntimeEnvelopeDeduplication.RetryAttemptMetadataKey] = "1";
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext
+                {
+                    Attempt = 1,
+                },
+            };
 
             Func<Task> act = () => dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
 
@@ -174,7 +180,10 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Payload = Any.Pack(new StringValue { Value = payload }),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
 
     private static int ReserveTcpPort()

@@ -65,8 +65,11 @@ public class WorkflowExecutionReadModelProjectorTests
         Id = id ?? Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime()),
         Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Down,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = publisherId,
+            Direction = EventDirection.Down,
+        },
     };
 
     [Fact]

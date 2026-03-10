@@ -40,7 +40,10 @@ internal sealed class MassTransitStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
 
         await PublishToStreamAsync(_streamId, envelope, ct);

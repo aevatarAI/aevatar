@@ -72,9 +72,12 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
             {
                 Id = "retry-envelope-3",
                 Payload = Any.Pack(new StringValue { Value = "payload" }),
-                Direction = EventDirection.Down,
-                TargetActorId = "parent-run",
-                PublisherId = "child-run",
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                    TargetActorId = "parent-run",
+                    PublisherActorId = "child-run",
+                },
             },
         });
 
@@ -83,17 +86,20 @@ public sealed class InMemoryActorRuntimeCallbackSchedulerTests
         streams.LastProduced.Should().NotBeNull();
         var produced = streams.LastProduced!;
         produced.Id.Should().Be("retry-envelope-3");
-        produced.PublisherId.Should().Be("child-run");
-        produced.Direction.Should().Be(EventDirection.Down);
-        produced.Metadata.Should().BeEmpty();
+        produced.Route!.PublisherActorId.Should().Be("child-run");
+        produced.Route.Direction.Should().Be(EventDirection.Down);
+        produced.Runtime.Should().BeNull();
     }
 
     private static EventEnvelope CreateEnvelope() => new()
     {
         Payload = Any.Pack(new StringValue { Value = "payload" }),
-        Direction = EventDirection.Self,
-        TargetActorId = "actor-1",
-        PublisherId = "actor-1",
+        Route = new EnvelopeRoute
+        {
+            Direction = EventDirection.Self,
+            TargetActorId = "actor-1",
+            PublisherActorId = "actor-1",
+        },
     };
 
     private static object? GetScheduledCallback(

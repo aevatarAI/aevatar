@@ -188,8 +188,11 @@ public class MakerVoteModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test-publisher",
+                Direction = EventDirection.Self,
+            },
         };
     }
 
@@ -244,18 +247,20 @@ public class MakerVoteModuleCoverageTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
 
         public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = targetActorId;
+            _ = options;
             return PublishAsync(evt, EventDirection.Self, ct);
         }
 
@@ -263,13 +268,13 @@ public class MakerVoteModuleCoverageTests
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }
@@ -279,14 +284,14 @@ public class MakerVoteModuleCoverageTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = period;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }

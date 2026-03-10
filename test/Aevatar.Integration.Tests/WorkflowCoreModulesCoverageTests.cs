@@ -1209,8 +1209,11 @@ public sealed class WorkflowCoreModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId ?? "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId ?? "test-publisher",
+                Direction = EventDirection.Self,
+            },
         };
     }
 

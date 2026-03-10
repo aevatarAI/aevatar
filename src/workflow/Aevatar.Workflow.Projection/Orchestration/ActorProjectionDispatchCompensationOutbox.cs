@@ -85,8 +85,14 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            PublisherId = OutboxPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = correlationId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = OutboxPublisherId,
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
         };
 }

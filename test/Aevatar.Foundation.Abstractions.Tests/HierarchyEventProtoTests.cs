@@ -46,27 +46,33 @@ public class HierarchyEventProtoTests
     }
 
     [Fact]
-    public void EventEnvelope_ShouldPersistPayloadAndMetadata()
+    public void EventEnvelope_ShouldPersistPayloadAndBaggage()
     {
         var payload = Any.Pack(new StringValue { Value = "raw-payload" });
 
         var envelope = new EventEnvelope
         {
             Id = "evt-2",
-            PublisherId = "actor-a",
-            Direction = EventDirection.Self,
             Payload = payload,
-            CorrelationId = "corr-2",
-            TargetActorId = "actor-b",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "actor-a",
+                Direction = EventDirection.Self,
+                TargetActorId = "actor-b",
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-2",
+            },
         };
-        envelope.Metadata["k"] = "v";
+        envelope.Propagation.Baggage["k"] = "v";
 
         var parsed = EventEnvelope.Parser.ParseFrom(envelope.ToByteArray());
         parsed.ShouldBe(envelope);
         parsed.Payload.Is(StringValue.Descriptor).ShouldBeTrue();
         parsed.Payload.Unpack<StringValue>().Value.ShouldBe("raw-payload");
-        parsed.Metadata["k"].ShouldBe("v");
+        parsed.Propagation.Baggage["k"].ShouldBe("v");
         parsed.GetHashCode().ShouldBe(envelope.GetHashCode());
     }
 

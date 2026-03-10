@@ -91,34 +91,34 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage =>
-        _inner.PublishAsync(evt, direction, ct, metadata);
+        _inner.PublishAsync(evt, direction, ct, options);
 
     public Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage =>
-        _inner.SendToAsync(targetActorId, evt, ct, metadata);
+        _inner.SendToAsync(targetActorId, evt, ct, options);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default) =>
-        _inner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, metadata, ct);
+        _inner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default) =>
-        _inner.ScheduleSelfDurableTimerAsync(callbackId, dueTime, period, evt, metadata, ct);
+        _inner.ScheduleSelfDurableTimerAsync(callbackId, dueTime, period, evt, options, ct);
 
     public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
         _inner.CancelDurableCallbackAsync(lease, ct);

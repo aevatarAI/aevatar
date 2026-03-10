@@ -26,10 +26,19 @@ public sealed class RuntimeRoutingAndDeduplicationCoverageTests
         var envelope = new EventEnvelope
         {
             Id = "env-2",
+            Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = "logical-op-1",
+                },
+                Retry = new EnvelopeRetryContext
+                {
+                    OriginEventId = "env-1",
+                    Attempt = 2,
+                },
+            },
         };
-        envelope.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-op-1";
-        envelope.Metadata[RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey] = "env-1";
-        envelope.Metadata[RuntimeEnvelopeDeduplication.RetryAttemptMetadataKey] = "2";
 
         var built = RuntimeEnvelopeDeduplication.TryBuildDedupKey("actor-1", envelope, out var dedupKey);
 

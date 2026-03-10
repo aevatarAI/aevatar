@@ -17,8 +17,11 @@ public class EventRoutingBddTests
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Direction = direction,
-        PublisherId = "origin",
+        Route = new EnvelopeRoute
+        {
+            Direction = direction,
+            PublisherActorId = "origin",
+        },
     };
 
     [Fact(DisplayName = "Given a parent Actor with two child Actors, when event direction is Down, event should be sent to all children")]
@@ -90,7 +93,7 @@ public class EventRoutingBddTests
         // Given
         var router = new EventRouter("actor-a");
         var envelope = MakeEnvelope(EventDirection.Down);
-        envelope.Metadata["__publishers"] = "actor-a"; // Already processed
+        envelope.EnsureRuntime().VisitedActorIds.Add("actor-a"); // Already processed
 
         var handled = false;
 

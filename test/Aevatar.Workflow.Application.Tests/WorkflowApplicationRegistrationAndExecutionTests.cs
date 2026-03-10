@@ -193,10 +193,10 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
-        envelope.TargetActorId.Should().Be("actor-1");
-        envelope.CorrelationId.Should().Be("corr-1");
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.PublisherId.Should().Be("api");
+        envelope.Route!.TargetActorId.Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
+        envelope.Route.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
     }

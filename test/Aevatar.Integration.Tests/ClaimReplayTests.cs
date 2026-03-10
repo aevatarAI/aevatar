@@ -330,9 +330,15 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
                 Id = x.EventId,
                 Timestamp = x.Timestamp,
                 Payload = x.EventData,
-                PublisherId = runtimeActorId,
-                Direction = EventDirection.Self,
-                CorrelationId = "run-readmodel",
+                Route = new EnvelopeRoute
+                {
+                    PublisherActorId = runtimeActorId,
+                    Direction = EventDirection.Self,
+                },
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "run-readmodel",
+                },
             })
             .ToArray();
 

@@ -252,10 +252,16 @@ public static class WorkflowCapabilityEndpoints
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(resumed),
-                    PublisherId = "api.workflow.resume",
-                    Direction = EventDirection.Self,
-                    CorrelationId = correlationId,
-                    TargetActorId = actor.Id,
+                    Route = new EnvelopeRoute
+                    {
+                        PublisherActorId = "api.workflow.resume",
+                        Direction = EventDirection.Self,
+                        TargetActorId = actor.Id,
+                    },
+                    Propagation = new EnvelopePropagation
+                    {
+                        CorrelationId = correlationId,
+                    },
                 },
                 ct);
 
@@ -332,10 +338,16 @@ public static class WorkflowCapabilityEndpoints
                         SignalName = signalName,
                         Payload = input.Payload ?? string.Empty,
                     }),
-                    PublisherId = "api.workflow.signal",
-                    Direction = EventDirection.Self,
-                    CorrelationId = correlationId,
-                    TargetActorId = actor.Id,
+                    Route = new EnvelopeRoute
+                    {
+                        PublisherActorId = "api.workflow.signal",
+                        Direction = EventDirection.Self,
+                        TargetActorId = actor.Id,
+                    },
+                    Propagation = new EnvelopePropagation
+                    {
+                        CorrelationId = correlationId,
+                    },
                 },
                 ct);
 

@@ -198,9 +198,15 @@ public class ConnectorCallIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -214,9 +220,15 @@ public class ConnectorCallIntegrationTests
                 WorkflowName = "connector_flow",
                 RunId = "connector-flow-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
@@ -245,8 +257,11 @@ public class ConnectorCallIntegrationTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "test-session" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

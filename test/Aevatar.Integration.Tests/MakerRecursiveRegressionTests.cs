@@ -107,9 +107,15 @@ public class MakerRecursiveRegressionTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -123,9 +129,15 @@ public class MakerRecursiveRegressionTests
                 WorkflowName = "maker_regression",
                 RunId = "maker-regression-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
@@ -150,8 +162,11 @@ public class MakerRecursiveRegressionTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));

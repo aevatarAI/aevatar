@@ -33,7 +33,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -41,8 +41,11 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = _actorId,
-            Direction = direction,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = _actorId,
+                Direction = direction,
+            },
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -50,7 +53,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             _propagationPolicy,
             _actorId,
             EstimateRouteTargetCount(direction),
-            metadata);
+            options);
 
         switch (direction)
         {
@@ -87,7 +90,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         TEvent evt,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -95,9 +98,12 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = _actorId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = _actorId,
+                Direction = EventDirection.Self,
+                TargetActorId = targetActorId,
+            },
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -105,7 +111,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             _propagationPolicy,
             _actorId,
             routeTargetCount: 1,
-            metadata);
+            options);
         return DispatchAsync(_actorId, targetActorId, envelope, ct);
     }
 
@@ -121,7 +127,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
     private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope, CancellationToken ct)
     {
         var routedEnvelope = envelope.Clone();
-        PublisherChainMetadata.AppendDispatchPublisher(routedEnvelope, senderActorId, targetActorId);
+        VisitedActorChain.AppendDispatchPublisher(routedEnvelope, senderActorId, targetActorId);
 
         if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
             return _dispatchToSelfAsync(routedEnvelope);

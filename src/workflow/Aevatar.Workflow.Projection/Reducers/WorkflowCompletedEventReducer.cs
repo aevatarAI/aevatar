@@ -22,7 +22,7 @@ public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReduce
             now,
             "workflow.completed",
             $"success={evt.Success}",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             null,
             null,
             envelope.Payload?.TypeUrl ?? "",

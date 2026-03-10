@@ -12,8 +12,11 @@ public class EventRouterTests
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Direction = direction,
-        PublisherId = "origin",
+        Route = new EnvelopeRoute
+        {
+            Direction = direction,
+            PublisherActorId = "origin",
+        },
     };
 
     [Fact]
@@ -94,7 +97,7 @@ public class EventRouterTests
 
         // Simulate that actor-a has already processed this event
         var envelope = MakeEnvelope(EventDirection.Up);
-        envelope.Metadata["__publishers"] = "actor-a";
+        envelope.EnsureRuntime().VisitedActorIds.Add("actor-a");
 
         var handled = false;
         await router.RouteAsync(

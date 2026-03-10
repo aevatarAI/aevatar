@@ -121,14 +121,26 @@ public sealed class WorkflowExecutionContextAdapterTests
             "timeout-1",
             TimeSpan.FromSeconds(5),
             timeoutEvent,
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["mode"] = "timeout" },
+            new EventEnvelopePublishOptions
+            {
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    Baggage = { ["mode"] = "timeout" },
+                },
+            },
             CancellationToken.None);
         var timerLease = await adapter.ScheduleSelfDurableTimerAsync(
             "timer-1",
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(2),
             timerEvent,
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["mode"] = "timer" },
+            new EventEnvelopePublishOptions
+            {
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    Baggage = { ["mode"] = "timer" },
+                },
+            },
             CancellationToken.None);
         await adapter.CancelDurableCallbackAsync(cancelLease, CancellationToken.None);
 
@@ -175,7 +187,7 @@ public sealed class WorkflowExecutionContextAdapterTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -187,7 +199,7 @@ public sealed class WorkflowExecutionContextAdapterTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -199,11 +211,11 @@ public sealed class WorkflowExecutionContextAdapterTests
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            ScheduledTimeouts.Add(new RecordedCallback(callbackId, dueTime, Any.Pack(evt), metadata));
+            ScheduledTimeouts.Add(new RecordedCallback(callbackId, dueTime, Any.Pack(evt), options));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
         }
 
@@ -212,11 +224,11 @@ public sealed class WorkflowExecutionContextAdapterTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            ScheduledTimers.Add(new RecordedTimer(callbackId, dueTime, period, Any.Pack(evt), metadata));
+            ScheduledTimers.Add(new RecordedTimer(callbackId, dueTime, period, Any.Pack(evt), options));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 2, RuntimeCallbackBackend.InMemory));
         }
 
@@ -280,12 +292,12 @@ public sealed class WorkflowExecutionContextAdapterTests
         string CallbackId,
         TimeSpan DueTime,
         Any Event,
-        IReadOnlyDictionary<string, string>? Metadata);
+        EventEnvelopePublishOptions? Options);
 
     private sealed record RecordedTimer(
         string CallbackId,
         TimeSpan DueTime,
         TimeSpan Period,
         Any Event,
-        IReadOnlyDictionary<string, string>? Metadata);
+        EventEnvelopePublishOptions? Options);
 }

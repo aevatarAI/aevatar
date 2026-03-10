@@ -687,8 +687,11 @@ public class WorkflowExecutionProjectionServiceTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Down,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = publisherId,
+            Direction = EventDirection.Down,
+        },
     };
 
     private static WorkflowRunEventEnvelope BuildRunStartedEvent(string threadId) =>

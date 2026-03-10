@@ -49,7 +49,10 @@ public sealed class InMemoryStreamCoverageTests
             Id = "evt-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new PingEvent { Message = "payload" }),
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Self,
+            },
         };
 
         await stream.ProduceAsync(envelope);

@@ -49,7 +49,10 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-1",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
 
         var built = policy.TryBuildRetryEnvelope(
@@ -61,9 +64,9 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeTrue();
         nextAttempt.Should().Be(1);
         retryEnvelope.Id.Should().Be(envelope.Id);
-        retryEnvelope.Metadata["aevatar.retry.attempt"].Should().Be("1");
-        retryEnvelope.Metadata["aevatar.retry.last_error"].Should().Be("InvalidOperationException");
-        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-1");
+        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
+        retryEnvelope.Runtime.Retry.LastErrorType.Should().Be("InvalidOperationException");
+        retryEnvelope.Runtime.Retry.OriginEventId.Should().Be("evt-1");
     }
 
     [Fact]
@@ -74,10 +77,19 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-retry-2",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
-        envelope.Metadata["aevatar.retry.origin_event_id"] = "evt-root";
-        envelope.Metadata["aevatar.retry.attempt"] = "1";
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            Retry = new EnvelopeRetryContext
+            {
+                OriginEventId = "evt-root",
+                Attempt = 1,
+            },
+        };
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,
@@ -88,7 +100,7 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeTrue();
         nextAttempt.Should().Be(2);
         retryEnvelope.Id.Should().Be("evt-retry-2");
-        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-root");
+        retryEnvelope.Runtime!.Retry!.OriginEventId.Should().Be("evt-root");
     }
 
     [Fact]
@@ -118,9 +130,18 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-2",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
+            Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext
+                {
+                    Attempt = 1,
+                },
+            },
         };
-        envelope.Metadata["aevatar.retry.attempt"] = "1";
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,

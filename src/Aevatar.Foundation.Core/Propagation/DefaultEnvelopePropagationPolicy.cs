@@ -3,17 +3,10 @@ using Aevatar.Foundation.Abstractions.Propagation;
 namespace Aevatar.Foundation.Core.Propagation;
 
 /// <summary>
-/// Default framework propagation policy based on raw inbound envelope.
+/// Default framework propagation policy for typed propagation context.
 /// </summary>
 public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolicy
 {
-    private static readonly HashSet<string> BlockedMetadataKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "command.id",
-        "command_id",
-        EnvelopeMetadataKeys.DedupOriginId,
-    };
-
     private readonly ICorrelationLinkPolicy _correlationLinkPolicy;
 
     public DefaultEnvelopePropagationPolicy(ICorrelationLinkPolicy correlationLinkPolicy)
@@ -25,23 +18,45 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
     {
         ArgumentNullException.ThrowIfNull(outboundEnvelope);
 
-        if (inboundEnvelope != null)
-        {
-            foreach (var (key, value) in inboundEnvelope.Metadata)
-            {
-                if (BlockedMetadataKeys.Contains(key))
-                    continue;
+        var outboundPropagation = outboundEnvelope.EnsurePropagation();
+        var inboundPropagation = inboundEnvelope?.Propagation;
 
-                outboundEnvelope.Metadata[key] = value;
-            }
-        }
+        if (inboundPropagation != null)
+            CopyPropagation(outboundPropagation, inboundPropagation);
 
         var correlationId = _correlationLinkPolicy.ResolveCorrelationId(outboundEnvelope, inboundEnvelope);
         if (!string.IsNullOrWhiteSpace(correlationId))
-            outboundEnvelope.CorrelationId = correlationId;
+            outboundPropagation.CorrelationId = correlationId;
 
         var causationId = _correlationLinkPolicy.ResolveCausationId(outboundEnvelope, inboundEnvelope);
         if (!string.IsNullOrWhiteSpace(causationId))
-            outboundEnvelope.Metadata[EnvelopeMetadataKeys.TraceCausationId] = causationId;
+            outboundPropagation.CausationEventId = causationId;
+    }
+
+    private static void CopyPropagation(EnvelopePropagation outboundPropagation, EnvelopePropagation inboundPropagation)
+    {
+        ArgumentNullException.ThrowIfNull(outboundPropagation);
+        ArgumentNullException.ThrowIfNull(inboundPropagation);
+
+        if (!string.IsNullOrWhiteSpace(inboundPropagation.CorrelationId) &&
+            string.IsNullOrWhiteSpace(outboundPropagation.CorrelationId))
+        {
+            outboundPropagation.CorrelationId = inboundPropagation.CorrelationId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(inboundPropagation.CausationEventId) &&
+            string.IsNullOrWhiteSpace(outboundPropagation.CausationEventId))
+        {
+            outboundPropagation.CausationEventId = inboundPropagation.CausationEventId;
+        }
+
+        if (inboundPropagation.Trace != null && outboundPropagation.Trace == null)
+            outboundPropagation.Trace = inboundPropagation.Trace.Clone();
+
+        foreach (var pair in inboundPropagation.Baggage)
+        {
+            if (!outboundPropagation.Baggage.ContainsKey(pair.Key))
+                outboundPropagation.Baggage[pair.Key] = pair.Value;
+        }
     }
 }

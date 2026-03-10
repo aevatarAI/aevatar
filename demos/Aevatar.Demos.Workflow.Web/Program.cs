@@ -425,9 +425,15 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             WorkflowYaml = yaml,
             WorkflowName = name,
         }),
-        PublisherId = "web.demo",
-        Direction = EventDirection.Self,
-        CorrelationId = Guid.NewGuid().ToString("N"),
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "web.demo",
+            Direction = EventDirection.Self,
+        },
+        Propagation = new EnvelopePropagation
+        {
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        },
     });
 
     var tcs = new TaskCompletionSource<bool>();
@@ -453,9 +459,15 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(resumed),
-                    PublisherId = "web.demo.auto-human",
-                    Direction = EventDirection.Self,
-                    CorrelationId = Guid.NewGuid().ToString("N"),
+                    Route = new EnvelopeRoute
+                    {
+                        PublisherActorId = "web.demo.auto-human",
+                        Direction = EventDirection.Self,
+                    },
+                    Propagation = new EnvelopePropagation
+                    {
+                        CorrelationId = Guid.NewGuid().ToString("N"),
+                    },
                 });
             }
             catch (OperationCanceledException)
@@ -551,7 +563,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(TextMessageEndEvent.Descriptor))
             {
                 var evt = payload.Unpack<TextMessageEndEvent>();
-                var publisher = envelope.PublisherId ?? "";
+                var publisher = envelope.Route?.PublisherActorId ?? "";
                 if (!string.Equals(publisher, actor.Id, StringComparison.Ordinal)
                     && !string.IsNullOrWhiteSpace(evt.Content))
                 {
@@ -563,7 +575,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(TextMessageReasoningEvent.Descriptor))
             {
                 var evt = payload.Unpack<TextMessageReasoningEvent>();
-                var publisher = envelope.PublisherId ?? "";
+                var publisher = envelope.Route?.PublisherActorId ?? "";
                 if (!string.Equals(publisher, actor.Id, StringComparison.Ordinal)
                     && !string.IsNullOrWhiteSpace(evt.Delta))
                 {
@@ -575,7 +587,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(ChatResponseEvent.Descriptor))
             {
                 var evt = payload.Unpack<ChatResponseEvent>();
-                if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+                if (string.Equals(envelope.Route?.PublisherActorId, actor.Id, StringComparison.Ordinal))
                 {
                     var error = string.IsNullOrWhiteSpace(evt.Content) ? "Workflow run failed." : evt.Content;
                     await WriteSse("workflow.error", new { error });
@@ -607,8 +619,11 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(new ChatRequestEvent { Prompt = actualInput, SessionId = $"web-{name}" }),
-        PublisherId = "web.demo",
-        Direction = EventDirection.Self,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "web.demo",
+            Direction = EventDirection.Self,
+        },
     });
 
     try

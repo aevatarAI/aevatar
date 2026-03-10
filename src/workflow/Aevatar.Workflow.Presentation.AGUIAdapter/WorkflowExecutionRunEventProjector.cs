@@ -32,7 +32,7 @@ public sealed class WorkflowExecutionRunEventProjector
         // Resume/signal events may arrive without (or with a different) correlation id,
         // but they still belong to the same live run session.
         var commandId = string.IsNullOrWhiteSpace(context.CommandId)
-            ? envelope.CorrelationId
+            ? envelope.Propagation?.CorrelationId
             : context.CommandId;
         if (string.IsNullOrWhiteSpace(commandId))
             return EmptyEntries;

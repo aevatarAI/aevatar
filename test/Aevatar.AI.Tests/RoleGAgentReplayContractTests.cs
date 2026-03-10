@@ -351,13 +351,13 @@ public class RoleGAgentReplayContractTests
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = direction;
             _ = ct;
             _ = sourceEnvelope;
-            _ = metadata;
+            _ = options;
             Published.Add(evt);
             return Task.CompletedTask;
         }
@@ -367,11 +367,11 @@ public class RoleGAgentReplayContractTests
             TEvent evt,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct, sourceEnvelope, metadata);
+            return PublishAsync(evt, EventDirection.Self, ct, sourceEnvelope, options);
         }
     }
 

@@ -92,7 +92,9 @@ public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext
 
             try
             {
-                var runId = string.IsNullOrEmpty(request.RunId) ? envelope.CorrelationId : request.RunId;
+                var runId = string.IsNullOrEmpty(request.RunId)
+                    ? envelope.Propagation?.CorrelationId ?? string.Empty
+                    : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
                     RunId = runId,

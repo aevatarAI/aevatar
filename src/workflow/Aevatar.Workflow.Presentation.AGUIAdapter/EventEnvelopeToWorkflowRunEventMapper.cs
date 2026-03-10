@@ -300,7 +300,7 @@ public sealed class AIReasoningRunEventEnvelopeMappingHandler : IWorkflowRunEven
                     {
                         SessionId = evt.SessionId,
                         Delta = evt.Delta,
-                        Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromPublisher(envelope.PublisherId),
+                        Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromEnvelope(envelope),
                     }),
                 },
             },
@@ -510,16 +510,18 @@ internal static class AGUIEventEnvelopeMappingHelpers
 
     public static string ResolveThreadId(EventEnvelope envelope, string fallback)
     {
-        return string.IsNullOrWhiteSpace(envelope.PublisherId)
+        var publisherActorId = envelope.Route?.PublisherActorId;
+        return string.IsNullOrWhiteSpace(publisherActorId)
             ? fallback
-            : envelope.PublisherId;
+            : publisherActorId;
     }
 
     public static string ResolveRunId(EventEnvelope envelope, string fallbackThreadId)
     {
-        return string.IsNullOrWhiteSpace(envelope.CorrelationId)
+        var correlationId = envelope.Propagation?.CorrelationId;
+        return string.IsNullOrWhiteSpace(correlationId)
             ? fallbackThreadId
-            : envelope.CorrelationId;
+            : correlationId;
     }
 
     public static string ResolveMessageId(string? sessionId, string? envelopeId)
@@ -528,6 +530,11 @@ internal static class AGUIEventEnvelopeMappingHelpers
             return $"msg:{sessionId}";
 
         return $"msg:{envelopeId}";
+    }
+
+    public static string ResolveRoleFromEnvelope(EventEnvelope envelope)
+    {
+        return ResolveRoleFromPublisher(envelope.Route?.PublisherActorId);
     }
 
     public static string ResolveRoleFromPublisher(string? publisherId)

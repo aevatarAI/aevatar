@@ -62,9 +62,15 @@ public class WorkflowYamlScriptParityTests
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -78,9 +84,15 @@ public class WorkflowYamlScriptParityTests
                 WorkflowName = "yaml_script_parity",
                 RunId = "yaml-script-parity-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
@@ -104,9 +116,15 @@ public class WorkflowYamlScriptParityTests
                 Prompt = prompt,
                 SessionId = "parity-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));

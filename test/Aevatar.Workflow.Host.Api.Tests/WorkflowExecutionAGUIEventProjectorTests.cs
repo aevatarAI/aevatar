@@ -34,8 +34,11 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         await projector.ProjectAsync(context, new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = "cmd-2",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-2",
+            },
         });
 
         await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
@@ -58,8 +61,11 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         await projector.ProjectAsync(BuildContext(), new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-1",
+            },
         });
 
         sink.SnapshotEvents().Should().BeEmpty();
@@ -99,8 +105,11 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         await projector.ProjectAsync(BuildContext(), new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-1",
+            },
         });
 
         await sink.WaitForCountAsync(3, TimeSpan.FromSeconds(2));

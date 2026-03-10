@@ -988,8 +988,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (state.TimeoutsByStepId.TryGetValue(stepId, out var expectedLease))
             return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, expectedLease);
 
-        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
-               string.Equals(metadata.CallbackId, state.CurrentStepTimeoutCallbackId, StringComparison.Ordinal);
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, state.CurrentStepTimeoutCallbackId, StringComparison.Ordinal);
     }
 
     private static bool MatchesRetryBackoff(
@@ -1003,8 +1003,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (pending.Lease != null)
             return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease);
 
-        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
-               string.Equals(metadata.CallbackId, pending.CallbackId, StringComparison.Ordinal);
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.CallbackId, StringComparison.Ordinal);
     }
 
     private static string ResolveInboundEnvelopeId(IWorkflowExecutionContext ctx) =>

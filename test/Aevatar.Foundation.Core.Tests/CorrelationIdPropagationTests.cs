@@ -15,16 +15,16 @@ public class CorrelationIdPropagationTests
         agent.SetId("corr-publish-agent");
 
         var envelope = TestHelper.Envelope(new PingEvent { Message = "ping" });
-        envelope.CorrelationId = "corr-publish-1";
-        envelope.Metadata["trace.causation_id"] = "event-1";
-        envelope.Metadata["tenant"] = "acme";
+        envelope.EnsurePropagation().CorrelationId = "corr-publish-1";
+        envelope.Propagation.CausationEventId = "event-1";
+        envelope.Propagation.Baggage["tenant"] = "acme";
 
         await agent.HandleEventAsync(envelope);
 
         publisher.LastPublishSourceEnvelope.ShouldNotBeNull();
-        publisher.LastPublishSourceEnvelope.CorrelationId.ShouldBe("corr-publish-1");
-        publisher.LastPublishSourceEnvelope.Metadata["trace.causation_id"].ShouldBe("event-1");
-        publisher.LastPublishSourceEnvelope.Metadata["tenant"].ShouldBe("acme");
+        publisher.LastPublishSourceEnvelope.Propagation.CorrelationId.ShouldBe("corr-publish-1");
+        publisher.LastPublishSourceEnvelope.Propagation.CausationEventId.ShouldBe("event-1");
+        publisher.LastPublishSourceEnvelope.Propagation.Baggage["tenant"].ShouldBe("acme");
     }
 
     [Fact]
@@ -38,16 +38,16 @@ public class CorrelationIdPropagationTests
         agent.SetId("corr-send-agent");
 
         var envelope = TestHelper.Envelope(new PingEvent { Message = "ping" });
-        envelope.CorrelationId = "corr-send-1";
-        envelope.Metadata["trace.causation_id"] = "event-2";
-        envelope.Metadata["tenant"] = "contoso";
+        envelope.EnsurePropagation().CorrelationId = "corr-send-1";
+        envelope.Propagation.CausationEventId = "event-2";
+        envelope.Propagation.Baggage["tenant"] = "contoso";
 
         await agent.HandleEventAsync(envelope);
 
         publisher.LastSendSourceEnvelope.ShouldNotBeNull();
-        publisher.LastSendSourceEnvelope.CorrelationId.ShouldBe("corr-send-1");
-        publisher.LastSendSourceEnvelope.Metadata["trace.causation_id"].ShouldBe("event-2");
-        publisher.LastSendSourceEnvelope.Metadata["tenant"].ShouldBe("contoso");
+        publisher.LastSendSourceEnvelope.Propagation.CorrelationId.ShouldBe("corr-send-1");
+        publisher.LastSendSourceEnvelope.Propagation.CausationEventId.ShouldBe("event-2");
+        publisher.LastSendSourceEnvelope.Propagation.Baggage["tenant"].ShouldBe("contoso");
     }
 
     [Fact]
@@ -65,10 +65,10 @@ public class CorrelationIdPropagationTests
 
         var sourceEnvelope = TestHelper.Envelope(new PingEvent { Message = "source" });
         sourceEnvelope.Id = "inbound-event-3";
-        sourceEnvelope.CorrelationId = "corr-envelope-1";
-        sourceEnvelope.Metadata["trace.causation_id"] = "event-3-ignored";
-        sourceEnvelope.Metadata["tenant"] = "northwind";
-        sourceEnvelope.Metadata["command.id"] = "cmd-should-not-flow";
+        sourceEnvelope.EnsurePropagation().CorrelationId = "corr-envelope-1";
+        sourceEnvelope.Propagation.CausationEventId = "event-3-ignored";
+        sourceEnvelope.Propagation.Baggage["tenant"] = "northwind";
+        sourceEnvelope.Propagation.Baggage["command.id"] = "cmd-should-not-flow";
 
         await publisher.SendToAsync(
             "target-actor",
@@ -76,10 +76,10 @@ public class CorrelationIdPropagationTests
             sourceEnvelope: sourceEnvelope);
 
         var outgoing = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        outgoing.CorrelationId.ShouldBe("corr-envelope-1");
-        outgoing.Metadata["trace.causation_id"].ShouldBe("inbound-event-3");
-        outgoing.Metadata["tenant"].ShouldBe("northwind");
-        outgoing.Metadata.ContainsKey("command.id").ShouldBeFalse();
+        outgoing.Propagation.CorrelationId.ShouldBe("corr-envelope-1");
+        outgoing.Propagation.CausationEventId.ShouldBe("inbound-event-3");
+        outgoing.Propagation.Baggage["tenant"].ShouldBe("northwind");
+        outgoing.Propagation.Baggage["command.id"].ShouldBe("cmd-should-not-flow");
     }
 
     private sealed class PublishFromHandlerAgent : TestGAgentBase<CounterState>
@@ -105,7 +105,8 @@ public class CorrelationIdPropagationTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : Google.Protobuf.IMessage
         {
             LastPublishSourceEnvelope = sourceEnvelope;
@@ -116,7 +117,8 @@ public class CorrelationIdPropagationTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : Google.Protobuf.IMessage
         {
             LastSendSourceEnvelope = sourceEnvelope;

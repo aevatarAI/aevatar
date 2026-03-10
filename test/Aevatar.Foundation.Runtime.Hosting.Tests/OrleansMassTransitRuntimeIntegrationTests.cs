@@ -77,7 +77,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Payload = Any.Pack(new StringValue { Value = "auto-retry" }),
-                    Direction = EventDirection.Down,
+                    Route = new EnvelopeRoute
+                    {
+                        Direction = EventDirection.Down,
+                    },
                 };
 
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -117,14 +120,12 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 var receivedEnvelope = await RecordingKafkaIntegrationAgent.WaitForEnvelopeAsync(
                     envelope =>
                     {
-                        if (!envelope.Metadata.TryGetValue("aevatar.retry.attempt", out var attemptText))
-                            return false;
-                        return int.TryParse(attemptText, out var attempt) && attempt > 0;
+                        return (envelope.Runtime?.Retry?.Attempt ?? 0) > 0;
                     },
                     TimeSpan.FromSeconds(45));
                 receivedEnvelope.Payload!.TypeUrl.Should().Be(targetTypeUrl);
                 receivedEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("auto-retry");
-                receivedEnvelope.Metadata["aevatar.retry.attempt"].Should().NotBeNullOrWhiteSpace();
+                receivedEnvelope.Runtime!.Retry!.Attempt.Should().BeGreaterThan(0);
             }
             finally
             {
@@ -186,7 +187,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Payload = Any.Pack(new StringValue { Value = "mixed-version-retry" }),
-                    Direction = EventDirection.Down,
+                    Route = new EnvelopeRoute
+                    {
+                        Direction = EventDirection.Down,
+                    },
                 };
 
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -288,7 +292,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "inject-me" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -351,7 +358,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "retry-exhausted" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
             await transport.PublishAsync(actorEventNamespace, actorId, failingEnvelope.ToByteArray(), CancellationToken.None);
             await logProbe.WaitForInjectedFailureAsync(TimeSpan.FromSeconds(20));
@@ -362,7 +372,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new Int32Value { Value = 7 }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
             await transport.PublishAsync(actorEventNamespace, actorId, succeedingEnvelope.ToByteArray(), CancellationToken.None);
 
@@ -412,7 +425,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "ping" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -468,7 +484,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "fail-twice-then-ok" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
 
@@ -476,9 +495,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 current => current.Payload?.Is(StringValue.Descriptor) == true &&
                            current.Payload.Unpack<StringValue>().Value == "fail-twice-then-ok",
                 TimeSpan.FromSeconds(30));
-            receivedEnvelope.Metadata.TryGetValue("aevatar.retry.attempt", out var attemptText).Should().BeTrue();
-            int.TryParse(attemptText, out var attempt).Should().BeTrue();
-            attempt.Should().BeGreaterThan(0);
+            receivedEnvelope.Runtime!.Retry!.Attempt.Should().BeGreaterThan(0);
         }
         finally
         {
@@ -529,7 +546,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "always-fail" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
             await transport.PublishAsync(actorEventNamespace, actorId, failingEnvelope.ToByteArray(), CancellationToken.None);
             await Task.Delay(500);
@@ -538,7 +558,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "ok" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
             await transport.PublishAsync(actorEventNamespace, actorId, succeedingEnvelope.ToByteArray(), CancellationToken.None);
 
@@ -597,7 +620,10 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "fail-once-then-ok" }),
-                Direction = EventDirection.Down,
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                },
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, originalEnvelope.ToByteArray(), CancellationToken.None);
@@ -607,7 +633,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 current => current.Payload?.Is(StringValue.Descriptor) == true &&
                            current.Payload.Unpack<StringValue>().Value == "fail-once-then-ok",
                 TimeSpan.FromSeconds(30));
-            receivedEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be(originalEnvelope.Id);
+            receivedEnvelope.Runtime!.Retry!.OriginEventId.Should().Be(originalEnvelope.Id);
 
             var processedCount = ThrowingKafkaIntegrationAgent.GetProcessedCount(originalEnvelope.Id);
             processedCount.Should().Be(1);
@@ -1028,8 +1054,8 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
 
         private static string ResolveOriginId(EventEnvelope envelope)
         {
-            if (envelope.Metadata.TryGetValue("aevatar.retry.origin_event_id", out var originId) &&
-                !string.IsNullOrWhiteSpace(originId))
+            var originId = envelope.Runtime?.Retry?.OriginEventId;
+            if (!string.IsNullOrWhiteSpace(originId))
                 return originId;
             return string.IsNullOrWhiteSpace(envelope.Id) ? Guid.NewGuid().ToString("N") : envelope.Id;
         }

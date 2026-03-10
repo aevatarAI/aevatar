@@ -213,9 +213,15 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -229,9 +235,15 @@ public class WorkflowIntegrationTests
                 WorkflowName = "research_workflow",
                 RunId = "wf-1-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
@@ -244,9 +256,15 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         // Then
@@ -347,8 +365,11 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠",
                 SessionId = "test",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Down,
+            },
         };
 
         await actor.HandleEventAsync(envelope);

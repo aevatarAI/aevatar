@@ -25,7 +25,7 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
             now,
             "step.completed",
             $"{evt.StepId} success={evt.Success}",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             evt.StepId,
             step.StepType,
             envelope.Payload?.TypeUrl ?? "",

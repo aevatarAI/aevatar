@@ -79,7 +79,10 @@ public sealed class InMemoryStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
         return _ingressChannel.Writer.WriteAsync(wrapped, ct).AsTask();
     }

@@ -55,18 +55,21 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             {
                 Id = "retry-envelope-1",
                 Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
-                Direction = EventDirection.Down,
-                TargetActorId = "parent-run",
-                PublisherId = "child-run",
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Down,
+                    TargetActorId = "parent-run",
+                    PublisherActorId = "child-run",
+                },
             },
         });
 
         var scheduled = EventEnvelope.Parser.ParseFrom(dedicatedGrain.LastTimeoutEnvelopeBytes);
         dedicatedGrain.LastDeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
         scheduled.Id.Should().Be("retry-envelope-1");
-        scheduled.PublisherId.Should().Be("child-run");
-        scheduled.Direction.Should().Be(EventDirection.Down);
-        scheduled.TargetActorId.Should().Be("parent-run");
+        scheduled.Route!.PublisherActorId.Should().Be("child-run");
+        scheduled.Route.Direction.Should().Be(EventDirection.Down);
+        scheduled.Route.TargetActorId.Should().Be("parent-run");
     }
 
     [Fact]
@@ -132,14 +135,17 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             triggerEnvelope: new EventEnvelope
             {
                 Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
-                Direction = EventDirection.Up,
-                TargetActorId = "stale-target",
-                PublisherId = "child-run",
+                Route = new EnvelopeRoute
+                {
+                    Direction = EventDirection.Up,
+                    TargetActorId = "stale-target",
+                    PublisherActorId = "child-run",
+                },
             });
 
-        fired.PublisherId.Should().Be("child-run");
-        fired.Direction.Should().Be(EventDirection.Up);
-        fired.TargetActorId.Should().Be("parent-run");
+        fired.Route!.PublisherActorId.Should().Be("child-run");
+        fired.Route.Direction.Should().Be(EventDirection.Self);
+        fired.Route.TargetActorId.Should().Be("parent-run");
     }
 
     [Fact]
@@ -150,9 +156,12 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             Id = "retry-envelope-2",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new StringValue { Value = "retry-payload" }),
-            Direction = EventDirection.Down,
-            TargetActorId = "parent-run",
-            PublisherId = "child-run",
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+                TargetActorId = "parent-run",
+                PublisherActorId = "child-run",
+            },
         };
 
         var scheduled = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
@@ -165,17 +174,20 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
 
         scheduled.Id.Should().Be("retry-envelope-2");
         scheduled.Timestamp.Should().BeEquivalentTo(original.Timestamp);
-        scheduled.Direction.Should().Be(EventDirection.Down);
-        scheduled.PublisherId.Should().Be("child-run");
-        scheduled.Metadata.Should().BeEmpty();
+        scheduled.Route!.Direction.Should().Be(EventDirection.Down);
+        scheduled.Route.PublisherActorId.Should().Be("child-run");
+        scheduled.Runtime.Should().BeNull();
     }
 
     private static EventEnvelope CreateEnvelope() => new()
     {
         Payload = Any.Pack(new StringValue { Value = "payload" }),
-        Direction = EventDirection.Self,
-        TargetActorId = "actor-1",
-        PublisherId = "actor-1",
+        Route = new EnvelopeRoute
+        {
+            Direction = EventDirection.Self,
+            TargetActorId = "actor-1",
+            PublisherActorId = "actor-1",
+        },
     };
 
     private class GrainFactoryProxy : DispatchProxy

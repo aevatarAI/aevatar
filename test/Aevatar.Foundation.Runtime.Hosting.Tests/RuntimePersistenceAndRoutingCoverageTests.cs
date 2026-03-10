@@ -206,11 +206,17 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Direction = direction,
+            Route = new EnvelopeRoute
+            {
+                Direction = direction,
+            },
         };
 
         if (!string.IsNullOrWhiteSpace(publishers))
-            envelope.Metadata[PublisherChainMetadata.PublishersMetadataKey] = publishers;
+        {
+            foreach (var publisher in publishers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                VisitedActorChain.AppendIfMissing(envelope, publisher);
+        }
 
         return envelope;
     }

@@ -166,9 +166,15 @@ public class ScriptEvolutionReadModelProjectorTests
             Id = id,
             Payload = payload,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = "projection-test",
-            Direction = EventDirection.Self,
-            CorrelationId = id,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "projection-test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = id,
+            },
         };
     }
 

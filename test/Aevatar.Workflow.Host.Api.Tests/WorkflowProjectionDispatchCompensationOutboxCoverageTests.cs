@@ -45,9 +45,9 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
 
         actor.HandledEnvelopes.Should().ContainSingle();
         var envelope = actor.HandledEnvelopes.Single();
-        envelope.CorrelationId.Should().Be("record-1");
-        envelope.PublisherId.Should().Be("projection.compensation.outbox");
-        envelope.Direction.Should().Be(EventDirection.Self);
+        envelope.Propagation!.CorrelationId.Should().Be("record-1");
+        envelope.Route!.PublisherActorId.Should().Be("projection.compensation.outbox");
+        envelope.Route.Direction.Should().Be(EventDirection.Self);
         envelope.Payload.Unpack<ProjectionCompensationEnqueuedEvent>().RecordId.Should().Be("record-1");
     }
 
@@ -70,7 +70,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         actor.HandledEnvelopes.Should().ContainSingle();
         var replay = actor.HandledEnvelopes.Single().Payload.Unpack<ProjectionCompensationTriggerReplayEvent>();
         replay.BatchSize.Should().Be(17);
-        actor.HandledEnvelopes.Single().CorrelationId.Should().Be("replay");
+        actor.HandledEnvelopes.Single().Propagation!.CorrelationId.Should().Be("replay");
     }
 
     [Fact]

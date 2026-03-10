@@ -29,7 +29,7 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
             now,
             "workflow.suspended",
             $"Workflow suspended at step {evt.StepId}: {evt.SuspensionType}",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             evt.StepId,
             evt.SuspensionType,
             envelope.Payload?.TypeUrl ?? "",

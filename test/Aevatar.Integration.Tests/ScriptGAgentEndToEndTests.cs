@@ -122,9 +122,15 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             Id = committedStateEvent!.EventId,
             Timestamp = committedStateEvent.Timestamp,
             Payload = committedStateEvent.EventData,
-            PublisherId = runtimeActor.Id,
-            Direction = EventDirection.Self,
-            CorrelationId = "run-1",
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = runtimeActor.Id,
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "run-1",
+            },
         };
         await projector.ProjectAsync(context, projectionEnvelope, CancellationToken.None);
 

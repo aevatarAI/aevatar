@@ -354,22 +354,27 @@ public interface IEventPublisher
 ```csharp
 public sealed record PublishOptions(
     PropagationOverrides? Propagation = null,
-    RuntimeDeliveryOptions? Runtime = null);
+    DeliveryOptions? Delivery = null);
 
 public sealed record SendOptions(
     PropagationOverrides? Propagation = null,
-    RuntimeDeliveryOptions? Runtime = null);
+    DeliveryOptions? Delivery = null);
 
 public sealed record PropagationOverrides(
     string? CorrelationId = null,
+    string? CausationEventId = null,
     TraceContextModel? Trace = null,
     IReadOnlyDictionary<string, string>? Baggage = null);
 
-public sealed record RuntimeDeliveryOptions(
-    string? DeduplicationOperationId = null,
-    RetryOverrides? Retry = null,
-    CallbackLeaseModel? Callback = null);
+public sealed record DeliveryOptions(
+    string? DeduplicationOperationId = null);
 ```
+
+说明：
+
+1. Application code 只允许覆盖 propagation 字段与显式 dedup key。
+2. `source_actor_id / route_target_count / visited_actor_ids / retry / callback / forwarding` 归 runtime 所有，禁止通过 publish options 直接覆盖。
+3. Async-local `IAgentContext` 不再自动注入 `EnvelopePropagation.Baggage`。
 
 目标：
 
@@ -487,6 +492,7 @@ public sealed record RuntimeDeliveryOptions(
 4. route count
 5. runtime 内部诊断控制位
 6. 业务完成结果
+7. Async-local agent context 的整包镜像
 
 ### 14.3 为什么这比统一 metadata 更好
 

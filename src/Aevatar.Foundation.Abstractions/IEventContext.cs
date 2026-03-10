@@ -17,14 +17,14 @@ public interface IEventContext
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage;
 
     Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         throw new NotSupportedException(

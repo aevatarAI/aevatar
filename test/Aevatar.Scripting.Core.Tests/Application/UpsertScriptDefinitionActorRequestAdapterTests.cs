@@ -21,8 +21,8 @@ public class UpsertScriptDefinitionActorRequestAdapterTests
 
         envelope.Payload.Should().NotBeNull();
         envelope.Payload!.TypeUrl.Should().Contain(nameof(UpsertScriptDefinitionRequestedEvent));
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.TargetActorId.Should().Be("definition-actor-1");
+        envelope.Route!.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.TargetActorId.Should().Be("definition-actor-1");
 
         var payload = envelope.Payload.Unpack<UpsertScriptDefinitionRequestedEvent>();
         payload.ScriptId.Should().Be("script-1");

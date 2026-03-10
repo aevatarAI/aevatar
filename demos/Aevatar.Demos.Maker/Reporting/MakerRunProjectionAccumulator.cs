@@ -30,13 +30,14 @@ public sealed class MakerRunProjectionAccumulator
         if (payload == null) return;
         var typeUrl = payload.TypeUrl ?? "";
         var now = DateTimeOffset.UtcNow;
+        var publisher = envelope.Route?.PublisherActorId ?? string.Empty;
 
         lock (_lock)
         {
             if (payload.Is(StartWorkflowEvent.Descriptor))
             {
                 var evt = payload.Unpack<StartWorkflowEvent>();
-                AddTimeline(now, "workflow.start", "workflow started", envelope.PublisherId, null, null, typeUrl);
+                AddTimeline(now, "workflow.start", "workflow started", publisher, null, null, typeUrl);
                 return;
             }
 
@@ -54,7 +55,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "step.request",
                     $"{evt.StepId} ({evt.StepType})",
-                    envelope.PublisherId,
+                    publisher,
                     evt.StepId,
                     evt.StepType,
                     typeUrl,
@@ -78,7 +79,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "step.completed",
                     $"{evt.StepId} success={evt.Success}",
-                    envelope.PublisherId,
+                    publisher,
                     evt.StepId,
                     step.StepType,
                     typeUrl,
@@ -92,7 +93,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "maker.red_flag",
                         $"{evt.StepId} red_flagged={flagged}/{total}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl);
@@ -100,7 +101,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "maker.vote",
                         $"{evt.StepId} voted success={evt.Success}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl);
@@ -129,7 +130,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "connector.call",
                         $"{evt.StepId} connector={connectorName} type={connectorType}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl,
@@ -145,7 +146,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "maker.recursive",
                         $"{evt.StepId} stage={stage} depth={depth} atomic={atomic}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl,
@@ -167,7 +168,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "llm.start",
                     $"agent={evt.AgentId}, session={evt.SessionId}",
-                    envelope.PublisherId,
+                    publisher,
                     null,
                     null,
                     typeUrl,
@@ -178,14 +179,14 @@ public sealed class MakerRunProjectionAccumulator
             if (payload.Is(TextMessageEndEvent.Descriptor))
             {
                 var evt = payload.Unpack<TextMessageEndEvent>();
-                var publisher = string.IsNullOrWhiteSpace(envelope.PublisherId) ? "(unknown)" : envelope.PublisherId;
+                var replyPublisher = string.IsNullOrWhiteSpace(publisher) ? "(unknown)" : publisher;
 
-                if (!string.Equals(publisher, _rootActorId, StringComparison.Ordinal))
+                if (!string.Equals(replyPublisher, _rootActorId, StringComparison.Ordinal))
                 {
                     _roleReplies.Add(new MakerRoleReply
                     {
                         Timestamp = now,
-                        RoleId = publisher,
+                        RoleId = replyPublisher,
                         SessionId = evt.SessionId ?? "",
                         Content = evt.Content ?? "",
                         ContentLength = (evt.Content ?? "").Length,
@@ -195,8 +196,8 @@ public sealed class MakerRunProjectionAccumulator
                 AddTimeline(
                     now,
                     "llm.end",
-                    $"agent={publisher}, chars={(evt.Content ?? "").Length}",
-                    publisher,
+                    $"agent={replyPublisher}, chars={(evt.Content ?? "").Length}",
+                    replyPublisher,
                     null,
                     null,
                     typeUrl,
@@ -215,7 +216,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "workflow.completed",
                     $"success={evt.Success}",
-                    envelope.PublisherId,
+                    publisher,
                     null,
                     null,
                     typeUrl,

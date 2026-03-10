@@ -16,9 +16,15 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = "test",
-        CorrelationId = "cmd-1",
-        Direction = EventDirection.Down,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "test",
+            Direction = EventDirection.Down,
+        },
+        Propagation = new EnvelopePropagation
+        {
+            CorrelationId = "cmd-1",
+        },
     };
 
     [Fact]
@@ -84,7 +90,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             SessionId = "reasoning-session",
             Delta = "thinking chunk",
         });
-        envelope.PublisherId = "wf:planner";
+        envelope.EnsureRoute().PublisherActorId = "wf:planner";
 
         var events = CreateMapper().Map(envelope);
 
@@ -162,8 +168,11 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",
-            PublisherId = "x",
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "x",
+                Direction = EventDirection.Down,
+            },
         });
 
         unknown.Should().BeEmpty();

@@ -22,9 +22,9 @@ public class RunScriptActorRequestAdapterTests
 
         envelope.Payload.Should().NotBeNull();
         envelope.Payload!.TypeUrl.Should().Contain(nameof(RunScriptRequestedEvent));
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.PublisherId.Should().Be("scripting.application");
-        envelope.TargetActorId.Should().Be("actor-1");
+        envelope.Route!.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.PublisherActorId.Should().Be("scripting.application");
+        envelope.Route.TargetActorId.Should().Be("actor-1");
 
         var payload = envelope.Payload.Unpack<RunScriptRequestedEvent>();
         payload.RunId.Should().Be("run-1");

@@ -25,10 +25,16 @@ internal sealed class QueryWorkflowActorBindingRequestAdapter
                 RequestId = requestId,
                 ReplyStreamId = replyStreamId,
             }),
-            PublisherId = WorkflowQueryChannels.ActorBindingPublisherId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
-            CorrelationId = requestId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = WorkflowQueryChannels.ActorBindingPublisherId,
+                Direction = EventDirection.Self,
+                TargetActorId = targetActorId,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = requestId,
+            },
         };
     }
 }

@@ -157,11 +157,17 @@ public sealed class ConnectorCallModuleCoverageTests
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = correlationId ?? string.Empty,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test-publisher",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
     }
 

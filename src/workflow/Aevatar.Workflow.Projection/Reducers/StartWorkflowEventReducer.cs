@@ -19,7 +19,7 @@ public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBas
             now,
             "workflow.start",
             $"command={report.CommandId}",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             null,
             null,
             envelope.Payload?.TypeUrl ?? "");

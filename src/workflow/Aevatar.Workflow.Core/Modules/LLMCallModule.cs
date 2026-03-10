@@ -154,9 +154,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
+        var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
-            await PublishFailedCompletionAsync(pending, error, envelope.PublisherId, ctx, ct);
+            await PublishFailedCompletionAsync(pending, error, publisherActorId, ctx, ct);
             await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
             return;
         }
@@ -172,7 +173,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = pending.RunId,
             Success = true,
             Output = evt.Content ?? string.Empty,
-            WorkerId = envelope.PublisherId,
+            WorkerId = publisherActorId,
         }, EventDirection.Self, ct);
         await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
@@ -323,10 +324,13 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private static string BuildDispatchDedupId(string sessionId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId("workflow-llm-dispatch", sessionId);
 
-    private static IReadOnlyDictionary<string, string> BuildDispatchMetadata(string dispatchDedupId) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
+    private static EventEnvelopePublishOptions BuildDispatchOptions(string dispatchDedupId) =>
+        new()
         {
-            [EnvelopeMetadataKeys.DedupOriginId] = dispatchDedupId,
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = dispatchDedupId,
+            },
         };
 
     private static bool TryResolvePending(
@@ -402,7 +406,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
         var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
         chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
-        var dispatchMetadata = BuildDispatchMetadata(dispatchDedupId);
+        var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!string.IsNullOrEmpty(targetRole))
         {
@@ -410,14 +414,14 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             ctx.Logger.LogInformation(
                 "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
                 stepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
-            await ctx.SendToAsync(targetActorId, chatEvt, ct, dispatchMetadata);
+            await ctx.SendToAsync(targetActorId, chatEvt, ct, dispatchOptions);
             return;
         }
 
         ctx.Logger.LogInformation(
             "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
             stepId, timeoutMs, prompt.Length, promptPreview);
-        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct, dispatchMetadata);
+        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct, dispatchOptions);
     }
 
     private static PendingLlmCallState GetRequiredPending(string sessionId, IWorkflowExecutionContext ctx)
@@ -480,8 +484,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (pending.WatchdogLease != null)
             return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.WatchdogLease);
 
-        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
-               string.Equals(metadata.CallbackId, pending.WatchdogCallbackId, StringComparison.Ordinal);
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.WatchdogCallbackId, StringComparison.Ordinal);
     }
 
     private async Task StopWatchdogAsync(

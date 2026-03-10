@@ -11,12 +11,14 @@ public sealed class DefaultCorrelationLinkPolicy : ICorrelationLinkPolicy
 {
     public string? ResolveCorrelationId(EventEnvelope outboundEnvelope, EventEnvelope? inboundEnvelope)
     {
-        if (!string.IsNullOrWhiteSpace(outboundEnvelope.CorrelationId))
-            return outboundEnvelope.CorrelationId;
+        var outboundCorrelationId = outboundEnvelope.Propagation?.CorrelationId;
+        if (!string.IsNullOrWhiteSpace(outboundCorrelationId))
+            return outboundCorrelationId;
 
-        return string.IsNullOrWhiteSpace(inboundEnvelope?.CorrelationId)
+        var inboundCorrelationId = inboundEnvelope?.Propagation?.CorrelationId;
+        return string.IsNullOrWhiteSpace(inboundCorrelationId)
             ? null
-            : inboundEnvelope.CorrelationId;
+            : inboundCorrelationId;
     }
 
     public string? ResolveCausationId(EventEnvelope outboundEnvelope, EventEnvelope? inboundEnvelope)
