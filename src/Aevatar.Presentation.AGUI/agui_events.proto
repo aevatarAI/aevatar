@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package aevatar.presentation.agui;
+
+option csharp_namespace = "Aevatar.Presentation.AGUI";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/wrappers.proto";
+
+message AGUIEvent {
+  google.protobuf.Int64Value timestamp = 1;
+
+  oneof event {
+    RunStartedEvent run_started = 2;
+    RunFinishedEvent run_finished = 3;
+    RunErrorEvent run_error = 4;
+    StepStartedEvent step_started = 5;
+    StepFinishedEvent step_finished = 6;
+    TextMessageStartEvent text_message_start = 7;
+    TextMessageContentEvent text_message_content = 8;
+    TextMessageEndEvent text_message_end = 9;
+    StateSnapshotEvent state_snapshot = 10;
+    ToolCallStartEvent tool_call_start = 11;
+    ToolCallEndEvent tool_call_end = 12;
+    HumanInputRequestEvent human_input_request = 13;
+    HumanInputResponseEvent human_input_response = 14;
+    CustomEvent custom = 15;
+  }
+}
+
+message RunStartedEvent {
+  string thread_id = 1;
+  string run_id = 2;
+}
+
+message RunFinishedEvent {
+  string thread_id = 1;
+  string run_id = 2;
+  google.protobuf.Any result = 3;
+}
+
+message RunErrorEvent {
+  string message = 1;
+  google.protobuf.StringValue run_id = 2;
+  google.protobuf.StringValue code = 3;
+}
+
+message StepStartedEvent {
+  string step_name = 1;
+}
+
+message StepFinishedEvent {
+  string step_name = 1;
+}
+
+message TextMessageStartEvent {
+  string message_id = 1;
+  string role = 2;
+}
+
+message TextMessageContentEvent {
+  string message_id = 1;
+  string delta = 2;
+}
+
+message TextMessageEndEvent {
+  string message_id = 1;
+}
+
+message StateSnapshotEvent {
+  google.protobuf.Any snapshot = 1;
+}
+
+message ToolCallStartEvent {
+  string tool_call_id = 1;
+  string tool_name = 2;
+}
+
+message ToolCallEndEvent {
+  string tool_call_id = 1;
+  google.protobuf.StringValue result = 2;
+}
+
+message HumanInputRequestEvent {
+  string step_id = 1;
+  string run_id = 2;
+  string suspension_type = 3;
+  string prompt = 4;
+  int32 timeout_seconds = 5;
+  map<string, string> metadata = 6;
+}
+
+message HumanInputResponseEvent {
+  string step_id = 1;
+  string run_id = 2;
+  bool approved = 3;
+  google.protobuf.StringValue user_input = 4;
+}
+
+message CustomEvent {
+  string name = 1;
+  google.protobuf.Any payload = 2;
+}

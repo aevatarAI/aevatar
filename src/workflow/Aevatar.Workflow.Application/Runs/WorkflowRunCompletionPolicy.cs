@@ -5,17 +5,17 @@ namespace Aevatar.Workflow.Application.Runs;
 public sealed class WorkflowRunCompletionPolicy : IWorkflowRunCompletionPolicy
 {
     public bool TryResolve(
-        WorkflowOutputFrame frame,
+        WorkflowRunEventEnvelope evt,
         out WorkflowProjectionCompletionStatus status)
     {
         status = WorkflowProjectionCompletionStatus.Unknown;
-        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunFinished, StringComparison.Ordinal))
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished)
         {
             status = WorkflowProjectionCompletionStatus.Completed;
             return true;
         }
 
-        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunError, StringComparison.Ordinal))
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
         {
             status = WorkflowProjectionCompletionStatus.Failed;
             return true;

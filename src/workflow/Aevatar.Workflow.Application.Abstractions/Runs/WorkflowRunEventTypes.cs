@@ -14,4 +14,26 @@ public static class WorkflowRunEventTypes
     public const string ToolCallStart = "TOOL_CALL_START";
     public const string ToolCallEnd = "TOOL_CALL_END";
     public const string Custom = "CUSTOM";
+
+    public static string GetEventType(WorkflowRunEventEnvelope evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return evt.EventCase switch
+        {
+            WorkflowRunEventEnvelope.EventOneofCase.RunStarted => RunStarted,
+            WorkflowRunEventEnvelope.EventOneofCase.RunFinished => RunFinished,
+            WorkflowRunEventEnvelope.EventOneofCase.RunError => RunError,
+            WorkflowRunEventEnvelope.EventOneofCase.StepStarted => StepStarted,
+            WorkflowRunEventEnvelope.EventOneofCase.StepFinished => StepFinished,
+            WorkflowRunEventEnvelope.EventOneofCase.TextMessageStart => TextMessageStart,
+            WorkflowRunEventEnvelope.EventOneofCase.TextMessageContent => TextMessageContent,
+            WorkflowRunEventEnvelope.EventOneofCase.TextMessageEnd => TextMessageEnd,
+            WorkflowRunEventEnvelope.EventOneofCase.StateSnapshot => StateSnapshot,
+            WorkflowRunEventEnvelope.EventOneofCase.ToolCallStart => ToolCallStart,
+            WorkflowRunEventEnvelope.EventOneofCase.ToolCallEnd => ToolCallEnd,
+            WorkflowRunEventEnvelope.EventOneofCase.Custom => Custom,
+            _ => string.Empty,
+        };
+    }
 }

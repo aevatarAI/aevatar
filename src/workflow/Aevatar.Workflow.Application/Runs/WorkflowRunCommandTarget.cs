@@ -37,17 +37,17 @@ internal sealed class WorkflowRunCommandTarget
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
-    public IEventSink<WorkflowRunEvent>? LiveSink { get; private set; }
+    public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
-        IEventSink<WorkflowRunEvent> sink)
+        IEventSink<WorkflowRunEventEnvelope> sink)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
-    public IEventSink<WorkflowRunEvent> RequireLiveSink() =>
+    public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
 
     public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>

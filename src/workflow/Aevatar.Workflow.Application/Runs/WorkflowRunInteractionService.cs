@@ -32,7 +32,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
 
     public async Task<WorkflowChatRunInteractionResult> ExecuteAsync(
         WorkflowChatRunRequest request,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
         CancellationToken ct = default)
     {
@@ -53,7 +53,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
 
     private async Task<WorkflowChatRunInteractionResult> ExecuteWithoutFallbackAsync(
         WorkflowChatRunRequest request,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
         CancellationToken ct)
     {

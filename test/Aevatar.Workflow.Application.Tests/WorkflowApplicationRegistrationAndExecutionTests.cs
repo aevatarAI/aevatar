@@ -165,8 +165,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
 
         var concrete = provider.GetRequiredService<WorkflowRunOutputStreamer>();
         var outputStreamer = provider.GetRequiredService<IWorkflowRunOutputStreamer>();
-        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>();
-        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>();
+        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
+        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
 
         outputStreamer.Should().BeSameAs(concrete);
         eventOutputStream.Should().BeSameAs(concrete);

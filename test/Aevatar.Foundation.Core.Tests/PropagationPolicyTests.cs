@@ -61,6 +61,32 @@ public sealed class PropagationPolicyTests
     }
 
     [Fact]
+    public void Apply_ShouldNotPropagateRuntimeDedupOriginMetadata()
+    {
+        var inbound = new EventEnvelope
+        {
+            Id = "evt-in-dedup",
+            CorrelationId = "corr-dedup",
+            Payload = Any.Pack(new PingEvent { Message = "in" }),
+        };
+        inbound.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "dispatch-op-1";
+        inbound.Metadata["tenant"] = "acme";
+
+        var outbound = new EventEnvelope
+        {
+            Id = "evt-out-dedup",
+            Payload = Any.Pack(new PongEvent { Reply = "out" }),
+        };
+
+        Policy.Apply(outbound, inbound);
+
+        outbound.Metadata.ContainsKey(EnvelopeMetadataKeys.DedupOriginId).ShouldBeFalse();
+        outbound.Metadata["tenant"].ShouldBe("acme");
+        outbound.Metadata[EnvelopeMetadataKeys.TraceCausationId].ShouldBe("evt-in-dedup");
+        outbound.CorrelationId.ShouldBe("corr-dedup");
+    }
+
+    [Fact]
     public void Apply_TwoHop_ShouldLinkToDirectUpstreamOnly()
     {
         var firstInbound = new EventEnvelope

@@ -3,6 +3,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -354,17 +355,19 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static WorkflowOutputFrame BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
+    private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
         {
-            Type = WorkflowRunEventTypes.Custom,
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Name = "aevatar.run.context",
-            Value = new
+            Custom = new WorkflowCustomEventPayload
             {
-                receipt.ActorId,
-                receipt.WorkflowName,
-                receipt.CommandId,
+                Name = "aevatar.run.context",
+                Payload = Any.Pack(new WorkflowRunContextPayload
+                {
+                    ActorId = receipt.ActorId,
+                    WorkflowName = receipt.WorkflowName,
+                    CommandId = receipt.CommandId,
+                }),
             },
         };
 
@@ -395,12 +398,14 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             await writer.WriteAsync(
-                new WorkflowOutputFrame
+                new WorkflowRunEventEnvelope
                 {
-                    Type = WorkflowRunEventTypes.RunError,
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    Code = "EXECUTION_FAILED",
-                    Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                    RunError = new WorkflowRunErrorEventPayload
+                    {
+                        Code = "EXECUTION_FAILED",
+                        Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                    },
                 },
                 ct);
         }

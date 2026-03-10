@@ -11,6 +11,7 @@ public sealed class DefaultEnvelopePropagationPolicy : IEnvelopePropagationPolic
     {
         "command.id",
         "command_id",
+        EnvelopeMetadataKeys.DedupOriginId,
     };
 
     private readonly ICorrelationLinkPolicy _correlationLinkPolicy;

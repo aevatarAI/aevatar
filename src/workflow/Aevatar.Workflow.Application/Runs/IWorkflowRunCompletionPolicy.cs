@@ -5,6 +5,6 @@ namespace Aevatar.Workflow.Application.Runs;
 public interface IWorkflowRunCompletionPolicy
 {
     bool TryResolve(
-        WorkflowOutputFrame frame,
+        WorkflowRunEventEnvelope evt,
         out WorkflowProjectionCompletionStatus status);
 }

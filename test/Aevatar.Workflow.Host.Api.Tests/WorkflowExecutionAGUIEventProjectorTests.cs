@@ -1,8 +1,7 @@
 using System.Runtime.CompilerServices;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
-using Aevatar.CQRS.Projection.Core.Streaming;
-using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
@@ -18,39 +17,19 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     public async Task ProjectAsync_ShouldPublishToContextCommandStream_WhenEnvelopeCorrelationDiffers()
     {
         var streams = new InMemoryStreamProvider();
-        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
-        var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
-        [
-            new RunFinishedEvent
-            {
-                ThreadId = "actor-1",
-                RunId = "run-1",
-            },
-        ]), streamHub);
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper([BuildRunFinished("actor-1", "done")]),
+            streamHub);
 
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "actor-1",
-            CommandId = "cmd-1",
-            RootActorId = "actor-1",
-            WorkflowName = "direct",
-            Input = "hello",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
-
+        var context = BuildContext();
         var cmd1Sink = new RecordingSink();
         var cmd2Sink = new RecordingSink();
 
-        await using var cmd1Subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-1",
-            evt => cmd1Sink.PushAsync(evt));
-        await using var cmd2Subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-2",
-            evt => cmd2Sink.PushAsync(evt));
+        await using var cmd1Subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => cmd1Sink.PushAsync(evt));
+        await using var cmd2Subscription = await streamHub.SubscribeAsync("actor-1", "cmd-2", evt => cmd2Sink.PushAsync(evt));
 
         await projector.ProjectAsync(context, new EventEnvelope
         {
@@ -58,58 +37,9 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             CorrelationId = "cmd-2",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
-
-        cmd1Sink.SnapshotEvents().Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
-        cmd2Sink.SnapshotEvents().Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ProjectAsync_WithoutCorrelationId_ShouldPublishToContextCommandStream()
-    {
-        var streams = new InMemoryStreamProvider();
-        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
-            streams,
-            new WorkflowRunEventSessionCodec());
-        var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
-        [
-            new RunFinishedEvent
-            {
-                ThreadId = "actor-1",
-                RunId = "run-1",
-            },
-        ]), streamHub);
-
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "actor-1",
-            CommandId = "cmd-1",
-            RootActorId = "actor-1",
-            WorkflowName = "direct",
-            Input = "hello",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
-
-        var cmd1Sink = new RecordingSink();
-        var cmd2Sink = new RecordingSink();
-
-        await using var cmd1Subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-1",
-            evt => cmd1Sink.PushAsync(evt));
-        await using var cmd2Subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-2",
-            evt => cmd2Sink.PushAsync(evt));
-
-        await projector.ProjectAsync(context, new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        });
 
         await cmd1Sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
-        cmd1Sink.SnapshotEvents().Should().ContainSingle(x => x is WorkflowRunFinishedEvent);
+        cmd1Sink.SnapshotEvents().Should().ContainSingle(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
         cmd2Sink.SnapshotEvents().Should().BeEmpty();
     }
 
@@ -117,28 +47,15 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     public async Task ProjectAsync_WhenMapperReturnsEmpty_ShouldNotPublish()
     {
         var streams = new InMemoryStreamProvider();
-        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
-        var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper([]), streamHub);
-
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "actor-1",
-            CommandId = "cmd-1",
-            RootActorId = "actor-1",
-            WorkflowName = "direct",
-            Input = "hello",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
+        var projector = new WorkflowExecutionRunEventProjector(new StaticMapper([]), streamHub);
 
         var sink = new RecordingSink();
-        await using var subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-1",
-            evt => sink.PushAsync(evt));
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
 
-        await projector.ProjectAsync(context, new EventEnvelope
+        await projector.ProjectAsync(BuildContext(), new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             CorrelationId = "cmd-1",
@@ -149,102 +66,96 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldMapAllAGUIEventsToWorkflowRunEvents()
+    public async Task ProjectAsync_ShouldPublishAllMappedRunEventsInOrder()
     {
         var streams = new InMemoryStreamProvider();
-        var streamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
-        var projector = new WorkflowExecutionAGUIEventProjector(new StaticMapper(
-        [
-            new RunStartedEvent { ThreadId = "t1", RunId = "r1", Timestamp = 1 },
-            new RunFinishedEvent { ThreadId = "t1", RunId = "r1", Result = "ok", Timestamp = 2 },
-            new RunErrorEvent { Message = "boom", RunId = "r1", Code = "E", Timestamp = 3 },
-            new StepStartedEvent { StepName = "s1", Timestamp = 4 },
-            new StepFinishedEvent { StepName = "s1", Timestamp = 5 },
-            new Aevatar.Presentation.AGUI.TextMessageStartEvent { MessageId = "m1", Role = "assistant", Timestamp = 6 },
-            new Aevatar.Presentation.AGUI.TextMessageContentEvent { MessageId = "m1", Delta = "hi", Timestamp = 7 },
-            new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "m1", Timestamp = 8 },
-            new StateSnapshotEvent { Snapshot = new { a = 1 }, Timestamp = 9 },
-            new ToolCallStartEvent { ToolCallId = "tc1", ToolName = "search", Timestamp = 10 },
-            new ToolCallEndEvent { ToolCallId = "tc1", Result = "{}", Timestamp = 11 },
-            new CustomEvent { Name = "x", Value = 9, Timestamp = 12 },
-            new UnknownAGUIEvent { Timestamp = 13 },
-        ]), streamHub);
-
-        var context = new WorkflowExecutionProjectionContext
-        {
-            ProjectionId = "actor-1",
-            CommandId = "cmd-1",
-            RootActorId = "actor-1",
-            WorkflowName = "direct",
-            Input = "hello",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper(
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = 1,
+                    RunStarted = new WorkflowRunStartedEventPayload { ThreadId = "t1" },
+                },
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = 2,
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload { MessageId = "m1", Delta = "hi" },
+                },
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = 3,
+                    Custom = new WorkflowCustomEventPayload { Name = "custom" },
+                },
+            ]),
+            streamHub);
 
         var sink = new RecordingSink();
-        await using var subscription = await streamHub.SubscribeAsync(
-            "actor-1",
-            "cmd-1",
-            evt => sink.PushAsync(evt));
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
 
-        await projector.ProjectAsync(context, new EventEnvelope
+        await projector.ProjectAsync(BuildContext(), new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             CorrelationId = "cmd-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         });
-        await sink.WaitForCountAsync(13, TimeSpan.FromSeconds(2));
 
-        var sinkEvents = sink.SnapshotEvents();
-        sinkEvents.Should().HaveCount(13);
-        sinkEvents.Should().SatisfyRespectively(
-            e => e.Should().BeOfType<WorkflowRunStartedEvent>(),
-            e => e.Should().BeOfType<WorkflowRunFinishedEvent>(),
-            e => e.Should().BeOfType<WorkflowRunErrorEvent>(),
-            e => e.Should().BeOfType<WorkflowStepStartedEvent>(),
-            e => e.Should().BeOfType<WorkflowStepFinishedEvent>(),
-            e => e.Should().BeOfType<WorkflowTextMessageStartEvent>(),
-            e => e.Should().BeOfType<WorkflowTextMessageContentEvent>(),
-            e => e.Should().BeOfType<WorkflowTextMessageEndEvent>(),
-            e => e.Should().BeOfType<WorkflowStateSnapshotEvent>(),
-            e => e.Should().BeOfType<WorkflowToolCallStartEvent>(),
-            e => e.Should().BeOfType<WorkflowToolCallEndEvent>(),
-            e => e.Should().BeOfType<WorkflowCustomEvent>(),
-            e => e.Should().BeOfType<WorkflowCustomEvent>());
-
-        var mappedCustomFromUnknown = sinkEvents[^1].Should().BeOfType<WorkflowCustomEvent>().Subject;
-        mappedCustomFromUnknown.Name.Should().Be("UNKNOWN_KIND");
-        mappedCustomFromUnknown.Value.Should().BeNull();
+        await sink.WaitForCountAsync(3, TimeSpan.FromSeconds(2));
+        sink.SnapshotEvents().Select(x => x.EventCase).Should().ContainInOrder(
+            WorkflowRunEventEnvelope.EventOneofCase.RunStarted,
+            WorkflowRunEventEnvelope.EventOneofCase.TextMessageContent,
+            WorkflowRunEventEnvelope.EventOneofCase.Custom);
     }
 
-    private sealed class StaticMapper : IEventEnvelopeToAGUIEventMapper
+    private static WorkflowExecutionProjectionContext BuildContext() => new()
     {
-        private readonly IReadOnlyList<AGUIEvent> _events;
+        ProjectionId = "actor-1",
+        CommandId = "cmd-1",
+        RootActorId = "actor-1",
+        WorkflowName = "direct",
+        Input = "hello",
+        StartedAt = DateTimeOffset.UtcNow,
+    };
 
-        public StaticMapper(IReadOnlyList<AGUIEvent> events)
+    private static WorkflowRunEventEnvelope BuildRunFinished(string threadId, string output) =>
+        new()
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                ThreadId = threadId,
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = output }),
+            },
+        };
+
+    private sealed class StaticMapper : IEventEnvelopeToWorkflowRunEventMapper
+    {
+        private readonly IReadOnlyList<WorkflowRunEventEnvelope> _events;
+
+        public StaticMapper(IReadOnlyList<WorkflowRunEventEnvelope> events)
         {
             _events = events;
         }
 
-        public IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope)
+        public IReadOnlyList<WorkflowRunEventEnvelope> Map(EventEnvelope envelope)
         {
             _ = envelope;
             return _events;
         }
     }
 
-    private sealed class RecordingSink : IEventSink<WorkflowRunEvent>
+    private sealed class RecordingSink : IEventSink<WorkflowRunEventEnvelope>
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
+        private readonly List<WorkflowRunEventEnvelope> _events = [];
 
-        public List<WorkflowRunEvent> Events { get; } = [];
-
-        public IReadOnlyList<WorkflowRunEvent> SnapshotEvents()
+        public IReadOnlyList<WorkflowRunEventEnvelope> SnapshotEvents()
         {
             lock (_gate)
-                return Events.ToList();
+                return _events.ToList();
         }
 
         public Task WaitForCountAsync(int expectedCount, TimeSpan timeout)
@@ -252,7 +163,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             Task waitTask;
             lock (_gate)
             {
-                if (Events.Count >= expectedCount)
+                if (_events.Count >= expectedCount)
                     return Task.CompletedTask;
 
                 var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -263,12 +174,9 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             return waitTask.WaitAsync(timeout);
         }
 
-        public void Push(WorkflowRunEvent evt)
-        {
-            Append(evt);
-        }
+        public void Push(WorkflowRunEventEnvelope evt) => Append(evt);
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Append(evt);
@@ -279,27 +187,24 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         {
         }
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
         {
             _ = ct;
             await Task.CompletedTask;
             yield break;
         }
 
-        public ValueTask DisposeAsync()
-        {
-            return ValueTask.CompletedTask;
-        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        private void Append(WorkflowRunEvent evt)
+        private void Append(WorkflowRunEventEnvelope evt)
         {
             lock (_gate)
             {
-                Events.Add(evt);
+                _events.Add(evt);
                 for (var i = _countWaiters.Count - 1; i >= 0; i--)
                 {
                     var waiter = _countWaiters[i];
-                    if (Events.Count < waiter.Count)
+                    if (_events.Count < waiter.Count)
                         continue;
 
                     _countWaiters.RemoveAt(i);
@@ -307,10 +212,5 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
                 }
             }
         }
-    }
-
-    private sealed record UnknownAGUIEvent : AGUIEvent
-    {
-        public override string Type => "UNKNOWN_KIND";
     }
 }

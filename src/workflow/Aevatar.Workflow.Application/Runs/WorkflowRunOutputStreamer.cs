@@ -5,12 +5,12 @@ namespace Aevatar.Workflow.Application.Runs;
 
 public sealed class WorkflowRunOutputStreamer
     : IWorkflowRunOutputStreamer,
-      IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>,
-      IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>
+      IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>,
+      IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>
 {
     public async Task StreamAsync(
-        IEventSink<WorkflowRunEvent> sink,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
         await PumpAsync(
@@ -21,9 +21,9 @@ public sealed class WorkflowRunOutputStreamer
     }
 
     public async Task PumpAsync(
-        IAsyncEnumerable<WorkflowRunEvent> events,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
-        Func<WorkflowRunEvent, bool>? shouldStop = null,
+        IAsyncEnumerable<WorkflowRunEventEnvelope> events,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEventEnvelope, bool>? shouldStop = null,
         CancellationToken ct = default)
     {
         await foreach (var evt in events.WithCancellation(ct))
@@ -34,15 +34,11 @@ public sealed class WorkflowRunOutputStreamer
         }
     }
 
-    public WorkflowOutputFrame Map(WorkflowRunEvent evt) => WorkflowOutputFrameMapper.Map(evt);
+    public WorkflowRunEventEnvelope Map(WorkflowRunEventEnvelope evt) => evt;
 
-    private static bool IsTerminal(WorkflowRunEvent evt)
+    private static bool IsTerminal(WorkflowRunEventEnvelope evt)
     {
-        return evt switch
-        {
-            WorkflowRunFinishedEvent => true,
-            WorkflowRunErrorEvent => true,
-            _ => false,
-        };
+        return evt.EventCase is WorkflowRunEventEnvelope.EventOneofCase.RunFinished
+            or WorkflowRunEventEnvelope.EventOneofCase.RunError;
     }
 }

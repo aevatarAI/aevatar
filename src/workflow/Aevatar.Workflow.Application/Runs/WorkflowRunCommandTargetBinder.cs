@@ -27,7 +27,7 @@ internal sealed class WorkflowRunCommandTargetBinder
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 
-        var sink = new EventChannel<WorkflowRunEvent>();
+        var sink = new EventChannel<WorkflowRunEventEnvelope>();
 
         try
         {

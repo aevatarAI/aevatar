@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -9,14 +10,34 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
     [Fact]
     public async Task StreamAsync_ShouldStopAfterTerminalEvent()
     {
-        var channel = new EventChannel<WorkflowRunEvent>();
+        var channel = new EventChannel<WorkflowRunEventEnvelope>();
         var streamer = new WorkflowRunOutputStreamer();
-        var frames = new List<WorkflowOutputFrame>();
+        var frames = new List<WorkflowRunEventEnvelope>();
 
-        channel.Push(new WorkflowRunStartedEvent { ThreadId = "actor-1", Timestamp = 1001 });
-        channel.Push(new WorkflowTextMessageContentEvent { MessageId = "m1", Delta = "hello", Timestamp = 1002 });
-        channel.Push(new WorkflowRunFinishedEvent { ThreadId = "actor-1", Result = "done", Timestamp = 1003 });
-        channel.Push(new WorkflowCustomEvent { Name = "after_terminal", Value = "should_not_emit", Timestamp = 1004 });
+        channel.Push(new WorkflowRunEventEnvelope
+        {
+            Timestamp = 1001,
+            RunStarted = new WorkflowRunStartedEventPayload { ThreadId = "actor-1" },
+        });
+        channel.Push(new WorkflowRunEventEnvelope
+        {
+            Timestamp = 1002,
+            TextMessageContent = new WorkflowTextMessageContentEventPayload { MessageId = "m1", Delta = "hello" },
+        });
+        channel.Push(new WorkflowRunEventEnvelope
+        {
+            Timestamp = 1003,
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                ThreadId = "actor-1",
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+        channel.Push(new WorkflowRunEventEnvelope
+        {
+            Timestamp = 1004,
+            Custom = new WorkflowCustomEventPayload { Name = "after_terminal" },
+        });
         channel.Complete();
 
         await streamer.StreamAsync(channel, (frame, _) =>
@@ -26,21 +47,34 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
         });
 
         frames.Should().HaveCount(3);
-        frames[0].Type.Should().Be(WorkflowRunEventTypes.RunStarted);
-        frames[1].Type.Should().Be(WorkflowRunEventTypes.TextMessageContent);
-        frames[2].Type.Should().Be(WorkflowRunEventTypes.RunFinished);
-        frames.Should().NotContain(f => f.Name == "after_terminal");
+        frames[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStarted);
+        frames[1].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageContent);
+        frames[2].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
+        frames.Any(f => f.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom && f.Custom.Name == "after_terminal")
+            .Should().BeFalse();
     }
 
     [Fact]
     public async Task PumpAsync_ShouldHonorCustomStopPredicate()
     {
         var streamer = new WorkflowRunOutputStreamer();
-        var frames = new List<WorkflowOutputFrame>();
+        var frames = new List<WorkflowRunEventEnvelope>();
         var events = Stream(
-            new WorkflowStepStartedEvent { StepName = "s1", Timestamp = 1 },
-            new WorkflowStepFinishedEvent { StepName = "s1", Timestamp = 2 },
-            new WorkflowStepStartedEvent { StepName = "s2", Timestamp = 3 });
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = 1,
+                StepStarted = new WorkflowStepStartedEventPayload { StepName = "s1" },
+            },
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = 2,
+                StepFinished = new WorkflowStepFinishedEventPayload { StepName = "s1" },
+            },
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = 3,
+                StepStarted = new WorkflowStepStartedEventPayload { StepName = "s2" },
+            });
 
         await streamer.PumpAsync(
             events,
@@ -49,78 +83,47 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
                 frames.Add(frame);
                 return ValueTask.CompletedTask;
             },
-            shouldStop: evt => evt is WorkflowStepFinishedEvent);
+            shouldStop: evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepFinished);
 
         frames.Should().HaveCount(2);
-        frames[0].Type.Should().Be(WorkflowRunEventTypes.StepStarted);
-        frames[1].Type.Should().Be(WorkflowRunEventTypes.StepFinished);
+        frames[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StepStarted);
+        frames[1].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StepFinished);
     }
 
     [Fact]
-    public void Map_ShouldCoverKnownAndFallbackEventTypes()
+    public void Map_ShouldReturnTheOriginalEnvelope()
     {
         var streamer = new WorkflowRunOutputStreamer();
 
-        var started = streamer.Map(new WorkflowRunStartedEvent { ThreadId = "a1", Timestamp = 10 });
-        started.Type.Should().Be(WorkflowRunEventTypes.RunStarted);
-        started.ThreadId.Should().Be("a1");
+        var evt = new WorkflowRunEventEnvelope
+        {
+            Timestamp = 18,
+            StateSnapshot = new WorkflowStateSnapshotEventPayload
+            {
+                Snapshot = Any.Pack(new WorkflowProjectionStateSnapshotPayload
+                {
+                    ActorId = "actor-1",
+                    WorkflowName = "direct",
+                    CommandId = "cmd-1",
+                    ProjectionCompleted = true,
+                    ProjectionCompletionStatus = WorkflowProjectionCompletionStatusPayload.Completed,
+                }),
+            },
+        };
 
-        var finished = streamer.Map(new WorkflowRunFinishedEvent { ThreadId = "a1", Result = "ok", Timestamp = 11 });
-        finished.Type.Should().Be(WorkflowRunEventTypes.RunFinished);
-        finished.Result.Should().Be("ok");
+        var mapped = streamer.Map(evt);
 
-        var error = streamer.Map(new WorkflowRunErrorEvent { Message = "boom", Code = "E1", Timestamp = 12 });
-        error.Type.Should().Be(WorkflowRunEventTypes.RunError);
-        error.Message.Should().Be("boom");
-        error.Code.Should().Be("E1");
-
-        var stepStart = streamer.Map(new WorkflowStepStartedEvent { StepName = "step-a", Timestamp = 13 });
-        stepStart.StepName.Should().Be("step-a");
-
-        var stepFinish = streamer.Map(new WorkflowStepFinishedEvent { StepName = "step-a", Timestamp = 14 });
-        stepFinish.StepName.Should().Be("step-a");
-
-        var msgStart = streamer.Map(new WorkflowTextMessageStartEvent { MessageId = "m1", Role = "assistant", Timestamp = 15 });
-        msgStart.MessageId.Should().Be("m1");
-        msgStart.Role.Should().Be("assistant");
-
-        var msgDelta = streamer.Map(new WorkflowTextMessageContentEvent { MessageId = "m1", Delta = "delta", Timestamp = 16 });
-        msgDelta.Delta.Should().Be("delta");
-
-        var msgEnd = streamer.Map(new WorkflowTextMessageEndEvent { MessageId = "m1", Timestamp = 17 });
-        msgEnd.MessageId.Should().Be("m1");
-
-        var snapshot = streamer.Map(new WorkflowStateSnapshotEvent { Snapshot = new { v = 1 }, Timestamp = 18 });
-        snapshot.Type.Should().Be(WorkflowRunEventTypes.StateSnapshot);
-        snapshot.Snapshot.Should().NotBeNull();
-
-        var toolStart = streamer.Map(new WorkflowToolCallStartEvent { ToolCallId = "t1", ToolName = "search", Timestamp = 19 });
-        toolStart.ToolCallId.Should().Be("t1");
-        toolStart.ToolName.Should().Be("search");
-
-        var toolEnd = streamer.Map(new WorkflowToolCallEndEvent { ToolCallId = "t1", Result = "{}", Timestamp = 20 });
-        toolEnd.Result.Should().Be("{}");
-
-        var custom = streamer.Map(new WorkflowCustomEvent { Name = "custom-name", Value = 7, Timestamp = 21 });
-        custom.Name.Should().Be("custom-name");
-        custom.Value.Should().Be(7);
-
-        var unknown = streamer.Map(new UnknownWorkflowRunEvent { Timestamp = 22 });
-        unknown.Type.Should().Be("UNKNOWN_EVENT");
-        unknown.Timestamp.Should().Be(22);
+        mapped.Should().BeSameAs(evt);
+        mapped.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StateSnapshot);
+        mapped.StateSnapshot.Snapshot.Is(WorkflowProjectionStateSnapshotPayload.Descriptor).Should().BeTrue();
     }
 
-    private static async IAsyncEnumerable<WorkflowRunEvent> Stream(params WorkflowRunEvent[] events)
+    private static async IAsyncEnumerable<WorkflowRunEventEnvelope> Stream(params WorkflowRunEventEnvelope[] events)
     {
         foreach (var evt in events)
         {
             yield return evt;
             await Task.Yield();
         }
-    }
-
-    private sealed record UnknownWorkflowRunEvent : WorkflowRunEvent
-    {
-        public override string Type => "UNKNOWN_EVENT";
     }
 }

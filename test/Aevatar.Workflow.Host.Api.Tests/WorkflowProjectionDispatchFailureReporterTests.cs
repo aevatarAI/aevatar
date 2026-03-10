@@ -27,11 +27,12 @@ public class WorkflowProjectionDispatchFailureReporterTests
         hub.Published.Should().ContainSingle();
         hub.Published[0].ScopeId.Should().Be(context.RootActorId);
         hub.Published[0].SessionId.Should().Be(context.CommandId);
-        var errorEvent = hub.Published[0].Event.Should().BeOfType<WorkflowRunErrorEvent>().Subject;
+        hub.Published[0].Event.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
+        var errorEvent = hub.Published[0].Event.RunError;
         errorEvent.Code.Should().Be("PROJECTION_DISPATCH_FAILED");
         errorEvent.Message.Should().Contain("eventId=evt-1");
         errorEvent.Message.Should().Contain("reason=boom");
-        errorEvent.Timestamp.Should().Be(clock.UtcNow.ToUnixTimeMilliseconds());
+        hub.Published[0].Event.Timestamp.Should().Be(clock.UtcNow.ToUnixTimeMilliseconds());
     }
 
     [Fact]
@@ -62,14 +63,14 @@ public class WorkflowProjectionDispatchFailureReporterTests
     };
 }
 
-internal sealed class CapturingRunEventHub : IProjectionSessionEventHub<WorkflowRunEvent>
+internal sealed class CapturingRunEventHub : IProjectionSessionEventHub<WorkflowRunEventEnvelope>
 {
-    public List<(string ScopeId, string SessionId, WorkflowRunEvent Event)> Published { get; } = [];
+    public List<(string ScopeId, string SessionId, WorkflowRunEventEnvelope Event)> Published { get; } = [];
 
     public Task PublishAsync(
         string scopeId,
         string sessionId,
-        WorkflowRunEvent evt,
+        WorkflowRunEventEnvelope evt,
         CancellationToken ct = default)
     {
         Published.Add((scopeId, sessionId, evt));
@@ -79,7 +80,7 @@ internal sealed class CapturingRunEventHub : IProjectionSessionEventHub<Workflow
     public Task<IAsyncDisposable> SubscribeAsync(
         string scopeId,
         string sessionId,
-        Func<WorkflowRunEvent, ValueTask> handler,
+        Func<WorkflowRunEventEnvelope, ValueTask> handler,
         CancellationToken ct = default)
     {
         return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());

@@ -1,37 +1,37 @@
-using Aevatar.Presentation.AGUI;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 
-public interface IEventEnvelopeToAGUIEventMapper
+public interface IEventEnvelopeToWorkflowRunEventMapper
 {
-    IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope);
+    IReadOnlyList<WorkflowRunEventEnvelope> Map(EventEnvelope envelope);
 }
 
-public interface IAGUIEventEnvelopeMappingHandler
+public interface IWorkflowRunEventEnvelopeMappingHandler
 {
     int Order { get; }
 
-    bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events);
+    bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events);
 }
 
-public sealed class EventEnvelopeToAGUIEventMapper : IEventEnvelopeToAGUIEventMapper
+public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWorkflowRunEventMapper
 {
-    private readonly IReadOnlyList<IAGUIEventEnvelopeMappingHandler> _handlers;
+    private readonly IReadOnlyList<IWorkflowRunEventEnvelopeMappingHandler> _handlers;
 
-    public EventEnvelopeToAGUIEventMapper(IEnumerable<IAGUIEventEnvelopeMappingHandler> handlers)
+    public EventEnvelopeToWorkflowRunEventMapper(IEnumerable<IWorkflowRunEventEnvelopeMappingHandler> handlers)
     {
         _handlers = handlers.OrderBy(x => x.Order).ToList();
     }
 
-    public IReadOnlyList<AGUIEvent> Map(EventEnvelope envelope)
+    public IReadOnlyList<WorkflowRunEventEnvelope> Map(EventEnvelope envelope)
     {
         if (envelope.Payload == null)
             return [];
 
-        var output = new List<AGUIEvent>();
+        var output = new List<WorkflowRunEventEnvelope>();
         foreach (var handler in _handlers)
         {
             if (!handler.TryMap(envelope, out var mapped) || mapped.Count == 0)
@@ -44,11 +44,11 @@ public sealed class EventEnvelopeToAGUIEventMapper : IEventEnvelopeToAGUIEventMa
     }
 }
 
-public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class StartWorkflowRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 0;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(StartWorkflowEvent.Descriptor) != true)
         {
@@ -58,25 +58,26 @@ public sealed class StartWorkflowAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
 
         var evt = envelope.Payload.Unpack<StartWorkflowEvent>();
         var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
-        var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
         events =
         [
-            new RunStartedEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                ThreadId = threadId,
-                RunId = runId,
+                RunStarted = new WorkflowRunStartedEventPayload
+                {
+                    ThreadId = threadId,
+                },
             },
         ];
         return true;
     }
 }
 
-public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class StepRequestRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 10;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(StepRequestEvent.Descriptor) != true)
         {
@@ -88,18 +89,28 @@ public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
         events =
         [
-            new StepStartedEvent { Timestamp = ts, StepName = evt.StepId },
-            new CustomEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = ts,
-                Name = "aevatar.step.request",
-                Value = new
+                StepStarted = new WorkflowStepStartedEventPayload
                 {
-                    evt.RunId,
-                    evt.StepId,
-                    evt.StepType,
-                    evt.TargetRole,
-                    evt.Input,
+                    StepName = evt.StepId,
+                },
+            },
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = ts,
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = "aevatar.step.request",
+                    Payload = Any.Pack(new WorkflowStepRequestCustomPayload
+                    {
+                        RunId = evt.RunId,
+                        StepId = evt.StepId,
+                        StepType = evt.StepType,
+                        TargetRole = evt.TargetRole,
+                        Input = evt.Input,
+                    }),
                 },
             },
         ];
@@ -107,11 +118,11 @@ public sealed class StepRequestAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
     }
 }
 
-public sealed class StepCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 20;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(StepCompletedEvent.Descriptor) != true)
         {
@@ -125,23 +136,29 @@ public sealed class StepCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
             metadata[key] = value;
         events =
         [
-            new StepFinishedEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                StepName = evt.StepId,
-            },
-            new CustomEvent
-            {
-                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                Name = "aevatar.step.completed",
-                Value = new
+                StepFinished = new WorkflowStepFinishedEventPayload
                 {
-                    evt.RunId,
-                    evt.StepId,
-                    evt.Success,
-                    evt.Output,
-                    evt.Error,
-                    Metadata = metadata,
+                    StepName = evt.StepId,
+                },
+            },
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = "aevatar.step.completed",
+                    Payload = Any.Pack(new WorkflowStepCompletedCustomPayload
+                    {
+                        RunId = evt.RunId,
+                        StepId = evt.StepId,
+                        Success = evt.Success,
+                        Output = evt.Output,
+                        Error = evt.Error,
+                        Metadata = { metadata },
+                    }),
                 },
             },
         ];
@@ -149,11 +166,11 @@ public sealed class StepCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnv
     }
 }
 
-public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 30;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         events = [];
         if (envelope.Payload == null)
@@ -168,11 +185,14 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
-                    Role = "assistant",
+                    TextMessageStart = new WorkflowTextMessageStartEventPayload
+                    {
+                        MessageId = msgId,
+                        Role = "assistant",
+                    },
                 },
             ];
             return true;
@@ -184,11 +204,14 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
-                    Delta = evt.Delta,
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = msgId,
+                        Delta = evt.Delta,
+                    },
                 },
             ];
             return true;
@@ -200,10 +223,13 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
+                    TextMessageEnd = new WorkflowTextMessageEndEventPayload
+                    {
+                        MessageId = msgId,
+                    },
                 },
             ];
             return true;
@@ -215,22 +241,31 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
             events =
             [
-                new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
-                    Role = "assistant",
+                    TextMessageStart = new WorkflowTextMessageStartEventPayload
+                    {
+                        MessageId = msgId,
+                        Role = "assistant",
+                    },
                 },
-                new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
-                    Delta = evt.Content,
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = msgId,
+                        Delta = evt.Content,
+                    },
                 },
-                new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    MessageId = msgId,
+                    TextMessageEnd = new WorkflowTextMessageEndEventPayload
+                    {
+                        MessageId = msgId,
+                    },
                 },
             ];
             return true;
@@ -240,11 +275,11 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
     }
 }
 
-public sealed class AIReasoningAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class AIReasoningRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 35;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(Aevatar.AI.Abstractions.TextMessageReasoningEvent.Descriptor) != true)
         {
@@ -255,15 +290,18 @@ public sealed class AIReasoningAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
         var evt = envelope.Payload.Unpack<Aevatar.AI.Abstractions.TextMessageReasoningEvent>();
         events =
         [
-            new CustomEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
-                Name = "aevatar.llm.reasoning",
-                Value = new
+                Custom = new WorkflowCustomEventPayload
                 {
-                    evt.SessionId,
-                    evt.Delta,
-                    Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromPublisher(envelope.PublisherId),
+                    Name = "aevatar.llm.reasoning",
+                    Payload = Any.Pack(new WorkflowReasoningCustomPayload
+                    {
+                        SessionId = evt.SessionId,
+                        Delta = evt.Delta,
+                        Role = AGUIEventEnvelopeMappingHelpers.ResolveRoleFromPublisher(envelope.PublisherId),
+                    }),
                 },
             },
         ];
@@ -271,11 +309,11 @@ public sealed class AIReasoningAGUIEventEnvelopeMappingHandler : IAGUIEventEnvel
     }
 }
 
-public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class WorkflowCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 40;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(WorkflowCompletedEvent.Descriptor) != true)
         {
@@ -289,40 +327,45 @@ public sealed class WorkflowCompletedAGUIEventEnvelopeMappingHandler : IAGUIEven
         if (evt.Success)
         {
             var threadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
-            var runId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, threadId);
             events =
             [
-                new RunFinishedEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    ThreadId = threadId,
-                    RunId = runId,
-                    Result = new { output = evt.Output },
+                    RunFinished = new WorkflowRunFinishedEventPayload
+                    {
+                        ThreadId = threadId,
+                        Result = Any.Pack(new WorkflowRunResultPayload
+                        {
+                            Output = evt.Output,
+                        }),
+                    },
                 },
             ];
             return true;
         }
 
-        var errorThreadId = AGUIEventEnvelopeMappingHelpers.ResolveThreadId(envelope, evt.WorkflowName);
         events =
         [
-            new RunErrorEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = ts,
-                Message = evt.Error,
-                RunId = AGUIEventEnvelopeMappingHelpers.ResolveRunId(envelope, errorThreadId),
-                Code = "WORKFLOW_FAILED",
+                RunError = new WorkflowRunErrorEventPayload
+                {
+                    Message = evt.Error,
+                    Code = "WORKFLOW_FAILED",
+                },
             },
         ];
         return true;
     }
 }
 
-public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class ToolCallRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 50;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         events = [];
         if (envelope.Payload == null)
@@ -336,11 +379,14 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
             var evt = payload.Unpack<Aevatar.AI.Abstractions.ToolCallEvent>();
             events =
             [
-                new ToolCallStartEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    ToolCallId = evt.CallId,
-                    ToolName = evt.ToolName,
+                    ToolCallStart = new WorkflowToolCallStartEventPayload
+                    {
+                        ToolCallId = evt.CallId,
+                        ToolName = evt.ToolName,
+                    },
                 },
             ];
             return true;
@@ -351,11 +397,14 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
             var evt = payload.Unpack<Aevatar.AI.Abstractions.ToolResultEvent>();
             events =
             [
-                new ToolCallEndEvent
+                new WorkflowRunEventEnvelope
                 {
                     Timestamp = ts,
-                    ToolCallId = evt.CallId,
-                    Result = evt.ResultJson,
+                    ToolCallEnd = new WorkflowToolCallEndEventPayload
+                    {
+                        ToolCallId = evt.CallId,
+                        Result = evt.ResultJson,
+                    },
                 },
             ];
             return true;
@@ -365,11 +414,11 @@ public sealed class ToolCallAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelope
     }
 }
 
-public sealed class WorkflowSuspendedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 45;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(WorkflowSuspendedEvent.Descriptor) != true)
         {
@@ -386,26 +435,33 @@ public sealed class WorkflowSuspendedAGUIEventEnvelopeMappingHandler : IAGUIEven
 
         events =
         [
-            new HumanInputRequestEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = ts,
-                StepId = evt.StepId,
-                RunId = evt.RunId,
-                SuspensionType = evt.SuspensionType,
-                Prompt = evt.Prompt,
-                TimeoutSeconds = evt.TimeoutSeconds,
-                Metadata = metadata,
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = "aevatar.human_input.request",
+                    Payload = Any.Pack(new WorkflowHumanInputRequestCustomPayload
+                    {
+                        StepId = evt.StepId,
+                        RunId = evt.RunId,
+                        SuspensionType = evt.SuspensionType,
+                        Prompt = evt.Prompt,
+                        TimeoutSeconds = evt.TimeoutSeconds,
+                        Metadata = { metadata },
+                    }),
+                },
             },
         ];
         return true;
     }
 }
 
-public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
 {
     public int Order => 46;
 
-    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
     {
         if (envelope.Payload?.Is(WaitingForSignalEvent.Descriptor) != true)
         {
@@ -421,17 +477,20 @@ public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUI
 
         events =
         [
-            new CustomEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = ts,
-                Name = "aevatar.workflow.waiting_signal",
-                Value = new
+                Custom = new WorkflowCustomEventPayload
                 {
-                    RunId = runId,
-                    evt.StepId,
-                    evt.SignalName,
-                    evt.Prompt,
-                    evt.TimeoutMs,
+                    Name = "aevatar.workflow.waiting_signal",
+                    Payload = Any.Pack(new WorkflowWaitingSignalCustomPayload
+                    {
+                        RunId = runId,
+                        StepId = evt.StepId,
+                        SignalName = evt.SignalName,
+                        Prompt = evt.Prompt,
+                        TimeoutMs = evt.TimeoutMs,
+                    }),
                 },
             },
         ];
