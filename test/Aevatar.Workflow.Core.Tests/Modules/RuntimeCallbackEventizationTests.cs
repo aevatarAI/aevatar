@@ -567,7 +567,83 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent);
+        ctx.Published.Should().BeEmpty();
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel")
+            .RetryBackoffsByStepId.Should().NotContainKey("step-1");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldResumeRetryBackoffReplay_WhenRedispatchWasPersistedPending()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-retry-resume",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-resume",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepRetryBackoffFiredEvent);
+        var state = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        state.RetryBackoffsByStepId["step-1"].DispatchPending = true;
+        state.CurrentStepDispatchPending = true;
+        await ctx.SaveStateAsync("workflow_execution_kernel", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WorkflowStepRetryBackoffFiredEvent
+                {
+                    RunId = "run-retry-resume",
+                    StepId = "step-1",
+                    DelayMs = 800,
+                    NextAttempt = 2,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .ContainSingle(x => x.RunId == "run-retry-resume" && x.StepId == "step-1" && x.Input == "input-v1");
         ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel")
             .RetryBackoffsByStepId.Should().NotContainKey("step-1");
     }
@@ -1035,8 +1111,11 @@ public class RuntimeCallbackEventizationTests
         ctx.Scheduled.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task WorkflowLoop_ShouldFailTimeoutWithoutRetrying()
+    [Theory]
+    [InlineData("TIMEOUT after 100ms")]
+    [InlineData("LLM call timed out after 100ms")]
+    [InlineData("signal 'approve' timed out after 100ms")]
+    public async Task WorkflowLoop_ShouldFailRecognizedTimeoutErrorsWithoutRetrying(string error)
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -1076,14 +1155,14 @@ public class RuntimeCallbackEventizationTests
                 StepId = "step-1",
                 RunId = "run-timeout",
                 Success = false,
-                Error = "TIMEOUT after 100ms",
+                Error = error,
             }),
             ctx,
             CancellationToken.None);
 
         var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
         completion.Success.Should().BeFalse();
-        completion.Error.Should().Contain("TIMEOUT");
+        completion.Error.Should().Be(error);
         ctx.Scheduled.Should().BeEmpty();
     }
 

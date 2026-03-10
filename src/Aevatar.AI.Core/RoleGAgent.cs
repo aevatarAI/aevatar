@@ -33,6 +33,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
+    private string _appliedEventModules = string.Empty;
+    private string _appliedEventRoutes = string.Empty;
+    private IServiceProvider? _appliedModuleServices;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -58,7 +61,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        RoleGAgentFactory.ApplyModuleExtensions(this, evt.EventModules, evt.EventRoutes, Services);
     }
 
     /// <summary>Returns agent description.</summary>
@@ -77,6 +79,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     {
         _ = ct;
         RoleName = state.RoleName ?? string.Empty;
+        ApplyModuleExtensionsFromStateIfNeeded(state);
         return Task.CompletedTask;
     }
 
@@ -370,6 +373,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var next = current.Clone();
         var overrides = EnsureConfigOverrides(next);
         next.RoleName = evt.RoleName ?? string.Empty;
+        next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
+        next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);
         overrides.ProviderName = string.IsNullOrWhiteSpace(evt.ProviderName) ? string.Empty : evt.ProviderName.Trim();
         overrides.Model = string.IsNullOrWhiteSpace(evt.Model) ? string.Empty : evt.Model.Trim();
         overrides.SystemPrompt = evt.SystemPrompt ?? string.Empty;
@@ -501,6 +506,34 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             state.ConfigOverrides = new AIAgentConfigOverrides();
         return state.ConfigOverrides;
     }
+
+    private void ApplyModuleExtensionsFromStateIfNeeded(RoleGAgentState state)
+    {
+        var eventModules = NormalizeModuleExtensionText(state.EventModules);
+        var eventRoutes = NormalizeModuleExtensionText(state.EventRoutes);
+        if (string.Equals(_appliedEventModules, eventModules, StringComparison.Ordinal) &&
+            string.Equals(_appliedEventRoutes, eventRoutes, StringComparison.Ordinal) &&
+            ReferenceEquals(_appliedModuleServices, Services))
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(eventModules))
+        {
+            SetModules([]);
+        }
+        else
+        {
+            RoleGAgentFactory.ApplyModuleExtensions(this, eventModules, eventRoutes, Services);
+        }
+
+        _appliedEventModules = eventModules;
+        _appliedEventRoutes = eventRoutes;
+        _appliedModuleServices = Services;
+    }
+
+    private static string NormalizeModuleExtensionText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
     private sealed record SessionReplayRecord(
         string Content,

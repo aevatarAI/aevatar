@@ -9,6 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -434,8 +435,10 @@ public class ProjectionSessionEventHubTests
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("string");
         message.Payload.Should().NotBeNull();
-        message.Payload!.Is(StringValue.Descriptor).Should().BeTrue();
-        message.Payload.Unpack<StringValue>().Value.Should().Be("hello");
+        message.Payload.IsEmpty.Should().BeFalse();
+        var payload = Any.Parser.ParseFrom(message.Payload);
+        payload.Is(StringValue.Descriptor).Should().BeTrue();
+        payload.Unpack<StringValue>().Value.Should().Be("hello");
     }
 
     [Fact]
@@ -462,21 +465,21 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-2",
             EventType = "string",
-            Payload = Any.Pack(new StringValue { Value = "ignored-by-session" }),
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-session" }).ToByteString(),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "unknown",
-            Payload = Any.Pack(new StringValue { Value = "ignored-by-type" }),
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-type" }).ToByteString(),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = Any.Pack(new StringValue { Value = "accepted" }),
+            Payload = Any.Pack(new StringValue { Value = "accepted" }).ToByteString(),
         });
 
         received.Should().Equal("accepted");
@@ -487,7 +490,7 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = Any.Pack(new StringValue { Value = "after-dispose" }),
+            Payload = Any.Pack(new StringValue { Value = "after-dispose" }).ToByteString(),
         });
         received.Should().Equal("accepted");
     }
@@ -549,6 +552,36 @@ public class ProjectionSessionEventHubTests
             .ProducedMessages
             .Should()
             .ContainSingle();
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldLogWarning_WhenCodecCannotDecodeMessage()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var logger = new RecordingLogger<ProjectionSessionEventHub<string>>();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec, logger);
+
+        var subscription = await hub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+
+        var stream = provider.GetStream("projection.session:scope-1:session-1");
+        await stream.EmitAsync(new ProjectionSessionEventTransportMessage
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            EventType = "unknown",
+            Payload = Any.Pack(new StringValue { Value = "ignored" }).ToByteString(),
+        });
+
+        logger.Messages.Should().ContainSingle();
+        logger.Messages[0].Should().Contain("Dropping undecodable projection session event");
+        logger.Messages[0].Should().Contain("unknown");
+
+        await subscription.DisposeAsync();
     }
 }
 
@@ -668,18 +701,22 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
     public string GetEventType(string evt) => "string";
 
-    public Any Serialize(string evt) => Any.Pack(new StringValue { Value = evt });
+    public ByteString Serialize(string evt) => Any.Pack(new StringValue { Value = evt }).ToByteString();
 
-    public string? Deserialize(string eventType, Any payload)
+    public string? Deserialize(string eventType, ByteString payload)
     {
         if (!string.Equals(eventType, "string", StringComparison.Ordinal) ||
             payload == null ||
-            !payload.Is(StringValue.Descriptor))
+            payload.IsEmpty)
         {
             return null;
         }
 
-        return payload.Unpack<StringValue>().Value;
+        var envelope = Any.Parser.ParseFrom(payload);
+        if (!envelope.Is(StringValue.Descriptor))
+            return null;
+
+        return envelope.Unpack<StringValue>().Value;
     }
 }
 
@@ -689,12 +726,19 @@ internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCod
 
     public string GetEventType(string evt) => "string";
 
-    public Any Serialize(string evt) => Any.Pack(new StringValue { Value = evt });
+    public ByteString Serialize(string evt) => Any.Pack(new StringValue { Value = evt }).ToByteString();
 
-    public string? Deserialize(string eventType, Any payload) =>
-        payload?.Is(StringValue.Descriptor) == true
-            ? payload.Unpack<StringValue>().Value
+    public string? Deserialize(string eventType, ByteString payload)
+    {
+        _ = eventType;
+        if (payload == null || payload.IsEmpty)
+            return null;
+
+        var envelope = Any.Parser.ParseFrom(payload);
+        return envelope.Is(StringValue.Descriptor)
+            ? envelope.Unpack<StringValue>().Value
             : null;
+    }
 }
 
 internal sealed class TestInMemoryEventStore : IEventStore
@@ -899,5 +943,29 @@ internal sealed class SessionHubSubscription : IAsyncDisposable
 
         _disposeAction();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class RecordingLogger<T> : ILogger<T>
+{
+    public List<string> Messages { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        _ = eventId;
+        _ = exception;
+        if (logLevel < LogLevel.Warning)
+            return;
+
+        Messages.Add(formatter(state, exception));
     }
 }

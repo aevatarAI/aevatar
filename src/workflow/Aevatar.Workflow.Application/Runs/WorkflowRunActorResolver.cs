@@ -122,7 +122,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
             var inlineRunActor = await CreateRunActorAsync(
                 new WorkflowDefinitionBinding(
-                    sourceBinding.EffectiveDefinitionActorId,
+                    string.Empty,
                     workflowNameForRun,
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun),

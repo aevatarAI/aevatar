@@ -87,7 +87,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "step.completed",
-            Payload = Any.Pack(new StringValue { Value = "payload" }),
+            Payload = Any.Pack(new StringValue { Value = "payload" }).ToByteString(),
         };
 
         var parsed = ProjectionSessionEventTransportMessage.Parser.ParseFrom(msg.ToByteArray());
@@ -96,16 +96,18 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         parsed.CalculateSize().Should().BeGreaterThan(0);
         parsed.ToString().Should().Contain("eventType");
         ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(ProjectionSessionEventTransportMessage));
-        parsed.Payload!.Is(StringValue.Descriptor).Should().BeTrue();
-        parsed.Payload.Unpack<StringValue>().Value.Should().Be("payload");
+        var payload = Any.Parser.ParseFrom(parsed.Payload);
+        payload.Is(StringValue.Descriptor).Should().BeTrue();
+        payload.Unpack<StringValue>().Value.Should().Be("payload");
 
         var merged = new ProjectionSessionEventTransportMessage();
         merged.MergeFrom(msg);
         merged.Should().BeEquivalentTo(msg);
         msg.Equals((object?)null).Should().BeFalse();
 
-        msg.Payload = null;
-        msg.Payload.Should().BeNull();
+        msg.Payload = ByteString.Empty;
+        msg.Payload.Should().NotBeNull();
+        msg.Payload!.IsEmpty.Should().BeTrue();
 
         ProjectionSessionEventTransportReflection.Descriptor.Should().NotBeNull();
         ProjectionSessionEventTransportReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(ProjectionSessionEventTransportMessage));

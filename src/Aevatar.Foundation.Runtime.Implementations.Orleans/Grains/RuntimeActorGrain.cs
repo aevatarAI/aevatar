@@ -19,6 +19,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
+    private const string DirectDispatchFailurePropagationMetadataKey = "aevatar.dispatch.propagate_failure";
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -104,7 +105,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public Task<bool> IsInitializedAsync() =>
         Task.FromResult(_agent != null || !string.IsNullOrWhiteSpace(_state.State.AgentTypeName));
 
-    public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
+    public Task HandleEnvelopeAsync(byte[] envelopeBytes) =>
+        HandleEnvelopeAsyncCore(envelopeBytes, propagateFailure: false);
+
+    private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
         if (_agent == null)
         {
@@ -125,7 +129,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        if (await TryHandleCompatibilityRetryAsync(envelope))
+        propagateFailure = propagateFailure || ShouldPropagateDirectDispatchFailure(envelope);
+        if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
 
         if (_deduplicator != null &&
@@ -181,6 +186,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
+
+            if (propagateFailure)
+                throw;
         }
     }
 
@@ -413,7 +421,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             nextAttempt.ToString(CultureInfo.InvariantCulture));
     }
 
-    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
+    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope, bool propagateFailure)
     {
         if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
             return false;
@@ -434,6 +442,15 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             this.GetPrimaryKeyString(),
             envelope.Id,
             envelope.Payload?.TypeUrl ?? "(none)");
+
+        if (propagateFailure)
+            throw compatibilityException;
+
         return true;
     }
+
+    private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
+        envelope.Metadata.TryGetValue(DirectDispatchFailurePropagationMetadataKey, out var value) &&
+        bool.TryParse(value, out var propagate) &&
+        propagate;
 }

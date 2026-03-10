@@ -5,12 +5,16 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Execution;
 
 internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContext>
 {
     private const string ModuleStateKey = "workflow_execution_kernel";
+    private static readonly Regex TimeoutErrorPattern = new(
+        @"\bTIMEOUT\b|(?:^|[^A-Za-z0-9])timed out after\s+\d+\s*(?:ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly WorkflowDefinition _workflow;
@@ -447,40 +451,30 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (!state.RetryBackoffsByStepId.TryGetValue(stepId, out var pending))
             return;
 
-        if (pending.DispatchPending)
-        {
-            if (state.CurrentStepDispatchPending)
-            {
-                await ResumePendingCurrentStepDispatchAsync(state, ctx, ct);
-            }
-            else if (MatchesCurrentStep(state, stepId))
-            {
-                var currentStep = _workflow.GetStep(stepId);
-                if (currentStep != null)
-                {
-                    try
-                    {
-                        await DispatchStepAsync(currentStep, state.CurrentStepInput, state, ctx, ct);
-                    }
-                    catch
-                    {
-                        await SaveStateAsync(state, ctx, CancellationToken.None);
-                        throw;
-                    }
-                }
-            }
-
-            state.RetryBackoffsByStepId.Remove(stepId);
-            await SaveStateAsync(state, ctx, ct);
-            return;
-        }
-
         if (!MatchesRetryBackoff(state, stepId, pending, envelope))
         {
             ctx.Logger.LogDebug(
                 "workflow_loop: ignore retry backoff without matching lease metadata run={RunId} step={StepId}",
                 runId,
                 stepId);
+            return;
+        }
+
+        if (pending.DispatchPending)
+        {
+            ctx.Logger.LogDebug(
+                "workflow_loop: consume retry backoff replay after redispatch run={RunId} step={StepId}",
+                runId,
+                stepId);
+
+            if (state.CurrentStepDispatchPending && MatchesCurrentStep(state, stepId))
+            {
+                await ResumePendingCurrentStepDispatchAsync(state, ctx, ct);
+            }
+
+            state = LoadState(ctx);
+            state.RetryBackoffsByStepId.Remove(stepId);
+            await SaveStateAsync(state, ctx, ct);
             return;
         }
 
@@ -512,8 +506,14 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             pending.NextAttempt,
             evt.DelayMs);
 
+        var timeoutCallbackId = step.TimeoutMs is > 0
+            ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
+            : string.Empty;
+
         pending.DispatchPending = true;
         state.RetryBackoffsByStepId[stepId] = pending;
+        state.CurrentStepDispatchPending = true;
+        state.CurrentStepTimeoutCallbackId = timeoutCallbackId;
         await SaveStateAsync(state, ctx, ct);
 
         try
@@ -712,7 +712,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
     private static bool IsTimeoutError(string? error) =>
         !string.IsNullOrWhiteSpace(error) &&
-        error.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase);
+        TimeoutErrorPattern.IsMatch(error);
 
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         string callbackId,

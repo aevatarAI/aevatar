@@ -62,4 +62,6 @@ message RoleGAgentState {
   int32 message_count = 2;
   AIAgentConfigOverrides config_overrides = 3;
   map<string, RoleChatSessionState> sessions = 4;
+  string event_modules = 5;
+  string event_routes = 6;
 }

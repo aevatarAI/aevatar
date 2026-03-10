@@ -1,8 +1,11 @@
+using System.IO;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -42,10 +45,11 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
     {
         var codec = new WorkflowRunEventSessionCodec();
 
-        codec.Deserialize(null!, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
-        codec.Deserialize(string.Empty, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
+        codec.Deserialize(null!, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
+        codec.Deserialize(string.Empty, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
         codec.Deserialize(WorkflowRunEventTypes.RunStarted, null!).Should().BeNull();
-        codec.Deserialize(WorkflowRunEventTypes.RunStarted, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, Any.Pack(new StringValue { Value = "{not-json}" }).ToByteString()).Should().BeNull();
         codec.Deserialize("UNKNOWN", codec.Serialize(new WorkflowRunStartedEvent { ThreadId = "thread-1" })).Should().BeNull();
     }
 
@@ -68,6 +72,74 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
         finished.ThreadId.Should().Be("thread-1");
         finished.Result.Should().Be("ok");
         finished.Timestamp.Should().Be(123);
+    }
+
+    [Fact]
+    public void Deserialize_WhenPayloadIsLegacyJsonStringValue_ShouldFallback()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var payload = Any.Pack(new StringValue
+        {
+            Value = """
+                    {"type":"RUN_FINISHED","timestamp":456,"threadId":"thread-legacy","result":{"status":"ok","count":2}}
+                    """,
+        }).ToByteString();
+
+        var deserialized = codec.Deserialize(WorkflowRunEventTypes.RunFinished, payload);
+
+        deserialized.Should().BeOfType<WorkflowRunFinishedEvent>();
+        var finished = (WorkflowRunFinishedEvent)deserialized!;
+        finished.ThreadId.Should().Be("thread-legacy");
+        finished.Timestamp.Should().Be(456);
+        finished.Result.Should().BeEquivalentTo(new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["count"] = 2,
+        });
+    }
+
+    [Fact]
+    public void Deserialize_WhenPayloadUsesLegacyWireStringField_ShouldFallback()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var transport = ParseLegacyTransportMessage(
+            scopeId: "scope-1",
+            sessionId: "session-1",
+            eventType: WorkflowRunEventTypes.RunStarted,
+            legacyJson: """
+                        {"type":"RUN_STARTED","timestamp":789,"threadId":"thread-wire"}
+                        """);
+
+        transport.Payload.Should().NotBeNull();
+        transport.Payload.IsEmpty.Should().BeFalse();
+
+        var deserialized = codec.Deserialize(transport.EventType, transport.Payload);
+
+        deserialized.Should().BeOfType<WorkflowRunStartedEvent>();
+        var started = (WorkflowRunStartedEvent)deserialized!;
+        started.ThreadId.Should().Be("thread-wire");
+        started.Timestamp.Should().Be(789);
+    }
+
+    private static ProjectionSessionEventTransportMessage ParseLegacyTransportMessage(
+        string scopeId,
+        string sessionId,
+        string eventType,
+        string legacyJson)
+    {
+        using var stream = new MemoryStream();
+        var output = new CodedOutputStream(stream);
+        output.WriteRawTag(10);
+        output.WriteString(scopeId);
+        output.WriteRawTag(18);
+        output.WriteString(sessionId);
+        output.WriteRawTag(26);
+        output.WriteString(eventType);
+        output.WriteRawTag(34);
+        output.WriteString(legacyJson);
+        output.Flush();
+
+        return ProjectionSessionEventTransportMessage.Parser.ParseFrom(stream.ToArray());
     }
 }
 

@@ -1,4 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Streaming;
 
@@ -9,13 +11,16 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
 {
     private readonly IStreamProvider _streamProvider;
     private readonly IProjectionSessionEventCodec<TEvent> _codec;
+    private readonly ILogger<ProjectionSessionEventHub<TEvent>> _logger;
 
     public ProjectionSessionEventHub(
         IStreamProvider streamProvider,
-        IProjectionSessionEventCodec<TEvent> codec)
+        IProjectionSessionEventCodec<TEvent> codec,
+        ILogger<ProjectionSessionEventHub<TEvent>>? logger = null)
     {
         _streamProvider = streamProvider;
         _codec = codec;
+        _logger = logger ?? NullLogger<ProjectionSessionEventHub<TEvent>>.Instance;
     }
 
     public Task PublishAsync(
@@ -66,12 +71,29 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
-            if (message.Payload == null)
+            if (message.Payload == null || message.Payload.IsEmpty)
+            {
+                _logger.LogWarning(
+                    "Dropping projection session event with empty payload. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType}",
+                    _codec.Channel,
+                    scopeId,
+                    sessionId,
+                    message.EventType);
                 return;
+            }
 
             var evt = _codec.Deserialize(message.EventType, message.Payload);
             if (evt == null)
+            {
+                _logger.LogWarning(
+                    "Dropping undecodable projection session event. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType} payloadBytes={PayloadBytes}",
+                    _codec.Channel,
+                    scopeId,
+                    sessionId,
+                    message.EventType,
+                    message.Payload.Length);
                 return;
+            }
 
             await handler(evt);
         }, ct);

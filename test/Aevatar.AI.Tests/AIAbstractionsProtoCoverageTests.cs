@@ -133,6 +133,8 @@ public sealed class AIAbstractionsProtoCoverageTests
             RoleName = "assistant",
             MessageCount = 7,
             ConfigOverrides = overrides,
+            EventModules = "demo",
+            EventRoutes = "event.type == X -> demo",
             Sessions =
             {
                 ["session-1"] = new RoleChatSessionState
@@ -157,6 +159,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, RoleGAgentState.Parser);
         state.RoleName.Should().Be("assistant");
         state.MessageCount.Should().Be(7);
+        state.EventModules.Should().Be("demo");
+        state.EventRoutes.Should().Be("event.type == X -> demo");
         state.Sessions["session-1"].FinalContent.Should().Be("done");
         state.Sessions["session-1"].Sequence.Should().Be(7);
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
@@ -257,6 +261,8 @@ public sealed class AIAbstractionsProtoCoverageTests
             RoleName = "assistant",
             MessageCount = 1,
             ConfigOverrides = overrides,
+            EventModules = "demo",
+            EventRoutes = "event.type == X -> demo",
             Sessions =
             {
                 ["session-1"] = new RoleChatSessionState

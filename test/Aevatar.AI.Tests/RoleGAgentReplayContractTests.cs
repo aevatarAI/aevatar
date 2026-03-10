@@ -2,7 +2,9 @@ using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -99,6 +101,55 @@ public class RoleGAgentReplayContractTests
         await agent2.ActivateAsync();
         agent2.State.RoleName.Should().Be("assistant");
         agent2.RoleName.Should().Be("assistant");
+    }
+
+    [Fact]
+    public async Task RoutedModules_ShouldReplayAfterReactivate_WithoutReapplyingOnSessionStateChanges()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("module replay");
+        var moduleFactory = new CountingEventModuleFactory();
+        var services = BuildServices(store, services =>
+        {
+            services.AddSingleton<IEventModuleFactory<IEventHandlerContext>>(moduleFactory);
+        });
+
+        var agent1 = CreateAgent(services, "role-module-replay", provider);
+        await agent1.ActivateAsync();
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+            EventModules = "routable,bypass",
+            EventRoutes = "event.type == ChatRequestEvent -> routable",
+        });
+
+        agent1.State.EventModules.Should().Be("routable,bypass");
+        agent1.State.EventRoutes.Should().Be("event.type == ChatRequestEvent -> routable");
+        agent1.GetModules().Should().HaveCount(2);
+        agent1.GetModules().Should().ContainSingle(m => m.Name == "routable" && m is RoutedEventModule);
+        agent1.GetModules().Should().ContainSingle(m => m.Name == "bypass" && m is CountingBypassModule);
+        moduleFactory.TryCreateCallCount.Should().Be(2);
+
+        await agent1.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-module-replay",
+        });
+
+        moduleFactory.TryCreateCallCount.Should().Be(2);
+        await agent1.DeactivateAsync();
+
+        var agent2 = CreateAgent(services, "role-module-replay", provider);
+        await agent2.ActivateAsync();
+
+        agent2.State.EventModules.Should().Be("routable,bypass");
+        agent2.State.EventRoutes.Should().Be("event.type == ChatRequestEvent -> routable");
+        agent2.GetModules().Should().HaveCount(2);
+        agent2.GetModules().Should().ContainSingle(m => m.Name == "routable" && m is RoutedEventModule);
+        agent2.GetModules().Should().ContainSingle(m => m.Name == "bypass" && m is CountingBypassModule);
+        moduleFactory.TryCreateCallCount.Should().Be(4);
     }
 
     [Fact]
@@ -245,13 +296,16 @@ public class RoleGAgentReplayContractTests
         agent.State.Sessions.ContainsKey("session-130").Should().BeTrue();
     }
 
-    private static IServiceProvider BuildServices(InMemoryEventStoreForTests store)
+    private static IServiceProvider BuildServices(
+        InMemoryEventStoreForTests store,
+        Action<IServiceCollection>? configure = null)
     {
-        return new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton<IEventStore>(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
-            .BuildServiceProvider();
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        configure?.Invoke(services);
+        return services.BuildServiceProvider();
     }
 
     private static RoleGAgent CreateAgent(
@@ -363,5 +417,38 @@ public class RoleGAgentReplayContractTests
                 Usage = new TokenUsage(1, 1, 2),
             };
         }
+    }
+
+    private sealed class CountingEventModuleFactory : IEventModuleFactory<IEventHandlerContext>
+    {
+        public int TryCreateCallCount { get; private set; }
+
+        public bool TryCreate(string name, out IEventModule<IEventHandlerContext>? module)
+        {
+            TryCreateCallCount++;
+            module = name switch
+            {
+                "routable" => new CountingRoutableModule(),
+                "bypass" => new CountingBypassModule(),
+                _ => null,
+            };
+            return module != null;
+        }
+    }
+
+    private sealed class CountingRoutableModule : IEventModule<IEventHandlerContext>
+    {
+        public string Name => "routable";
+        public int Priority => 0;
+        public bool CanHandle(EventEnvelope envelope) => envelope != null;
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class CountingBypassModule : IEventModule<IEventHandlerContext>, IRouteBypassModule
+    {
+        public string Name => "bypass";
+        public int Priority => 0;
+        public bool CanHandle(EventEnvelope envelope) => envelope != null;
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 }

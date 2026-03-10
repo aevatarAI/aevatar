@@ -1,4 +1,4 @@
-using Google.Protobuf.WellKnownTypes;
+using Google.Protobuf;
 
 namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
@@ -14,7 +14,7 @@ public interface IProjectionSessionEventCodec<TEvent>
 
     string GetEventType(TEvent evt);
 
-    Any Serialize(TEvent evt);
+    ByteString Serialize(TEvent evt);
 
-    TEvent? Deserialize(string eventType, Any payload);
+    TEvent? Deserialize(string eventType, ByteString payload);
 }

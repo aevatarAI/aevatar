@@ -18,24 +18,28 @@ public sealed class ScriptEvolutionSessionEventCodec
         return EventType;
     }
 
-    public Any Serialize(ScriptEvolutionSessionCompletedEvent evt)
+    public ByteString Serialize(ScriptEvolutionSessionCompletedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        return Any.Pack(evt);
+        return Any.Pack(evt).ToByteString();
     }
 
-    public ScriptEvolutionSessionCompletedEvent? Deserialize(string eventType, Any payload)
+    public ScriptEvolutionSessionCompletedEvent? Deserialize(string eventType, ByteString payload)
     {
         if (!string.Equals(eventType, EventType, StringComparison.Ordinal) ||
             payload == null ||
-            !payload.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+            payload.IsEmpty)
         {
             return null;
         }
 
         try
         {
-            return payload.Unpack<ScriptEvolutionSessionCompletedEvent>();
+            var envelope = Any.Parser.ParseFrom(payload);
+            if (!envelope.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+                return null;
+
+            return envelope.Unpack<ScriptEvolutionSessionCompletedEvent>();
         }
         catch (InvalidProtocolBufferException)
         {
