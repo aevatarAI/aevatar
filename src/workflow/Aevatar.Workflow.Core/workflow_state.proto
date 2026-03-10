@@ -115,6 +115,8 @@ message RetryBackoffState
   WorkflowRuntimeCallbackLeaseState lease = 1;
   int32 next_attempt = 2;
   int32 delay_ms = 3;
+  string callback_id = 4;
+  bool dispatch_pending = 5;
 }
 
 message WorkflowExecutionKernelState
@@ -127,12 +129,15 @@ message WorkflowExecutionKernelState
   map<string, int32> retry_attempts_by_step_id = 6;
   map<string, WorkflowRuntimeCallbackLeaseState> timeouts_by_step_id = 7;
   map<string, RetryBackoffState> retry_backoffs_by_step_id = 8;
+  bool current_step_dispatch_pending = 9;
+  string current_step_timeout_callback_id = 10;
 }
 
 message PendingDelayState
 {
   WorkflowRuntimeCallbackLeaseState lease = 1;
   string input = 2;
+  string callback_id = 3;
 }
 
 message DelayModuleState
@@ -147,6 +152,7 @@ message PendingSignalState
   string input = 3;
   string signal_name = 4;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
+  string timeout_callback_id = 6;
 }
 
 message WaitSignalModuleState
@@ -282,6 +288,8 @@ message PendingLlmCallState
   string run_id = 2;
   string target_role = 3;
   WorkflowRuntimeCallbackLeaseState watchdog_lease = 4;
+  bool request_dispatched = 5;
+  string watchdog_callback_id = 6;
 }
 
 message LLMCallModuleState

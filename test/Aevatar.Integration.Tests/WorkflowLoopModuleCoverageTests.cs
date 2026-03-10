@@ -746,7 +746,8 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         next.StepId.Should().Be("s2");
-        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == "workflow-step-timeout:run-cancel-timeout:s1");
+        ctx.Canceled.Should().ContainSingle(x =>
+            x.CallbackId.StartsWith("workflow-step-timeout:run-cancel-timeout:s1:", StringComparison.Ordinal));
     }
 
     [Fact]

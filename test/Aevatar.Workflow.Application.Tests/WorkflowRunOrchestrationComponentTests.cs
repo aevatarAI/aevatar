@@ -12,15 +12,17 @@ public sealed class WorkflowRunOrchestrationComponentTests
     [Fact]
     public async Task WorkflowRunCommandTargetResolver_ShouldFail_WhenProjectionIsDisabled()
     {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None));
         var resolver = new WorkflowRunCommandTargetResolver(
-            new FakeWorkflowRunActorResolver(
-                new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None)),
+            actorResolver,
             new FakeProjectionPort { ProjectionEnabled = false });
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
+        actorResolver.ResolveCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -136,6 +138,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
     {
         private readonly WorkflowActorResolutionResult _result;
+        public int ResolveCallCount { get; private set; }
 
         public FakeWorkflowRunActorResolver(WorkflowActorResolutionResult result)
         {
@@ -148,6 +151,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         {
             _ = request;
             ct.ThrowIfCancellationRequested();
+            ResolveCallCount++;
             return Task.FromResult(_result);
         }
     }

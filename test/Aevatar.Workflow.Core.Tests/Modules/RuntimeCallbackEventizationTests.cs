@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -90,6 +91,102 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task DelayModule_ShouldAcceptCallbackIdFallback_WhenLeaseIsMissing()
+    {
+        var module = new DelayModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "delay-step",
+                StepType = "delay",
+                RunId = "run-delay-fallback",
+                Input = "payload",
+                Parameters = { ["duration_ms"] = "1200" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single();
+        var state = ctx.LoadState<DelayModuleState>("delay");
+        state.Pending["run-delay-fallback:delay-step"].Lease = null;
+        await ctx.SaveStateAsync("delay", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new DelayStepTimeoutFiredEvent
+                {
+                    RunId = "run-delay-fallback",
+                    StepId = "delay-step",
+                    DurationMs = 1200,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("payload");
+    }
+
+    [Fact]
+    public async Task DelayModule_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
+    {
+        var module = new DelayModule();
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "delay-step", StringComparison.Ordinal) &&
+                                     completed.Success,
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "delay-step",
+                StepType = "delay",
+                RunId = "run-delay-replay",
+                Input = "payload",
+                Parameters = { ["duration_ms"] = "1200" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single();
+        ctx.Published.Clear();
+        var timeoutEnvelope = Wrap(
+            new DelayStepTimeoutFiredEvent
+            {
+                RunId = "run-delay-replay",
+                StepId = "delay-step",
+                DurationMs = 1200,
+            },
+            MetadataFor(scheduled));
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.LoadState<DelayModuleState>("delay").Pending.Should().ContainKey("run-delay-replay:delay-step");
+
+        await module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("payload");
+    }
+
+    [Fact]
     public async Task WaitSignalModule_ShouldIgnoreStaleTimeoutWithoutDroppingPending()
     {
         var module = new WaitSignalModule();
@@ -153,6 +250,55 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldAcceptCallbackIdFallback_WhenLeaseIsMissing()
+    {
+        var module = new WaitSignalModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "wait-1",
+                StepType = "wait_signal",
+                RunId = "run-wait-fallback",
+                Input = "default-output",
+                Parameters =
+                {
+                    ["signal_name"] = "approve",
+                    ["timeout_ms"] = "5000",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
+        var state = ctx.LoadState<WaitSignalModuleState>("wait_signal");
+        state.Pending["run-wait-fallback:approve:wait-1"].TimeoutLease = null;
+        await ctx.SaveStateAsync("wait_signal", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WaitSignalTimeoutFiredEvent
+                {
+                    RunId = "run-wait-fallback",
+                    StepId = "wait-1",
+                    SignalName = "approve",
+                    TimeoutMs = 5000,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("timed out");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
         var ctx = new SchedulingContext
@@ -213,6 +359,57 @@ public class RuntimeCallbackEventizationTests
             .Single();
         completion.Success.Should().BeFalse();
         completion.Error.Should().Contain("TIMEOUT");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldResumeInitialDispatch_WhenStartPublishFailsTransiently()
+    {
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepRequestEvent request &&
+                                     string.Equals(request.StepId, "step-1", StringComparison.Ordinal),
+        };
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        var startEnvelope = Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-start-replay",
+            Input = "input-v1",
+        });
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(startEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        var pendingState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        pendingState.Active.Should().BeTrue();
+        pendingState.CurrentStepDispatchPending.Should().BeTrue();
+        pendingState.CurrentStepId.Should().Be("step-1");
+
+        await module.HandleAsync(startEnvelope, ctx, CancellationToken.None);
+
+        var retryStepRequest = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Single();
+        retryStepRequest.RunId.Should().Be("run-start-replay");
+        retryStepRequest.StepId.Should().Be("step-1");
+        retryStepRequest.Input.Should().Be("input-v1");
     }
 
     [Fact]
@@ -304,6 +501,77 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WorkflowLoop_ShouldConsumeRetryBackoffReplay_AfterRedispatchAlreadyCommitted()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-retry-cleanup",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-cleanup",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepRetryBackoffFiredEvent);
+        var state = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        state.RetryBackoffsByStepId["step-1"].DispatchPending = true;
+        await ctx.SaveStateAsync("workflow_execution_kernel", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WorkflowStepRetryBackoffFiredEvent
+                {
+                    RunId = "run-retry-cleanup",
+                    StepId = "step-1",
+                    DelayMs = 800,
+                    NextAttempt = 2,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().NotContain(x => x.Event is StepRequestEvent);
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel")
+            .RetryBackoffsByStepId.Should().NotContainKey("step-1");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
     {
         var ctx = new SchedulingContext();
@@ -375,7 +643,7 @@ public class RuntimeCallbackEventizationTests
 
         ctx.Published.Should().BeEmpty();
         ctx.Canceled.Should().ContainSingle(x =>
-            x.CallbackId == "workflow-step-timeout:run-retry-replay:step-1" &&
+            x.CallbackId.StartsWith("workflow-step-timeout:run-retry-replay:step-1:", StringComparison.Ordinal) &&
             x.ExpectedGeneration == 2);
 
         await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
@@ -387,6 +655,56 @@ public class RuntimeCallbackEventizationTests
         retryStepRequest.RunId.Should().Be("run-retry-replay");
         retryStepRequest.StepId.Should().Be("step-1");
         retryStepRequest.Input.Should().Be("input-v1");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldReplayCompletion_WhenPublishFailsTransiently()
+    {
+        var module = new LLMCallModule();
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "step-1", StringComparison.Ordinal) &&
+                                     completed.Success,
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "step-1",
+                StepType = "llm_call",
+                RunId = "run-llm-replay",
+                Input = "prompt",
+                Parameters = { ["timeout_ms"] = "5000" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
+        ctx.Published.Clear();
+        var responseEnvelope = Wrap(new ChatResponseEvent
+        {
+            SessionId = chatRequest.SessionId,
+            Content = "ok",
+        });
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(responseEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId.Should().ContainKey(chatRequest.SessionId);
+
+        await module.HandleAsync(responseEnvelope, ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("ok");
     }
 
     [Fact]

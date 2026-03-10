@@ -92,63 +92,34 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        var attempt = runtimeState.AttemptsByStepId.GetValueOrDefault(stepId, 0) + 1;
-        runtimeState.AttemptsByStepId[stepId] = attempt;
-
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, stepId, attempt);
         var timeoutMs = ResolveLlmTimeoutMs(request);
-        var watchdogCallbackId = BuildWatchdogCallbackId(chatSessionId);
-        runtimeState.PendingBySessionId[chatSessionId] = new PendingLlmCallState
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        if (!TryResolvePending(runtimeState, runId, stepId, out var chatSessionId, out var pendingState))
         {
-            StepId = stepId,
-            RunId = runId,
-            TargetRole = request.TargetRole ?? string.Empty,
-        };
-        await SaveStateAsync(runtimeState, ctx, ct);
-
-        var targetRole = request.TargetRole;
-        var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
-        var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
-        chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
+            var attempt = runtimeState.AttemptsByStepId.GetValueOrDefault(stepId, 0) + 1;
+            runtimeState.AttemptsByStepId[stepId] = attempt;
+            chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, stepId, attempt);
+            pendingState = new PendingLlmCallState
+            {
+                StepId = stepId,
+                RunId = runId,
+                TargetRole = request.TargetRole ?? string.Empty,
+                RequestDispatched = false,
+                WatchdogCallbackId = BuildWatchdogCallbackId(chatSessionId),
+            };
+            runtimeState.PendingBySessionId[chatSessionId] = pendingState;
+            await SaveStateAsync(runtimeState, ctx, ct);
+        }
 
         try
         {
-            if (!string.IsNullOrEmpty(targetRole))
-            {
-                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
-                ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
-                    stepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
-                await ctx.SendToAsync(targetActorId, chatEvt, ct);
-            }
-            else
-            {
-                ctx.Logger.LogInformation(
-                    "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
-                    stepId, timeoutMs, prompt.Length, promptPreview);
-                await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
-            }
+            await EnsureWatchdogScheduledAsync(chatSessionId, pendingState, timeoutMs, ctx, ct);
+            pendingState = GetRequiredPending(chatSessionId, ctx);
+            if (pendingState.RequestDispatched)
+                return;
 
-            var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
-                watchdogCallbackId,
-                TimeSpan.FromMilliseconds(timeoutMs),
-                new LlmCallWatchdogTimeoutFiredEvent
-                {
-                    SessionId = chatSessionId,
-                    TimeoutMs = timeoutMs,
-                    RunId = runId,
-                    StepId = stepId,
-                },
-                ct: ct);
-
-            runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-            if (runtimeState.PendingBySessionId.TryGetValue(chatSessionId, out var pendingState))
-            {
-                pendingState.WatchdogLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
-                runtimeState.PendingBySessionId[chatSessionId] = pendingState;
-                await SaveStateAsync(runtimeState, ctx, ct);
-            }
+            await DispatchChatRequestAsync(chatSessionId, pendingState.TargetRole, prompt, timeoutMs, stepId, ctx, ct);
+            await MarkRequestDispatchedAsync(chatSessionId, ctx, ct);
         }
         catch (Exception ex)
         {
@@ -168,20 +139,18 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        runtimeState.AttemptsByStepId.Remove(pending.StepId);
-        await SaveStateAsync(runtimeState, ctx, ct);
-
-        var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
             await PublishFailedCompletionAsync(pending, error, envelope.PublisherId, ctx, ct);
+            await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
             return;
         }
 
+        var outputPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         ctx.Logger.LogInformation(
             "LLMCallModule: step={StepId} completed ({Len} chars): {Preview}",
             pending.StepId, evt.Content?.Length ?? 0, outputPreview);
@@ -194,6 +163,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             Output = evt.Content ?? string.Empty,
             WorkerId = envelope.PublisherId,
         }, EventDirection.Self, ct);
+        await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
 
     private async Task HandleChatResponseAsync(
@@ -206,20 +176,18 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        runtimeState.AttemptsByStepId.Remove(pending.StepId);
-        await SaveStateAsync(runtimeState, ctx, ct);
-
-        var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         if (TryExtractLlmFailure(evt.Content, out var error))
         {
             await PublishFailedCompletionAsync(pending, error, ctx.AgentId, ctx, ct);
+            await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
             return;
         }
 
+        var nsPreview = (evt.Content ?? "").Length > 300 ? evt.Content![..300] + "..." : evt.Content ?? "";
         ctx.Logger.LogInformation(
             "LLMCallModule: step={StepId} completed non-streaming ({Len} chars): {Preview}",
             pending.StepId, evt.Content?.Length ?? 0, nsPreview);
@@ -232,6 +200,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             Output = evt.Content ?? string.Empty,
             WorkerId = ctx.AgentId,
         }, EventDirection.Self, ct);
+        await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
 
     private static int ResolveLlmTimeoutMs(StepRequestEvent request)
@@ -280,8 +249,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (!runtimeState.PendingBySessionId.TryGetValue(evt.SessionId, out var pending))
             return;
 
-        if (pending.WatchdogLease == null ||
-            !WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.WatchdogLease))
+        if (!MatchesWatchdog(envelope, pending))
         {
             ctx.Logger.LogDebug(
                 "LLMCallModule: ignore watchdog without matching lease session={SessionId}",
@@ -289,32 +257,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        runtimeState.PendingBySessionId.Remove(evt.SessionId);
-        runtimeState.AttemptsByStepId.Remove(pending.StepId);
-        await SaveStateAsync(runtimeState, ctx, ct);
-
         ctx.Logger.LogWarning(
             "LLMCallModule: step={StepId} timeout after {Timeout}ms (run={RunId}).",
             pending.StepId,
             evt.TimeoutMs,
             pending.RunId);
 
-        try
-        {
-            await PublishFailedCompletionAsync(
-                pending,
-                $"LLM call timed out after {evt.TimeoutMs}ms",
-                pending.TargetRole,
-                ctx,
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            ctx.Logger.LogWarning(
-                ex,
-                "LLMCallModule: failed to publish timeout completion for step={StepId}.",
-                pending.StepId);
-        }
+        await PublishFailedCompletionAsync(
+            pending,
+            $"LLM call timed out after {evt.TimeoutMs}ms",
+            pending.TargetRole,
+            ctx,
+            ct);
+        await RemovePendingAsync(evt.SessionId, pending.StepId, ctx, ct);
     }
 
     private async Task FailPendingAsync(
@@ -325,14 +280,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         CancellationToken ct)
     {
         var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
-        if (!runtimeState.PendingBySessionId.Remove(sessionId, out var pending))
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pending))
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
-        runtimeState.AttemptsByStepId.Remove(pending.StepId);
-        await SaveStateAsync(runtimeState, ctx, ct);
-
         await PublishFailedCompletionAsync(pending, error, workerId, ctx, ct);
+        await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
 
     private static Task PublishFailedCompletionAsync(
@@ -355,6 +308,140 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string BuildWatchdogCallbackId(string sessionId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(LlmWatchdogCallbackPrefix, sessionId);
+
+    private static bool TryResolvePending(
+        LLMCallModuleState state,
+        string runId,
+        string stepId,
+        out string sessionId,
+        out PendingLlmCallState pending)
+    {
+        foreach (var entry in state.PendingBySessionId)
+        {
+            if (!string.Equals(entry.Value.RunId, runId, StringComparison.Ordinal) ||
+                !string.Equals(entry.Value.StepId, stepId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            sessionId = entry.Key;
+            pending = entry.Value;
+            return true;
+        }
+
+        sessionId = string.Empty;
+        pending = default!;
+        return false;
+    }
+
+    private async Task EnsureWatchdogScheduledAsync(
+        string sessionId,
+        PendingLlmCallState pending,
+        int timeoutMs,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (pending.WatchdogLease != null)
+            return;
+
+        var callbackId = string.IsNullOrWhiteSpace(pending.WatchdogCallbackId)
+            ? BuildWatchdogCallbackId(sessionId)
+            : pending.WatchdogCallbackId;
+        var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
+            callbackId,
+            TimeSpan.FromMilliseconds(timeoutMs),
+            new LlmCallWatchdogTimeoutFiredEvent
+            {
+                SessionId = sessionId,
+                TimeoutMs = timeoutMs,
+                RunId = pending.RunId,
+                StepId = pending.StepId,
+            },
+            ct: ct);
+
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var persistedPending))
+            return;
+
+        persistedPending.WatchdogCallbackId = callbackId;
+        persistedPending.WatchdogLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+        runtimeState.PendingBySessionId[sessionId] = persistedPending;
+        await SaveStateAsync(runtimeState, ctx, ct);
+    }
+
+    private async Task DispatchChatRequestAsync(
+        string sessionId,
+        string targetRole,
+        string prompt,
+        int timeoutMs,
+        string stepId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
+        var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
+        chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
+
+        if (!string.IsNullOrEmpty(targetRole))
+        {
+            var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
+            ctx.Logger.LogInformation(
+                "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+                stepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
+            await ctx.SendToAsync(targetActorId, chatEvt, ct);
+            return;
+        }
+
+        ctx.Logger.LogInformation(
+            "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
+            stepId, timeoutMs, prompt.Length, promptPreview);
+        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
+    }
+
+    private static PendingLlmCallState GetRequiredPending(string sessionId, IWorkflowExecutionContext ctx)
+    {
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        return runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pendingState)
+            ? pendingState
+            : throw new InvalidOperationException($"Missing pending LLM call state for session {sessionId}.");
+    }
+
+    private static async Task MarkRequestDispatchedAsync(
+        string sessionId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out var pendingState))
+            return;
+
+        pendingState.RequestDispatched = true;
+        runtimeState.PendingBySessionId[sessionId] = pendingState;
+        await SaveStateAsync(runtimeState, ctx, ct);
+    }
+
+    private static async Task RemovePendingAsync(
+        string sessionId,
+        string stepId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        if (!runtimeState.PendingBySessionId.Remove(sessionId))
+            return;
+
+        runtimeState.AttemptsByStepId.Remove(stepId);
+        await SaveStateAsync(runtimeState, ctx, ct);
+    }
+
+    private static bool MatchesWatchdog(EventEnvelope envelope, PendingLlmCallState pending)
+    {
+        if (pending.WatchdogLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.WatchdogLease);
+
+        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
+               string.Equals(metadata.CallbackId, pending.WatchdogCallbackId, StringComparison.Ordinal);
+    }
 
     private async Task StopWatchdogAsync(
         PendingLlmCallState pending,

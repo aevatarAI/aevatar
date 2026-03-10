@@ -70,20 +70,21 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 runId,
                 signalName);
 
-            await ctx.PublishAsync(new WaitingForSignalEvent
+            await CancelPendingAsync(state, pendingKey, ctx, CancellationToken.None);
+
+            var pendingState = new PendingSignalState
             {
                 StepId = stepId,
-                SignalName = signalName,
-                Prompt = prompt,
-                TimeoutMs = timeoutMs,
                 RunId = runId,
-            }, EventDirection.Both, ct);
-
-            if (state.Pending.Remove(BuildPendingKey(pendingKey), out var existingPending) &&
-                existingPending.TimeoutLease != null)
-            {
-                await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, existingPending.TimeoutLease, CancellationToken.None);
-            }
+                Input = request.Input ?? string.Empty,
+                SignalName = signalName,
+                TimeoutLease = null,
+                TimeoutCallbackId = timeoutMs > 0
+                    ? BuildTimeoutCallbackId(runId, signalName, stepId, ResolveOriginEnvelopeId(envelope))
+                    : string.Empty,
+            };
+            state.Pending[BuildPendingKey(pendingKey)] = pendingState;
+            await SaveStateAsync(state, ctx, ct);
 
             if (timeoutMs > 0)
             {
@@ -94,34 +95,24 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                     SignalName = signalName,
                     TimeoutMs = Math.Clamp(timeoutMs, 100, 3_600_000),
                 };
-                var callbackId = BuildTimeoutCallbackId(runId, signalName, stepId);
                 var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
-                    callbackId,
+                    pendingState.TimeoutCallbackId,
                     TimeSpan.FromMilliseconds(timeoutFiredEvent.TimeoutMs),
                     timeoutFiredEvent,
                     ct: ct);
-                state.Pending[BuildPendingKey(pendingKey)] = new PendingSignalState
-                {
-                    StepId = stepId,
-                    RunId = runId,
-                    Input = request.Input ?? string.Empty,
-                    SignalName = signalName,
-                    TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease),
-                };
-            }
-            else
-            {
-                state.Pending[BuildPendingKey(pendingKey)] = new PendingSignalState
-                {
-                    StepId = stepId,
-                    RunId = runId,
-                    Input = request.Input ?? string.Empty,
-                    SignalName = signalName,
-                    TimeoutLease = null,
-                };
+                pendingState.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+                state.Pending[BuildPendingKey(pendingKey)] = pendingState;
+                await SaveStateAsync(state, ctx, ct);
             }
 
-            await SaveStateAsync(state, ctx, ct);
+            await ctx.PublishAsync(new WaitingForSignalEvent
+            {
+                StepId = stepId,
+                SignalName = signalName,
+                Prompt = prompt,
+                TimeoutMs = timeoutMs,
+                RunId = runId,
+            }, EventDirection.Both, ct);
         }
         else if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
         {
@@ -137,8 +128,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             if (!state.Pending.TryGetValue(BuildPendingKey(pendingKey), out var pending))
                 return;
 
-            if (pending.TimeoutLease == null ||
-                !WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.TimeoutLease))
+            if (!MatchesTimeout(envelope, pending))
             {
                 ctx.Logger.LogDebug(
                     "WaitSignal: ignore timeout without matching lease run={RunId} step={StepId} signal={Signal}",
@@ -262,13 +252,40 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
     private static string NormalizeStepId(string? stepId) =>
         string.IsNullOrWhiteSpace(stepId) ? string.Empty : stepId.Trim();
 
-    private static string BuildTimeoutCallbackId(string runId, string signalName, string stepId) =>
-        RuntimeCallbackKeyComposer.BuildCallbackId("wait-signal-timeout", runId, signalName, stepId);
+    private static bool MatchesTimeout(EventEnvelope envelope, PendingSignalState pending)
+    {
+        if (pending.TimeoutLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.TimeoutLease);
+
+        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
+               string.Equals(metadata.CallbackId, pending.TimeoutCallbackId, StringComparison.Ordinal);
+    }
+
+    private static string ResolveOriginEnvelopeId(EventEnvelope envelope) =>
+        string.IsNullOrWhiteSpace(envelope.Id)
+            ? Guid.NewGuid().ToString("N")
+            : envelope.Id;
+
+    private static string BuildTimeoutCallbackId(string runId, string signalName, string stepId, string originEnvelopeId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("wait-signal-timeout", runId, signalName, stepId, originEnvelopeId);
 
     private readonly record struct PendingSignalKey(string RunId, string SignalName, string StepId);
 
     private static string BuildPendingKey(PendingSignalKey key) =>
         $"{key.RunId}:{key.SignalName}:{key.StepId}";
+
+    private static async Task CancelPendingAsync(
+        WaitSignalModuleState state,
+        PendingSignalKey key,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (!state.Pending.Remove(BuildPendingKey(key), out var existingPending))
+            return;
+
+        await SaveStateAsync(state, ctx, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, existingPending.TimeoutLease, ct);
+    }
 
     private static Task SaveStateAsync(
         WaitSignalModuleState state,

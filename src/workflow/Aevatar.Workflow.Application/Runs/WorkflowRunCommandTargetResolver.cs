@@ -24,13 +24,13 @@ internal sealed class WorkflowRunCommandTargetResolver
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var actorResolution = await _actorResolver.ResolveOrCreateAsync(command, ct);
-        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
-            return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(actorResolution.Error);
-
         if (!_projectionPort.ProjectionEnabled)
             return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.ProjectionDisabled);
+
+        var actorResolution = await _actorResolver.ResolveOrCreateAsync(command, ct);
+        if (actorResolution.Error != WorkflowChatRunStartError.None || actorResolution.Actor == null)
+            return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Failure(actorResolution.Error);
 
         return CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>.Success(
             new WorkflowRunCommandTarget(
