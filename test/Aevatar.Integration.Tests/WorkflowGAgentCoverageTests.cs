@@ -509,7 +509,7 @@ public class WorkflowGAgentCoverageTests
         parentCompletion.RunId.Should().Be("parent-run");
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("child-done");
-        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
     }
 

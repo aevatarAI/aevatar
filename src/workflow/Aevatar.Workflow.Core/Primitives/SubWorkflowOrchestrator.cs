@@ -204,11 +204,11 @@ internal sealed class SubWorkflowOrchestrator
             Output = completed.Output,
             Error = completed.Error,
         };
-        parentCompleted.Metadata[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
-        parentCompleted.Metadata[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
-        parentCompleted.Metadata[WorkflowCallLifecycleMetadataKey] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
-        parentCompleted.Metadata[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
-        parentCompleted.Metadata[WorkflowCallChildRunIdMetadataKey] = childRunId;
+        parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
+        parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
+        parentCompleted.Annotations[WorkflowCallLifecycleMetadataKey] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
+        parentCompleted.Annotations[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
+        parentCompleted.Annotations[WorkflowCallChildRunIdMetadataKey] = childRunId;
 
         await _publishAsync(parentCompleted, EventDirection.Self, ct);
         await TryFinalizeNonSingletonChildAsync(pending, ct);

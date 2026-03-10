@@ -142,7 +142,15 @@ internal static class WorkflowExecutionReportSnapshotMapper
             Error = source.Error ?? string.Empty,
         };
         snapshot.RequestParameters.Add(source.RequestParameters ?? new Dictionary<string, string>(StringComparer.Ordinal));
-        snapshot.CompletionMetadata.Add(source.CompletionMetadata ?? new Dictionary<string, string>(StringComparer.Ordinal));
+        snapshot.CompletionAnnotations.Add(source.CompletionAnnotations ?? new Dictionary<string, string>(StringComparer.Ordinal));
+        snapshot.NextStepId = source.NextStepId ?? string.Empty;
+        snapshot.BranchKey = source.BranchKey ?? string.Empty;
+        snapshot.AssignedVariable = source.AssignedVariable ?? string.Empty;
+        snapshot.AssignedValue = source.AssignedValue ?? string.Empty;
+        snapshot.SuspensionType = source.SuspensionType ?? string.Empty;
+        snapshot.SuspensionPrompt = source.SuspensionPrompt ?? string.Empty;
+        snapshot.SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds ?? 0;
+        snapshot.RequestedVariableName = source.RequestedVariableName ?? string.Empty;
         return snapshot;
     }
 
@@ -159,7 +167,15 @@ internal static class WorkflowExecutionReportSnapshotMapper
             OutputPreview = source.OutputPreview ?? string.Empty,
             Error = source.Error ?? string.Empty,
             RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
-            CompletionMetadata = source.CompletionMetadata.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            NextStepId = source.NextStepId ?? string.Empty,
+            BranchKey = source.BranchKey ?? string.Empty,
+            AssignedVariable = source.AssignedVariable ?? string.Empty,
+            AssignedValue = source.AssignedValue ?? string.Empty,
+            SuspensionType = source.SuspensionType ?? string.Empty,
+            SuspensionPrompt = source.SuspensionPrompt ?? string.Empty,
+            SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds == 0 ? null : source.SuspensionTimeoutSeconds,
+            RequestedVariableName = source.RequestedVariableName ?? string.Empty,
         };
 
     private static WorkflowExecutionRoleReplySnapshot ToRoleReplySnapshot(WorkflowExecutionRoleReply source) =>

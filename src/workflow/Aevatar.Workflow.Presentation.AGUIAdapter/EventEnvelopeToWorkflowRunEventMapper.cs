@@ -131,9 +131,9 @@ public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEv
         }
 
         var evt = envelope.Payload.Unpack<StepCompletedEvent>();
-        var metadata = new Dictionary<string, string>();
-        foreach (var (key, value) in evt.Metadata)
-            metadata[key] = value;
+        var annotations = new Dictionary<string, string>();
+        foreach (var (key, value) in evt.Annotations)
+            annotations[key] = value;
         events =
         [
             new WorkflowRunEventEnvelope
@@ -157,7 +157,7 @@ public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEv
                         Success = evt.Success,
                         Output = evt.Output,
                         Error = evt.Error,
-                        Metadata = { metadata },
+                        Annotations = { annotations },
                         NextStepId = evt.NextStepId,
                         BranchKey = evt.BranchKey,
                         AssignedVariable = evt.AssignedVariable,

@@ -1917,7 +1917,7 @@
           success: value.success === true,
           output: readCustomValue(value, "output", "Output"),
           error: value.error ?? value.Error ?? null,
-          metadata: value.metadata || {},
+          annotations: value.annotations || value.Annotations || {},
           nextStepId: readCustomValue(value, "nextStepId", "NextStepId"),
           branchKey: readCustomValue(value, "branchKey", "BranchKey"),
           assignedVariable: readCustomValue(value, "assignedVariable", "AssignedVariable"),

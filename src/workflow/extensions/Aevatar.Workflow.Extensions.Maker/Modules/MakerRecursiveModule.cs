@@ -239,14 +239,14 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             WorkerId = stageResult.WorkerId,
         };
 
-        foreach (var (key, value) in stageResult.Metadata)
-            completed.Metadata[key] = value;
-        completed.Metadata["maker.recursive"] = "true";
-        completed.Metadata["maker.depth"] = node.Depth.ToString();
-        completed.Metadata["maker.max_depth"] = node.MaxDepth.ToString();
-        completed.Metadata["maker.atomic_decision"] = node.AtomicDecision.ToString();
-        completed.Metadata["maker.stage"] = stage;
-        completed.Metadata["maker.child_count"] = node.ChildStepIds.Count.ToString();
+        foreach (var (key, value) in stageResult.Annotations)
+            completed.Annotations[key] = value;
+        completed.Annotations["maker.recursive"] = "true";
+        completed.Annotations["maker.depth"] = node.Depth.ToString();
+        completed.Annotations["maker.max_depth"] = node.MaxDepth.ToString();
+        completed.Annotations["maker.atomic_decision"] = node.AtomicDecision.ToString();
+        completed.Annotations["maker.stage"] = stage;
+        completed.Annotations["maker.child_count"] = node.ChildStepIds.Count.ToString();
 
         await ctx.PublishAsync(completed, EventDirection.Self, ct);
         CleanupNode(node.Key);

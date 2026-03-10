@@ -56,7 +56,7 @@ message StepCompletedEvent {
   string output = 3;
   string error = 4;
   string worker_id = 5;
-  map<string, string> metadata = 6;
+  map<string, string> annotations = 6;
   string run_id = 7;
   string next_step_id = 8;
   string branch_key = 9;
@@ -105,7 +105,7 @@ message WorkflowSuspendedEvent {
   int32 timeout_seconds = 5;
   string variable_name = 6;
 }
-message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; }
 
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }

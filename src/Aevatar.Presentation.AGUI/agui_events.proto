@@ -87,7 +87,7 @@ message HumanInputRequestEvent {
   string suspension_type = 3;
   string prompt = 4;
   int32 timeout_seconds = 5;
-  map<string, string> metadata = 6;
+  string variable_name = 6;
 }
 
 message HumanInputResponseEvent {

@@ -48,8 +48,8 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             };
-            completed.Metadata["guard.skipped"] = "true";
-            completed.Metadata["guard.reason"] = reason;
+            completed.Annotations["guard.skipped"] = "true";
+            completed.Annotations["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }
         else if (onFail == "branch" && request.Parameters.TryGetValue("branch_target", out var target))
@@ -62,7 +62,7 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
                 Output = input,
                 NextStepId = target,
             };
-            completed.Metadata["guard.reason"] = reason;
+            completed.Annotations["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }
         else

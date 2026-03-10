@@ -312,7 +312,15 @@ public sealed class WorkflowExecutionStepTrace
     public string OutputPreview { get; set; } = "";
     public string Error { get; set; } = "";
     public Dictionary<string, string> RequestParameters { get; set; } = [];
-    public Dictionary<string, string> CompletionMetadata { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
+    public string NextStepId { get; set; } = "";
+    public string BranchKey { get; set; } = "";
+    public string AssignedVariable { get; set; } = "";
+    public string AssignedValue { get; set; } = "";
+    public string SuspensionType { get; set; } = "";
+    public string SuspensionPrompt { get; set; } = "";
+    public int? SuspensionTimeoutSeconds { get; set; }
+    public string RequestedVariableName { get; set; } = "";
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

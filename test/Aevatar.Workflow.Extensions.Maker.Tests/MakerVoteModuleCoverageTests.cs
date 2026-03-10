@@ -65,11 +65,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-empty");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("No candidates provided");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("0");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.k"].Should().Be("1");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("2200");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("0");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.k"].Should().Be("1");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("2200");
     }
 
     [Fact]
@@ -98,11 +98,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-flagged");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("red-flagged");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("2");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("2");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.k"].Should().Be("2");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("3");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("2");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("2");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.k"].Should().Be("2");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("3");
     }
 
     [Fact]
@@ -131,12 +131,12 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-ok");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("B");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("3");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("0");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("3");
-        completed.Metadata["maker_vote.top_votes"].Should().Be("2");
-        completed.Metadata["maker_vote.runner_up_votes"].Should().Be("1");
-        completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("True");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("3");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("0");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("3");
+        completed.Annotations["maker_vote.top_votes"].Should().Be("2");
+        completed.Annotations["maker_vote.runner_up_votes"].Should().Be("1");
+        completed.Annotations["maker_vote.used_majority_fallback"].Should().Be("True");
     }
 
     [Fact]
@@ -166,11 +166,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-defaults");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("short");
-        completed.Metadata["maker_vote.k"].Should().Be("1");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("2200");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("1");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("1");
-        completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("False");
+        completed.Annotations["maker_vote.k"].Should().Be("1");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("2200");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("1");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("1");
+        completed.Annotations["maker_vote.used_majority_fallback"].Should().Be("False");
     }
 
     private static RecordingWorkflowExecutionContext CreateContext()

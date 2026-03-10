@@ -509,7 +509,7 @@ steps:
 - 不要在模块里藏隐式状态，状态尽量显式放在 workflow vars 或事件里
 - 模块保持单一职责：一个模块处理一种 step type
 - YAML 只写 connector 名称和调用意图，连接细节与安全策略放配置
-- 每次 connector 调用的元数据会写入 `StepCompletedEvent.Metadata`，便于回放与审计
+- 每次 connector 调用的运行注解会写入 `StepCompletedEvent.Annotations`，便于回放与审计
 
 ---
 

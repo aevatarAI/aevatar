@@ -143,7 +143,7 @@ dotnet run
 - 输入：`StepRequestEvent.Input`
 - 路由：`parameters.connector` 选择命名 connector
 - 容错：支持 `on_missing=skip` / `on_error=continue`
-- 观测：统一输出到 `StepCompletedEvent.Metadata`
+- 观测：统一输出到 `StepCompletedEvent.Annotations`
 
 ### MakerVoteModule (`maker_vote`, Workflow.Extensions.Maker)
 

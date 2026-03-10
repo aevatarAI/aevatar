@@ -48,7 +48,15 @@ message WorkflowExecutionStepTraceSnapshot {
   string output_preview = 8;
   string error = 9;
   map<string, string> request_parameters = 10;
-  map<string, string> completion_metadata = 11;
+  map<string, string> completion_annotations = 11;
+  string next_step_id = 12;
+  string branch_key = 13;
+  string assigned_variable = 14;
+  string assigned_value = 15;
+  string suspension_type = 16;
+  string suspension_prompt = 17;
+  int32 suspension_timeout_seconds = 18;
+  string requested_variable_name = 19;
 }
 
 message WorkflowExecutionRoleReplySnapshot {

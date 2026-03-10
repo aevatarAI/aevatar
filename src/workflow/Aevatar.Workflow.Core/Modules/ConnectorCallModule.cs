@@ -141,7 +141,7 @@ public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext
             };
             AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
             foreach (var (key, value) in response.Metadata)
-                ok.Metadata[key] = value;
+                ok.Annotations[key] = value;
             await ctx.PublishAsync(ok, EventDirection.Self, ct);
             return;
         }
@@ -164,8 +164,8 @@ public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext
                 Output = request.Input,
             };
             AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-            continued.Metadata["connector.continued_on_error"] = "true";
-            continued.Metadata["connector.error"] = errorText ?? "";
+            continued.Annotations["connector.continued_on_error"] = "true";
+            continued.Annotations["connector.error"] = errorText ?? "";
             await ctx.PublishAsync(continued, EventDirection.Self, ct);
             return;
         }
@@ -212,11 +212,11 @@ public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext
             Success = true,
             Output = request.Input,
         };
-        skipped.Metadata["connector.skipped"] = "true";
-        skipped.Metadata["connector.skip_reason"] = reason;
-        skipped.Metadata["connector.name"] = connectorName;
-        skipped.Metadata["connector.operation"] = operation;
-        skipped.Metadata["connector.timeout_ms"] = timeoutMs.ToString();
+        skipped.Annotations["connector.skipped"] = "true";
+        skipped.Annotations["connector.skip_reason"] = reason;
+        skipped.Annotations["connector.name"] = connectorName;
+        skipped.Annotations["connector.operation"] = operation;
+        skipped.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
         await ctx.PublishAsync(skipped, EventDirection.Self, ct);
     }
 
@@ -229,12 +229,12 @@ public sealed class ConnectorCallModule : IEventModule<IWorkflowExecutionContext
         int timeoutMs,
         double durationMs)
     {
-        evt.Metadata["connector.name"] = connectorName;
-        evt.Metadata["connector.type"] = connector.Type;
-        evt.Metadata["connector.operation"] = operation;
-        evt.Metadata["connector.attempts"] = attempts.ToString();
-        evt.Metadata["connector.timeout_ms"] = timeoutMs.ToString();
-        evt.Metadata["connector.duration_ms"] = durationMs.ToString("F2");
+        evt.Annotations["connector.name"] = connectorName;
+        evt.Annotations["connector.type"] = connector.Type;
+        evt.Annotations["connector.operation"] = operation;
+        evt.Annotations["connector.attempts"] = attempts.ToString();
+        evt.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
+        evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
     }
 
     private static int ParseBoundedInt(string raw, int min, int max, int fallback)

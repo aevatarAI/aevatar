@@ -18,7 +18,11 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
         step.Error = evt.Error ?? "";
         step.WorkerId = evt.WorkerId ?? "";
         step.OutputPreview = WorkflowExecutionProjectionMutations.Truncate(evt.Output ?? "", 240);
-        step.CompletionMetadata = evt.Metadata.ToDictionary(kv => kv.Key, kv => kv.Value);
+        step.CompletionAnnotations = evt.Annotations.ToDictionary(kv => kv.Key, kv => kv.Value);
+        step.NextStepId = evt.NextStepId ?? string.Empty;
+        step.BranchKey = evt.BranchKey ?? string.Empty;
+        step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
+        step.AssignedValue = evt.AssignedValue ?? string.Empty;
 
         WorkflowExecutionProjectionMutations.AddTimeline(
             report,
@@ -29,7 +33,7 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
             evt.StepId,
             step.StepType,
             envelope.Payload?.TypeUrl ?? "",
-            step.CompletionMetadata);
+            step.CompletionAnnotations);
 
         return true;
     }

@@ -24,9 +24,13 @@ internal static class WorkflowExecutionStateModelExtensions
             Output = evt.Output ?? string.Empty,
             Error = evt.Error ?? string.Empty,
             WorkerId = evt.WorkerId ?? string.Empty,
+            NextStepId = evt.NextStepId ?? string.Empty,
+            BranchKey = evt.BranchKey ?? string.Empty,
+            AssignedVariable = evt.AssignedVariable ?? string.Empty,
+            AssignedValue = evt.AssignedValue ?? string.Empty,
         };
-        foreach (var (key, value) in evt.Metadata)
-            result.Metadata[key] = value;
+        foreach (var (key, value) in evt.Annotations)
+            result.Annotations[key] = value;
 
         return result;
     }

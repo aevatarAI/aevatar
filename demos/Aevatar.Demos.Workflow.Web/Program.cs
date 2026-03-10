@@ -510,9 +510,9 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(StepCompletedEvent.Descriptor))
             {
                 var evt = payload.Unpack<StepCompletedEvent>();
-                var meta = new Dictionary<string, string>();
-                foreach (var kv in evt.Metadata)
-                    meta[kv.Key] = kv.Value;
+                var annotations = new Dictionary<string, string>();
+                foreach (var kv in evt.Annotations)
+                    annotations[kv.Key] = kv.Value;
                 await WriteSse("step.completed", new
                 {
                     runId = evt.RunId,
@@ -520,7 +520,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     success = evt.Success,
                     output = evt.Output,
                     error = string.IsNullOrEmpty(evt.Error) ? null : evt.Error,
-                    metadata = meta.Count > 0 ? meta : null,
+                    annotations = annotations.Count > 0 ? annotations : null,
                 });
             }
 

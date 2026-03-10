@@ -138,9 +138,9 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
                     Success = true,
                     Output = completed.Output,
                 };
-                parentCompleted.Metadata["while.iterations"] = nextIteration.ToString();
-                parentCompleted.Metadata["while.max_iterations"] = state.MaxIterations.ToString();
-                parentCompleted.Metadata["while.condition"] = state.ConditionExpression;
+                parentCompleted.Annotations["while.iterations"] = nextIteration.ToString();
+                parentCompleted.Annotations["while.max_iterations"] = state.MaxIterations.ToString();
+                parentCompleted.Annotations["while.condition"] = state.ConditionExpression;
                 await ctx.PublishAsync(parentCompleted, EventDirection.Self, ct);
             }
         }

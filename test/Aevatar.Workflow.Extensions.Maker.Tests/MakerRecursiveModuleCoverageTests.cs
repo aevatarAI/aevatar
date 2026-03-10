@@ -70,8 +70,8 @@ public class MakerRecursiveModuleCoverageTests
         final.RunId.Should().Be(runId);
         final.Success.Should().BeTrue();
         final.Output.Should().Be("LEAF_ANSWER");
-        final.Metadata["maker.recursive"].Should().Be("true");
-        final.Metadata["maker.stage"].Should().Be("leaf");
+        final.Annotations["maker.recursive"].Should().Be("true");
+        final.Annotations["maker.stage"].Should().Be("leaf");
     }
 
     [Fact]

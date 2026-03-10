@@ -136,8 +136,8 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             Success = true,
             Output = evalCtx.OriginalInput,
         };
-        completed.Metadata["evaluate.score"] = score.ToString("F1");
-        completed.Metadata["evaluate.passed"] = passed.ToString();
+        completed.Annotations["evaluate.score"] = score.ToString("F1");
+        completed.Annotations["evaluate.passed"] = passed.ToString();
 
         if (!passed && !string.IsNullOrEmpty(evalCtx.OnBelow))
             completed.BranchKey = evalCtx.OnBelow;

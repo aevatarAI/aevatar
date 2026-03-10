@@ -282,7 +282,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("DONE");
-        completed.Metadata["while.iterations"].Should().Be("2");
+        completed.Annotations["while.iterations"].Should().Be("2");
     }
 
     [Fact]
@@ -635,8 +635,8 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        completion.Metadata["cache.key"].Should().EndWith("...");
-        completion.Metadata["cache.key"].Length.Should().Be(63);
+        completion.Annotations["cache.key"].Should().EndWith("...");
+        completion.Annotations["cache.key"].Length.Should().Be(63);
     }
 
     [Fact]
@@ -684,8 +684,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         missCompletion.StepId.Should().Be("cache-parent-1");
         missCompletion.Success.Should().BeTrue();
         missCompletion.Output.Should().Be("cached-output");
-        missCompletion.Metadata["cache.hit"].Should().Be("false");
-        missCompletion.Metadata.Should().ContainKey("cache.key");
+        missCompletion.Annotations["cache.hit"].Should().Be("false");
+        missCompletion.Annotations.Should().ContainKey("cache.key");
 
         ctx.Published.Clear();
 
@@ -708,8 +708,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         hitCompletion.StepId.Should().Be("cache-parent-2");
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-output");
-        hitCompletion.Metadata["cache.hit"].Should().Be("true");
-        hitCompletion.Metadata.Should().ContainKey("cache.key");
+        hitCompletion.Annotations["cache.hit"].Should().Be("true");
+        hitCompletion.Annotations.Should().ContainKey("cache.key");
     }
 
     [Fact]
@@ -764,7 +764,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
         foreach (var completion in waiterCompletions)
         {
-            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            completion.Annotations.TryGetValue("cache.hit", out var hit).Should().BeTrue();
             hit.Should().Be("false");
         }
 

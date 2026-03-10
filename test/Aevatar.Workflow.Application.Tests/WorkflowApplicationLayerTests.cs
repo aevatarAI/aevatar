@@ -45,7 +45,10 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunInteractionService_ShouldEmitFramesSnapshotAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var pipeline = new FakeDispatchPipeline
@@ -181,7 +184,10 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunDetachedDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var outputStreamer = new FakeWorkflowRunOutputStreamer
@@ -199,7 +205,7 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
         await outputStreamer.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await projectionPort.Released.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         projectionPort.DetachCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
@@ -391,6 +397,8 @@ public sealed class WorkflowApplicationLayerTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public List<string> DestroyCalls { get; } = [];
+        public int ExpectedDestroyCount { get; set; } = int.MaxValue;
+        public TaskCompletionSource<bool> DestroyCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DestroyException { get; set; }
 
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
@@ -402,6 +410,8 @@ public sealed class WorkflowApplicationLayerTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
         {
             DestroyCalls.Add(actorId);
+            if (DestroyCalls.Count >= ExpectedDestroyCount)
+                DestroyCompleted.TrySetResult(true);
             if (DestroyException != null)
                 throw DestroyException;
 
