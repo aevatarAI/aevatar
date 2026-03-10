@@ -298,6 +298,7 @@ public sealed class WorkflowRunGAgent
     {
         await PersistDomainEventAsync(evt);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
+        await CleanupRoleAgentTreeAsync(CancellationToken.None);
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -321,6 +322,52 @@ public sealed class WorkflowRunGAgent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
         }, EventDirection.Up);
+    }
+
+    private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
+    {
+        var roleActorIds = CollectRoleActorIds();
+        if (roleActorIds.Count == 0)
+            return;
+
+        var remainingActorIds = new List<string>();
+        foreach (var childActorId in roleActorIds)
+        {
+            try
+            {
+                await _runtime.UnlinkAsync(childActorId, ct);
+                await _runtime.DestroyAsync(childActorId, ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Failed to cleanup workflow role actor {ChildActorId} for run actor {ActorId}.",
+                    childActorId,
+                    Id);
+                remainingActorIds.Add(childActorId);
+            }
+        }
+
+        _childAgentIds.Clear();
+        _childAgentIds.AddRange(remainingActorIds);
+    }
+
+    private IReadOnlyList<string> CollectRoleActorIds()
+    {
+        var roleActorIds = new HashSet<string>(_childAgentIds, StringComparer.Ordinal);
+        if (_compiledWorkflow == null)
+            return roleActorIds.ToList();
+
+        foreach (var role in _compiledWorkflow.Roles)
+        {
+            if (string.IsNullOrWhiteSpace(role.Id))
+                continue;
+
+            roleActorIds.Add(BuildChildActorId(role.Id));
+        }
+
+        return roleActorIds.ToList();
     }
 
     private async Task EnsureAgentTreeAsync()

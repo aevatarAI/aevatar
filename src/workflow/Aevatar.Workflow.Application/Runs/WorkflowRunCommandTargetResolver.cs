@@ -9,13 +9,16 @@ internal sealed class WorkflowRunCommandTargetResolver
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
+    private readonly IWorkflowRunActorPort _actorPort;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
-        IWorkflowExecutionProjectionLifecyclePort projectionPort)
+        IWorkflowExecutionProjectionLifecyclePort projectionPort,
+        IWorkflowRunActorPort actorPort)
     {
         _actorResolver = actorResolver;
         _projectionPort = projectionPort;
+        _actorPort = actorPort;
     }
 
     public async Task<CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>> ResolveAsync(
@@ -37,6 +40,7 @@ internal sealed class WorkflowRunCommandTargetResolver
                 actorResolution.Actor,
                 actorResolution.WorkflowNameForRun,
                 actorResolution.CreatedActorIds,
-                _projectionPort));
+                _projectionPort,
+                _actorPort));
     }
 }

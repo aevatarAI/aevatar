@@ -43,7 +43,8 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunInteractionService_ShouldEmitFramesSnapshotAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var target = CreateBoundTarget(projectionPort, "actor-1", "direct", "cmd-1");
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var pipeline = new FakeDispatchPipeline
         {
@@ -91,6 +92,35 @@ public sealed class WorkflowApplicationLayerTests
         snapshotEmitter.Calls.Single().Receipt.Should().Be(receipt);
         projectionPort.DetachCalls.Should().ContainSingle();
         projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunInteractionService_ShouldNotDestroyActors_WhenTerminalFrameNotObserved()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var pipeline = new FakeDispatchPipeline
+        {
+            Result = Success(target, receipt),
+        };
+        var service = new WorkflowRunInteractionService(
+            pipeline,
+            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("progress")] },
+            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeWorkflowRunStateSnapshotEmitter(),
+            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult.Should().Be(new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Failed, false));
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -104,6 +134,7 @@ public sealed class WorkflowApplicationLayerTests
         var service = new WorkflowRunDetachedDispatchService(
             pipeline,
             new FakeWorkflowRunOutputStreamer(),
+            new FakeWorkflowRunCompletionPolicy(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
@@ -116,15 +147,17 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunDetachedDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var target = CreateBoundTarget(projectionPort, "actor-1", "direct", "cmd-1");
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var outputStreamer = new FakeWorkflowRunOutputStreamer
         {
-            Frames = [BuildFrame("progress")],
+            Frames = [BuildFrame("progress"), BuildFrame("done")],
         };
         var service = new WorkflowRunDetachedDispatchService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
             outputStreamer,
+            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
@@ -134,6 +167,7 @@ public sealed class WorkflowApplicationLayerTests
         await outputStreamer.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await projectionPort.Released.Task.WaitAsync(TimeSpan.FromSeconds(5));
         projectionPort.DetachCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
@@ -150,15 +184,18 @@ public sealed class WorkflowApplicationLayerTests
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
         FakeProjectionPort projectionPort,
+        FakeWorkflowRunActorPort actorPort,
         string actorId,
         string workflowName,
-        string commandId)
+        string commandId,
+        IReadOnlyList<string>? createdActorIds = null)
     {
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
             workflowName,
-            [],
-            projectionPort);
+            createdActorIds ?? [],
+            projectionPort,
+            actorPort);
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEvent>());
         return target;
     }
@@ -299,6 +336,34 @@ public sealed class WorkflowApplicationLayerTests
 
         public string ActorId { get; }
         public string CommandId { get; }
+    }
+
+    private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
+    {
+        public List<string> DestroyCalls { get; } = [];
+
+        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            DestroyCalls.Add(actorId);
+            return Task.CompletedTask;
+        }
+
+        public Task BindWorkflowDefinitionAsync(
+            IActor actor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeActor : IActor

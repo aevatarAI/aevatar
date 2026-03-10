@@ -189,6 +189,7 @@ public class WorkflowGAgentCoverageTests
             "wf_valid",
             runId: "run-1");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -197,8 +198,6 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-
-        var oldChildActorId = runtime.CreatedActors.Single().Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -395,6 +394,7 @@ public class WorkflowGAgentCoverageTests
             "wf_valid",
             runId: "run-replace");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -403,8 +403,6 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-
-        var oldChildActorId = runtime.CreatedActors.Single().Id;
 
         await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
@@ -564,6 +562,37 @@ public class WorkflowGAgentCoverageTests
         runtime.Destroyed.Should().Contain(childActorByLifecycle["transient"]);
         runtime.Unlinked.Should().NotContain(childActorByLifecycle["singleton"]);
         runtime.Destroyed.Should().NotContain(childActorByLifecycle["singleton"]);
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRunCompletes_ShouldCleanupRoleActors()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-complete");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+
+        var roleActorId = runtime.CreatedActors.Single().Id;
+
+        await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_valid",
+            RunId = "run-complete",
+            Success = true,
+            Output = "done",
+        });
+
+        agent.State.Status.Should().Be("completed");
+        runtime.Unlinked.Should().Contain(roleActorId);
+        runtime.Destroyed.Should().Contain(roleActorId);
+        runtime.CreatedActors.Should().BeEmpty();
     }
 
     [Fact]

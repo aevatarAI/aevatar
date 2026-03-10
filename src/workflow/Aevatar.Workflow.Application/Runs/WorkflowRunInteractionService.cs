@@ -103,7 +103,9 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         }
         finally
         {
-            await target.ReleaseAsync(ct: CancellationToken.None);
+            await target.ReleaseAsync(
+                destroyCreatedActors: projectionCompleted,
+                ct: CancellationToken.None);
         }
     }
 }

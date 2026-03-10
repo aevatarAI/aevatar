@@ -61,7 +61,8 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             actor,
             "direct",
             createdActorIds: [],
-            projectionPort);
+            projectionPort,
+            new NoOpWorkflowRunActorPort());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -102,6 +103,28 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             IWorkflowExecutionProjectionLease lease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunActorPort
+    {
+        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task BindWorkflowDefinitionAsync(
+            IActor actor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeActor : IActor

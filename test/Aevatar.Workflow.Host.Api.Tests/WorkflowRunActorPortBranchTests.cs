@@ -228,6 +228,61 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.Linked.Should().ContainSingle(x => x.ParentId == "definition-proxy" && x.ChildId == "run-proxy");
     }
 
+    [Fact]
+    public async Task CreateRunAsync_WhenDefinitionBindFails_ShouldDestroyCreatedDefinitionActor()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            DispatchExceptionFactory = (actorId, envelope) =>
+                actorId == "definition-fail" &&
+                envelope.Payload?.Is(BindWorkflowDefinitionEvent.Descriptor) == true
+                    ? new InvalidOperationException("definition bind failed")
+                    : null,
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-fail", new WorkflowGAgent()));
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                string.Empty,
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("definition bind failed");
+        runtime.Destroyed.Should().Equal("definition-fail");
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenRunBindFails_ShouldDestroyCreatedRunAndDefinitionActors()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            DispatchExceptionFactory = (actorId, envelope) =>
+                actorId == "run-fail" &&
+                envelope.Payload?.Is(BindWorkflowRunDefinitionEvent.Descriptor) == true
+                    ? new InvalidOperationException("run bind failed")
+                    : null,
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-fail", new WorkflowGAgent()));
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-fail", new StubAgent("run-fail")));
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                string.Empty,
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("run bind failed");
+        runtime.Destroyed.Should().Equal("run-fail", "definition-fail");
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null) =>
@@ -244,6 +299,8 @@ public sealed class WorkflowRunActorPortBranchTests
         public List<(Type AgentType, string? RequestedId)> CreateRequests { get; } = [];
 
         public List<(string ParentId, string ChildId)> Linked { get; } = [];
+        public List<string> Destroyed { get; } = [];
+        public Func<string, EventEnvelope, Exception?>? DispatchExceptionFactory { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -270,6 +327,7 @@ public sealed class WorkflowRunActorPortBranchTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Destroyed.Add(id);
             StoredActors.Remove(id);
             return Task.CompletedTask;
         }
@@ -285,6 +343,10 @@ public sealed class WorkflowRunActorPortBranchTests
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var dispatchException = DispatchExceptionFactory?.Invoke(actorId, envelope);
+            if (dispatchException != null)
+                throw dispatchException;
+
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
         }

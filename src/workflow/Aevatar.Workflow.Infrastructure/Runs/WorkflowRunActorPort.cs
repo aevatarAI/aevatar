@@ -50,28 +50,40 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
                 "Workflow run creation requires a valid workflow definition binding.");
         }
 
-        var definitionResolution = await EnsureDefinitionActorAsync(definition, ct);
-        var runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
-        if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
-            await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id);
+        DefinitionActorResolutionResult definitionResolution = default;
+        IActor? runActor = null;
+        var createdActorIds = new List<string>(2);
+        try
+        {
+            definitionResolution = await EnsureDefinitionActorAsync(definition, ct);
+            if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
+                createdActorIds.Add(definitionResolution.ActorId);
 
-        await _dispatchPort.DispatchAsync(
-            runActor.Id,
-            CreateWorkflowRunBindEnvelope(
-                definitionResolution.ActorId,
+            runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
+            createdActorIds.Add(runActor.Id);
+            if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
+                await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id, ct);
+
+            await _dispatchPort.DispatchAsync(
                 runActor.Id,
-                definition.WorkflowYaml,
-                definition.WorkflowName,
-                definition.InlineWorkflowYamls),
-            ct);
-        var createdActorIds = new List<string>(2) { runActor.Id };
-        if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
-            createdActorIds.Insert(0, definitionResolution.ActorId);
+                CreateWorkflowRunBindEnvelope(
+                    definitionResolution.ActorId,
+                    runActor.Id,
+                    definition.WorkflowYaml,
+                    definition.WorkflowName,
+                    definition.InlineWorkflowYamls),
+                ct);
 
-        return new WorkflowRunCreationResult(
-            runActor,
-            definitionResolution.ActorId,
-            createdActorIds);
+            return new WorkflowRunCreationResult(
+                runActor,
+                definitionResolution.ActorId,
+                createdActorIds);
+        }
+        catch
+        {
+            await TryDestroyActorsAsync(createdActorIds);
+            throw;
+        }
     }
 
     public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -168,13 +180,39 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         CancellationToken ct)
     {
         var definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
-        await BindWorkflowDefinitionAsync(
-            definitionActor,
-            definition.WorkflowYaml,
-            definition.WorkflowName,
-            definition.InlineWorkflowYamls,
-            ct);
-        return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+        try
+        {
+            await BindWorkflowDefinitionAsync(
+                definitionActor,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                ct);
+            return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+        }
+        catch
+        {
+            await TryDestroyActorsAsync([definitionActor.Id]);
+            throw;
+        }
+    }
+
+    private async Task TryDestroyActorsAsync(IReadOnlyList<string> actorIds)
+    {
+        foreach (var actorId in actorIds
+                     .Where(static x => !string.IsNullOrWhiteSpace(x))
+                     .Distinct(StringComparer.Ordinal)
+                     .Reverse())
+        {
+            try
+            {
+                await _runtime.DestroyAsync(actorId, CancellationToken.None);
+            }
+            catch
+            {
+                // Best effort rollback path.
+            }
+        }
     }
 
     private static string? NormalizeActorId(string? actorId)

@@ -16,7 +16,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None));
         var resolver = new WorkflowRunCommandTargetResolver(
             actorResolver,
-            new FakeProjectionPort { ProjectionEnabled = false });
+            new FakeProjectionPort { ProjectionEnabled = false },
+            new FakeWorkflowRunActorPort());
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
@@ -32,7 +33,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var resolver = new WorkflowRunCommandTargetResolver(
             new FakeWorkflowRunActorResolver(
                 new WorkflowActorResolutionResult(actor, "auto", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
-            new FakeProjectionPort());
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort());
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
@@ -51,8 +53,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "direct", [], projectionPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "direct", [], projectionPort, actorPort);
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -80,12 +82,13 @@ public sealed class WorkflowRunOrchestrationComponentTests
             EnsureLease = null,
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
             ["definition-1", "actor-1", "definition-1"],
-            projectionPort);
+            projectionPort,
+            actorPort);
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -112,12 +115,13 @@ public sealed class WorkflowRunOrchestrationComponentTests
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
             ["definition-1", "actor-1"],
-            projectionPort);
+            projectionPort,
+            actorPort);
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",

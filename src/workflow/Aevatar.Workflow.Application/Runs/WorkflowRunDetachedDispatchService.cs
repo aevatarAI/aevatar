@@ -10,17 +10,20 @@ internal sealed class WorkflowRunDetachedDispatchService
 {
     private readonly ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _dispatchPipeline;
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
+    private readonly IWorkflowRunCompletionPolicy _completionPolicy;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly ILogger<WorkflowRunDetachedDispatchService> _logger;
 
     public WorkflowRunDetachedDispatchService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> dispatchPipeline,
         IWorkflowRunOutputStreamer outputStreamer,
+        IWorkflowRunCompletionPolicy completionPolicy,
         WorkflowDirectFallbackPolicy fallbackPolicy,
         ILogger<WorkflowRunDetachedDispatchService>? logger = null)
     {
         _dispatchPipeline = dispatchPipeline;
         _outputStreamer = outputStreamer;
+        _completionPolicy = completionPolicy;
         _fallbackPolicy = fallbackPolicy;
         _logger = logger ?? NullLogger<WorkflowRunDetachedDispatchService>.Instance;
     }
@@ -63,11 +66,19 @@ internal sealed class WorkflowRunDetachedDispatchService
         _ = Task.Run(
             async () =>
             {
+                var projectionCompleted = false;
                 try
                 {
                     await _outputStreamer.StreamAsync(
                         target.RequireLiveSink(),
-                        static (_, _) => ValueTask.CompletedTask,
+                        (frame, token) =>
+                        {
+                            if (!projectionCompleted && _completionPolicy.TryResolve(frame, out _))
+                                projectionCompleted = true;
+
+                            _ = token;
+                            return ValueTask.CompletedTask;
+                        },
                         CancellationToken.None);
                 }
                 catch (Exception ex)
@@ -78,7 +89,9 @@ internal sealed class WorkflowRunDetachedDispatchService
                 {
                     try
                     {
-                        await target.ReleaseAsync(ct: CancellationToken.None);
+                        await target.ReleaseAsync(
+                            destroyCreatedActors: projectionCompleted,
+                            ct: CancellationToken.None);
                     }
                     catch (Exception ex)
                     {

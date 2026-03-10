@@ -10,14 +10,11 @@ internal sealed class WorkflowRunCommandTargetBinder
     : ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>
 {
     private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
-    private readonly IWorkflowRunActorPort _actorPort;
 
     public WorkflowRunCommandTargetBinder(
-        IWorkflowExecutionProjectionLifecyclePort projectionPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowExecutionProjectionLifecyclePort projectionPort)
     {
         _projectionPort = projectionPort;
-        _actorPort = actorPort;
     }
 
     public async Task<CommandTargetBindingResult<WorkflowChatRunStartError>> BindAsync(
@@ -46,8 +43,7 @@ internal sealed class WorkflowRunCommandTargetBinder
 
             if (projectionLease == null)
             {
-                await sink.DisposeAsync();
-                await ThrowIfRollbackFailedAsync(target.CreatedActorIds);
+                await target.RollbackCreatedActorsAsync(CancellationToken.None);
                 return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
@@ -57,9 +53,7 @@ internal sealed class WorkflowRunCommandTargetBinder
         }
         catch (Exception ex)
         {
-            await sink.DisposeAsync();
-
-            var rollbackError = await TryRollbackCreatedActorsAsync(target.CreatedActorIds);
+            var rollbackError = await TryRollbackCreatedActorsAsync(target);
             if (rollbackError == null)
                 throw;
 
@@ -72,42 +66,16 @@ internal sealed class WorkflowRunCommandTargetBinder
         }
     }
 
-    private async Task ThrowIfRollbackFailedAsync(IReadOnlyList<string>? actorIds)
+    private static async Task<Exception?> TryRollbackCreatedActorsAsync(WorkflowRunCommandTarget target)
     {
-        var rollbackError = await TryRollbackCreatedActorsAsync(actorIds);
-        if (rollbackError != null)
-            throw rollbackError;
-    }
-
-    private async Task<Exception?> TryRollbackCreatedActorsAsync(IReadOnlyList<string>? actorIds)
-    {
-        if (actorIds == null || actorIds.Count == 0)
+        try
+        {
+            await target.RollbackCreatedActorsAsync(CancellationToken.None);
             return null;
-
-        List<Exception>? failures = null;
-        foreach (var actorId in actorIds
-                     .Where(static x => !string.IsNullOrWhiteSpace(x))
-                     .Distinct(StringComparer.Ordinal)
-                     .Reverse())
-        {
-            try
-            {
-                await _actorPort.DestroyAsync(actorId, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                failures ??= [];
-                failures.Add(new InvalidOperationException(
-                    $"Failed to rollback workflow actor '{actorId}'.",
-                    ex));
-            }
         }
-
-        return failures switch
+        catch (Exception ex)
         {
-            null => null,
-            { Count: 1 } => failures[0],
-            _ => new AggregateException("Workflow actor rollback failed.", failures),
-        };
+            return ex;
+        }
     }
 }

@@ -15,13 +15,6 @@ namespace Aevatar.Workflow.Core;
 public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 {
     private readonly WorkflowParser _parser = new();
-    private WorkflowDefinition? _compiledWorkflow;
-
-    protected override Task OnActivateAsync(CancellationToken ct)
-    {
-        RebuildCompiledWorkflowCache();
-        return base.OnActivateAsync(ct);
-    }
 
     public async Task BindWorkflowDefinitionAsync(
         string workflowYaml,
@@ -42,7 +35,6 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         }
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
-        RebuildCompiledWorkflowCache();
     }
 
     [EventHandler]
@@ -119,39 +111,6 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             Logger.LogWarning(ex, "EvaluateWorkflowCompilation: parse/validation failed.");
             return WorkflowCompilationResult.Invalid(ex.Message);
-        }
-    }
-
-    private void RebuildCompiledWorkflowCache()
-    {
-        if (string.IsNullOrWhiteSpace(State.WorkflowYaml))
-        {
-            _compiledWorkflow = null;
-            return;
-        }
-
-        try
-        {
-            var workflow = _parser.Parse(State.WorkflowYaml);
-            var errors = WorkflowValidator.Validate(
-                workflow,
-                new WorkflowValidator.WorkflowValidationOptions
-                {
-                    RequireKnownStepTypes = false,
-                },
-                availableWorkflowNames: null);
-            _compiledWorkflow = errors.Count == 0 ? workflow : null;
-            if (errors.Count > 0)
-            {
-                Logger.LogWarning(
-                    "RebuildCompiledWorkflowCache: workflow has validation errors. errors={Errors}",
-                    string.Join("; ", errors));
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "RebuildCompiledWorkflowCache: parse failed.");
-            _compiledWorkflow = null;
         }
     }
 
