@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.Workflow.Projection.Transport";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+message WorkflowExecutionReportSnapshot {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp created_at_utc = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  string root_actor_id = 6;
+  string command_id = 7;
+  string report_version = 8;
+  int32 projection_scope = 9;
+  int32 topology_source = 10;
+  int32 completion_status = 11;
+  string workflow_name = 12;
+  google.protobuf.Timestamp started_at_utc = 13;
+  google.protobuf.Timestamp ended_at_utc = 14;
+  double duration_ms = 15;
+  google.protobuf.BoolValue success = 16;
+  string input = 17;
+  string final_output = 18;
+  string final_error = 19;
+  repeated WorkflowExecutionTopologyEdgeSnapshot topology = 20;
+  repeated WorkflowExecutionStepTraceSnapshot steps = 21;
+  repeated WorkflowExecutionRoleReplySnapshot role_replies = 22;
+  repeated WorkflowExecutionTimelineEventSnapshot timeline = 23;
+  WorkflowExecutionSummarySnapshot summary = 24;
+}
+
+message WorkflowExecutionTopologyEdgeSnapshot {
+  string parent = 1;
+  string child = 2;
+}
+
+message WorkflowExecutionStepTraceSnapshot {
+  string step_id = 1;
+  string step_type = 2;
+  string target_role = 3;
+  google.protobuf.Timestamp requested_at_utc = 4;
+  google.protobuf.Timestamp completed_at_utc = 5;
+  google.protobuf.BoolValue success = 6;
+  string worker_id = 7;
+  string output_preview = 8;
+  string error = 9;
+  map<string, string> request_parameters = 10;
+  map<string, string> completion_metadata = 11;
+}
+
+message WorkflowExecutionRoleReplySnapshot {
+  google.protobuf.Timestamp timestamp_utc = 1;
+  string role_id = 2;
+  string session_id = 3;
+  string content = 4;
+  int32 content_length = 5;
+}
+
+message WorkflowExecutionTimelineEventSnapshot {
+  google.protobuf.Timestamp timestamp_utc = 1;
+  string stage = 2;
+  string message = 3;
+  string agent_id = 4;
+  string step_id = 5;
+  string step_type = 6;
+  string event_type = 7;
+  map<string, string> data = 8;
+}
+
+message WorkflowExecutionSummarySnapshot {
+  int32 total_steps = 1;
+  int32 requested_steps = 2;
+  int32 completed_steps = 3;
+  int32 role_reply_count = 4;
+  map<string, int32> step_type_counts = 5;
+}
+
+message WorkflowRunSessionEventEnvelope {
+  google.protobuf.Int64Value timestamp = 1;
+
+  oneof event {
+    WorkflowRunStartedEventPayload run_started = 2;
+    WorkflowRunFinishedEventPayload run_finished = 3;
+    WorkflowRunErrorEventPayload run_error = 4;
+    WorkflowStepStartedEventPayload step_started = 5;
+    WorkflowStepFinishedEventPayload step_finished = 6;
+    WorkflowTextMessageStartEventPayload text_message_start = 7;
+    WorkflowTextMessageContentEventPayload text_message_content = 8;
+    WorkflowTextMessageEndEventPayload text_message_end = 9;
+    WorkflowStateSnapshotEventPayload state_snapshot = 10;
+    WorkflowToolCallStartEventPayload tool_call_start = 11;
+    WorkflowToolCallEndEventPayload tool_call_end = 12;
+    WorkflowCustomEventPayload custom = 13;
+  }
+}
+
+message WorkflowRunStartedEventPayload {
+  string thread_id = 1;
+}
+
+message WorkflowRunFinishedEventPayload {
+  string thread_id = 1;
+  google.protobuf.Value result = 2;
+}
+
+message WorkflowRunErrorEventPayload {
+  string message = 1;
+  google.protobuf.StringValue code = 2;
+}
+
+message WorkflowStepStartedEventPayload {
+  string step_name = 1;
+}
+
+message WorkflowStepFinishedEventPayload {
+  string step_name = 1;
+}
+
+message WorkflowTextMessageStartEventPayload {
+  string message_id = 1;
+  string role = 2;
+}
+
+message WorkflowTextMessageContentEventPayload {
+  string message_id = 1;
+  string delta = 2;
+}
+
+message WorkflowTextMessageEndEventPayload {
+  string message_id = 1;
+}
+
+message WorkflowStateSnapshotEventPayload {
+  google.protobuf.Value snapshot = 1;
+}
+
+message WorkflowToolCallStartEventPayload {
+  string tool_call_id = 1;
+  string tool_name = 2;
+}
+
+message WorkflowToolCallEndEventPayload {
+  string tool_call_id = 1;
+  google.protobuf.StringValue result = 2;
+}
+
+message WorkflowCustomEventPayload {
+  string name = 1;
+  google.protobuf.Value value = 2;
+}

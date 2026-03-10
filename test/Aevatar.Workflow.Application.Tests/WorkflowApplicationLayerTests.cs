@@ -96,6 +96,38 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
+    public async Task WorkflowRunInteractionService_ShouldPreserveSuccess_WhenCleanupFails()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("cleanup failed"),
+        };
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var service = new WorkflowRunInteractionService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("done")] },
+            new FakeWorkflowRunCompletionPolicy
+            {
+                TerminalFrameType = "done",
+                TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
+            },
+            new FakeWorkflowRunStateSnapshotEmitter(),
+            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult.Should().Be(new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
     public async Task WorkflowRunInteractionService_ShouldNotDestroyActors_WhenTerminalFrameNotObserved()
     {
         var projectionPort = new FakeProjectionPort();
@@ -292,6 +324,8 @@ public sealed class WorkflowApplicationLayerTests
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEvent> Sink)> DetachCalls { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Exception? DetachException { get; set; }
+        public Exception? ReleaseException { get; set; }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -313,6 +347,9 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken ct = default)
         {
             DetachCalls.Add((lease, sink));
+            if (DetachException != null)
+                throw DetachException;
+
             return Task.CompletedTask;
         }
 
@@ -322,6 +359,9 @@ public sealed class WorkflowApplicationLayerTests
         {
             ReleaseCalls.Add(lease);
             Released.TrySetResult(true);
+            if (ReleaseException != null)
+                throw ReleaseException;
+
             return Task.CompletedTask;
         }
     }
@@ -341,6 +381,7 @@ public sealed class WorkflowApplicationLayerTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public List<string> DestroyCalls { get; } = [];
+        public Exception? DestroyException { get; set; }
 
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -351,6 +392,9 @@ public sealed class WorkflowApplicationLayerTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
         {
             DestroyCalls.Add(actorId);
+            if (DestroyException != null)
+                throw DestroyException;
+
             return Task.CompletedTask;
         }
 

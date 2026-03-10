@@ -450,7 +450,25 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (pending.DispatchPending)
         {
             if (state.CurrentStepDispatchPending)
+            {
                 await ResumePendingCurrentStepDispatchAsync(state, ctx, ct);
+            }
+            else if (MatchesCurrentStep(state, stepId))
+            {
+                var currentStep = _workflow.GetStep(stepId);
+                if (currentStep != null)
+                {
+                    try
+                    {
+                        await DispatchStepAsync(currentStep, state.CurrentStepInput, state, ctx, ct);
+                    }
+                    catch
+                    {
+                        await SaveStateAsync(state, ctx, CancellationToken.None);
+                        throw;
+                    }
+                }
+            }
 
             state.RetryBackoffsByStepId.Remove(stepId);
             await SaveStateAsync(state, ctx, ct);

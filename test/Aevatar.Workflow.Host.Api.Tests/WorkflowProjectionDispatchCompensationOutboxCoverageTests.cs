@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -23,7 +24,13 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
             RecordId = "record-1",
             Operation = "upsert",
             FailedStore = "Graph",
-            ReadModelJson = "{}",
+            ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(new WorkflowExecutionReport
+            {
+                Id = "record-1",
+                RootActorId = "record-1",
+                CommandId = "cmd-1",
+                WorkflowName = "workflow",
+            }),
             ReadModelType = "type",
             Key = "key",
         };

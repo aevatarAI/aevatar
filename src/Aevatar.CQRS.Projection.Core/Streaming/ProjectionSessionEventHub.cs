@@ -66,6 +66,9 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
+            if (message.Payload == null)
+                return;
+
             var evt = _codec.Deserialize(message.EventType, message.Payload);
             if (evt == null)
                 return;

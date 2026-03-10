@@ -3,6 +3,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -36,29 +37,16 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    [Theory]
-    [InlineData(null, "{}")]
-    [InlineData("", "{}")]
-    [InlineData("RUN_STARTED", null)]
-    [InlineData("RUN_STARTED", "")]
-    [InlineData("UNKNOWN", "{}")]
-    public void Deserialize_WhenEventTypeOrPayloadInvalid_ShouldReturnNull(string? eventType, string? payload)
-    {
-        var codec = new WorkflowRunEventSessionCodec();
-
-        var deserialized = codec.Deserialize(eventType!, payload!);
-
-        deserialized.Should().BeNull();
-    }
-
     [Fact]
-    public void Deserialize_WhenPayloadIsMalformed_ShouldReturnNull()
+    public void Deserialize_WhenEventTypeOrPayloadInvalid_ShouldReturnNull()
     {
         var codec = new WorkflowRunEventSessionCodec();
 
-        var deserialized = codec.Deserialize(WorkflowRunEventTypes.RunStarted, "{");
-
-        deserialized.Should().BeNull();
+        codec.Deserialize(null!, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
+        codec.Deserialize(string.Empty, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, null!).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, Any.Pack(new StringValue { Value = "payload" })).Should().BeNull();
+        codec.Deserialize("UNKNOWN", codec.Serialize(new WorkflowRunStartedEvent { ThreadId = "thread-1" })).Should().BeNull();
     }
 
     [Fact]
@@ -78,8 +66,7 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
         deserialized.Should().BeOfType<WorkflowRunFinishedEvent>();
         var finished = (WorkflowRunFinishedEvent)deserialized!;
         finished.ThreadId.Should().Be("thread-1");
-        finished.Result.Should().BeOfType<System.Text.Json.JsonElement>();
-        ((System.Text.Json.JsonElement)finished.Result!).GetString().Should().Be("ok");
+        finished.Result.Should().Be("ok");
         finished.Timestamp.Should().Be(123);
     }
 }

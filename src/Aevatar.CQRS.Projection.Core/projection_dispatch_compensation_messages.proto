@@ -2,6 +2,7 @@ syntax = "proto3";
 
 option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
 
+import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
 message ProjectionDispatchCompensationOutboxState {
@@ -14,7 +15,7 @@ message ProjectionDispatchCompensationOutboxEntry {
   string failed_store = 3;
   repeated string succeeded_stores = 4;
   string read_model_type = 5;
-  string read_model_json = 6;
+  google.protobuf.Any read_model = 6;
   string key = 7;
   google.protobuf.Timestamp enqueued_at_utc = 8;
   google.protobuf.Timestamp next_visible_at_utc = 9;
@@ -29,7 +30,7 @@ message ProjectionCompensationEnqueuedEvent {
   string failed_store = 3;
   repeated string succeeded_stores = 4;
   string read_model_type = 5;
-  string read_model_json = 6;
+  google.protobuf.Any read_model = 6;
   string key = 7;
   google.protobuf.Timestamp enqueued_at_utc = 8;
   string last_error = 9;

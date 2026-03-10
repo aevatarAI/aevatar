@@ -66,6 +66,8 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         var receipt = execution.Receipt;
         var projectionCompleted = false;
         var projectionCompletionStatus = WorkflowProjectionCompletionStatus.Unknown;
+        WorkflowChatRunInteractionResult? interactionResult = null;
+        Exception? executionException = null;
 
         try
         {
@@ -96,16 +98,34 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
                 emitAsync,
                 ct);
 
-            return new WorkflowChatRunInteractionResult(
+            interactionResult = new WorkflowChatRunInteractionResult(
                 WorkflowChatRunStartError.None,
                 receipt,
                 new WorkflowChatRunFinalizeResult(projectionCompletionStatus, projectionCompleted));
+            return interactionResult;
+        }
+        catch (Exception ex)
+        {
+            executionException = ex;
+            throw;
         }
         finally
         {
-            await target.ReleaseAsync(
-                destroyCreatedActors: projectionCompleted,
-                ct: CancellationToken.None);
+            try
+            {
+                await target.ReleaseAsync(
+                    destroyCreatedActors: projectionCompleted,
+                    ct: CancellationToken.None);
+            }
+            catch (Exception ex) when (interactionResult != null || executionException != null)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Workflow run cleanup failed after interactive execution. actorId={ActorId}, commandId={CommandId}, succeeded={Succeeded}",
+                    receipt.ActorId,
+                    receipt.CommandId,
+                    interactionResult != null);
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -432,7 +433,9 @@ public class ProjectionSessionEventHubTests
         message.ScopeId.Should().Be("scope-1");
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("string");
-        message.Payload.Should().Be("hello");
+        message.Payload.Should().NotBeNull();
+        message.Payload!.Is(StringValue.Descriptor).Should().BeTrue();
+        message.Payload.Unpack<StringValue>().Value.Should().Be("hello");
     }
 
     [Fact]
@@ -459,21 +462,21 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-2",
             EventType = "string",
-            Payload = "ignored-by-session",
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-session" }),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "unknown",
-            Payload = "ignored-by-type",
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-type" }),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = "accepted",
+            Payload = Any.Pack(new StringValue { Value = "accepted" }),
         });
 
         received.Should().Equal("accepted");
@@ -484,7 +487,7 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = "after-dispose",
+            Payload = Any.Pack(new StringValue { Value = "after-dispose" }),
         });
         received.Should().Equal("accepted");
     }
@@ -584,7 +587,7 @@ internal sealed class OwnershipCoordinatorRuntime : IActorRuntime, IActorDispatc
         return Task.FromResult<IActor>(actor);
     }
 
-    public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+    public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
         throw new NotSupportedException();
     }
@@ -652,7 +655,7 @@ internal sealed class PlainTestAgent : IAgent
 
     public Task<string> GetDescriptionAsync() => Task.FromResult("plain");
 
-    public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+    public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
 
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
@@ -665,10 +668,19 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
     public string GetEventType(string evt) => "string";
 
-    public string Serialize(string evt) => evt;
+    public Any Serialize(string evt) => Any.Pack(new StringValue { Value = evt });
 
-    public string? Deserialize(string eventType, string payload) =>
-        string.Equals(eventType, "string", StringComparison.Ordinal) ? payload : null;
+    public string? Deserialize(string eventType, Any payload)
+    {
+        if (!string.Equals(eventType, "string", StringComparison.Ordinal) ||
+            payload == null ||
+            !payload.Is(StringValue.Descriptor))
+        {
+            return null;
+        }
+
+        return payload.Unpack<StringValue>().Value;
+    }
 }
 
 internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCodec<string>
@@ -677,9 +689,12 @@ internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCod
 
     public string GetEventType(string evt) => "string";
 
-    public string Serialize(string evt) => evt;
+    public Any Serialize(string evt) => Any.Pack(new StringValue { Value = evt });
 
-    public string? Deserialize(string eventType, string payload) => payload;
+    public string? Deserialize(string eventType, Any payload) =>
+        payload?.Is(StringValue.Descriptor) == true
+            ? payload.Unpack<StringValue>().Value
+            : null;
 }
 
 internal sealed class TestInMemoryEventStore : IEventStore

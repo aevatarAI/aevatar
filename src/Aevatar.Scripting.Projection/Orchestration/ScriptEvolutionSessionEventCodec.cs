@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
@@ -17,24 +18,24 @@ public sealed class ScriptEvolutionSessionEventCodec
         return EventType;
     }
 
-    public string Serialize(ScriptEvolutionSessionCompletedEvent evt)
+    public Any Serialize(ScriptEvolutionSessionCompletedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        return Convert.ToBase64String(evt.ToByteArray());
+        return Any.Pack(evt);
     }
 
-    public ScriptEvolutionSessionCompletedEvent? Deserialize(string eventType, string payload)
+    public ScriptEvolutionSessionCompletedEvent? Deserialize(string eventType, Any payload)
     {
-        if (!string.Equals(eventType, EventType, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(payload))
+        if (!string.Equals(eventType, EventType, StringComparison.Ordinal) ||
+            payload == null ||
+            !payload.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+        {
             return null;
+        }
 
         try
         {
-            return ScriptEvolutionSessionCompletedEvent.Parser.ParseFrom(Convert.FromBase64String(payload));
-        }
-        catch (FormatException)
-        {
-            return null;
+            return payload.Unpack<ScriptEvolutionSessionCompletedEvent>();
         }
         catch (InvalidProtocolBufferException)
         {
