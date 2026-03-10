@@ -158,7 +158,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         var environment = ResolveRuntimeEnvironment(configuration["Projection:Policies:Environment"]);
         var production = IsProductionEnvironment(environment);
 
-        if ((denyInMemoryGraphProvider || production) && enableInMemoryGraphProvider)
+        if (denyInMemoryGraphProvider && enableInMemoryGraphProvider)
         {
             throw new InvalidOperationException(
                 "InMemory graph provider is not allowed by projection policy. " +
