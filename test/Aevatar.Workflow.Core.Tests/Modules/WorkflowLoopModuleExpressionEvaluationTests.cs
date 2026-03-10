@@ -103,7 +103,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
 
         public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
 
-        public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
+        public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             Published.Add((evt, direction));

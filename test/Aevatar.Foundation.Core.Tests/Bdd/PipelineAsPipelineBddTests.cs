@@ -133,7 +133,7 @@ public class CollectingPublisher : IEventPublisher
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         _published.Add(evt);
@@ -144,7 +144,7 @@ public class CollectingPublisher : IEventPublisher
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         _published.Add(evt);

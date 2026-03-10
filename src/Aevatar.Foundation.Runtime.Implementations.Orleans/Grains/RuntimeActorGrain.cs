@@ -401,10 +401,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private string BuildDedupKey(EventEnvelope envelope)
     {
-        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-                       !string.IsNullOrWhiteSpace(metadataOriginId)
-            ? metadataOriginId
-            : envelope.Id;
+        var originId = envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.DedupOriginId, out var dedupOriginId) &&
+                       !string.IsNullOrWhiteSpace(dedupOriginId)
+            ? dedupOriginId
+            : envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
+              !string.IsNullOrWhiteSpace(metadataOriginId)
+                ? metadataOriginId
+                : envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? string.Empty;

@@ -219,13 +219,15 @@ public abstract class GAgentBase : IAgent
     /// <summary>Publishes an event with direction.</summary>
     protected Task PublishAsync<TEvent>(TEvent evt,
         EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope);
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope, metadata);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
-        CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope);
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope, metadata);
 
     protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
@@ -334,8 +336,8 @@ public abstract class GAgentBase : IAgent
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope) where T : Google.Protobuf.IMessage => Task.CompletedTask;
-        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, IReadOnlyDictionary<string, string>? metadata) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, IReadOnlyDictionary<string, string>? metadata) where T : Google.Protobuf.IMessage => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

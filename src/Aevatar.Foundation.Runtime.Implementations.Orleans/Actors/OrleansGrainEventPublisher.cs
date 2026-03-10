@@ -32,7 +32,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -48,7 +49,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             sourceEnvelope,
             _propagationPolicy,
             _actorId,
-            EstimateRouteTargetCount(direction));
+            EstimateRouteTargetCount(direction),
+            metadata);
 
         switch (direction)
         {
@@ -84,7 +86,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -101,7 +104,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             sourceEnvelope,
             _propagationPolicy,
             _actorId,
-            routeTargetCount: 1);
+            routeTargetCount: 1,
+            metadata);
         return DispatchAsync(_actorId, targetActorId, envelope, ct);
     }
 

@@ -45,4 +45,9 @@ public static class EnvelopeMetadataKeys
     /// Actor id that originally created/published the envelope.
     /// </summary>
     public const string SourceActorId = "__source_actor_id";
+
+    /// <summary>
+    /// Stable deduplication origin id used to collapse duplicate outbound deliveries.
+    /// </summary>
+    public const string DedupOriginId = "__dedup_origin_id";
 }

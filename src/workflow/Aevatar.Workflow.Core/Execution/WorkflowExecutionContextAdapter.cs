@@ -87,13 +87,21 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
         return _stateHost.ClearExecutionStateAsync(scopeKey, ct);
     }
 
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        EventDirection direction = EventDirection.Down,
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage =>
-        _inner.PublishAsync(evt, direction, ct);
+        _inner.PublishAsync(evt, direction, ct, metadata);
 
-    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage =>
-        _inner.SendToAsync(targetActorId, evt, ct);
+        _inner.SendToAsync(targetActorId, evt, ct, metadata);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,

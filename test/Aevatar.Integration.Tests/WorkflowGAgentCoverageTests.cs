@@ -734,7 +734,7 @@ public class WorkflowGAgentCoverageTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             Published.Add((evt, direction));
@@ -745,7 +745,7 @@ public class WorkflowGAgentCoverageTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             Sent.Add((targetActorId, evt));

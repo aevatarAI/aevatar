@@ -37,7 +37,8 @@ public sealed class LocalActorPublisher : IEventPublisher
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         var routeTargetCount = GetRouteTargetCount(direction);
@@ -54,7 +55,8 @@ public sealed class LocalActorPublisher : IEventPublisher
             sourceEnvelope,
             _envelopePropagationPolicy,
             _actorId,
-            routeTargetCount);
+            routeTargetCount,
+            metadata);
 
         switch (direction)
         {
@@ -80,7 +82,8 @@ public sealed class LocalActorPublisher : IEventPublisher
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -97,7 +100,8 @@ public sealed class LocalActorPublisher : IEventPublisher
             sourceEnvelope,
             _envelopePropagationPolicy,
             _actorId,
-            routeTargetCount: 1);
+            routeTargetCount: 1,
+            metadata);
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
     }
 

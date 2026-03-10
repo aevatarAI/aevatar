@@ -96,7 +96,8 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     public Task PublishAsync<TEvent>(
         TEvent evt,
         EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         Published.Add((evt, direction));
@@ -107,7 +108,8 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     public Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? metadata = null)
         where TEvent : IMessage
     {
         _ = targetActorId;

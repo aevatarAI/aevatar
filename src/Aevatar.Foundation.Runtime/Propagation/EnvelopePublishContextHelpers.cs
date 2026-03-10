@@ -11,7 +11,8 @@ public static class EnvelopePublishContextHelpers
         EventEnvelope? sourceEnvelope,
         IEnvelopePropagationPolicy propagationPolicy,
         string sourceActorId,
-        long? routeTargetCount = null)
+        long? routeTargetCount = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         ArgumentNullException.ThrowIfNull(propagationPolicy);
@@ -24,5 +25,11 @@ public static class EnvelopePublishContextHelpers
 
         if (routeTargetCount.HasValue)
             envelope.Metadata[EnvelopeMetadataKeys.RouteTargetCount] = routeTargetCount.Value.ToString();
+
+        if (metadata == null)
+            return;
+
+        foreach (var pair in metadata)
+            envelope.Metadata[pair.Key] = pair.Value;
     }
 }

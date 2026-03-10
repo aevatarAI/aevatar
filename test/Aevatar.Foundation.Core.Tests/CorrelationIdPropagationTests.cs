@@ -105,7 +105,7 @@ public class CorrelationIdPropagationTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : Google.Protobuf.IMessage
         {
             LastPublishSourceEnvelope = sourceEnvelope;
@@ -116,7 +116,7 @@ public class CorrelationIdPropagationTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : Google.Protobuf.IMessage
         {
             LastSendSourceEnvelope = sourceEnvelope;

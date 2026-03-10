@@ -428,7 +428,7 @@ public class ScriptEvolutionManagerGAgentBranchCoverageTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             _ = evt;
@@ -442,7 +442,7 @@ public class ScriptEvolutionManagerGAgentBranchCoverageTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             _ = sourceEnvelope;

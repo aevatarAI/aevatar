@@ -719,7 +719,7 @@ public class ScriptEvolutionManagerGAgentTests
             T evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where T : IMessage
         {
             _ = evt;
@@ -733,7 +733,7 @@ public class ScriptEvolutionManagerGAgentTests
             string targetActorId,
             T evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where T : IMessage
         {
             _ = sourceEnvelope;

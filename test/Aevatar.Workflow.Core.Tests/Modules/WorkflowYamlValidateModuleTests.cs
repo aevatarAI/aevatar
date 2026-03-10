@@ -178,7 +178,8 @@ public sealed class WorkflowYamlValidateModuleTests
         public Task PublishAsync<TEvent>(
             TEvent evt,
             EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -186,7 +187,8 @@ public sealed class WorkflowYamlValidateModuleTests
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage => Task.CompletedTask;
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(

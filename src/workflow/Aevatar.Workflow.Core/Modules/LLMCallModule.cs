@@ -1,6 +1,7 @@
 using System.Globalization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
@@ -106,6 +107,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 TargetRole = request.TargetRole ?? string.Empty,
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(chatSessionId),
+                DispatchDedupId = BuildDispatchDedupId(chatSessionId),
             };
             runtimeState.PendingBySessionId[chatSessionId] = pendingState;
             await SaveStateAsync(runtimeState, ctx, ct);
@@ -115,10 +117,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         {
             await EnsureWatchdogScheduledAsync(chatSessionId, pendingState, timeoutMs, ctx, ct);
             pendingState = GetRequiredPending(chatSessionId, ctx);
+            pendingState = await EnsureDispatchDedupIdAsync(chatSessionId, pendingState, ctx, ct);
             if (pendingState.RequestDispatched)
                 return;
 
-            await DispatchChatRequestAsync(chatSessionId, pendingState.TargetRole, prompt, timeoutMs, stepId, ctx, ct);
+            await DispatchChatRequestAsync(
+                chatSessionId,
+                pendingState.TargetRole,
+                pendingState.DispatchDedupId,
+                prompt,
+                timeoutMs,
+                stepId,
+                ctx,
+                ct);
             await MarkRequestDispatchedAsync(chatSessionId, ctx, ct);
         }
         catch (Exception ex)
@@ -309,6 +320,15 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private static string BuildWatchdogCallbackId(string sessionId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(LlmWatchdogCallbackPrefix, sessionId);
 
+    private static string BuildDispatchDedupId(string sessionId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("workflow-llm-dispatch", sessionId);
+
+    private static IReadOnlyDictionary<string, string> BuildDispatchMetadata(string dispatchDedupId) =>
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [EnvelopeMetadataKeys.DedupOriginId] = dispatchDedupId,
+        };
+
     private static bool TryResolvePending(
         LLMCallModuleState state,
         string runId,
@@ -372,6 +392,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private async Task DispatchChatRequestAsync(
         string sessionId,
         string targetRole,
+        string dispatchDedupId,
         string prompt,
         int timeoutMs,
         string stepId,
@@ -381,6 +402,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
         var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
         chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
+        var dispatchMetadata = BuildDispatchMetadata(dispatchDedupId);
 
         if (!string.IsNullOrEmpty(targetRole))
         {
@@ -388,14 +410,14 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             ctx.Logger.LogInformation(
                 "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} timeout={Timeout}ms prompt=({Len} chars) {Preview}",
                 stepId, targetRole, targetActorId, timeoutMs, prompt.Length, promptPreview);
-            await ctx.SendToAsync(targetActorId, chatEvt, ct);
+            await ctx.SendToAsync(targetActorId, chatEvt, ct, dispatchMetadata);
             return;
         }
 
         ctx.Logger.LogInformation(
             "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
             stepId, timeoutMs, prompt.Length, promptPreview);
-        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct);
+        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct, dispatchMetadata);
     }
 
     private static PendingLlmCallState GetRequiredPending(string sessionId, IWorkflowExecutionContext ctx)
@@ -418,6 +440,25 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         pendingState.RequestDispatched = true;
         runtimeState.PendingBySessionId[sessionId] = pendingState;
         await SaveStateAsync(runtimeState, ctx, ct);
+    }
+
+    private static async Task<PendingLlmCallState> EnsureDispatchDedupIdAsync(
+        string sessionId,
+        PendingLlmCallState pendingState,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(pendingState.DispatchDedupId))
+            return pendingState;
+
+        var runtimeState = WorkflowExecutionStateAccess.Load<LLMCallModuleState>(ctx, ModuleStateKey);
+        if (!runtimeState.PendingBySessionId.TryGetValue(sessionId, out pendingState))
+            throw new InvalidOperationException($"Missing pending LLM call state for session {sessionId}.");
+
+        pendingState.DispatchDedupId = BuildDispatchDedupId(sessionId);
+        runtimeState.PendingBySessionId[sessionId] = pendingState;
+        await SaveStateAsync(runtimeState, ctx, ct);
+        return pendingState;
     }
 
     private static async Task RemovePendingAsync(

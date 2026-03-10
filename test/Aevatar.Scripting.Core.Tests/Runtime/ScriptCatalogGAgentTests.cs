@@ -404,7 +404,7 @@ public class ScriptCatalogGAgentTests
             T evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where T : IMessage
         {
             _ = evt;
@@ -418,7 +418,7 @@ public class ScriptCatalogGAgentTests
             string targetActorId,
             T evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
             where T : IMessage
         {
             _ = sourceEnvelope;

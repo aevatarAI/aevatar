@@ -174,7 +174,8 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task PublishAsync<TEvent>(
             TEvent evt,
             EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -185,7 +186,8 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task SendToAsync<TEvent>(
             string targetActorId,
             TEvent evt,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();

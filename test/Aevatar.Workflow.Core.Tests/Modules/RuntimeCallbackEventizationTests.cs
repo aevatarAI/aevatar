@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -708,6 +709,53 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldReuseDispatchDedupMetadata_WhenDispatchIsReplayed()
+    {
+        var module = new LLMCallModule();
+        var ctx = new SchedulingContext();
+        var requestEnvelope = Wrap(new StepRequestEvent
+        {
+            StepId = "step-1",
+            StepType = "llm_call",
+            RunId = "run-llm-dedup",
+            Input = "prompt",
+            TargetRole = "assistant",
+            Parameters = { ["timeout_ms"] = "5000" },
+        });
+
+        await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
+
+        var firstDispatch = ctx.Outbound
+            .Single(x => x.Event is ChatRequestEvent);
+        var firstChatRequest = (ChatRequestEvent)firstDispatch.Event;
+        firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
+        firstDispatch.Metadata.Should().ContainKey(EnvelopeMetadataKeys.DedupOriginId);
+        var dedupOriginId = firstDispatch.Metadata[EnvelopeMetadataKeys.DedupOriginId];
+        dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
+
+        var state = ctx.LoadState<LLMCallModuleState>("llm_call");
+        var pending = state.PendingBySessionId[firstChatRequest.SessionId];
+        pending.RequestDispatched = false;
+        state.PendingBySessionId[firstChatRequest.SessionId] = pending;
+        await ctx.SaveStateAsync("llm_call", state, CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Outbound.Clear();
+
+        await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
+
+        var replayDispatch = ctx.Outbound
+            .Single(x => x.Event is ChatRequestEvent);
+        var replayChatRequest = (ChatRequestEvent)replayDispatch.Event;
+        replayChatRequest.SessionId.Should().Be(firstChatRequest.SessionId);
+        replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
+        replayDispatch.Metadata[EnvelopeMetadataKeys.DedupOriginId].Should().Be(dedupOriginId);
+
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId[firstChatRequest.SessionId]
+            .DispatchDedupId.Should().Be(dedupOriginId);
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldRejectStartWhenRunAlreadyActive()
     {
         var ctx = new SchedulingContext();
@@ -1103,6 +1151,8 @@ public class RuntimeCallbackEventizationTests
 
         public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
 
+        public List<OutboundDispatch> Outbound { get; } = [];
+
         public List<ScheduledCallback> Scheduled { get; } = [];
 
         public List<CanceledCallback> Canceled { get; } = [];
@@ -1112,7 +1162,26 @@ public class RuntimeCallbackEventizationTests
         public Task PublishAsync<TEvent>(
             TEvent evt,
             EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
+            where TEvent : IMessage
+        {
+            return RecordOutboundAsync(evt, direction, targetActorId: null, metadata, ct);
+        }
+
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            IReadOnlyDictionary<string, string>? metadata = null)
+            where TEvent : IMessage
+        {
+            return RecordOutboundAsync(evt, EventDirection.Self, targetActorId, metadata, ct);
+        }
+
+        private Task RecordOutboundAsync<TEvent>(
+            TEvent evt,
+            EventDirection direction,
+            string? targetActorId,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken ct)
             where TEvent : IMessage
         {
             _ = ct;
@@ -1123,14 +1192,14 @@ public class RuntimeCallbackEventizationTests
             }
 
             Published.Add((evt, direction));
+            Outbound.Add(new OutboundDispatch(
+                evt,
+                direction,
+                targetActorId,
+                metadata == null
+                    ? new Dictionary<string, string>(StringComparer.Ordinal)
+                    : new Dictionary<string, string>(metadata, StringComparer.Ordinal)));
             return Task.CompletedTask;
-        }
-
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct);
         }
 
         public TState LoadState<TState>(string scopeKey)
@@ -1272,4 +1341,10 @@ public class RuntimeCallbackEventizationTests
 
         public long ExpectedGeneration => Lease.Generation;
     }
+
+    private sealed record OutboundDispatch(
+        IMessage Event,
+        EventDirection Direction,
+        string? TargetActorId,
+        IReadOnlyDictionary<string, string> Metadata);
 }
