@@ -4,6 +4,7 @@ public sealed record WorkflowChatRunRequest(
     string Prompt,
     string? WorkflowName,
     string? ActorId,
+    string? SessionId = null,
     // Inline workflow YAML bundle; first item is the entry workflow.
     IReadOnlyList<string>? WorkflowYamls = null);
 

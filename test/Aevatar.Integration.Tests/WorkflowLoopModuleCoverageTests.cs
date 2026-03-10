@@ -558,7 +558,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["branch"] = "yes" },
+                BranchKey = "yes",
             }),
             ctx,
             CancellationToken.None);
@@ -591,7 +591,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["next_step"] = "s3" },
+                NextStepId = "s3",
             }),
             ctx,
             CancellationToken.None);
@@ -879,11 +879,8 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "ignored",
-                Metadata =
-                {
-                    ["assign.target"] = "counter",
-                    ["assign.value"] = "1",
-                },
+                AssignedVariable = "counter",
+                AssignedValue = "1",
             }),
             ctx,
             CancellationToken.None);

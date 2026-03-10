@@ -10,9 +10,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 {
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
-        var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
-                        !string.IsNullOrWhiteSpace(metadataSessionId)
-            ? metadataSessionId
+        var sessionId = !string.IsNullOrWhiteSpace(command.SessionId)
+            ? command.SessionId
             : context.CorrelationId;
 
         var chatRequest = new ChatRequestEvent

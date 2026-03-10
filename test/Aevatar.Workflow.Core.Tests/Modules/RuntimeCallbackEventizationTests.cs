@@ -1050,7 +1050,7 @@ public class RuntimeCallbackEventizationTests
                 RunId = "run-next",
                 Success = true,
                 Output = "done",
-                Metadata = { ["next_step"] = "missing-step" },
+                NextStepId = "missing-step",
             }),
             ctx,
             CancellationToken.None);

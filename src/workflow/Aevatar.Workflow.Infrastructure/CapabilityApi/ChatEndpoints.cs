@@ -235,11 +235,6 @@ public static class WorkflowCapabilityEndpoints
                 Approved = input.Approved,
                 UserInput = input.UserInput ?? string.Empty,
             };
-            if (input.Metadata is { Count: > 0 })
-            {
-                foreach (var (key, value) in input.Metadata)
-                    resumed.Metadata[key] = value;
-            }
             var commandId = (input.CommandId ?? string.Empty).Trim();
             var correlationId = string.IsNullOrWhiteSpace(commandId)
                 ? Guid.NewGuid().ToString("N")

@@ -158,6 +158,10 @@ public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEv
                         Output = evt.Output,
                         Error = evt.Error,
                         Metadata = { metadata },
+                        NextStepId = evt.NextStepId,
+                        BranchKey = evt.BranchKey,
+                        AssignedVariable = evt.AssignedVariable,
+                        AssignedValue = evt.AssignedValue,
                     }),
                 },
             },
@@ -429,10 +433,6 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
 
-        var metadata = new Dictionary<string, string>();
-        foreach (var (key, value) in evt.Metadata)
-            metadata[key] = value;
-
         events =
         [
             new WorkflowRunEventEnvelope
@@ -448,7 +448,7 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                         SuspensionType = evt.SuspensionType,
                         Prompt = evt.Prompt,
                         TimeoutSeconds = evt.TimeoutSeconds,
-                        Metadata = { metadata },
+                        VariableName = evt.VariableName,
                     }),
                 },
             },

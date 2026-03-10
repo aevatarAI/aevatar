@@ -849,7 +849,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
-        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
+        chat.TimeoutMs.Should().Be(1800000);
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -1184,13 +1184,13 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
-        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
-        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
+        completions["assign-1"].AssignedVariable.Should().Be("x");
+        completions["assign-1"].AssignedValue.Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
-        completions["cond-1"].Metadata["branch"].Should().Be("true");
+        completions["cond-1"].BranchKey.Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
-        completions["cond-2"].Metadata["branch"].Should().Be("false");
+        completions["cond-2"].BranchKey.Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 

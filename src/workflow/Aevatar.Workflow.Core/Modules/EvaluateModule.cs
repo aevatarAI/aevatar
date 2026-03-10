@@ -140,7 +140,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         completed.Metadata["evaluate.passed"] = passed.ToString();
 
         if (!passed && !string.IsNullOrEmpty(evalCtx.OnBelow))
-            completed.Metadata["branch"] = evalCtx.OnBelow;
+            completed.BranchKey = evalCtx.OnBelow;
 
         await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }

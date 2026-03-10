@@ -527,10 +527,6 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             if (payload.Is(WorkflowSuspendedEvent.Descriptor))
             {
                 var evt = payload.Unpack<WorkflowSuspendedEvent>();
-                var meta = new Dictionary<string, string>();
-                foreach (var kv in evt.Metadata)
-                    meta[kv.Key] = kv.Value;
-
                 await WriteSse("workflow.suspended", new
                 {
                     actorId = actor.Id,
@@ -539,7 +535,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     suspensionType = evt.SuspensionType,
                     prompt = evt.Prompt,
                     timeoutSeconds = evt.TimeoutSeconds,
-                    metadata = meta.Count > 0 ? meta : null,
+                    variableName = string.IsNullOrWhiteSpace(evt.VariableName) ? null : evt.VariableName,
                 });
 
                 if (shouldAutoResume)
@@ -726,7 +722,7 @@ static object[] BuildPrimitivesCatalog()
         },
         new {
             name = "conditional", aliases = new[] { "conditional" }, category = "control",
-            description = "Binary branching. Checks if input contains a keyword, sets metadata[\"branch\"] to \"true\" or \"false\".",
+            description = "Binary branching. Checks if input contains a keyword, sets StepCompletedEvent.BranchKey to \"true\" or \"false\".",
             parameters = new object[] {
                 P("condition", "Keyword to search for in input (case-insensitive contains)", "default"),
             },
@@ -1123,9 +1119,7 @@ static WorkflowResumedEvent BuildAutoResumedEvent(WorkflowSuspendedEvent suspend
     var suspensionType = suspended.SuspensionType ?? string.Empty;
     if (string.Equals(suspensionType, "human_approval", StringComparison.OrdinalIgnoreCase))
     {
-        var shouldReject = (suspended.Prompt ?? string.Empty).Contains("AUTO_REJECT", StringComparison.OrdinalIgnoreCase) ||
-            (suspended.Metadata.TryGetValue("auto_reject", out var marker) &&
-             string.Equals(marker, "true", StringComparison.OrdinalIgnoreCase));
+        var shouldReject = (suspended.Prompt ?? string.Empty).Contains("AUTO_REJECT", StringComparison.OrdinalIgnoreCase);
 
         return new WorkflowResumedEvent
         {
@@ -1136,8 +1130,8 @@ static WorkflowResumedEvent BuildAutoResumedEvent(WorkflowSuspendedEvent suspend
         };
     }
 
-    var variable = suspended.Metadata.TryGetValue("variable", out var v) && !string.IsNullOrWhiteSpace(v)
-        ? v.Trim()
+    var variable = !string.IsNullOrWhiteSpace(suspended.VariableName)
+        ? suspended.VariableName.Trim()
         : "user_input";
     var source = (originalInput ?? string.Empty).ReplaceLineEndings(" ").Trim();
     if (source.Length > 80)

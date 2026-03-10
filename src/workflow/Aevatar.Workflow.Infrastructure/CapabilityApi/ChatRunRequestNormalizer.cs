@@ -30,7 +30,8 @@ internal static class ChatRunRequestNormalizer
                     input.Prompt,
                     WorkflowName: null,
                     normalizedAgentId,
-                    inlineWorkflowYamls));
+                    SessionId: NormalizeSessionId(input.SessionId),
+                    WorkflowYamls: inlineWorkflowYamls));
         }
 
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
@@ -41,6 +42,7 @@ internal static class ChatRunRequestNormalizer
                     input.Prompt,
                     requestedWorkflowName,
                     normalizedAgentId,
+                    SessionId: NormalizeSessionId(input.SessionId),
                     WorkflowYamls: null));
         }
 
@@ -53,6 +55,7 @@ internal static class ChatRunRequestNormalizer
                 input.Prompt,
                 defaultWorkflowName,
                 normalizedAgentId,
+                SessionId: NormalizeSessionId(input.SessionId),
                 WorkflowYamls: null));
     }
 
@@ -72,4 +75,7 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeAgentId(string? agentId) =>
         string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();
+
+    private static string? NormalizeSessionId(string? sessionId) =>
+        string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
 }

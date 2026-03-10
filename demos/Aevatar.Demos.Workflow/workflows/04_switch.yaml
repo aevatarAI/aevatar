@@ -3,7 +3,7 @@ description: |
   Demonstrates the `switch` primitive — multi-way branching.
   Routes input based on category keyword: bug/feature/question → respective handler.
   The switch module matches the input content against branch keys using
-  case-insensitive contains matching, and sets metadata["branch"].
+  case-insensitive contains matching, and sets StepCompletedEvent.BranchKey.
 
 roles: []
 

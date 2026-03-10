@@ -140,7 +140,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             SuspensionType = "human_input",
             Prompt = "请提供补充信息",
             TimeoutSeconds = 1800,
-            Metadata = { { "variable", "user_context" } },
+            VariableName = "user_context",
         }));
         var waiting = CreateMapper().Map(Wrap(new WaitingForSignalEvent
         {
@@ -154,7 +154,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         suspended.Should().ContainSingle();
         suspended[0].Custom.Name.Should().Be("aevatar.human_input.request");
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
-        request.Metadata["variable"].Should().Be("user_context");
+        request.VariableName.Should().Be("user_context");
 
         waiting.Should().ContainSingle();
         waiting[0].Custom.Name.Should().Be("aevatar.workflow.waiting_signal");

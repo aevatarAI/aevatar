@@ -56,9 +56,12 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
         {
             var completed = new StepCompletedEvent
             {
-                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
+                StepId = request.StepId,
+                RunId = request.RunId,
+                Success = true,
+                Output = input,
+                NextStepId = target,
             };
-            completed.Metadata["next_step"] = target;
             completed.Metadata["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }

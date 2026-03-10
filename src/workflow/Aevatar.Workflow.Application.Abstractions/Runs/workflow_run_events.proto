@@ -144,6 +144,10 @@ message WorkflowStepCompletedCustomPayload {
   string output = 4;
   string error = 5;
   map<string, string> metadata = 6;
+  string next_step_id = 7;
+  string branch_key = 8;
+  string assigned_variable = 9;
+  string assigned_value = 10;
 }
 
 message WorkflowReasoningCustomPayload {
@@ -158,7 +162,7 @@ message WorkflowHumanInputRequestCustomPayload {
   string suspension_type = 3;
   string prompt = 4;
   int32 timeout_seconds = 5;
-  map<string, string> metadata = 6;
+  string variable_name = 6;
 }
 
 message WorkflowHumanInputResponseCustomPayload {

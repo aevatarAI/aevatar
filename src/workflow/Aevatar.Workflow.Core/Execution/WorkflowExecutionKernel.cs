@@ -262,13 +262,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 outputPreview);
         }
 
-        if (evt.Metadata.TryGetValue("assign.target", out var assignTarget) &&
-            !string.IsNullOrWhiteSpace(assignTarget))
+        if (!string.IsNullOrWhiteSpace(evt.AssignedVariable))
         {
-            var assignValue = evt.Metadata.TryGetValue("assign.value", out var valueFromMetadata)
-                ? valueFromMetadata
-                : evt.Output ?? string.Empty;
-            state.Variables[assignTarget] = assignValue;
+            var assignValue = string.IsNullOrWhiteSpace(evt.AssignedValue)
+                ? evt.Output ?? string.Empty
+                : evt.AssignedValue;
+            state.Variables[evt.AssignedVariable] = assignValue;
         }
 
         if (!string.IsNullOrWhiteSpace(evt.StepId))
@@ -321,9 +320,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         await SaveStateAsync(state, ctx, ct);
 
         StepDefinition? next;
-        if (evt.Metadata.TryGetValue("next_step", out var directNextStepId) &&
-            !string.IsNullOrWhiteSpace(directNextStepId))
+        if (!string.IsNullOrWhiteSpace(evt.NextStepId))
         {
+            var directNextStepId = evt.NextStepId;
             next = _workflow.GetStep(directNextStepId);
             if (next == null)
             {
@@ -345,8 +344,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         else
         {
-            var branchKey = evt.Metadata.TryGetValue("branch", out var branch) ? branch : null;
-            next = _workflow.GetNextStep(current.Id, branchKey);
+            next = _workflow.GetNextStep(current.Id, evt.BranchKey);
         }
 
         if (next == null)

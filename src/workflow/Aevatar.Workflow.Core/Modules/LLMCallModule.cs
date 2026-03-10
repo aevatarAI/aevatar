@@ -14,7 +14,6 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
-    private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
     private const string ModuleStateKey = "llm_call";
@@ -404,8 +403,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         CancellationToken ct)
     {
         var promptPreview = prompt.Length > 200 ? prompt[..200] + "..." : prompt;
-        var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = sessionId };
-        chatEvt.Metadata[LlmTimeoutMetadataKey] = timeoutMs.ToString(CultureInfo.InvariantCulture);
+        var chatEvt = new ChatRequestEvent
+        {
+            Prompt = prompt,
+            SessionId = sessionId,
+            TimeoutMs = timeoutMs,
+        };
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!string.IsNullOrEmpty(targetRole))

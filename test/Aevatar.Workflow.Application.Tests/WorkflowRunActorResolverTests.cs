@@ -44,7 +44,7 @@ public sealed class WorkflowRunActorResolverTests
             new InMemoryWorkflowDefinitionRegistry());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", [entryWorkflowYaml, helperWorkflowYaml]),
+            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml, helperWorkflowYaml]),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -88,7 +88,7 @@ public sealed class WorkflowRunActorResolverTests
             new InMemoryWorkflowDefinitionRegistry());
 
         var result = await resolver.ResolveOrCreateAsync(
-            new WorkflowChatRunRequest("hello", null, "agent-1", [entryWorkflowYaml]),
+            new WorkflowChatRunRequest("hello", null, "agent-1", WorkflowYamls: [entryWorkflowYaml]),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.WorkflowBindingMismatch);

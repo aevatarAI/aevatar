@@ -174,7 +174,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldUseSessionIdFromMetadata()
+    public void EnvelopeFactory_ShouldUseSessionIdFromCommand()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -184,11 +184,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
-            });
-        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
+            Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
+        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1", SessionId: "session-42");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -217,14 +214,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(command, new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
-            new Dictionary<string, string>
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "   ",
-            }));
+            new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 }

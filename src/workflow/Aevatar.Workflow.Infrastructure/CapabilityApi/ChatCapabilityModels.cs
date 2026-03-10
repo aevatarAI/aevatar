@@ -23,6 +23,12 @@ public sealed record ChatInput
     public string? AgentId { get; init; }
 
     /// <summary>
+    /// Optional client-controlled session identifier for downstream chat correlation.
+    /// When omitted, the server correlation id becomes the chat session id.
+    /// </summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>
     /// Inline workflow YAML bundle for this request.
     /// The first item is treated as the entry workflow.
     /// If present, this field takes precedence over <see cref="Workflow"/>.
@@ -38,7 +44,6 @@ public sealed record WorkflowResumeInput
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
-    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowSignalInput

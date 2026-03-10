@@ -30,7 +30,7 @@ dotnet run -- --all
 | `transform` | — | TransformModule | 纯函数变换：count、take、join、split、distinct、uppercase、lowercase、trim、reverse_lines、count_words |
 | `guard` | `assert` | GuardModule | 数据校验：not_empty、json_valid、regex、max_length、contains；支持 on_fail 策略（fail/skip/branch） |
 | `conditional` | — | ConditionalModule | 简单条件分支，根据输入中是否包含关键词选择 true/false 路径 |
-| `switch` | — | SwitchModule | 多路分支，按 `on` 参数精确匹配或包含匹配 branch key，未命中走 `_default` |
+| `switch` | — | SwitchModule | 多路分支，按 `on` 参数精确匹配或包含匹配 branch key，结果写入 `StepCompletedEvent.BranchKey`，未命中走 `_default` |
 | `assign` | — | AssignModule | 变量赋值，从字面值或 `$` 路径引用上一步输出 |
 | `retrieve_facts` | — | RetrieveFactsModule | 关键词检索 top-k 事实（输入按行分隔的事实列表） |
 | `emit` | `publish` | EmitModule | 发布自定义事件，用于可观测性 / Webhook / 跨工作流信号 |
