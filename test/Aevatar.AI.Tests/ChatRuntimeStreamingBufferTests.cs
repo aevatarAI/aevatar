@@ -113,6 +113,59 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldForwardRequestIdAndMergeMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RequestId = "base-request",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["base"] = "1",
+                    ["override"] = "old",
+                },
+            });
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["override"] = "new",
+            ["workflow.run_id"] = "run-1",
+        };
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", metadata))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RequestId.Should().Be("session-42");
+        provider.LastStreamRequest.Metadata.Should().NotBeNull();
+        provider.LastStreamRequest.Metadata!["base"].Should().Be("1");
+        provider.LastStreamRequest.Metadata["override"].Should().Be("new");
+        provider.LastStreamRequest.Metadata["workflow.run_id"].Should().Be("run-1");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldExposeRequestIdToLlmMiddlewareMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var captureMiddleware = new CaptureLLMMetadataMiddleware();
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            llmMiddlewares: [captureMiddleware]);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
+        {
+        }
+
+        captureMiddleware.RequestIds.Should().ContainSingle().Which.Should().Be("session-77");
+    }
+
+    [Fact]
     public void Constructor_WhenStreamBufferCapacityIsInvalid_ShouldThrow()
     {
         var provider = new StreamingProvider([]);
@@ -125,7 +178,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
         int streamBufferCapacity,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        Func<LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var toolLoop = new ToolCallLoop(new ToolManager());
@@ -135,7 +189,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: () => new LLMRequest { Messages = [] },
+            requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
             llmMiddlewares: llmMiddlewares,
             streamBufferCapacity: streamBufferCapacity);
     }
@@ -147,6 +201,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         public string Name => "streaming-provider";
         public int StreamCallCount { get; private set; }
+        public LLMRequest? LastStreamRequest { get; private set; }
 
         public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
         {
@@ -159,7 +214,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
+            LastStreamRequest = request;
             StreamCallCount++;
 
             foreach (var chunk in chunks)
@@ -195,6 +250,22 @@ public sealed class ChatRuntimeStreamingBufferTests
         {
             await next();
             LastResponse = context.Response;
+        }
+    }
+
+    private sealed class CaptureLLMMetadataMiddleware : ILLMCallMiddleware
+    {
+        public List<string> RequestIds { get; } = [];
+
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            if (context.Metadata.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+                requestIdObj is string requestId)
+            {
+                RequestIds.Add(requestId);
+            }
+
+            await next();
         }
     }
 }

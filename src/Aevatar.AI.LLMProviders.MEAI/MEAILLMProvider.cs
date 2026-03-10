@@ -215,9 +215,21 @@ public sealed class MEAILLMProvider : ILLMProvider
         var options = new ChatOptions();
         var hasOptions = false;
 
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+        {
+            options.ConversationId = request.RequestId.Trim();
+            hasOptions = true;
+        }
+
         if (request.Model != null) { options.ModelId = request.Model; hasOptions = true; }
         if (request.Temperature.HasValue) { options.Temperature = (float)request.Temperature.Value; hasOptions = true; }
         if (request.MaxTokens.HasValue) { options.MaxOutputTokens = request.MaxTokens.Value; hasOptions = true; }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId) || request.Metadata is { Count: > 0 })
+        {
+            options.AdditionalProperties = BuildAdditionalProperties(request);
+            hasOptions = true;
+        }
 
         // 注册 Tools
         if (request.Tools is { Count: > 0 })
@@ -234,6 +246,22 @@ public sealed class MEAILLMProvider : ILLMProvider
         }
 
         return hasOptions ? options : null;
+    }
+
+    private static AdditionalPropertiesDictionary BuildAdditionalProperties(LLMRequest request)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        if (request.Metadata != null)
+        {
+            foreach (var pair in request.Metadata)
+                properties[pair.Key] = pair.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+            properties[LLMRequestMetadataKeys.RequestId] = request.RequestId.Trim();
+
+        return new AdditionalPropertiesDictionary(properties);
     }
 
     // ─── 转换：MEAI → Aevatar ───

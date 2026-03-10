@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
@@ -106,7 +107,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "root-t", "mid-t", "leaf-t" })
+        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "root-t", "mid-t", "leaf-t", "collector-dedup" })
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
@@ -214,5 +215,25 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         restored.Should().NotBeNull();
         restored!.Id.Should().Be(agentId);
         restored.Agent.Should().BeOfType<CollectorAgent>();
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_ShouldDeduplicateByStableOriginId_ForSameActor()
+    {
+        const string actorId = "collector-dedup";
+        var actor = await _runtime.CreateAsync<CollectorAgent>(actorId);
+        var collector = (CollectorAgent)actor.Agent;
+        var first = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        first.Id = "env-1";
+        first.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-dedup-1";
+
+        var second = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        second.Id = "env-2";
+        second.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-dedup-1";
+
+        await actor.HandleEventAsync(first);
+        await actor.HandleEventAsync(second);
+
+        collector.ReceivedMessages.Should().ContainSingle().Which.Should().Be("dup");
     }
 }

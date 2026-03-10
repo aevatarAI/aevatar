@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,9 +19,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
-    private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
-    private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
-
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -130,9 +128,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         if (await TryHandleCompatibilityRetryAsync(envelope))
             return;
 
-        if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
+        if (_deduplicator != null &&
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
         {
-            var dedupKey = BuildDedupKey(envelope);
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
@@ -399,33 +397,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         return true;
     }
 
-    private string BuildDedupKey(EventEnvelope envelope)
-    {
-        var originId = envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.DedupOriginId, out var dedupOriginId) &&
-                       !string.IsNullOrWhiteSpace(dedupOriginId)
-            ? dedupOriginId
-            : envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-              !string.IsNullOrWhiteSpace(metadataOriginId)
-                ? metadataOriginId
-                : envelope.Id;
-
-        if (string.IsNullOrWhiteSpace(originId))
-            originId = envelope.Id ?? string.Empty;
-
-        var attempt = 0;
-        if (envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var metadataAttempt) &&
-            int.TryParse(metadataAttempt, out var parsedAttempt) &&
-            parsedAttempt > 0)
-        {
-            attempt = parsedAttempt;
-        }
-
-        return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
-    }
-
     private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
+        var originId = envelope.Metadata.TryGetValue(RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
                        !string.IsNullOrWhiteSpace(metadataOriginId)
             ? metadataOriginId
             : envelope.Id;

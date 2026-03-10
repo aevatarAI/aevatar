@@ -13,6 +13,12 @@ public sealed class LLMRequest
     /// <summary>对话消息列表，按顺序排列（system / user / assistant / tool）。</summary>
     public required List<ChatMessage> Messages { get; init; }
 
+    /// <summary>稳定请求标识，用于 replay/dedup/outbox 等跨边界关联。</summary>
+    public string? RequestId { get; init; }
+
+    /// <summary>透传给 provider/middleware 的附加元数据。</summary>
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+
     /// <summary>可选工具列表，供 LLM 选择调用。</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 

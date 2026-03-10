@@ -142,6 +142,24 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
+    public async Task LLMCall_WithRequestId_ShouldSetRequestIdTag()
+    {
+        _activities.Clear();
+
+        var ctx = new LLMCallContext
+        {
+            Request = new LLMRequest { Messages = [], Model = "gpt-4", RequestId = "session-42" },
+            Provider = new FakeLLMProvider(),
+        };
+
+        await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "chat").Last();
+        activity.GetTagItem("gen_ai.request.id").Should().Be("session-42");
+    }
+
+    [Fact]
     public async Task LLMCall_WithBlankProviderName_UsesUnknownAndHandlesNullResponse()
     {
         _activities.Clear();

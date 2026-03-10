@@ -1,10 +1,10 @@
+using Aevatar.Foundation.Runtime.Deduplication;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 internal sealed class RuntimeEnvelopeRetryPolicy
 {
-    private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
     private const string RetryLastErrorMetadataKey = "aevatar.retry.last_error";
-    private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
 
     private RuntimeEnvelopeRetryPolicy(int maxAttempts, int retryDelayMs)
     {
@@ -51,19 +51,17 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         }
 
         retryEnvelope = originalEnvelope.Clone();
-        retryEnvelope.Metadata[RetryAttemptMetadataKey] = nextAttempt.ToString();
+        retryEnvelope.Metadata[RuntimeEnvelopeDeduplication.RetryAttemptMetadataKey] = nextAttempt.ToString();
         retryEnvelope.Metadata[RetryLastErrorMetadataKey] = exception.GetType().Name;
         var originEventId = ResolveOriginEventId(originalEnvelope);
         if (!string.IsNullOrWhiteSpace(originEventId))
-            retryEnvelope.Metadata[RetryOriginEventIdMetadataKey] = originEventId;
+            retryEnvelope.Metadata[RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey] = originEventId;
         return true;
     }
 
     private static int GetAttempt(EventEnvelope envelope)
     {
-        if (!envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var value))
-            return 0;
-        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : 0;
+        return RuntimeEnvelopeDeduplication.GetAttempt(envelope);
     }
 
     private static int ParseOrDefault(string? value, int defaultValue)
@@ -75,9 +73,12 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     private static string? ResolveOriginEventId(EventEnvelope envelope)
     {
-        if (envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var originEventId) &&
+        if (envelope.Metadata.TryGetValue(RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey, out var originEventId) &&
             !string.IsNullOrWhiteSpace(originEventId))
+        {
             return originEventId;
+        }
+
         return string.IsNullOrWhiteSpace(envelope.Id) ? null : envelope.Id;
     }
 }

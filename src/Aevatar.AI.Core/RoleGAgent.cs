@@ -32,6 +32,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 {
     private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
+    private const int MaxTrackedSessions = 128;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -68,6 +69,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
+            .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
+            .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
             .OrCurrent();
 
     protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
@@ -111,6 +114,33 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     [EventHandler]
     public async Task HandleChatRequest(ChatRequestEvent request)
     {
+        var trackedSession = ResolveTrackedSession(request);
+        if (trackedSession is { Completed: true })
+        {
+            Logger.LogInformation(
+                "[{Role}] Replaying cached LLM completion for session={SessionId}",
+                RoleName,
+                request.SessionId);
+            await ReplayCompletedSessionAsync(request.SessionId, trackedSession);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SessionId) && trackedSession == null)
+        {
+            await PersistDomainEventAsync(new RoleChatSessionStartedEvent
+            {
+                SessionId = request.SessionId,
+                Prompt = request.Prompt,
+            });
+        }
+        else if (trackedSession != null)
+        {
+            Logger.LogInformation(
+                "[{Role}] Resuming incomplete LLM session={SessionId}",
+                RoleName,
+                request.SessionId);
+        }
+
         var promptPreview = request.Prompt.Length > 200
             ? request.Prompt[..200] + "..."
             : request.Prompt;
@@ -127,75 +157,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentId = Id,
         }, EventDirection.Up);
 
+        SessionReplayRecord replayRecord;
         try
         {
-            // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
-            var fullContent = new StringBuilder();
-            var fullReasoning = new StringBuilder();
-            var toolCalls = new StreamingToolCallAccumulator();
-
-            await foreach (var chunk in ChatStreamAsync(request.Prompt, streamCt))
-            {
-                if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                {
-                    fullContent.Append(chunk.DeltaContent);
-                    await PublishAsync(new TextMessageContentEvent
-                    {
-                        Delta = chunk.DeltaContent,
-                        SessionId = request.SessionId,
-                    }, EventDirection.Up);
-                }
-
-                if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
-                {
-                    fullReasoning.Append(chunk.DeltaReasoningContent);
-                    await PublishAsync(new TextMessageReasoningEvent
-                    {
-                        Delta = chunk.DeltaReasoningContent,
-                        SessionId = request.SessionId,
-                    }, EventDirection.Up);
-                }
-
-                if (chunk.DeltaToolCall != null)
-                    toolCalls.TrackDelta(chunk.DeltaToolCall);
-            }
-
-            foreach (var toolCall in toolCalls.BuildToolCalls())
-            {
-                await PublishAsync(new ToolCallEvent
-                {
-                    CallId = toolCall.Id,
-                    ToolName = toolCall.Name,
-                    ArgumentsJson = toolCall.ArgumentsJson,
-                }, EventDirection.Up);
-            }
-
-            var response = fullContent.ToString();
-            var responsePreview = response.Length > 300
-                ? response[..300] + "..."
-                : response;
-            Logger.LogInformation("[{Role}] LLM response ({Len} chars): {Preview}",
-                RoleName, response.Length, responsePreview);
-
-            if (fullReasoning.Length > 0)
-            {
-                var reasoning = fullReasoning.ToString();
-                var reasoningPreview = reasoning.Length > 300
-                    ? reasoning[..300] + "..."
-                    : reasoning;
-                Logger.LogInformation(
-                    "[{Role}] LLM reasoning ({Len} chars): {Preview}",
-                    RoleName,
-                    reasoning.Length,
-                    reasoningPreview);
-            }
-
-            // ─── AG-UI: TEXT_MESSAGE_END ───
-            await PublishAsync(new TextMessageEndEvent
-            {
-                Content = response,
-                SessionId = request.SessionId,
-            }, EventDirection.Up);
+            replayRecord = await ExecuteStreamingChatAsync(request, streamCt);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
@@ -204,23 +169,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 RoleName,
                 timeoutMs,
                 request.SessionId);
-            await PublishAsync(new TextMessageEndEvent
-            {
-                Content = BuildLlmFailureContent($"LLM request timed out after {timeoutMs}ms"),
-                SessionId = request.SessionId,
-            }, EventDirection.Up);
+            replayRecord = SessionReplayRecord.FromFailure(
+                BuildLlmFailureContent($"LLM request timed out after {timeoutMs}ms"));
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "[{Role}] LLM request failed. session={SessionId}", RoleName, request.SessionId);
-            await PublishAsync(new TextMessageEndEvent
-            {
-                Content = useWorkflowFailureMarker
+            replayRecord = SessionReplayRecord.FromFailure(
+                useWorkflowFailureMarker
                     ? BuildLlmFailureContent(ex.Message)
-                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}",
-                SessionId = request.SessionId,
-            }, EventDirection.Up);
+                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}");
         }
+
+        await PersistSessionCompletionAsync(request, replayRecord);
+        await PublishCompletionAsync(request.SessionId, replayRecord.Content);
     }
 
     private static int ResolveLlmTimeoutMs(ChatRequestEvent request)
@@ -243,6 +205,163 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     private static string SanitizeFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
+
+    private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(ChatRequestEvent request, CancellationToken streamCt)
+    {
+        // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
+        var fullContent = new StringBuilder();
+        var fullReasoning = new StringBuilder();
+        var toolCalls = new StreamingToolCallAccumulator();
+        IReadOnlyDictionary<string, string>? requestMetadata = request.Metadata.Count == 0
+            ? null
+            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
+
+        await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, requestMetadata, streamCt))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+            {
+                fullContent.Append(chunk.DeltaContent);
+                await PublishAsync(new TextMessageContentEvent
+                {
+                    Delta = chunk.DeltaContent,
+                    SessionId = request.SessionId,
+                }, EventDirection.Up);
+            }
+
+            if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+            {
+                fullReasoning.Append(chunk.DeltaReasoningContent);
+                await PublishAsync(new TextMessageReasoningEvent
+                {
+                    Delta = chunk.DeltaReasoningContent,
+                    SessionId = request.SessionId,
+                }, EventDirection.Up);
+            }
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+        }
+
+        foreach (var toolCall in toolCalls.BuildToolCalls())
+        {
+            await PublishAsync(new ToolCallEvent
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            }, EventDirection.Up);
+        }
+
+        var response = fullContent.ToString();
+        var responsePreview = response.Length > 300
+            ? response[..300] + "..."
+            : response;
+        Logger.LogInformation(
+            "[{Role}] LLM response ({Len} chars): {Preview}",
+            RoleName,
+            response.Length,
+            responsePreview);
+
+        if (fullReasoning.Length > 0)
+        {
+            var reasoning = fullReasoning.ToString();
+            var reasoningPreview = reasoning.Length > 300
+                ? reasoning[..300] + "..."
+                : reasoning;
+            Logger.LogInformation(
+                "[{Role}] LLM reasoning ({Len} chars): {Preview}",
+                RoleName,
+                reasoning.Length,
+                reasoningPreview);
+        }
+
+        return new SessionReplayRecord(
+            response,
+            fullReasoning.ToString(),
+            toolCalls.BuildToolCalls(),
+            ContentEmitted: fullContent.Length > 0);
+    }
+
+    private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+        {
+            SessionId = request.SessionId,
+            Content = replayRecord.Content,
+            ReasoningContent = replayRecord.ReasoningContent,
+            Prompt = request.Prompt,
+            ContentEmitted = replayRecord.ContentEmitted,
+            ToolCalls = { ToToolCallEvents(replayRecord.ToolCalls) },
+        });
+    }
+
+    private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
+    {
+        await PublishAsync(new TextMessageStartEvent
+        {
+            SessionId = sessionId,
+            AgentId = Id,
+        }, EventDirection.Up);
+
+        if (trackedSession.ContentEmitted && !string.IsNullOrEmpty(trackedSession.FinalContent))
+        {
+            await PublishAsync(new TextMessageContentEvent
+            {
+                Delta = trackedSession.FinalContent,
+                SessionId = sessionId,
+            }, EventDirection.Up);
+        }
+
+        if (!string.IsNullOrEmpty(trackedSession.FinalReasoningContent))
+        {
+            await PublishAsync(new TextMessageReasoningEvent
+            {
+                Delta = trackedSession.FinalReasoningContent,
+                SessionId = sessionId,
+            }, EventDirection.Up);
+        }
+
+        foreach (var toolCall in trackedSession.ToolCalls)
+        {
+            await PublishAsync(new ToolCallEvent
+            {
+                CallId = toolCall.CallId,
+                ToolName = toolCall.ToolName,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            }, EventDirection.Up);
+        }
+
+        await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
+    }
+
+    private Task PublishCompletionAsync(string sessionId, string completionContent) =>
+        PublishAsync(
+            new TextMessageEndEvent
+            {
+                Content = completionContent,
+                SessionId = sessionId,
+            },
+            EventDirection.Up);
+
+    private RoleChatSessionState? ResolveTrackedSession(ChatRequestEvent request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+            return null;
+
+        if (!State.Sessions.TryGetValue(request.SessionId, out var trackedSession))
+            return null;
+
+        if (!string.Equals(trackedSession.Prompt, request.Prompt, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Session '{request.SessionId}' already exists with a different prompt.");
+        }
+
+        return trackedSession;
+    }
 
     private static RoleGAgentState ApplyInitializeRoleAgent(
         RoleGAgentState current,
@@ -277,11 +396,120 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         return next;
     }
 
+    private static RoleGAgentState ApplyChatSessionStarted(
+        RoleGAgentState current,
+        RoleChatSessionStartedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SessionId))
+            return current;
+
+        var next = current.Clone();
+        var sessions = next.Sessions;
+        if (!sessions.TryGetValue(evt.SessionId, out var session))
+        {
+            session = new RoleChatSessionState();
+            next.MessageCount++;
+            session.Sequence = next.MessageCount;
+        }
+        else if (session.Sequence <= 0)
+        {
+            next.MessageCount++;
+            session.Sequence = next.MessageCount;
+        }
+
+        session.Prompt = evt.Prompt ?? string.Empty;
+        sessions[evt.SessionId] = session;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static RoleGAgentState ApplyChatSessionCompleted(
+        RoleGAgentState current,
+        RoleChatSessionCompletedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SessionId))
+            return current;
+
+        var next = current.Clone();
+        if (!next.Sessions.TryGetValue(evt.SessionId, out var session))
+        {
+            session = new RoleChatSessionState();
+            next.MessageCount++;
+            session.Sequence = next.MessageCount;
+        }
+        else if (session.Sequence <= 0)
+        {
+            next.MessageCount++;
+            session.Sequence = next.MessageCount;
+        }
+
+        session.Completed = true;
+        session.Prompt = evt.Prompt ?? session.Prompt ?? string.Empty;
+        session.FinalContent = evt.Content ?? string.Empty;
+        session.FinalReasoningContent = evt.ReasoningContent ?? string.Empty;
+        session.ContentEmitted = evt.ContentEmitted;
+        session.ToolCalls.Clear();
+        session.ToolCalls.Add(evt.ToolCalls);
+        next.Sessions[evt.SessionId] = session;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static IEnumerable<ToolCallEvent> ToToolCallEvents(IEnumerable<ToolCall> toolCalls)
+    {
+        foreach (var toolCall in toolCalls)
+        {
+            yield return new ToolCallEvent
+            {
+                CallId = toolCall.Id,
+                ToolName = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            };
+        }
+    }
+
+    private static void TrimTrackedSessions(RoleGAgentState state)
+    {
+        if (state.Sessions.Count <= MaxTrackedSessions)
+            return;
+
+        while (state.Sessions.Count > MaxTrackedSessions)
+        {
+            string? oldestSessionId = null;
+            long oldestSequence = long.MaxValue;
+
+            foreach (var session in state.Sessions)
+            {
+                var sequence = session.Value.Sequence <= 0 ? long.MinValue : session.Value.Sequence;
+                if (sequence < oldestSequence)
+                {
+                    oldestSequence = sequence;
+                    oldestSessionId = session.Key;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(oldestSessionId))
+                break;
+
+            state.Sessions.Remove(oldestSessionId);
+        }
+    }
+
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)
     {
         if (state.ConfigOverrides == null)
             state.ConfigOverrides = new AIAgentConfigOverrides();
         return state.ConfigOverrides;
+    }
+
+    private sealed record SessionReplayRecord(
+        string Content,
+        string ReasoningContent,
+        IReadOnlyList<ToolCall> ToolCalls,
+        bool ContentEmitted)
+    {
+        public static SessionReplayRecord FromFailure(string content) =>
+            new(content, string.Empty, [], ContentEmitted: false);
     }
 
 }

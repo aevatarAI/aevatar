@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Runtime.Deduplication;
 
 namespace Aevatar.Foundation.Core.Tests;
 
@@ -16,6 +18,23 @@ public sealed class RuntimeRoutingAndDeduplicationCoverageTests
         first.Should().BeTrue();
         second.Should().BeFalse();
         third.Should().BeTrue();
+    }
+
+    [Fact]
+    public void RuntimeEnvelopeDeduplication_ShouldPreferStableOriginMetadata()
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = "env-2",
+        };
+        envelope.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-op-1";
+        envelope.Metadata[RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey] = "env-1";
+        envelope.Metadata[RuntimeEnvelopeDeduplication.RetryAttemptMetadataKey] = "2";
+
+        var built = RuntimeEnvelopeDeduplication.TryBuildDedupKey("actor-1", envelope, out var dedupKey);
+
+        built.Should().BeTrue();
+        dedupKey.Should().Be("actor-1:logical-op-1:2");
     }
 
     [Fact]

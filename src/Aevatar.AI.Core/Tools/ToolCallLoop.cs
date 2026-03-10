@@ -43,10 +43,15 @@ public sealed class ToolCallLoop
     {
         for (var round = 0; round < maxRounds; round++)
         {
+            var callId = ComposeRoundCallId(baseRequest.RequestId, round);
             var request = new LLMRequest
             {
-                Messages = [..messages], Tools = baseRequest.Tools,
-                Model = baseRequest.Model, Temperature = baseRequest.Temperature,
+                Messages = [..messages],
+                RequestId = baseRequest.RequestId,
+                Metadata = BuildPerCallMetadata(baseRequest.Metadata, callId),
+                Tools = baseRequest.Tools,
+                Model = baseRequest.Model,
+                Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
             };
 
@@ -111,10 +116,15 @@ public sealed class ToolCallLoop
 
         // maxRounds exhausted — tool results from the last round are already in messages.
         // Make one final LLM call WITHOUT tools so the model must produce a text response.
+        var finalCallId = ComposeFinalCallId(baseRequest.RequestId);
         var finalRequest = new LLMRequest
         {
-            Messages = [..messages], Tools = null,
-            Model = baseRequest.Model, Temperature = baseRequest.Temperature,
+            Messages = [..messages],
+            RequestId = baseRequest.RequestId,
+            Metadata = BuildPerCallMetadata(baseRequest.Metadata, finalCallId),
+            Tools = null,
+            Model = baseRequest.Model,
+            Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
         };
         var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
@@ -140,6 +150,7 @@ public sealed class ToolCallLoop
             CancellationToken = ct,
             IsStreaming = false,
         };
+        AnnotateRequestIdentity(llmCallContext);
 
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
@@ -155,6 +166,58 @@ public sealed class ToolCallLoop
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
         return (response, llmCallContext.Terminate);
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
+        IReadOnlyDictionary<string, string>? baseMetadata,
+        string? callId)
+    {
+        if (baseMetadata == null || baseMetadata.Count == 0)
+        {
+            if (string.IsNullOrWhiteSpace(callId))
+                return null;
+
+            return new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.CallId] = callId,
+            };
+        }
+
+        var metadata = new Dictionary<string, string>(baseMetadata, StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(callId))
+            metadata[LLMRequestMetadataKeys.CallId] = callId;
+        return metadata;
+    }
+
+    private static string? ComposeRoundCallId(string? baseRequestId, int round)
+    {
+        if (string.IsNullOrWhiteSpace(baseRequestId))
+            return null;
+
+        return round <= 0
+            ? baseRequestId
+            : $"{baseRequestId}:tool-round:{round + 1}";
+    }
+
+    private static string? ComposeFinalCallId(string? baseRequestId)
+    {
+        if (string.IsNullOrWhiteSpace(baseRequestId))
+            return null;
+
+        return $"{baseRequestId}:final";
+    }
+
+    private static void AnnotateRequestIdentity(LLMCallContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
+            context.Metadata[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
+
+        if (context.Request.Metadata != null &&
+            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
+            !string.IsNullOrWhiteSpace(callId))
+        {
+            context.Metadata[LLMRequestMetadataKeys.CallId] = callId;
+        }
     }
 
     private sealed class NullAgentTool(string name) : IAgentTool

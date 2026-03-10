@@ -60,6 +60,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         var router = new EventRouter(actorId);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
+        var deduplicator = _services.GetService<IEventDeduplicator>();
         var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
         var actor = new LocalActor(
             agent,
@@ -67,7 +68,8 @@ public sealed class LocalActorRuntime : IActorRuntime
             router,
             _streams,
             logger,
-            _deactivationHookDispatcher);
+            _deactivationHookDispatcher,
+            deduplicator);
 
         InjectDependencies(agent, publisher, actorId, logger);
 

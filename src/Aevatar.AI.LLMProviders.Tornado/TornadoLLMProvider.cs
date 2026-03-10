@@ -118,6 +118,10 @@ public sealed class TornadoLLMProvider : ILLMProvider
             Messages = messages,
         };
 
+        var metadata = BuildMetadata(request);
+        if (metadata != null)
+            chatRequest.Metadata = metadata;
+
         if (request.Temperature.HasValue)
             chatRequest.Temperature = request.Temperature.Value;
 
@@ -128,6 +132,27 @@ public sealed class TornadoLLMProvider : ILLMProvider
         // LlmTornado Provider 主要用于纯 Chat 场景
 
         return chatRequest;
+    }
+
+    private static Dictionary<string, string>? BuildMetadata(LLMRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId) &&
+            (request.Metadata == null || request.Metadata.Count == 0))
+        {
+            return null;
+        }
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (request.Metadata != null)
+        {
+            foreach (var pair in request.Metadata)
+                metadata[pair.Key] = pair.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+            metadata[LLMRequestMetadataKeys.RequestId] = request.RequestId.Trim();
+
+        return metadata;
     }
 
     // ─── 转换：LlmTornado → Aevatar ───

@@ -62,6 +62,89 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallMetadata()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-identity",
+                        Name = "echo",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "{}"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-99",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflow.run_id"] = "run-99",
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[0].RequestId.Should().Be("session-99");
+        provider.Requests[1].RequestId.Should().Be("session-99");
+        provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
+        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
+        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldExposeStableRequestIdAndPerCallIdToLlmMiddlewareMetadata()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-identity",
+                        Name = "echo",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "{}"));
+        var requestIdMiddleware = new CaptureLlmRequestIdentityMiddleware();
+        var loop = new ToolCallLoop(
+            tools,
+            hooks: null,
+            toolMiddlewares: [],
+            llmMiddlewares: [requestIdMiddleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-105",
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        requestIdMiddleware.RequestIds.Should().Equal("session-105", "session-105");
+        requestIdMiddleware.CallIds.Should().Equal("session-105", "session-105:tool-round:2");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenHookMutatesToolCall_ShouldUseMutatedNameAndArguments()
     {
         var provider = new QueueLLMProvider(
@@ -285,6 +368,29 @@ public class ToolCallLoopTests
         Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
     {
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
+    }
+
+    private sealed class CaptureLlmRequestIdentityMiddleware : ILLMCallMiddleware
+    {
+        public List<string> RequestIds { get; } = [];
+        public List<string> CallIds { get; } = [];
+
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            if (context.Metadata.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+                requestIdObj is string requestId)
+            {
+                RequestIds.Add(requestId);
+            }
+
+            if (context.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callIdObj) &&
+                callIdObj is string callId)
+            {
+                CallIds.Add(callId);
+            }
+
+            await next();
+        }
     }
 
     private sealed class RecordingHook : IAIGAgentExecutionHook

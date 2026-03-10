@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
@@ -13,6 +14,7 @@ public sealed class LocalActor : IActor
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
+    private readonly IEventDeduplicator? _deduplicator;
     private IAsyncDisposable? _selfSubscription;
 
     public LocalActor(
@@ -21,7 +23,8 @@ public sealed class LocalActor : IActor
         EventRouter router,
         IStreamProvider streams,
         ILogger logger,
-        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
+        IEventDeduplicator? deduplicator = null)
     {
         Agent = agent;
         Id = id;
@@ -29,6 +32,7 @@ public sealed class LocalActor : IActor
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
+        _deduplicator = deduplicator;
     }
 
     public string Id { get; }
@@ -111,21 +115,39 @@ public sealed class LocalActor : IActor
 
     private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
     {
-        using var scope = EventHandleScope.Begin(_logger, Id, envelope);
+        EventHandleScope scope = default;
+        var scopeCreated = false;
         await _mailbox.WaitAsync();
         try
         {
+            if (_deduplicator != null &&
+                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, envelope, out var dedupKey) &&
+                !await _deduplicator.TryRecordAsync(dedupKey))
+            {
+                _logger.LogDebug(
+                    "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
+                    Id,
+                    envelope.Id,
+                    dedupKey);
+                return;
+            }
+
+            scope = EventHandleScope.Begin(_logger, Id, envelope);
+            scopeCreated = true;
             await Agent.HandleEventAsync(envelope);
         }
         catch (Exception ex)
         {
-            scope.MarkError(ex);
+            if (scopeCreated)
+                scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (propagateFailure)
                 throw;
         }
         finally
         {
+            if (scopeCreated)
+                scope.Dispose();
             _mailbox.Release();
         }
     }
