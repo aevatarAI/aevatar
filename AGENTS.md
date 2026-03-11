@@ -53,6 +53,13 @@
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
 
+## Actor 生命周期判定（强制）
+- 默认优先 `run/session/task-scoped actor`：凡是一次执行、一次会话、一次临时编排即可完成职责的能力，默认建模为短生命周期 actor；静态 `GAgent`、workflow、scripting 只要协议一致，都可作为这类 actor 的实现来源。
+- 长期 actor 只保留给事实拥有者：只有 `definition/catalog/manager/index/checkpoint` 这类需要长期持有权威状态、串行推进事实的对象，才允许设计为长期 actor。
+- 单线程 actor 不承担热点共享服务：禁止把 actor 当成高并发无状态公共服务容器；单线程 actor 用于维护状态边界和顺序语义，不用于承接无限扩张的共享吞吐。
+- 升级默认前滚，不热替换存量 run：脚本、workflow、静态实现升级时，默认语义是“旧 run 留在旧 actor/旧定义，新的创建请求走新实现”；除非明确设计了状态迁移契约，否则禁止对正在运行的 actor 做原地实现替换。
+- `actorId` 对调用方是不透明地址：允许更换其背后实现，但调用方不得解析前缀、类型名或实现来源，也不得把 `actorId` 字面模式当成业务判断条件。
+
 ## Actor 化执行哲学（强制）
 - 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
 - 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
@@ -112,6 +119,11 @@
 - CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范
+- `GIT` 分支命名使用固定格式，不允许任何变体：`<type>/YYYY-MM-DD_<purpose>`。
+- `<type>` 必须从固定集合中选择：`feat`、`fix`、`refactor`、`docs`、`test`、`chore`。
+- 日期必须使用前置定长格式 `YYYY-MM-DD`；禁止使用 `2026-3-12`、`20260312`、`03-12-2026`、后置日期或日期时间混合格式。
+- `<purpose>` 只允许使用小写字母、数字和连字符 `-`，应简短表达单一目标；禁止空泛名称如 `test`、`tmp`、`misc`。
+- 标准示例：`feat/2026-03-12_gagent-protocol-first-plan`。
 - 提交信息使用祈使句并聚焦单一目的（如：`Refactor projection pipeline`）。
 - PR 必须包含：问题与方案、影响路径、验证命令与结果、相关文档更新。
 - 若涉及架构调整，需同时更新 `docs/` 架构文档与示意图。
