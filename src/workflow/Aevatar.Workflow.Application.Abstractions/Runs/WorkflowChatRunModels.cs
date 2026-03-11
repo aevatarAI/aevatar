@@ -37,15 +37,3 @@ public sealed record WorkflowChatRunAcceptedReceipt(
     string WorkflowName,
     string CommandId,
     string CorrelationId);
-
-public sealed record WorkflowChatRunFinalizeResult(
-    WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
-    bool ProjectionCompleted);
-
-public sealed record WorkflowChatRunInteractionResult(
-    WorkflowChatRunStartError Error,
-    WorkflowChatRunAcceptedReceipt? Receipt,
-    WorkflowChatRunFinalizeResult? FinalizeResult)
-{
-    public bool Succeeded => Error == WorkflowChatRunStartError.None;
-}

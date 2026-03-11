@@ -322,10 +322,10 @@ Application 层不再消费 record 事件体系，改为直接消费 protobuf ev
 
 需要做的事情：
 
-1. `WorkflowRunOutputStreamer`
+1. `DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>` + `IdentityEventFrameMapper<WorkflowRunEventEnvelope>`
 2. `WorkflowOutputFrameMapper`
 3. `WorkflowRunCompletionPolicy`
-4. `WorkflowRunStateSnapshotEmitter`
+4. `WorkflowRunFinalizeEmitter`
 5. `WorkflowRunCommandTarget`
 6. `WorkflowRunCommandTargetBinder`
 

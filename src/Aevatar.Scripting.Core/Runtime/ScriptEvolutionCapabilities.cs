@@ -9,14 +9,23 @@ namespace Aevatar.Scripting.Core.Runtime;
 public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
 {
     private readonly ScriptRuntimeCapabilityContext _context;
-    private readonly IScriptLifecyclePort _lifecyclePort;
+    private readonly IScriptEvolutionProposalPort _proposalPort;
+    private readonly IScriptDefinitionCommandPort _definitionCommandPort;
+    private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
+    private readonly IScriptCatalogCommandPort _catalogCommandPort;
 
     public ScriptEvolutionCapabilities(
         ScriptRuntimeCapabilityContext context,
-        IScriptLifecyclePort lifecyclePort)
+        IScriptEvolutionProposalPort proposalPort,
+        IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptRuntimeCommandPort runtimeCommandPort,
+        IScriptCatalogCommandPort catalogCommandPort)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
-        _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
+        _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
+        _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
+        _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
+        _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
     }
 
     public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
@@ -41,7 +50,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
                 : proposal.CandidateSourceHash,
         };
 
-        return _lifecyclePort.ProposeAsync(normalized, ct);
+        return _proposalPort.ProposeAsync(normalized, ct);
     }
 
     public Task<string> UpsertScriptDefinitionAsync(
@@ -51,7 +60,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string sourceHash,
         string? definitionActorId,
         CancellationToken ct) =>
-        _lifecyclePort.UpsertDefinitionAsync(
+        _definitionCommandPort.UpsertDefinitionAsync(
             scriptId,
             scriptRevision,
             sourceText,
@@ -64,7 +73,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string scriptRevision,
         string? runtimeActorId,
         CancellationToken ct) =>
-        _lifecyclePort.SpawnRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
+        _runtimeCommandPort.SpawnRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
 
     public Task RunScriptInstanceAsync(
         string runtimeActorId,
@@ -74,7 +83,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string definitionActorId,
         string requestedEventType,
         CancellationToken ct) =>
-        _lifecyclePort.RunRuntimeAsync(
+        _runtimeCommandPort.RunRuntimeAsync(
             runtimeActorId,
             runId,
             inputPayload,
@@ -91,7 +100,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string sourceHash,
         string proposalId,
         CancellationToken ct) =>
-        _lifecyclePort.PromoteCatalogRevisionAsync(
+        _catalogCommandPort.PromoteCatalogRevisionAsync(
             string.IsNullOrWhiteSpace(catalogActorId) ? null : catalogActorId,
             scriptId,
             string.Empty,
@@ -108,7 +117,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string reason,
         string proposalId,
         CancellationToken ct) =>
-        _lifecyclePort.RollbackCatalogRevisionAsync(
+        _catalogCommandPort.RollbackCatalogRevisionAsync(
             string.IsNullOrWhiteSpace(catalogActorId) ? null : catalogActorId,
             scriptId,
             targetRevision,

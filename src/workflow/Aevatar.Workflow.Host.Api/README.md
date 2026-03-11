@@ -15,7 +15,7 @@
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
   - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（注册表名称 lookup，含内建与文件工作流）或 `workflowYamls`（inline YAML bundle）；仅在新建 Actor 且 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`
 - 调用应用层：
-  - `IWorkflowRunInteractionService`
+  - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`
   - `ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>`
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。

@@ -1,17 +1,18 @@
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.Workflow.Application.Tests;
 
-public sealed class WorkflowRunOutputStreamerCoverageTests
+public sealed class WorkflowRunEventOutputStreamCoverageTests
 {
     [Fact]
-    public async Task StreamAsync_ShouldStopAfterTerminalEvent()
+    public async Task PumpAsync_ShouldStopAfterTerminalEvent()
     {
         var channel = new EventChannel<WorkflowRunEventEnvelope>();
-        var streamer = new WorkflowRunOutputStreamer();
+        var stream = new DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>(
+            new IdentityEventFrameMapper<WorkflowRunEventEnvelope>());
         var frames = new List<WorkflowRunEventEnvelope>();
 
         channel.Push(new WorkflowRunEventEnvelope
@@ -40,11 +41,15 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
         });
         channel.Complete();
 
-        await streamer.StreamAsync(channel, (frame, _) =>
-        {
-            frames.Add(frame);
-            return ValueTask.CompletedTask;
-        });
+        await stream.PumpAsync(
+            channel.ReadAllAsync(CancellationToken.None),
+            (frame, _) =>
+            {
+                frames.Add(frame);
+                return ValueTask.CompletedTask;
+            },
+            evt => evt.EventCase is WorkflowRunEventEnvelope.EventOneofCase.RunFinished
+                or WorkflowRunEventEnvelope.EventOneofCase.RunError);
 
         frames.Should().HaveCount(3);
         frames[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStarted);
@@ -57,7 +62,8 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
     [Fact]
     public async Task PumpAsync_ShouldHonorCustomStopPredicate()
     {
-        var streamer = new WorkflowRunOutputStreamer();
+        var stream = new DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>(
+            new IdentityEventFrameMapper<WorkflowRunEventEnvelope>());
         var frames = new List<WorkflowRunEventEnvelope>();
         var events = Stream(
             new WorkflowRunEventEnvelope
@@ -76,7 +82,7 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
                 StepStarted = new WorkflowStepStartedEventPayload { StepName = "s2" },
             });
 
-        await streamer.PumpAsync(
+        await stream.PumpAsync(
             events,
             (frame, _) =>
             {
@@ -91,9 +97,9 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
     }
 
     [Fact]
-    public void Map_ShouldReturnTheOriginalEnvelope()
+    public void IdentityMapper_ShouldReturnTheOriginalEnvelope()
     {
-        var streamer = new WorkflowRunOutputStreamer();
+        var mapper = new IdentityEventFrameMapper<WorkflowRunEventEnvelope>();
 
         var evt = new WorkflowRunEventEnvelope
         {
@@ -111,7 +117,7 @@ public sealed class WorkflowRunOutputStreamerCoverageTests
             },
         };
 
-        var mapped = streamer.Map(evt);
+        var mapped = mapper.Map(evt);
 
         mapped.Should().BeSameAs(evt);
         mapped.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StateSnapshot);

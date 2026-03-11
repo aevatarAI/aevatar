@@ -7,16 +7,22 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
 {
     private readonly IScriptPackageCompiler _compiler;
-    private readonly IScriptLifecyclePort _lifecyclePort;
+    private readonly IScriptDefinitionCommandPort _definitionCommandPort;
+    private readonly IScriptCatalogCommandPort _catalogCommandPort;
+    private readonly IScriptCatalogQueryPort _catalogQueryPort;
     private readonly IScriptingActorAddressResolver _addressResolver;
 
     public RuntimeScriptEvolutionFlowPort(
         IScriptPackageCompiler compiler,
-        IScriptLifecyclePort lifecyclePort,
+        IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptCatalogCommandPort catalogCommandPort,
+        IScriptCatalogQueryPort catalogQueryPort,
         IScriptingActorAddressResolver addressResolver)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
-        _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
+        _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
+        _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
+        _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
@@ -51,7 +57,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
             var catalogBaselineSource = "query";
             try
             {
-                catalogBefore = await _lifecyclePort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
+                catalogBefore = await _catalogQueryPort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
             }
             catch (Exception ex)
             {
@@ -76,7 +82,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
             string definitionActorId;
             try
             {
-                definitionActorId = await _lifecyclePort.UpsertDefinitionAsync(
+                definitionActorId = await _definitionCommandPort.UpsertDefinitionAsync(
                     scriptId,
                     candidateRevision,
                     proposal.CandidateSource ?? string.Empty,
@@ -93,7 +99,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
 
             try
             {
-                await _lifecyclePort.PromoteCatalogRevisionAsync(
+                await _catalogCommandPort.PromoteCatalogRevisionAsync(
                     catalogActorId,
                     scriptId,
                     proposal.BaseRevision ?? string.Empty,
@@ -147,7 +153,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
             ? _addressResolver.GetCatalogActorId()
             : request.CatalogActorId;
 
-        return _lifecyclePort.RollbackCatalogRevisionAsync(
+        return _catalogCommandPort.RollbackCatalogRevisionAsync(
             catalogActorId,
             request.ScriptId,
             request.TargetRevision,
@@ -202,7 +208,7 @@ public sealed class RuntimeScriptEvolutionFlowPort : IScriptEvolutionFlowPort
 
         try
         {
-            await _lifecyclePort.RollbackCatalogRevisionAsync(
+            await _catalogCommandPort.RollbackCatalogRevisionAsync(
                 catalogActorId,
                 scriptId,
                 catalogBefore.ActiveRevision,

@@ -61,7 +61,15 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptLifecyclePort));
+            x.ServiceType == typeof(IScriptEvolutionProposalPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptDefinitionCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptRuntimeCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogQueryPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
             x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));

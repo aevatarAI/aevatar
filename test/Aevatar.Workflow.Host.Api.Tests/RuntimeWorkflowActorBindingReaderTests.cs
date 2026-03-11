@@ -24,7 +24,11 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldReturnNull_WhenActorMissing()
     {
-        var reader = CreateReader();
+        var reader = CreateReader(
+            requestReply: new FakeStreamRequestReplyClient
+            {
+                ActorQueryException = new InvalidOperationException("actor not found"),
+            });
 
         var result = await reader.GetAsync("missing", CancellationToken.None);
 
@@ -36,7 +40,10 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1", new StubAgent("agent-1"));
-        var requestReply = new FakeStreamRequestReplyClient();
+        var requestReply = new FakeStreamRequestReplyClient
+        {
+            ActorQueryException = new TimeoutException("workflow binding query timed out"),
+        };
         var verifier = new FakeAgentTypeVerifier();
         var reader = CreateReader(runtime, requestReply, verifier);
 
@@ -188,8 +195,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         requestReply ??= new FakeStreamRequestReplyClient();
         verifier ??= new FakeAgentTypeVerifier();
         return new RuntimeWorkflowActorBindingReader(
-            new RuntimeWorkflowActorAccessor(runtime),
-            new RuntimeWorkflowQueryClient(new FakeStreamProvider(), requestReply),
+            new RuntimeWorkflowQueryClient(new FakeStreamProvider(), requestReply, new FakeActorDispatchPort()),
             verifier);
     }
 
@@ -229,6 +235,17 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class FakeActorDispatchPort : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubAgent(string id) : IAgent
@@ -289,6 +306,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     private sealed class FakeStreamRequestReplyClient : IStreamRequestReplyClient
     {
         public int QueryActorCalls { get; private set; }
+        public Exception? ActorQueryException { get; set; }
         public WorkflowActorBindingRespondedEvent Response { get; set; } = new()
         {
             RequestId = "req-1",
@@ -306,6 +324,9 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, IActor actor, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
             where TResponse : IMessage, new()
         {
+            if (ActorQueryException != null)
+                throw ActorQueryException;
+
             QueryActorCalls++;
             CapturedReplyPrefix = replyStreamPrefix;
             CapturedTimeout = timeout;
@@ -313,6 +334,22 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
             CapturedTimeoutMessage = timeoutMessageFactory(Response.RequestId);
             isMatch((TResponse)(IMessage)Response, Response.RequestId).Should().BeTrue();
             return Task.FromResult((TResponse)(IMessage)Response);
+        }
+
+        public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, string actorId, IActorDispatchPort dispatchPort, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
+            where TResponse : IMessage, new()
+        {
+            _ = actorId;
+            _ = dispatchPort;
+            return QueryActorAsync<TResponse>(
+                streams,
+                new FakeActor(actorId, new StubAgent(actorId + "-agent")),
+                replyStreamPrefix,
+                timeout,
+                envelopeFactory,
+                isMatch,
+                timeoutMessageFactory,
+                ct);
         }
     }
 }

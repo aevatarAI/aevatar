@@ -78,8 +78,8 @@
 
 | 领域 | 当前做法 | 问题 |
 |---|---|---|
-| Workflow 命令入口 | `ICommandDispatchPipeline + WorkflowRunInteractionService` | 已部分统一，但观察/完成/清理仍有 capability 私有样板 |
-| Scripting 命令入口 | `IScriptLifecyclePort + RuntimeScript*LifecycleService` | 绕开标准 CQRS 主骨架，自带一套 lifecycle 聚合 |
+| Workflow 命令入口 | `ICommandDispatchPipeline + ICommandInteractionService` | 已统一到 CQRS generic interaction template |
+| Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeCommandPort/... + RuntimeScript*LifecycleService` | 已拆掉总入口，但仍保留 capability-specific command adapter |
 | Workflow 读侧观察 | `IWorkflowExecutionProjectionLifecyclePort` + completion policy + durable resolver | 能力可用，但可抽象部分仍留在 workflow 私有层 |
 | Scripting 读侧观察 | `IScriptEvolutionProjectionLifecyclePort` + session codec/context | 与 workflow 共享底层基类，但仍各写一套 capability adapter |
 | Workflow 执行模型 | `WorkflowRunGAgent` 内部 module runtime | 是 actor 内部插件模型 |
@@ -300,11 +300,11 @@ flowchart LR
 
 | 当前类 | 目标归属 | 动作 |
 |---|---|---|
-| `WorkflowRunInteractionService` | CQRS Core generic interaction template | 抽共性，业务只保留 policy 与 frame mapping |
-| `WorkflowRunOutputStreamer` | CQRS Core generic streaming helper | 提取无业务的 stream pump 和 frame adapter 套路 |
+| `ICommandInteractionService` | CQRS Core generic interaction template | 抽共性，业务只保留 policy 与 frame mapping |
+| `IEventOutputStream<TEvent, TFrame>` + `IdentityEventFrameMapper<TEvent>` | CQRS Core generic streaming helper | 已提取无业务的 stream pump 和 frame adapter 套路 |
 | `WorkflowRunCompletionPolicy` | capability 实现 generic completion policy | 保留实现，改挂到通用接口 |
 | `WorkflowRunDurableCompletionResolver` | capability 实现 generic durable resolver | 保留实现，改挂到通用接口 |
-| `WorkflowRunStateSnapshotEmitter` | capability 实现 generic finalize emitter | 保留实现，接口改为通用 |
+| `WorkflowRunFinalizeEmitter` | capability 实现 generic finalize emitter | 保留实现，接口改为通用 |
 
 ### 10.2 对多 GAgent Family 协作型样本
 
@@ -427,7 +427,7 @@ Scripting 目录重构目标：
 验收：
 
 1. workflow 仍通过现有测试。
-2. `WorkflowRunInteractionService` 体积显著下降，或被通用实现替代。
+2. workflow 私有交互 façade 被删除，或只剩 capability-specific policy 适配。
 3. 通用 interaction template 至少被 workflow 实际使用。
 
 ### Phase 2：Workflow 收敛到模板
@@ -453,12 +453,12 @@ Scripting 目录重构目标：
 
 1. 为 `RunScript`、`ProposeEvolution`、`UpsertDefinition` 等入口建立标准命令模型。
 2. 为 scripting 提供 target resolver、envelope factory、receipt factory、binder。
-3. 用 `ICommandDispatchService` 和 generic interaction service 替换 `IScriptLifecyclePort`。
+3. 用 `ICommandDispatchService`、窄 command/query port 和 generic interaction service 替换总入口 facade。
 4. 保留 query client 这类纯技术基础设施，但它们只能挂在 narrow query / durable resolver 后面。
 
 验收：
 
-1. `IScriptLifecyclePort` 从 Host/Application 主链路移除。
+1. scripting 主链路不再暴露 capability 私有总入口。
 2. scripting 至少一条外部入口接入标准 CQRS 模板。
 3. scripting 相关测试通过，行为语义不回退。
 
@@ -516,11 +516,11 @@ Scripting 目录重构目标：
 | 当前对象 | 目标归属 | 处理方式 |
 |---|---|---|
 | `DefaultCommandDispatchPipeline` | CQRS Core | 保留，作为统一命令骨架 |
-| `WorkflowRunInteractionService` | CQRS Core + workflow policy | 抽共性，下沉通用模板 |
-| `WorkflowRunOutputStreamer` | CQRS Core | 抽无业务 streaming 样板 |
+| `ICommandInteractionService` | CQRS Core + workflow policy | 抽共性，下沉通用模板 |
+| `IEventOutputStream<TEvent, TFrame>` + `IdentityEventFrameMapper<TEvent>` | CQRS Core | 抽无业务 streaming 样板 |
 | `WorkflowRunCompletionPolicy` | workflow capability | 保留为 generic policy 实现 |
 | `WorkflowRunDurableCompletionResolver` | workflow capability | 保留为 generic durable resolver 实现 |
-| `WorkflowRunStateSnapshotEmitter` | workflow capability | 保留为 generic finalize emitter 实现 |
+| `WorkflowRunFinalizeEmitter` | workflow capability | 保留为 generic finalize emitter 实现 |
 | `IScriptLifecyclePort` | 删除 | 由标准 command/query/interaction 替代 |
 | `RuntimeScriptLifecyclePort` | 删除 | 同上 |
 | `RuntimeScriptExecutionLifecycleService` | scripting resolver/factory/binder | 拆分 |

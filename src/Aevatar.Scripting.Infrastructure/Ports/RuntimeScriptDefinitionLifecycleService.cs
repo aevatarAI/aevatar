@@ -7,9 +7,9 @@ using Aevatar.Scripting.Core.Ports;
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionLifecycleService
+    : ScriptActorCommandPortBase<ScriptDefinitionGAgent>,
+      IScriptDefinitionCommandPort
 {
-    private readonly IActorDispatchPort _dispatchPort;
-    private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly UpsertScriptDefinitionActorRequestAdapter _upsertDefinitionAdapter = new();
 
@@ -17,9 +17,8 @@ public sealed class RuntimeScriptDefinitionLifecycleService
         IActorDispatchPort dispatchPort,
         RuntimeScriptActorAccessor actorAccessor,
         IScriptingActorAddressResolver addressResolver)
+        : base(dispatchPort, actorAccessor)
     {
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
@@ -39,20 +38,19 @@ public sealed class RuntimeScriptDefinitionLifecycleService
             ? _addressResolver.GetDefinitionActorId(scriptId)
             : definitionActorId;
 
-        _ = await _actorAccessor.GetOrCreateAsync<ScriptDefinitionGAgent>(
+        _ = await GetOrCreateActorAsync(
             actorId,
             "Script definition actor not found",
             ct);
 
-        await _dispatchPort.DispatchAsync(
+        await DispatchAsync(
             actorId,
-            _upsertDefinitionAdapter.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: scriptRevision,
-                    SourceText: sourceText,
-                    SourceHash: sourceHash ?? string.Empty),
-                actorId),
+            new UpsertScriptDefinitionActorRequest(
+                ScriptId: scriptId,
+                ScriptRevision: scriptRevision,
+                SourceText: sourceText,
+                SourceHash: sourceHash ?? string.Empty),
+            _upsertDefinitionAdapter.Map,
             ct);
 
         return actorId;

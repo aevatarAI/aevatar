@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -54,7 +55,7 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        IWorkflowRunInteractionService chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
@@ -97,7 +98,7 @@ public static class WorkflowCapabilityEndpoints
                 },
                 ct);
 
-            if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
+            if (!result.Succeeded && !writer.Started)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
@@ -461,7 +462,7 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        IWorkflowRunInteractionService chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {

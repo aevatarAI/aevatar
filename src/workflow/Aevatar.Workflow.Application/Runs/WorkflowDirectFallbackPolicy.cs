@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
@@ -6,6 +7,7 @@ namespace Aevatar.Workflow.Application.Runs;
 /// Decides whether a failed workflow run should be retried against the direct workflow.
 /// </summary>
 public sealed class WorkflowDirectFallbackPolicy
+    : ICommandFallbackPolicy<WorkflowChatRunRequest>
 {
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
@@ -46,6 +48,21 @@ public sealed class WorkflowDirectFallbackPolicy
     {
         var exceptionType = ex.GetType();
         return _behaviorOptions.DirectFallbackExceptionWhitelist.Contains(exceptionType);
+    }
+
+    public bool TryCreateFallbackCommand(
+        WorkflowChatRunRequest command,
+        Exception exception,
+        out WorkflowChatRunRequest fallbackCommand)
+    {
+        if (ShouldFallback(command, exception))
+        {
+            fallbackCommand = ToFallbackRequest(command);
+            return true;
+        }
+
+        fallbackCommand = command;
+        return false;
     }
 
     public WorkflowChatRunRequest ToFallbackRequest(WorkflowChatRunRequest request) =>

@@ -1,5 +1,8 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -77,7 +80,7 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunInteractionService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
+    public async Task FallbackCommandInteractionService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -94,24 +97,26 @@ public sealed class WorkflowRunFallbackCoverageTests
                 Receipt = receipt,
             }));
 
-        var service = new WorkflowRunInteractionService(
-            pipeline,
-            new FakeWorkflowRunOutputStreamer
-            {
-                Events =
-                [
-                    new WorkflowRunEventEnvelope
-                    {
-                        RunFinished = new WorkflowRunFinishedEventPayload
+        var service = new FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+            new DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+                pipeline,
+                new FakeEventOutputStream
+                {
+                    Events =
+                    [
+                        new WorkflowRunEventEnvelope
                         {
-                            ThreadId = receipt.ActorId,
-                            Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
+                            RunFinished = new WorkflowRunFinishedEventPayload
+                            {
+                                ThreadId = receipt.ActorId,
+                                Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
+                            },
                         },
-                    },
-                ],
-            },
-            new FakeWorkflowRunCompletionPolicy(),
-            new FakeWorkflowRunStateSnapshotEmitter(),
+                    ],
+                },
+                new FakeWorkflowRunCompletionPolicy(),
+                new FakeFinalizeEmitter(),
+                new FakeDurableCompletionResolver()),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -126,7 +131,7 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunDetachedDispatchService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
+    public async Task FallbackCommandDispatchService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -142,7 +147,7 @@ public sealed class WorkflowRunFallbackCoverageTests
                 Envelope = new EventEnvelope { Id = "evt-1" },
                 Receipt = receipt,
             }));
-        var outputStreamer = new FakeWorkflowRunOutputStreamer
+        var outputStream = new FakeEventOutputStream
         {
             Events =
             [
@@ -156,10 +161,13 @@ public sealed class WorkflowRunFallbackCoverageTests
                 },
             ],
         };
-        var service = new WorkflowRunDetachedDispatchService(
-            pipeline,
-            outputStreamer,
-            new FakeWorkflowRunCompletionPolicy(),
+        var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
+            new WorkflowRunDetachedDispatchService(
+                pipeline,
+                outputStream,
+                new FakeWorkflowRunCompletionPolicy(),
+                new FakeDurableCompletionResolver(),
+                logger: null),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -215,25 +223,30 @@ public sealed class WorkflowRunFallbackCoverageTests
         }
     }
 
-    private sealed class FakeWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
+    private sealed class FakeEventOutputStream : IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>
     {
         public IReadOnlyList<WorkflowRunEventEnvelope> Events { get; set; } = [];
 
-        public async Task StreamAsync(
-            IEventSink<WorkflowRunEventEnvelope> sink,
+        public async Task PumpAsync(
+            IAsyncEnumerable<WorkflowRunEventEnvelope> events,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowRunEventEnvelope, bool>? shouldStop = null,
             CancellationToken ct = default)
         {
-            _ = sink;
+            _ = events;
             foreach (var evt in Events)
+            {
                 await emitAsync(evt, ct);
+                if (shouldStop?.Invoke(evt) == true)
+                    break;
+            }
         }
-
-        public WorkflowRunEventEnvelope Map(WorkflowRunEventEnvelope evt) => evt;
     }
 
-    private sealed class FakeWorkflowRunCompletionPolicy : IWorkflowRunCompletionPolicy
+    private sealed class FakeWorkflowRunCompletionPolicy : ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
     {
+        public WorkflowProjectionCompletionStatus IncompleteCompletion => WorkflowProjectionCompletionStatus.Unknown;
+
         public bool TryResolve(WorkflowRunEventEnvelope evt, out WorkflowProjectionCompletionStatus status)
         {
             status = evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished
@@ -243,20 +256,33 @@ public sealed class WorkflowRunFallbackCoverageTests
         }
     }
 
-    private sealed class FakeWorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotEmitter
+    private sealed class FakeFinalizeEmitter : ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>
     {
         public Task EmitAsync(
             WorkflowChatRunAcceptedReceipt receipt,
-            WorkflowProjectionCompletionStatus projectionCompletionStatus,
-            bool projectionCompleted,
+            WorkflowProjectionCompletionStatus completion,
+            bool completed,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             CancellationToken ct = default)
         {
             _ = receipt;
-            _ = projectionCompletionStatus;
-            _ = projectionCompleted;
+            _ = completion;
+            _ = completed;
             _ = emitAsync;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeDurableCompletionResolver
+        : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
+    {
+        public Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete);
         }
     }
 

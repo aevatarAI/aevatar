@@ -9,7 +9,7 @@
 - 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
 - 为 run actor 建立 projection lifecycle 和 live sink
 - 生成 `WorkflowChatRunAcceptedReceipt`
-- 把 `WorkflowRunEvent` 映射成 `WorkflowOutputFrame`
+- 通过 CQRS Core 通用 event stream 持续输出 `WorkflowRunEventEnvelope`
 - 暴露读侧查询门面
 
 ## Run 主链路
@@ -40,12 +40,13 @@
 - 通过 projection lifecycle port 建立 run-isolated projection lease
 - 产出供 CQRS Core 继续 dispatch 的 `CommandTargetBindingResult`
 
-### WorkflowRunInteractionService / WorkflowRunDetachedDispatchService
+### CQRS Interaction / WorkflowRunDetachedDispatchService
 
-- `WorkflowRunInteractionService` 走完整交互路径：驱动 dispatch pipeline、接收 accepted receipt、消费 sink 并持续输出 `WorkflowOutputFrame`
+- `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
 - `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：只返回 `Accepted + commandId + actorId`
+- `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
-- 状态快照由 `WorkflowRunStateSnapshotEmitter` 统一在收尾阶段补发
+- 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
 
 ## Query 语义
 
@@ -74,8 +75,7 @@ Aevatar.Workflow.Application/
 │   ├── WorkflowRunCommandTargetBinder.cs
 │   ├── WorkflowRunCommandTargetResolver.cs
 │   ├── WorkflowRunDetachedDispatchService.cs
-│   ├── WorkflowRunInteractionService.cs
-│   └── WorkflowRunStateSnapshotEmitter.cs
+│   └── WorkflowRunFinalizeEmitter.cs
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs
 ├── Workflows/

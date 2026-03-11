@@ -99,10 +99,11 @@ Application 查询适配器：
 1. `QueryScriptDefinitionSnapshotRequestAdapter`
 2. `QueryScriptCatalogEntryRequestAdapter`
 
-Infrastructure 查询/生命周期端口：
+Infrastructure 查询/命令端口：
 
 1. `RuntimeScriptDefinitionSnapshotPort`
-2. `RuntimeScriptLifecyclePort`
+2. `IScriptEvolutionProposalPort + RuntimeScriptEvolutionLifecycleService`
+3. `IScriptDefinitionCommandPort / IScriptRuntimeCommandPort / IScriptCatalogCommandPort / IScriptCatalogQueryPort`
 
 Core 响应处理要点：
 
@@ -130,7 +131,7 @@ Core 响应处理要点：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
-3. 外部入口等待终态时走 `RuntimeScriptLifecyclePort` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
+3. 外部入口等待终态时走 `IScriptEvolutionProposalPort` 实现 `RuntimeScriptEvolutionLifecycleService` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
 
 两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 

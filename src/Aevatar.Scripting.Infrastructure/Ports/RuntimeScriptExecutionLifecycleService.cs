@@ -1,22 +1,22 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptExecutionLifecycleService
+    : ScriptActorCommandPortBase<ScriptRuntimeGAgent>,
+      IScriptRuntimeCommandPort
 {
-    private readonly IActorDispatchPort _dispatchPort;
-    private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RunScriptActorRequestAdapter _runScriptAdapter = new();
 
     public RuntimeScriptExecutionLifecycleService(
         IActorDispatchPort dispatchPort,
         RuntimeScriptActorAccessor actorAccessor)
+        : base(dispatchPort, actorAccessor)
     {
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
     }
 
     public async Task<string> SpawnRuntimeAsync(
@@ -34,10 +34,10 @@ public sealed class RuntimeScriptExecutionLifecycleService
             ? $"script-runtime:{definitionActorId}:{normalizedRevision}:{Guid.NewGuid():N}"
             : runtimeActorId;
 
-        if (await _actorAccessor.ExistsAsync(actorId))
+        if (await ExistsAsync(actorId))
             return actorId;
 
-        _ = await _actorAccessor.CreateAsync<ScriptRuntimeGAgent>(actorId, ct);
+        _ = await CreateActorAsync(actorId, ct);
         return actorId;
     }
 
@@ -53,19 +53,17 @@ public sealed class RuntimeScriptExecutionLifecycleService
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimeActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(runId);
 
-        var runtimeActor = await _actorAccessor.GetAsync(runtimeActorId)
-            ?? throw new InvalidOperationException($"Script runtime actor not found: {runtimeActorId}");
+        var runtimeActor = await GetRequiredActorAsync(runtimeActorId, "Script runtime actor not found");
 
-        await _dispatchPort.DispatchAsync(
+        await DispatchAsync(
             runtimeActor.Id,
-            _runScriptAdapter.Map(
-                new RunScriptActorRequest(
-                    RunId: runId,
-                    InputPayload: inputPayload?.Clone(),
-                    ScriptRevision: scriptRevision ?? string.Empty,
-                    DefinitionActorId: definitionActorId ?? string.Empty,
-                    RequestedEventType: requestedEventType ?? string.Empty),
-                runtimeActorId),
+            new RunScriptActorRequest(
+                RunId: runId,
+                InputPayload: inputPayload?.Clone(),
+                ScriptRevision: scriptRevision ?? string.Empty,
+                DefinitionActorId: definitionActorId ?? string.Empty,
+                RequestedEventType: requestedEventType ?? string.Empty),
+            _runScriptAdapter.Map,
             ct);
     }
 }

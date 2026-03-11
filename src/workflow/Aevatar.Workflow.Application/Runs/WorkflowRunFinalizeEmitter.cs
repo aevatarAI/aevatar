@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -5,23 +6,20 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotEmitter
+public sealed class WorkflowRunFinalizeEmitter
+    : ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>
 {
     private readonly IWorkflowExecutionProjectionQueryPort _projectionQueryPort;
-    private readonly IWorkflowRunOutputStreamer _outputStreamer;
 
-    public WorkflowRunStateSnapshotEmitter(
-        IWorkflowExecutionProjectionQueryPort projectionQueryPort,
-        IWorkflowRunOutputStreamer outputStreamer)
+    public WorkflowRunFinalizeEmitter(IWorkflowExecutionProjectionQueryPort projectionQueryPort)
     {
-        _projectionQueryPort = projectionQueryPort;
-        _outputStreamer = outputStreamer;
+        _projectionQueryPort = projectionQueryPort ?? throw new ArgumentNullException(nameof(projectionQueryPort));
     }
 
     public async Task EmitAsync(
         WorkflowChatRunAcceptedReceipt receipt,
-        WorkflowProjectionCompletionStatus projectionCompletionStatus,
-        bool projectionCompleted,
+        WorkflowProjectionCompletionStatus completion,
+        bool completed,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
@@ -34,8 +32,8 @@ public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotE
             ActorId = receipt.ActorId,
             WorkflowName = receipt.WorkflowName,
             CommandId = receipt.CommandId,
-            ProjectionCompleted = projectionCompleted,
-            ProjectionCompletionStatus = MapStatus(projectionCompletionStatus),
+            ProjectionCompleted = completed,
+            ProjectionCompletionStatus = MapStatus(completion),
             SnapshotAvailable = snapshot != null,
             Snapshot = snapshot == null ? null : MapSnapshot(snapshot),
         };

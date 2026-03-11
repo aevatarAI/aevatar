@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -8,7 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Tests;
 
-public sealed class WorkflowRunStateSnapshotEmitterTests
+public sealed class WorkflowRunFinalizeEmitterTests
 {
     public static TheoryData<WorkflowProjectionCompletionStatus, WorkflowProjectionCompletionStatusPayload> StatusMappings =>
         new()
@@ -28,16 +27,14 @@ public sealed class WorkflowRunStateSnapshotEmitterTests
         WorkflowProjectionCompletionStatus status,
         WorkflowProjectionCompletionStatusPayload expected)
     {
-        var emitter = new WorkflowRunStateSnapshotEmitter(
-            new FakeProjectionQueryPort(),
-            new NoopWorkflowRunOutputStreamer());
+        var emitter = new WorkflowRunFinalizeEmitter(new FakeProjectionQueryPort());
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         WorkflowRunEventEnvelope? emitted = null;
 
         await emitter.EmitAsync(
             receipt,
             status,
-            projectionCompleted: true,
+            completed: true,
             (evt, _) =>
             {
                 emitted = evt;
@@ -72,16 +69,15 @@ public sealed class WorkflowRunStateSnapshotEmitterTests
             CompletedSteps = 6,
             RoleReplyCount = 5,
         };
-        var emitter = new WorkflowRunStateSnapshotEmitter(
-            new FakeProjectionQueryPort { Snapshot = snapshot },
-            new NoopWorkflowRunOutputStreamer());
+        var emitter = new WorkflowRunFinalizeEmitter(
+            new FakeProjectionQueryPort { Snapshot = snapshot });
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         WorkflowProjectionStateSnapshotPayload? payload = null;
 
         await emitter.EmitAsync(
             receipt,
             WorkflowProjectionCompletionStatus.Completed,
-            projectionCompleted: false,
+            completed: false,
             (evt, _) =>
             {
                 payload = evt.StateSnapshot.Snapshot.Unpack<WorkflowProjectionStateSnapshotPayload>();
@@ -107,15 +103,14 @@ public sealed class WorkflowRunStateSnapshotEmitterTests
     [Fact]
     public async Task EmitAsync_ShouldSwallowSnapshotLookupFailures_AndEmitUnavailableSnapshot()
     {
-        var emitter = new WorkflowRunStateSnapshotEmitter(
-            new FakeProjectionQueryPort { SnapshotException = new InvalidOperationException("boom") },
-            new NoopWorkflowRunOutputStreamer());
+        var emitter = new WorkflowRunFinalizeEmitter(
+            new FakeProjectionQueryPort { SnapshotException = new InvalidOperationException("boom") });
         WorkflowProjectionStateSnapshotPayload? payload = null;
 
         await emitter.EmitAsync(
             new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
             WorkflowProjectionCompletionStatus.Failed,
-            projectionCompleted: false,
+            completed: false,
             (evt, _) =>
             {
                 payload = evt.StateSnapshot.Snapshot.Unpack<WorkflowProjectionStateSnapshotPayload>();
@@ -133,14 +128,13 @@ public sealed class WorkflowRunStateSnapshotEmitterTests
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        var emitter = new WorkflowRunStateSnapshotEmitter(
-            new FakeProjectionQueryPort { SnapshotException = new OperationCanceledException(cts.Token) },
-            new NoopWorkflowRunOutputStreamer());
+        var emitter = new WorkflowRunFinalizeEmitter(
+            new FakeProjectionQueryPort { SnapshotException = new OperationCanceledException(cts.Token) });
 
         var act = async () => await emitter.EmitAsync(
             new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
             WorkflowProjectionCompletionStatus.Completed,
-            projectionCompleted: true,
+            completed: true,
             static (_, _) => ValueTask.CompletedTask,
             cts.Token);
 
@@ -176,13 +170,5 @@ public sealed class WorkflowRunStateSnapshotEmitterTests
 
         public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    private sealed class NoopWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
-    {
-        public Task StreamAsync(IEventSink<WorkflowRunEventEnvelope> sink, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public WorkflowRunEventEnvelope Map(WorkflowRunEventEnvelope evt) => evt;
     }
 }

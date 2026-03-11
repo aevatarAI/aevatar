@@ -9,6 +9,7 @@ using Aevatar.Scripting.Core.Ports;
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptEvolutionLifecycleService
+    : IScriptEvolutionProposalPort
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IScriptEvolutionProjectionLifecyclePort _projectionLifecyclePort;

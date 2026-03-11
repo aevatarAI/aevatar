@@ -1,6 +1,9 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -55,17 +58,26 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunCommandTarget>>();
         services.AddSingleton<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowRunAcceptedReceiptFactory>();
         services.AddSingleton<ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, DefaultCommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
-        services.TryAddSingleton<IWorkflowRunStateSnapshotEmitter, WorkflowRunStateSnapshotEmitter>();
-        services.TryAddSingleton<IWorkflowRunCompletionPolicy, WorkflowRunCompletionPolicy>();
-        services.TryAddSingleton<IWorkflowRunDurableCompletionResolver, WorkflowRunDurableCompletionResolver>();
-        services.AddSingleton<WorkflowRunOutputStreamer>();
-        services.AddSingleton<IWorkflowRunOutputStreamer>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
-        services.TryAddSingleton<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
-        services.TryAddSingleton<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>(sp => sp.GetRequiredService<WorkflowRunOutputStreamer>());
+        services.TryAddSingleton<ICommandFallbackPolicy<WorkflowChatRunRequest>>(sp => sp.GetRequiredService<WorkflowDirectFallbackPolicy>());
+        services.TryAddSingleton<ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>, WorkflowRunFinalizeEmitter>();
+        services.TryAddSingleton<ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>, WorkflowRunCompletionPolicy>();
+        services.TryAddSingleton<ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>, WorkflowRunDurableCompletionResolver>();
+        services.TryAddSingleton<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, IdentityEventFrameMapper<WorkflowRunEventEnvelope>>();
+        services.TryAddSingleton<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
+        services.AddSingleton<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>();
+        services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(sp =>
+            new FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+                sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
+                sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>()));
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
-        services.AddSingleton<IWorkflowRunInteractionService, WorkflowRunInteractionService>();
-        services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunDetachedDispatchService>();
+        services.AddSingleton<WorkflowRunDetachedDispatchService>();
+        services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(sp =>
+            new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
+                sp.GetRequiredService<WorkflowRunDetachedDispatchService>(),
+                sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>>()));
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         return services;
     }

@@ -1,6 +1,10 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
@@ -157,20 +161,35 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void AddWorkflowApplication_ShouldWireWorkflowRunOutputStreamerAcrossAbstractions()
+    public void AddWorkflowApplication_ShouldWireGenericEventStreamingAndInteractionServices()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
-        using var provider = services.BuildServiceProvider();
 
-        var concrete = provider.GetRequiredService<WorkflowRunOutputStreamer>();
-        var outputStreamer = provider.GetRequiredService<IWorkflowRunOutputStreamer>();
-        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
-        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
-
-        outputStreamer.Should().BeSameAs(concrete);
-        eventOutputStream.Should().BeSameAs(concrete);
-        frameMapper.Should().BeSameAs(concrete);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(IdentityEventFrameMapper<WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(WorkflowRunFinalizeEmitter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(WorkflowRunDetachedDispatchService) &&
+            x.ImplementationType == typeof(WorkflowRunDetachedDispatchService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFallbackPolicy<WorkflowChatRunRequest>) &&
+            x.ImplementationFactory != null);
     }
 
     [Fact]

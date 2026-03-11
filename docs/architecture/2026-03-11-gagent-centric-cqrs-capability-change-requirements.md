@@ -177,9 +177,9 @@
 
 | 问题域 | 证据路径 | 现状 |
 |---|---|---|
-| 交互编排样板 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunInteractionService.cs` | 观察、完成、清理仍是 capability 私有编排 |
-| capability 私有总入口 | `src/Aevatar.Scripting.Core/Ports/IScriptLifecyclePort.cs` | 聚合命令/查询/生命周期操作 |
-| capability 私有 lifecycle facade | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptLifecyclePort.cs` | 绕开标准 CQRS 模板 |
+| 交互编排样板 | `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs` | 已收敛为通用交互模板，业务仅保留 capability policy |
+| scripting command adapter 重复样板 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionLifecycleService.cs` / `RuntimeScriptExecutionLifecycleService.cs` | 已拆总入口，但仍存在 capability-specific command adapter |
+| scripting orchestration facade 残留 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionFlowPort.cs` | 仍保留 capability-specific flow 组合层 |
 | 各类 capability-specific observation adapter | `src/workflow/Aevatar.Workflow.Projection/*` / `src/Aevatar.Scripting.Projection/*` | 已有共性，但仍未完全前移 |
 
 ### 6.3 当前样本显示出的两类实现模式
@@ -196,7 +196,7 @@
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
 | R1 | `CQRS Core` 统一命令阶段与观察阶段 | 存在通用 interaction template，至少两个样本可接入 | Partial | `DefaultCommandDispatchPipeline` 已存在 | 缺少 observation/finalize/release 通用抽象 |
-| R2 | capability 不得自带总入口 lifecycle port | 主链路移除 capability 私有 lifecycle facade | Partial | `IScriptLifecyclePort` 仍存在 | 需拆回标准 command/query/interaction |
+| R2 | capability 不得自带总入口 lifecycle port | 主链路移除 capability 私有 lifecycle facade | Completed | `IScriptLifecyclePort` / `RuntimeScriptLifecyclePort` 已删除 | 后续只继续压缩窄 adapter 与 flow 组合层 |
 | R3 | 机制层抽象不表达业务系统关系 | 通用接口、文档、守卫均无主从关系假设 | Partial | 现有部分文档仍带样本化描述 | 需收敛通用文档口径 |
 | R4 | 抽象、继承、范型使用有硬规则 | 新增书面规则与门禁 | Missing | 当前规则零散 | 需补变更纪律和 guard |
 | R5 | Projection 继续单主干 | 不新增并行 session/observe 链路 | Partial | 现有样本基本共用主链 | 需禁止 capability 私有观察通道继续增长 |

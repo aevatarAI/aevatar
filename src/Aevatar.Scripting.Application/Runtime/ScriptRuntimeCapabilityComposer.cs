@@ -9,16 +9,25 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
 {
     private readonly IAICapability _aiCapability;
     private readonly IGAgentRuntimePort _agentRuntimePort;
-    private readonly IScriptLifecyclePort _lifecyclePort;
+    private readonly IScriptEvolutionProposalPort _proposalPort;
+    private readonly IScriptDefinitionCommandPort _definitionCommandPort;
+    private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
+    private readonly IScriptCatalogCommandPort _catalogCommandPort;
 
     public ScriptRuntimeCapabilityComposer(
         IAICapability aiCapability,
         IGAgentRuntimePort agentRuntimePort,
-        IScriptLifecyclePort lifecyclePort)
+        IScriptEvolutionProposalPort proposalPort,
+        IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptRuntimeCommandPort runtimeCommandPort,
+        IScriptCatalogCommandPort catalogCommandPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
-        _lifecyclePort = lifecyclePort ?? throw new ArgumentNullException(nameof(lifecyclePort));
+        _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
+        _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
+        _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
+        _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
     }
 
     public IScriptRuntimeCapabilities Compose(ScriptRuntimeCapabilityContext context)
@@ -36,7 +45,10 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
             _agentRuntimePort);
         var evolution = new ScriptEvolutionCapabilities(
             context,
-            _lifecyclePort);
+            _proposalPort,
+            _definitionCommandPort,
+            _runtimeCommandPort,
+            _catalogCommandPort);
 
         return new ScriptRuntimeCapabilities(interaction, agentLifecycle, evolution);
     }

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -9,6 +10,8 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowRunCommandTarget
     : IActorCommandDispatchTarget,
+      ICommandEventTarget<WorkflowRunEventEnvelope>,
+      ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
@@ -55,6 +58,18 @@ internal sealed class WorkflowRunCommandTarget
 
     public Task RollbackCreatedActorsAsync(CancellationToken ct = default) =>
         DestroyCreatedActorsAsync(ct);
+
+    public Task ReleaseAfterInteractionAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(cleanup);
+
+        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
+        return ReleaseAsync(destroyCreatedActors: destroyCreatedActors, ct: ct);
+    }
 
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,

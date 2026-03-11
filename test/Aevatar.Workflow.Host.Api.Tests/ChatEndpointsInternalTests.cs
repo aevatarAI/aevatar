@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -128,7 +129,7 @@ public sealed class ChatEndpointsInternalTests
         await WorkflowCapabilityEndpoints.HandleChat(
             http,
             new ChatInput { Prompt = "" },
-            new FakeWorkflowRunInteractionService(),
+            new FakeCommandInteractionService(),
             CancellationToken.None);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -138,13 +139,11 @@ public sealed class ChatEndpointsInternalTests
     public async Task HandleChat_ShouldReturnJsonError_WhenExecutionReturnsStartErrorBeforeWriterStarts()
     {
         var http = CreateHttpContext();
-        var interactionService = new FakeWorkflowRunInteractionService
+        var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _) => Task.FromResult(
-                new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.WorkflowBindingMismatch,
-                    null,
-                    null)),
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch)),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -161,7 +160,7 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleChat_ShouldWriteSseFramesAndCorrelationHeader_WhenExecutionSucceeds()
     {
-        var interactionService = new FakeWorkflowRunInteractionService
+        var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
             {
@@ -176,10 +175,8 @@ public sealed class ChatEndpointsInternalTests
                         Delta = "hello",
                     },
                 }, ct);
-                return new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.None,
-                    receipt,
-                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
         var http = CreateHttpContext();
@@ -201,7 +198,7 @@ public sealed class ChatEndpointsInternalTests
     public async Task HandleChat_ShouldReturnServerError_WhenExecutionThrowsBeforeStreamStarts()
     {
         var http = CreateHttpContext();
-        var interactionService = new FakeWorkflowRunInteractionService
+        var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _) => throw new InvalidOperationException("boom"),
         };
@@ -221,7 +218,7 @@ public sealed class ChatEndpointsInternalTests
     public async Task HandleChat_ShouldWriteRunErrorFrame_WhenExecutionThrowsAfterStreamStarts()
     {
         var http = CreateHttpContext();
-        var interactionService = new FakeWorkflowRunInteractionService
+        var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
             {
@@ -517,7 +514,7 @@ public sealed class ChatEndpointsInternalTests
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
-            new FakeWorkflowRunInteractionService(),
+            new FakeCommandInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -536,7 +533,7 @@ public sealed class ChatEndpointsInternalTests
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
             http,
-            new FakeWorkflowRunInteractionService(),
+            new FakeCommandInteractionService(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -553,7 +550,7 @@ public sealed class ChatEndpointsInternalTests
         socket.EnqueueReceive("""{"type":"chat.command","requestId":"req-1","payload":{"prompt":"hello"}}""");
         var http = CreateHttpContext();
         http.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
-        var interactionService = new FakeWorkflowRunInteractionService
+        var interactionService = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _) => throw new InvalidOperationException("boom"),
         };
@@ -590,12 +587,15 @@ public sealed class ChatEndpointsInternalTests
         return http;
     }
 
-    private sealed class FakeWorkflowRunInteractionService : IWorkflowRunInteractionService
+    private sealed class FakeCommandInteractionService
+        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
     {
-        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
-            (_, _, _) => Task.FromResult(new WorkflowChatRunInteractionResult(WorkflowChatRunStartError.None, null, null));
+        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+            (_, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
+        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,

@@ -8,9 +8,10 @@ using Aevatar.Scripting.Core.Ports;
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogLifecycleService
+    : ScriptActorCommandPortBase<ScriptCatalogGAgent>,
+      IScriptCatalogCommandPort,
+      IScriptCatalogQueryPort
 {
-    private readonly IActorDispatchPort _dispatchPort;
-    private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _catalogQueryTimeout;
@@ -24,9 +25,8 @@ public sealed class RuntimeScriptCatalogLifecycleService
         RuntimeScriptQueryClient queryClient,
         IScriptingActorAddressResolver addressResolver,
         IScriptingPortTimeouts timeouts)
+        : base(dispatchPort, actorAccessor)
     {
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
         _catalogQueryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
@@ -45,17 +45,16 @@ public sealed class RuntimeScriptCatalogLifecycleService
     {
         var (resolvedCatalogActorId, _) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
-        await _dispatchPort.DispatchAsync(
+        await DispatchAsync(
             resolvedCatalogActorId,
-            _promoteRevisionAdapter.Map(
-                new PromoteScriptRevisionActorRequest(
-                    ScriptId: scriptId ?? string.Empty,
-                    Revision: revision ?? string.Empty,
-                    DefinitionActorId: definitionActorId ?? string.Empty,
-                    SourceHash: sourceHash ?? string.Empty,
-                    ProposalId: proposalId ?? string.Empty,
-                    ExpectedBaseRevision: expectedBaseRevision ?? string.Empty),
-                resolvedCatalogActorId),
+            new PromoteScriptRevisionActorRequest(
+                ScriptId: scriptId ?? string.Empty,
+                Revision: revision ?? string.Empty,
+                DefinitionActorId: definitionActorId ?? string.Empty,
+                SourceHash: sourceHash ?? string.Empty,
+                ProposalId: proposalId ?? string.Empty,
+                ExpectedBaseRevision: expectedBaseRevision ?? string.Empty),
+            _promoteRevisionAdapter.Map,
             ct);
     }
 
@@ -70,16 +69,15 @@ public sealed class RuntimeScriptCatalogLifecycleService
     {
         var (resolvedCatalogActorId, _) = await ResolveAndGetOrCreateCatalogActorAsync(catalogActorId, ct);
 
-        await _dispatchPort.DispatchAsync(
+        await DispatchAsync(
             resolvedCatalogActorId,
-            _rollbackRevisionAdapter.Map(
-                new RollbackScriptRevisionActorRequest(
-                    ScriptId: scriptId ?? string.Empty,
-                    TargetRevision: targetRevision ?? string.Empty,
-                    Reason: reason ?? string.Empty,
-                    ProposalId: proposalId ?? string.Empty,
-                    ExpectedCurrentRevision: expectedCurrentRevision ?? string.Empty),
-                resolvedCatalogActorId),
+            new RollbackScriptRevisionActorRequest(
+                ScriptId: scriptId ?? string.Empty,
+                TargetRevision: targetRevision ?? string.Empty,
+                Reason: reason ?? string.Empty,
+                ProposalId: proposalId ?? string.Empty,
+                ExpectedCurrentRevision: expectedCurrentRevision ?? string.Empty),
+            _rollbackRevisionAdapter.Map,
             ct);
     }
 
@@ -92,7 +90,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
             return null;
 
         var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        var actor = await _actorAccessor.GetAsync(resolvedCatalogActorId);
+        var actor = await GetActorAsync(resolvedCatalogActorId);
         if (actor == null)
             return null;
 
@@ -127,7 +125,7 @@ public sealed class RuntimeScriptCatalogLifecycleService
         CancellationToken ct)
     {
         var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        var actor = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
+        var actor = await GetOrCreateActorAsync(
             resolvedCatalogActorId,
             "Script catalog actor not found",
             ct);

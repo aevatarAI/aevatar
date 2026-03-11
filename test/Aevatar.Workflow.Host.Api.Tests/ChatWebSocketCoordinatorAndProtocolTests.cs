@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -28,7 +29,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ExecuteAsync_ShouldSendAckAndAguiEvent()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var service = new FakeWorkflowRunInteractionService
+        var service = new FakeCommandInteractionService
         {
             ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
             {
@@ -43,10 +44,8 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                         Delta = "hello",
                     },
                 }, ct);
-                return new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.None,
-                    receipt,
-                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
 
@@ -71,13 +70,11 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ExecuteAsync_ShouldSendCommandError_WhenStartFails()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var service = new FakeWorkflowRunInteractionService
+        var service = new FakeCommandInteractionService
         {
             ResultFactory = (_, _, _) => Task.FromResult(
-                new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.WorkflowNotFound,
-                    null,
-                    null)),
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
         };
 
         await ChatWebSocketRunCoordinator.ExecuteAsync(
@@ -95,12 +92,15 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         socket.SentTexts[0].Should().Contain("WORKFLOW_NOT_FOUND");
     }
 
-    private sealed class FakeWorkflowRunInteractionService : IWorkflowRunInteractionService
+    private sealed class FakeCommandInteractionService
+        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
     {
-        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
-            (_, _, _) => Task.FromResult(new WorkflowChatRunInteractionResult(WorkflowChatRunStartError.None, null, null));
+        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+            (_, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
+        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,

@@ -218,7 +218,7 @@ sequenceDiagram
     participant User as "终端用户"
     participant App as "AI Native App"
     participant API as "Mainnet API"
-    participant AppSvc as "WorkflowRunInteractionService"
+    participant AppSvc as "ICommandInteractionService"
     participant WFAgent as "WorkflowRunGAgent"
     participant Role1 as "RoleGAgent:analyst"
     participant Role2 as "RoleGAgent:reviewer"
@@ -1536,7 +1536,7 @@ Mainnet 的职责是将该 YAML 编译为可执行工作流，并按 `agent_prof
 sequenceDiagram
     participant AppSdk as "AI Native App SDK"
     participant MainnetApi as "Mainnet API"
-    participant AppService as "WorkflowRunInteractionService"
+    participant AppService as "ICommandInteractionService"
     participant Resolver as "WorkflowRunActorResolver"
     participant WfAgent as "WorkflowGAgent"
     participant Chrono as "Chrono Platform"

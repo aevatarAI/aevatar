@@ -7,8 +7,7 @@
 ```
 Aevatar.Workflow.Application.Abstractions/
 ├── Runs/
-│   ├── IWorkflowRunInteractionService.cs      # SSE/WS run 交互主入口
-│   ├── WorkflowChatRunModels.cs               # Request/Result/OutputFrame 等契约
+│   ├── WorkflowChatRunModels.cs               # Request/Receipt/Error 等契约
 │   └── WorkflowRunEventContracts.cs           # WorkflowRunEvent 体系 + Sink + Channel
 ├── Queries/
 │   ├── IWorkflowExecutionQueryApplicationService.cs  # 查询门面
@@ -27,11 +26,9 @@ Aevatar.Workflow.Application.Abstractions/
 
 | 类型 | 说明 |
 |------|------|
-| `IWorkflowRunInteractionService` | `ExecuteAsync` 单入口，接收 request + emit 回调 |
 | `WorkflowChatRunRequest` | 请求：prompt、workflow、workflowYamls、agentId |
 | `WorkflowChatRunAcceptedReceipt` | accepted receipt：`actorId + workflowName + commandId + correlationId` |
-| `WorkflowChatRunInteractionResult` | 结果：包含 start error、accepted receipt、finalize result |
-| `WorkflowOutputFrame` | 输出帧：type + payload，用于 SSE 流 |
+| `WorkflowRunEventEnvelope` | 输出事件包络：SSE/WS 直接透传的稳定流事件 |
 | `WorkflowChatRunStartError` | 启动错误枚举 |
 
 ### Run 事件体系

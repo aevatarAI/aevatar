@@ -1,26 +1,12 @@
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal interface IWorkflowRunDurableCompletionResolver
-{
-    Task<WorkflowRunDurableCompletionObservation> ResolveAsync(
-        string actorId,
-        CancellationToken ct = default);
-}
-
-internal readonly record struct WorkflowRunDurableCompletionObservation(
-    bool HasTerminalStatus,
-    WorkflowProjectionCompletionStatus Status)
-{
-    public static WorkflowRunDurableCompletionObservation Incomplete { get; } =
-        new(false, WorkflowProjectionCompletionStatus.Unknown);
-}
-
 internal sealed class WorkflowRunDurableCompletionResolver
-    : IWorkflowRunDurableCompletionResolver
+    : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
 {
     private readonly IWorkflowExecutionProjectionQueryPort _projectionQueryPort;
 
@@ -30,10 +16,13 @@ internal sealed class WorkflowRunDurableCompletionResolver
         _projectionQueryPort = projectionQueryPort ?? throw new ArgumentNullException(nameof(projectionQueryPort));
     }
 
-    public async Task<WorkflowRunDurableCompletionObservation> ResolveAsync(
-        string actorId,
+    public async Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(receipt);
+
+        var actorId = receipt.ActorId;
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
 
         try
@@ -47,11 +36,11 @@ internal sealed class WorkflowRunDurableCompletionResolver
         }
         catch
         {
-            return WorkflowRunDurableCompletionObservation.Incomplete;
+            return CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete;
         }
     }
 
-    private static WorkflowRunDurableCompletionObservation MapSnapshot(WorkflowActorSnapshot? snapshot) =>
+    private static CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus> MapSnapshot(WorkflowActorSnapshot? snapshot) =>
         snapshot?.CompletionStatus switch
         {
             WorkflowRunCompletionStatus.Completed => new(true, WorkflowProjectionCompletionStatus.Completed),
@@ -60,6 +49,6 @@ internal sealed class WorkflowRunDurableCompletionResolver
             WorkflowRunCompletionStatus.Stopped => new(true, WorkflowProjectionCompletionStatus.Stopped),
             WorkflowRunCompletionStatus.NotFound => new(true, WorkflowProjectionCompletionStatus.NotFound),
             WorkflowRunCompletionStatus.Disabled => new(true, WorkflowProjectionCompletionStatus.Disabled),
-            _ => WorkflowRunDurableCompletionObservation.Incomplete,
+            _ => CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete,
         };
 }
