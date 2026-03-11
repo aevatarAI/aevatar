@@ -78,12 +78,12 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task CreateRunAsync_WhenExistingDefinitionDiffers_ShouldRebindExistingDefinitionActor()
+    public async Task CreateRunAsync_WhenExistingDefinitionYamlDiffersButWorkflowNameMatches_ShouldRebindExistingDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
-        definitionAgent.State.WorkflowName = "other";
-        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: old\n    type: delay\n";
         runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-3", new StubAgent("run-3")));
         var port = CreatePort(runtime);
@@ -104,6 +104,29 @@ public sealed class WorkflowRunActorPortBranchTests
         ((RecordingActor)runtime.StoredActors["definition-3"]).LastHandledEnvelope!.Payload!
             .Is(BindWorkflowDefinitionEvent.Descriptor)
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingDefinitionWorkflowNameDiffers_ShouldFailFast()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "other";
+        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-3",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to workflow 'other'*cannot switch to 'direct'*");
+        runtime.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]

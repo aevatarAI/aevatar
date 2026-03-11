@@ -158,6 +158,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
                     $"Actor '{existingActor.Id}' is not a workflow definition actor and cannot be reused as a definition source.");
             }
 
+            EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+
             if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
             {
                 await BindWorkflowDefinitionAsync(
@@ -256,6 +258,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         }
 
         return true;
+    }
+
+    private static void EnsureWorkflowNameCompatibility(
+        string actorId,
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        var boundWorkflowName = binding.WorkflowName?.Trim() ?? string.Empty;
+        var requestedWorkflowName = definition.WorkflowName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(boundWorkflowName) ||
+            string.IsNullOrWhiteSpace(requestedWorkflowName) ||
+            string.Equals(boundWorkflowName, requestedWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Workflow definition actor '{actorId}' is already bound to workflow '{binding.WorkflowName}' and cannot switch to '{definition.WorkflowName}'.");
     }
 
     private static EventEnvelope CreateWorkflowDefinitionBindEnvelope(

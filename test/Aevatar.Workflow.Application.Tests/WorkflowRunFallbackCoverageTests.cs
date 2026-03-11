@@ -112,6 +112,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             },
             new FakeWorkflowRunCompletionPolicy(),
             new FakeWorkflowRunStateSnapshotEmitter(),
+            new FakeWorkflowRunDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -160,6 +161,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             pipeline,
             outputStreamer,
             new FakeWorkflowRunCompletionPolicy(),
+            new FakeWorkflowRunDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -257,6 +259,18 @@ public sealed class WorkflowRunFallbackCoverageTests
             _ = projectionCompleted;
             _ = emitAsync;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeWorkflowRunDurableCompletionResolver : IWorkflowRunDurableCompletionResolver
+    {
+        public Task<WorkflowRunDurableCompletionObservation> ResolveAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(WorkflowRunDurableCompletionObservation.Incomplete);
         }
     }
 

@@ -109,7 +109,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
 
         msg.Payload = ByteString.Empty;
         msg.Payload.Should().NotBeNull();
-        msg.Payload!.IsEmpty.Should().BeTrue();
+        (msg.Payload ?? throw new InvalidOperationException("Payload should not be null.")).IsEmpty.Should().BeTrue();
         msg.LegacyPayload = string.Empty;
         msg.LegacyPayload.Should().BeEmpty();
 
