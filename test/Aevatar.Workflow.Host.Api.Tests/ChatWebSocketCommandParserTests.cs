@@ -71,6 +71,20 @@ public class ChatWebSocketCommandParserTests
     }
 
     [Fact]
+    public void TryParse_LegacyWorkflowYamlAlias_ShouldPopulateChatInput()
+    {
+        var frame = TextFrame("""{"type":"chat.command","requestId":"req-legacy","payload":{"prompt":"hello","workflowYaml":"name: direct","agentId":"a-1"}}""");
+
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
+
+        ok.Should().BeTrue();
+        envelope.RequestId.Should().Be("req-legacy");
+        envelope.Input.WorkflowYaml.Should().Be("name: direct");
+        envelope.Input.WorkflowYamls.Should().BeNull();
+        envelope.Input.AgentId.Should().Be("a-1");
+    }
+
+    [Fact]
     public void TryParse_BinaryFrame_ShouldKeepBinaryResponseType()
     {
         var frame = new ChatWebSocketInboundFrame(

@@ -25,6 +25,53 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldAcceptLegacyWorkflowYamlAlias()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            AgentId = " actor-1 ",
+            WorkflowYaml = "name: inline",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request.Should().BeEquivalentTo(new WorkflowChatRunRequest("hello", null, "actor-1", ["name: inline"]));
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectBlankLegacyWorkflowYaml()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            WorkflowYaml = "   ",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectMixedLegacyAndBundleWorkflowYaml()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            WorkflowYaml = "name: legacy",
+            WorkflowYamls = ["name: bundle"],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldDefaultToAuto_WhenCreatingNewRun()
     {
         var input = new ChatInput

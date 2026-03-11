@@ -23,6 +23,12 @@ public sealed record ChatInput
     public string? AgentId { get; init; }
 
     /// <summary>
+    /// Legacy single inline workflow YAML field.
+    /// Prefer <see cref="WorkflowYamls"/> for new clients.
+    /// </summary>
+    public string? WorkflowYaml { get; init; }
+
+    /// <summary>
     /// Inline workflow YAML bundle for this request.
     /// The first item is treated as the entry workflow.
     /// If present, this field takes precedence over <see cref="Workflow"/>.

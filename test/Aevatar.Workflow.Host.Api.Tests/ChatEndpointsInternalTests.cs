@@ -146,6 +146,44 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleResume_ShouldRejectMismatchedRunId()
+    {
+        var runtime = new FakeActorRuntime();
+        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
+        var bindingReader = new FakeWorkflowActorBindingReader
+        {
+            Binding = new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-1",
+                "definition-1",
+                "run-expected",
+                "direct",
+                "yaml",
+                new Dictionary<string, string>()),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-other",
+                StepId = "step-1",
+            },
+            runtime,
+            runtime,
+            bindingReader,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("run-expected");
+        runtime.DispatchCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleSignal_ShouldRejectNonRunActor()
     {
         var runtime = new FakeActorRuntime();
@@ -173,6 +211,44 @@ public sealed class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("not a workflow run actor");
+        runtime.DispatchCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleSignal_ShouldRejectMismatchedRunId()
+    {
+        var runtime = new FakeActorRuntime();
+        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
+        var bindingReader = new FakeWorkflowActorBindingReader
+        {
+            Binding = new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "actor-1",
+                "definition-1",
+                "run-expected",
+                "direct",
+                "yaml",
+                new Dictionary<string, string>()),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-other",
+                SignalName = "approve",
+            },
+            runtime,
+            runtime,
+            bindingReader,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("run-expected");
         runtime.DispatchCalls.Should().BeEmpty();
     }
 

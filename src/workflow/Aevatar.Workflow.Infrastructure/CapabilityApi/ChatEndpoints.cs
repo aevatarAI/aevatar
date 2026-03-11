@@ -226,6 +226,19 @@ public static class WorkflowCapabilityEndpoints
                 scope.MarkResult(StatusCodes.Status400BadRequest);
                 return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
             }
+            if (string.IsNullOrWhiteSpace(binding.RunId))
+            {
+                scope.MarkResult(StatusCodes.Status409Conflict);
+                return Results.Conflict(new { error = $"Actor '{actorId}' does not have a bound run id." });
+            }
+            if (!string.Equals(binding.RunId.Trim(), runId, StringComparison.Ordinal))
+            {
+                scope.MarkResult(StatusCodes.Status409Conflict);
+                return Results.Conflict(new
+                {
+                    error = $"Actor '{actorId}' is bound to run '{binding.RunId}', not '{runId}'.",
+                });
+            }
 
             var resumed = new WorkflowResumedEvent
             {
@@ -312,6 +325,19 @@ public static class WorkflowCapabilityEndpoints
             {
                 scope.MarkResult(StatusCodes.Status400BadRequest);
                 return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
+            }
+            if (string.IsNullOrWhiteSpace(binding.RunId))
+            {
+                scope.MarkResult(StatusCodes.Status409Conflict);
+                return Results.Conflict(new { error = $"Actor '{actorId}' does not have a bound run id." });
+            }
+            if (!string.Equals(binding.RunId.Trim(), runId, StringComparison.Ordinal))
+            {
+                scope.MarkResult(StatusCodes.Status409Conflict);
+                return Results.Conflict(new
+                {
+                    error = $"Actor '{actorId}' is bound to run '{binding.RunId}', not '{runId}'.",
+                });
             }
 
             var commandId = (input.CommandId ?? string.Empty).Trim();

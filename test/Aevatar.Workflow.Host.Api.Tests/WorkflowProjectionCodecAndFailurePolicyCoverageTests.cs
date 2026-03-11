@@ -169,8 +169,22 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
 
         var envelope = Any.Parser.ParseFrom(payload).Unpack<WorkflowRunSessionEventEnvelope>();
 
-        envelope.RunFinished.LegacyResult.Should().NotBeNull();
+        envelope.RunFinished.LegacyResult.Should().BeNull();
         envelope.RunFinished.Result.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void SerializeLegacy_ShouldReturnNull_ToAvoidLegacyDualWrite()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var legacyCodec = (ILegacyProjectionSessionEventCodec<WorkflowRunEvent>)codec;
+
+        var legacyPayload = legacyCodec.SerializeLegacy(new WorkflowRunStartedEvent
+        {
+            ThreadId = "thread-1",
+        });
+
+        legacyPayload.Should().BeNull();
     }
 
     private static ProjectionSessionEventTransportMessage ParseLegacyTransportMessage(

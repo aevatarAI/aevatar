@@ -30,10 +30,10 @@ public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<
         return Any.Pack(WorkflowRunSessionEventEnvelopeMapper.ToEnvelope(evt)).ToByteString();
     }
 
-    public string SerializeLegacy(WorkflowRunEvent evt)
+    public string? SerializeLegacy(WorkflowRunEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        return JsonSerializer.Serialize(evt, evt.GetType(), JsonOptions);
+        return null;
     }
 
     public WorkflowRunEvent? Deserialize(string eventType, ByteString payload)
