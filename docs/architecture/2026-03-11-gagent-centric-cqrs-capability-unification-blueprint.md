@@ -87,8 +87,8 @@
 |---|---|---|
 | Workflow 命令入口 | `ICommandDispatchPipeline + ICommandInteractionService` | 已统一到 CQRS generic interaction template |
 | Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeProvisioningPort/IScriptRuntimeCommandPort/... + RuntimeScript*CommandService/ProvisioningService` | 已拆掉总入口；evolution 已接入 generic interaction，definition/runtime/catalog command 已统一到标准 dispatch pipeline，runtime create/reuse 独立为 provisioning port |
-| Workflow 读侧观察 | `IWorkflowExecutionProjectionLifecyclePort` + completion policy + durable resolver | 能力可用，但可抽象部分仍留在 workflow 私有层 |
-| Scripting 读侧观察 | `IScriptEvolutionProjectionLifecyclePort` + session codec/context | 与 workflow 共享底层基类，但仍各写一套 capability adapter |
+| Workflow 读侧观察 | `IWorkflowExecutionProjectionPort` + completion policy + durable resolver | 能力可用，但可抽象部分仍留在 workflow 私有层 |
+| Scripting 读侧观察 | `IScriptEvolutionProjectionPort` + session codec/context | 与 workflow 共享底层基类，但仍各写一套 capability adapter |
 | Workflow 执行模型 | `WorkflowRunGAgent` 内部 module runtime | 是 actor 内部插件模型 |
 | Scripting 执行模型 | `ScriptRuntimeGAgent` + compiled runtime contract | 是多 actor 协作模型 |
 
@@ -353,7 +353,7 @@ Projection Core 已经是相对正确的主干。
 
 | 当前类族 | 问题 | 目标动作 |
 |---|---|---|
-| `WorkflowExecutionProjectionLifecycleService` / `ScriptEvolutionProjectionLifecycleService` | 共享相同基类但 capability alias 仍较重 | 抽 descriptor/factory 规范，减少 capability 包装层 |
+| `WorkflowExecutionProjectionPortService` / `ScriptEvolutionProjectionPortService` | 共享相同基类但 capability alias 仍较重 | 抽 descriptor/factory 规范，减少 capability 包装层 |
 | `WorkflowRunEventSessionCodec` / `ScriptEvolutionSessionEventCodec` | 各 capability 自建 codec 约定 | 定义统一 session codec 命名和 wire 约束 |
 | `WorkflowExecutionProjectionContext` / `ScriptEvolutionSessionProjectionContext` | 结构相似但标准不统一 | 抽最小公共上下文模型，只保留能力差异字段 |
 

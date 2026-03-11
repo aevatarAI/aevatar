@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Integration.Tests;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
@@ -222,8 +223,6 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private const string ReadModelPayloadKey = "text_normalization.current";
 
     private readonly IActorRuntime _runtime;
-    private readonly UpsertScriptDefinitionActorRequestAdapter _upsertAdapter = new();
-    private readonly RunScriptActorRequestAdapter _runAdapter = new();
 
     public TextNormalizationScriptingProtocolGAgent(IActorRuntime runtime)
     {
@@ -235,25 +234,24 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     {
         var definitionActor = await EnsureDefinitionActorAsync();
         var runtimeActor = await EnsureRuntimeActorAsync();
+        var runId = evt.CommandId ?? string.Empty;
 
         await definitionActor.HandleEventAsync(
-            _upsertAdapter.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId,
-                    ScriptRevision,
-                    TextNormalizationProtocolSample.ScriptSource,
-                    "text-normalization-protocol-hash"),
-                definitionActor.Id),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActor.Id,
+                ScriptId,
+                ScriptRevision,
+                TextNormalizationProtocolSample.ScriptSource,
+                "text-normalization-protocol-hash"),
             CancellationToken.None);
         await runtimeActor.HandleEventAsync(
-            _runAdapter.Map(
-                new RunScriptActorRequest(
-                    RunId: evt.CommandId,
-                    InputPayload: Any.Pack(evt),
-                    ScriptRevision: ScriptRevision,
-                    DefinitionActorId: definitionActor.Id,
-                    RequestedEventType: TextNormalizationRequested.Descriptor.FullName),
-                runtimeActor.Id),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                runtimeActor.Id,
+                runId,
+                Any.Pack(evt),
+                ScriptRevision,
+                definitionActor.Id,
+                TextNormalizationRequested.Descriptor.FullName),
             CancellationToken.None);
 
         var runtimeAgent = (ScriptRuntimeGAgent)runtimeActor.Agent;

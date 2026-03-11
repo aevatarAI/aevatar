@@ -76,7 +76,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
-    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
 

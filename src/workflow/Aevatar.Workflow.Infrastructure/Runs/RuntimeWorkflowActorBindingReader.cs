@@ -12,8 +12,6 @@ internal sealed class RuntimeWorkflowActorBindingReader : IWorkflowActorBindingR
     private static readonly TimeSpan UnsupportedActorProbeTimeout = TimeSpan.FromSeconds(1);
     private readonly RuntimeWorkflowQueryClient _queryClient;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
-    private readonly QueryWorkflowActorBindingRequestAdapter _queryAdapter = new();
-
     public RuntimeWorkflowActorBindingReader(
         RuntimeWorkflowQueryClient queryClient,
         IAgentTypeVerifier agentTypeVerifier)
@@ -35,7 +33,7 @@ internal sealed class RuntimeWorkflowActorBindingReader : IWorkflowActorBindingR
                 actorId,
             WorkflowQueryRouteConventions.ActorBindingReplyStreamPrefix,
                 isWorkflowActor ? DefaultQueryTimeout : UnsupportedActorProbeTimeout,
-                (requestId, replyStreamId) => _queryAdapter.Map(actorId, requestId, replyStreamId),
+                (requestId, replyStreamId) => WorkflowActorBindingQueryEnvelopeFactory.Create(actorId, requestId, replyStreamId),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             WorkflowQueryRouteConventions.BuildActorBindingTimeoutMessage,
             ct);

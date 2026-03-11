@@ -10,9 +10,9 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class ScriptEvolutionCommandTargetBinder
     : ICommandTargetBinder<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>
 {
-    private readonly IScriptEvolutionProjectionLifecyclePort _projectionPort;
+    private readonly IScriptEvolutionProjectionPort _projectionPort;
 
-    public ScriptEvolutionCommandTargetBinder(IScriptEvolutionProjectionLifecyclePort projectionPort)
+    public ScriptEvolutionCommandTargetBinder(IScriptEvolutionProjectionPort projectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }

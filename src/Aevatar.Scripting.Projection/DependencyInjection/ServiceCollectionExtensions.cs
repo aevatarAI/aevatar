@@ -31,9 +31,9 @@ public static class ServiceCollectionExtensions
             ScriptEvolutionSessionCompletedEvent>();
         services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionReleaseService>();
-        services.TryAddSingleton<ScriptEvolutionProjectionLifecycleService>();
-        services.TryAddSingleton<IScriptEvolutionProjectionLifecyclePort>(sp =>
-            sp.GetRequiredService<ScriptEvolutionProjectionLifecycleService>());
+        services.TryAddSingleton<ScriptEvolutionProjectionPortService>();
+        services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
+            sp.GetRequiredService<ScriptEvolutionProjectionPortService>());
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionEventReducer<ScriptExecutionReadModel, ScriptProjectionContext>,

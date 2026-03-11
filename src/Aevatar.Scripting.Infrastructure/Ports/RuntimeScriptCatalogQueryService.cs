@@ -11,8 +11,6 @@ public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly IScriptingActorAddressResolver _addressResolver;
     private readonly TimeSpan _catalogQueryTimeout;
-    private readonly QueryScriptCatalogEntryRequestAdapter _queryCatalogEntryAdapter = new();
-
     public RuntimeScriptCatalogQueryService(
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
@@ -43,7 +41,11 @@ public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
             actor,
             ScriptingQueryRouteConventions.CatalogReplyStreamPrefix,
             _catalogQueryTimeout,
-            (requestId, replyStreamId) => _queryCatalogEntryAdapter.Map(resolvedCatalogActorId, requestId, replyStreamId, scriptId),
+            (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateCatalogEntryQuery(
+                resolvedCatalogActorId,
+                requestId,
+                replyStreamId,
+                scriptId),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             ScriptingQueryRouteConventions.BuildCatalogEntryTimeoutMessage,
             ct);

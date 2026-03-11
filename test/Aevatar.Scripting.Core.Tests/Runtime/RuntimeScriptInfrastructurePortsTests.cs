@@ -488,7 +488,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionInteractionService_ShouldReturnDecision_WhenSessionCompletes()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
+        var projectionPort = new TestProjectionPort();
         var fallbackPort = new TestFallbackPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
         {
@@ -532,7 +532,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionInteractionService_ShouldGenerateProposalId_WhenRequestProposalIdMissing()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
+        var projectionPort = new TestProjectionPort();
         var fallbackPort = new TestFallbackPort();
         StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
@@ -566,7 +566,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionInteractionService_ShouldUseFallbackDecision_WhenSessionTimesOut()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
+        var projectionPort = new TestProjectionPort();
         var fallbackPort = new TestFallbackPort
         {
             NextResult = new ScriptPromotionDecision(
@@ -608,7 +608,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionInteractionService_ShouldThrowTimeout_WhenSessionTimesOutWithoutFallback()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
+        var projectionPort = new TestProjectionPort();
         var fallbackPort = new TestFallbackPort { NextResult = null };
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
         var service = CreateEvolutionInteractionService(
@@ -636,7 +636,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task EvolutionInteractionService_ShouldThrow_WhenProjectionLeaseIsUnavailable()
     {
-        var projectionPort = new TestProjectionLifecyclePort { ReturnNullLease = true };
+        var projectionPort = new TestProjectionPort { ReturnNullLease = true };
         var fallbackPort = new TestFallbackPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
         var service = CreateEvolutionInteractionService(runtime, projectionPort, fallbackPort);
@@ -724,7 +724,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
-        TestProjectionLifecyclePort projectionPort,
+        TestProjectionPort projectionPort,
         Action<string, StartScriptEvolutionSessionRequestedEvent> onStartSession)
     {
         var runtime = new TestActorRuntime();
@@ -751,7 +751,7 @@ public class RuntimeScriptInfrastructurePortsTests
 
     private static RuntimeScriptEvolutionInteractionService CreateEvolutionInteractionService(
         TestActorRuntime runtime,
-        TestProjectionLifecyclePort projectionPort,
+        TestProjectionPort projectionPort,
         TestFallbackPort fallbackPort,
         IScriptingPortTimeouts? timeouts = null)
     {
@@ -1021,7 +1021,7 @@ public class RuntimeScriptInfrastructurePortsTests
         public string ProposalId { get; } = proposalId;
     }
 
-    private sealed class TestProjectionLifecyclePort : IScriptEvolutionProjectionLifecyclePort
+    private sealed class TestProjectionPort : IScriptEvolutionProjectionPort
     {
         private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
             new(StringComparer.Ordinal);

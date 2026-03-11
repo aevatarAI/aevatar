@@ -2,7 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Abstractions.Projections;
 
-public interface IWorkflowExecutionProjectionLifecyclePort
+public interface IWorkflowExecutionProjectionPort
     : IEventSinkProjectionLifecyclePort<IWorkflowExecutionProjectionLease, WorkflowRunEventEnvelope>
 {
     Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(

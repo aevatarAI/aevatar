@@ -54,9 +54,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             orchestratorRuntime,
             orchestratorRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-multi-script-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-multi-script-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -77,9 +78,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             ?? throw new InvalidOperationException("ScriptRuntimeGAgent type name is required.")),
                     },
                 }),
-                ScriptRevision: "rev-orchestrator-1",
-                DefinitionActorId: orchestratorDefinitionActorId,
-                RequestedEventType: "script.autonomous.multi.orchestrate"));
+                ScriptRevision = "rev-orchestrator-1",
+                DefinitionActorId = orchestratorDefinitionActorId,
+                RequestedEventType = "script.autonomous.multi.orchestrate",
+            });
 
         var summary = GetSummary(orchestratorRuntime);
         summary.Fields["decision_a2"].StringValue.Should().Be("promoted");
@@ -162,9 +164,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             rootRuntime,
             runtimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-self-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-self-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -174,9 +177,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("SelfGeneratedRuntime", "SelfGeneratedCompletedEvent")),
                     },
                 }),
-                ScriptRevision: "rev-self-1",
-                DefinitionActorId: definitionActorId,
-                RequestedEventType: "script.self.evolve"));
+                ScriptRevision = "rev-self-1",
+                DefinitionActorId = definitionActorId,
+                RequestedEventType = "script.self.evolve",
+            });
 
         var v1Summary = GetSummary(rootRuntime);
         v1Summary.Fields["decision_v2"].StringValue.Should().Be("promoted");
@@ -240,9 +244,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-catalog-control-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-catalog-control-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -252,9 +257,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("ManualCatalogRev2Runtime", "ManualCatalogRev2CompletedEvent")),
                     },
                 }),
-                ScriptRevision: "rev-controller-1",
-                DefinitionActorId: controllerDefinitionActorId,
-                RequestedEventType: "script.catalog.control"));
+                ScriptRevision = "rev-controller-1",
+                DefinitionActorId = controllerDefinitionActorId,
+                RequestedEventType = "script.catalog.control",
+            });
 
         var summary = GetSummary(controllerRuntime);
         var manualRuntimeId = summary.Fields["manual_runtime_id"].StringValue;
@@ -303,9 +309,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-interaction-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-interaction-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -320,9 +327,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("InvokedDefinitionRuntime", "InvokedDefinitionEvent")),
                     },
                 }),
-                ScriptRevision: "rev-interaction-1",
-                DefinitionActorId: controllerDefinitionActorId,
-                RequestedEventType: "script.interaction.exercise"));
+                ScriptRevision = "rev-interaction-1",
+                DefinitionActorId = controllerDefinitionActorId,
+                RequestedEventType = "script.interaction.exercise",
+            });
 
         var summary = GetSummary(controllerRuntime);
         summary.Fields["ai_response_length"].StringValue.Should().Be("0");
@@ -348,26 +356,23 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         string source)
     {
         var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await actor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: revision,
-                    SourceText: source,
-                    SourceHash: $"hash-{scriptId}-{revision}"),
-                definitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                scriptId,
+                revision,
+                source,
+                $"hash-{scriptId}-{revision}"),
             CancellationToken.None);
     }
 
     private static async Task RunScriptAsync(
         IActor runtimeActor,
         string runtimeActorId,
-        RunScriptActorRequest command)
+        RunScriptRequestedEvent command)
     {
-        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            run.Map(command, runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(runtimeActorId, command),
             CancellationToken.None);
     }
 

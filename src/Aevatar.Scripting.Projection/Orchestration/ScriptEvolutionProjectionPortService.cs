@@ -6,13 +6,13 @@ using Aevatar.Scripting.Projection.Configuration;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
-public sealed class ScriptEvolutionProjectionLifecycleService
+public sealed class ScriptEvolutionProjectionPortService
     : EventSinkProjectionLifecyclePortServiceBase<IScriptEvolutionProjectionLease, ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>,
-      IScriptEvolutionProjectionLifecyclePort
+      IScriptEvolutionProjectionPort
 {
     private const string ProjectionName = "script-evolution-session";
 
-    public ScriptEvolutionProjectionLifecycleService(
+    public ScriptEvolutionProjectionPortService(
         ScriptEvolutionProjectionOptions options,
         IProjectionPortActivationService<ScriptEvolutionRuntimeLease> activationService,
         IProjectionPortReleaseService<ScriptEvolutionRuntimeLease> releaseService,
