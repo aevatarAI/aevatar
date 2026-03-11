@@ -26,6 +26,7 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
                 envelope.RunFinished = new WorkflowRunFinishedEventPayload
                 {
                     ThreadId = e.ThreadId,
+                    LegacyResult = WorkflowProjectionTransportValueCodec.SerializeLegacy(e.Result),
                     Result = WorkflowProjectionTransportValueCodec.Serialize(e.Result),
                 };
                 break;
@@ -71,6 +72,7 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
             case WorkflowStateSnapshotEvent e:
                 envelope.StateSnapshot = new WorkflowStateSnapshotEventPayload
                 {
+                    LegacySnapshot = WorkflowProjectionTransportValueCodec.SerializeLegacy(e.Snapshot),
                     Snapshot = WorkflowProjectionTransportValueCodec.Serialize(e.Snapshot),
                 };
                 break;
@@ -92,6 +94,7 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
                 envelope.Custom = new WorkflowCustomEventPayload
                 {
                     Name = e.Name,
+                    LegacyValue = WorkflowProjectionTransportValueCodec.SerializeLegacy(e.Value),
                     Value = WorkflowProjectionTransportValueCodec.Serialize(e.Value),
                 };
                 break;

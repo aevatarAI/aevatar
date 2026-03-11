@@ -471,6 +471,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
+    public void ProjectionScopeEnums_ShouldRetainLegacyOrdinals()
+    {
+        ((int)WorkflowExecutionProjectionScope.ActorShared).Should().Be(0);
+        ((int)WorkflowExecutionProjectionScope.RunIsolated).Should().Be(1);
+        ((int)WorkflowRunProjectionScope.ActorShared).Should().Be(0);
+        ((int)WorkflowRunProjectionScope.RunIsolated).Should().Be(1);
+    }
+
+    [Fact]
     public async Task SinkSubscriptionManager_ShouldReplaceSameSinkSubscription()
     {
         var hub = new RecordingRunEventHub();

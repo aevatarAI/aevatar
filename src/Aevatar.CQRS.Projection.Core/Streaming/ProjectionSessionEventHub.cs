@@ -43,6 +43,7 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
             ScopeId = scopeId,
             SessionId = sessionId,
             EventType = _codec.GetEventType(evt),
+            LegacyPayload = (_codec as ILegacyProjectionSessionEventCodec<TEvent>)?.SerializeLegacy(evt) ?? string.Empty,
             Payload = _codec.Serialize(evt),
         };
         return stream.ProduceAsync(message, ct);
@@ -71,10 +72,11 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
-            if (message.Payload == null || message.Payload.IsEmpty)
+            if ((message.Payload == null || message.Payload.IsEmpty) &&
+                string.IsNullOrWhiteSpace(message.LegacyPayload))
             {
                 _logger.LogWarning(
-                    "Dropping projection session event with empty payload. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType}",
+                    "Dropping projection session event with empty payloads. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType}",
                     _codec.Channel,
                     scopeId,
                     sessionId,
@@ -82,16 +84,27 @@ public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventH
                 return;
             }
 
-            var evt = _codec.Deserialize(message.EventType, message.Payload);
+            TEvent? evt = default;
+            if (message.Payload != null && !message.Payload.IsEmpty)
+                evt = _codec.Deserialize(message.EventType, message.Payload);
+
+            if (evt == null &&
+                !string.IsNullOrWhiteSpace(message.LegacyPayload) &&
+                _codec is ILegacyProjectionSessionEventCodec<TEvent> legacyCodec)
+            {
+                evt = legacyCodec.DeserializeLegacy(message.EventType, message.LegacyPayload);
+            }
+
             if (evt == null)
             {
                 _logger.LogWarning(
-                    "Dropping undecodable projection session event. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType} payloadBytes={PayloadBytes}",
+                    "Dropping undecodable projection session event. channel={Channel} scopeId={ScopeId} sessionId={SessionId} eventType={EventType} payloadBytes={PayloadBytes} legacyPayloadLength={LegacyPayloadLength}",
                     _codec.Channel,
                     scopeId,
                     sessionId,
                     message.EventType,
-                    message.Payload.Length);
+                    message.Payload?.Length ?? 0,
+                    message.LegacyPayload?.Length ?? 0);
                 return;
             }
 

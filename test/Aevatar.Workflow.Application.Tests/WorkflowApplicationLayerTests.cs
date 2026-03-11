@@ -183,7 +183,7 @@ public sealed class WorkflowApplicationLayerTests
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.FinalizeResult.Should().Be(new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Failed, false));
+        result.FinalizeResult.Should().Be(new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Unknown, false));
         actorPort.DestroyCalls.Should().BeEmpty();
     }
 

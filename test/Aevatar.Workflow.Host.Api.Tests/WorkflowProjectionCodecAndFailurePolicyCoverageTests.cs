@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -132,6 +133,7 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
     public void Deserialize_WhenPayloadUsesLegacyWireStringField_ShouldFallback()
     {
         var codec = new WorkflowRunEventSessionCodec();
+        var legacyCodec = (ILegacyProjectionSessionEventCodec<WorkflowRunEvent>)codec;
         var transport = ParseLegacyTransportMessage(
             scopeId: "scope-1",
             sessionId: "session-1",
@@ -140,15 +142,35 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
                         {"type":"RUN_STARTED","timestamp":789,"threadId":"thread-wire"}
                         """);
 
-        transport.Payload.Should().NotBeNull();
-        transport.Payload.IsEmpty.Should().BeFalse();
+        transport.LegacyPayload.Should().NotBeNullOrWhiteSpace();
 
-        var deserialized = codec.Deserialize(transport.EventType, transport.Payload);
+        var deserialized = legacyCodec.DeserializeLegacy(transport.EventType, transport.LegacyPayload);
 
         deserialized.Should().BeOfType<WorkflowRunStartedEvent>();
         var started = (WorkflowRunStartedEvent)deserialized!;
         started.ThreadId.Should().Be("thread-wire");
         started.Timestamp.Should().Be(789);
+    }
+
+    [Fact]
+    public void Serialize_ShouldPopulateLegacyAndBinaryFields_ForCompatibility()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var payload = codec.Serialize(new WorkflowRunFinishedEvent
+        {
+            ThreadId = "thread-compat",
+            Result = new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["count"] = 2,
+            },
+            Timestamp = 100,
+        });
+
+        var envelope = Any.Parser.ParseFrom(payload).Unpack<WorkflowRunSessionEventEnvelope>();
+
+        envelope.RunFinished.LegacyResult.Should().NotBeNull();
+        envelope.RunFinished.Result.Should().NotBeNull();
     }
 
     private static ProjectionSessionEventTransportMessage ParseLegacyTransportMessage(

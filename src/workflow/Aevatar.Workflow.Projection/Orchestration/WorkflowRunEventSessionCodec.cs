@@ -12,7 +12,10 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 /// Session event codec for workflow live run output events.
 /// </summary>
 public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<WorkflowRunEvent>
+    , ILegacyProjectionSessionEventCodec<WorkflowRunEvent>
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     public string Channel => "workflow-run";
 
     public string GetEventType(WorkflowRunEvent evt)
@@ -25,6 +28,12 @@ public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<
     {
         ArgumentNullException.ThrowIfNull(evt);
         return Any.Pack(WorkflowRunSessionEventEnvelopeMapper.ToEnvelope(evt)).ToByteString();
+    }
+
+    public string SerializeLegacy(WorkflowRunEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        return JsonSerializer.Serialize(evt, evt.GetType(), JsonOptions);
     }
 
     public WorkflowRunEvent? Deserialize(string eventType, ByteString payload)
@@ -45,6 +54,16 @@ public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<
         }
 
         return null;
+    }
+
+    public WorkflowRunEvent? DeserializeLegacy(string eventType, string payload)
+    {
+        if (string.IsNullOrWhiteSpace(eventType) || string.IsNullOrWhiteSpace(payload))
+            return null;
+
+        return TryDeserializeLegacyJson(eventType, payload, out var evt)
+            ? evt
+            : null;
     }
 
     private static bool TryDeserializeEnvelope(string eventType, ByteString payload, out WorkflowRunEvent? evt)

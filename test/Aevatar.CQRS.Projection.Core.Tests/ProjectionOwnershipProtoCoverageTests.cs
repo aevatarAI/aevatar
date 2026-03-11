@@ -87,6 +87,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "step.completed",
+            LegacyPayload = "{\"value\":\"payload\"}",
             Payload = Any.Pack(new StringValue { Value = "payload" }).ToByteString(),
         };
 
@@ -96,6 +97,7 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         parsed.CalculateSize().Should().BeGreaterThan(0);
         parsed.ToString().Should().Contain("eventType");
         ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(ProjectionSessionEventTransportMessage));
+        parsed.LegacyPayload.Should().Be("{\"value\":\"payload\"}");
         var payload = Any.Parser.ParseFrom(parsed.Payload);
         payload.Is(StringValue.Descriptor).Should().BeTrue();
         payload.Unpack<StringValue>().Value.Should().Be("payload");
@@ -108,6 +110,8 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         msg.Payload = ByteString.Empty;
         msg.Payload.Should().NotBeNull();
         msg.Payload!.IsEmpty.Should().BeTrue();
+        msg.LegacyPayload = string.Empty;
+        msg.LegacyPayload.Should().BeEmpty();
 
         ProjectionSessionEventTransportReflection.Descriptor.Should().NotBeNull();
         ProjectionSessionEventTransportReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(ProjectionSessionEventTransportMessage));

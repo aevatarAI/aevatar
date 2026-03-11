@@ -434,6 +434,7 @@ public class ProjectionSessionEventHubTests
         message.ScopeId.Should().Be("scope-1");
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("string");
+        message.LegacyPayload.Should().Be("hello");
         message.Payload.Should().NotBeNull();
         message.Payload.IsEmpty.Should().BeFalse();
         var payload = Any.Parser.ParseFrom(message.Payload);
@@ -493,6 +494,38 @@ public class ProjectionSessionEventHubTests
             Payload = Any.Pack(new StringValue { Value = "after-dispose" }).ToByteString(),
         });
         received.Should().Equal("accepted");
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldFallbackToLegacyPayload_WhenBinaryPayloadMissing()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+        var received = new List<string>();
+
+        await using var subscription = await hub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            evt =>
+            {
+                received.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        var stream = provider.GetStream("projection.session:scope-1:session-1");
+        await stream.EmitAsync(new ProjectionSessionEventTransportMessage
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            EventType = "string",
+            LegacyPayload = "accepted-legacy",
+            Payload = ByteString.Empty,
+        });
+
+        received.Should().Equal("accepted-legacy");
+        await subscription.DisposeAsync();
     }
 
     [Fact]
@@ -695,13 +728,17 @@ internal sealed class PlainTestAgent : IAgent
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<string>
+internal sealed class StringSessionEventCodec
+    : IProjectionSessionEventCodec<string>,
+      ILegacyProjectionSessionEventCodec<string>
 {
     public string Channel => "projection.session";
 
     public string GetEventType(string evt) => "string";
 
     public ByteString Serialize(string evt) => Any.Pack(new StringValue { Value = evt }).ToByteString();
+
+    public string SerializeLegacy(string evt) => evt;
 
     public string? Deserialize(string eventType, ByteString payload)
     {
@@ -718,6 +755,11 @@ internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<str
 
         return envelope.Unpack<StringValue>().Value;
     }
+
+    public string? DeserializeLegacy(string eventType, string payload) =>
+        string.Equals(eventType, "string", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(payload)
+            ? payload
+            : null;
 }
 
 internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCodec<string>

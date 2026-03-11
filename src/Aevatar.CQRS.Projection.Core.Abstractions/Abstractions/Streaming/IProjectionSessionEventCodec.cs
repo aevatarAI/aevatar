@@ -18,3 +18,13 @@ public interface IProjectionSessionEventCodec<TEvent>
 
     TEvent? Deserialize(string eventType, ByteString payload);
 }
+
+/// <summary>
+/// Optional compatibility contract for codecs that must keep legacy string transport readable during mixed-version rollout.
+/// </summary>
+public interface ILegacyProjectionSessionEventCodec<TEvent>
+{
+    string? SerializeLegacy(TEvent evt);
+
+    TEvent? DeserializeLegacy(string eventType, string payload);
+}

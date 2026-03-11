@@ -6,7 +6,8 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public enum WorkflowExecutionProjectionScope
 {
-    RunIsolated = 0,
+    ActorShared = 0,
+    RunIsolated = 1,
 }
 
 public enum WorkflowExecutionTopologySource

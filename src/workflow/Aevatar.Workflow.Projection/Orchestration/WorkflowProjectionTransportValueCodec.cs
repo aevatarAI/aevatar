@@ -13,6 +13,11 @@ internal static class WorkflowProjectionTransportValueCodec
             ? CreateNullValue()
             : SerializeCore(value);
 
+    public static Value SerializeLegacy(object? value) =>
+        value == null
+            ? new Value { NullValue = NullValue.NullValue }
+            : SerializeLegacyCore(value);
+
     public static object? Deserialize(WorkflowProjectionValue? value)
     {
         if (value == null)
@@ -99,6 +104,43 @@ internal static class WorkflowProjectionTransportValueCodec
         };
     }
 
+    private static Value SerializeLegacyCore(object value)
+    {
+        return value switch
+        {
+            Value protobufValue => protobufValue.Clone(),
+            Struct protobufStruct => new Value { StructValue = protobufStruct.Clone() },
+            ListValue protobufList => new Value { ListValue = protobufList.Clone() },
+            string text => new Value { StringValue = text },
+            bool boolean => new Value { BoolValue = boolean },
+            byte number => new Value { NumberValue = number },
+            sbyte number => new Value { NumberValue = number },
+            short number => new Value { NumberValue = number },
+            ushort number => new Value { NumberValue = number },
+            int number => new Value { NumberValue = number },
+            uint number => new Value { NumberValue = number },
+            long number => new Value { NumberValue = number },
+            ulong number => new Value { NumberValue = number },
+            float number => new Value { NumberValue = number },
+            double number => new Value { NumberValue = number },
+            decimal number => new Value { NumberValue = Convert.ToDouble(number, CultureInfo.InvariantCulture) },
+            System.Enum enumValue => new Value { StringValue = enumValue.ToString() },
+            Guid guid => new Value { StringValue = guid.ToString("D") },
+            DateTimeOffset dateTimeOffset => new Value
+            {
+                StringValue = dateTimeOffset.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            },
+            DateTime dateTime => new Value
+            {
+                StringValue = ToUtc(dateTime).ToString("O", CultureInfo.InvariantCulture),
+            },
+            Uri uri => new Value { StringValue = uri.ToString() },
+            IDictionary dictionary => new Value { StructValue = SerializeLegacyDictionary(dictionary) },
+            IEnumerable enumerable when value is not string => new Value { ListValue = SerializeLegacyList(enumerable) },
+            _ => new Value { StructValue = SerializeLegacyObject(value) },
+        };
+    }
+
     private static WorkflowProjectionObject SerializeDictionary(IDictionary dictionary)
     {
         var result = new WorkflowProjectionObject();
@@ -135,6 +177,47 @@ internal static class WorkflowProjectionTransportValueCodec
                 continue;
 
             result.Fields[property.Name] = Serialize(property.GetValue(value));
+        }
+
+        return result;
+    }
+
+    private static Struct SerializeLegacyDictionary(IDictionary dictionary)
+    {
+        var result = new Struct();
+        foreach (DictionaryEntry entry in dictionary)
+        {
+            if (entry.Key == null)
+                continue;
+
+            var key = Convert.ToString(entry.Key, CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            result.Fields[key] = SerializeLegacy(entry.Value);
+        }
+
+        return result;
+    }
+
+    private static ListValue SerializeLegacyList(IEnumerable enumerable)
+    {
+        var result = new ListValue();
+        foreach (var item in enumerable)
+            result.Values.Add(SerializeLegacy(item));
+
+        return result;
+    }
+
+    private static Struct SerializeLegacyObject(object value)
+    {
+        var result = new Struct();
+        foreach (var property in value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        {
+            if (!property.CanRead || property.GetIndexParameters().Length != 0)
+                continue;
+
+            result.Fields[property.Name] = SerializeLegacy(property.GetValue(value));
         }
 
         return result;

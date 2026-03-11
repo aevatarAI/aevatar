@@ -100,10 +100,6 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
                     projectionCompleted = true;
                     projectionCompletionStatus = durableCompletion.Status;
                 }
-                else
-                {
-                    projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
-                }
             }
 
             await _stateSnapshotEmitter.EmitAsync(

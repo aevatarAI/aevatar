@@ -6,5 +6,6 @@ message ProjectionSessionEventTransportMessage {
   string scope_id = 1;
   string session_id = 2;
   string event_type = 3;
-  bytes payload = 4;
+  string legacy_payload = 4;
+  bytes payload = 5;
 }
