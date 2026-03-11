@@ -133,9 +133,6 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
         public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) =>
-            Task.CompletedTask;
-
         public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
             Task.FromResult(actorId ?? "created");
 

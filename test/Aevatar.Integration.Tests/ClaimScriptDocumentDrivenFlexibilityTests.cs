@@ -5,9 +5,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Schema;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
@@ -134,8 +134,8 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
         var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
         var enforcesDefinitionSnapshotLookup = true;
-        var hasFactoryPort = System.Type.GetType(
-                "Aevatar.Scripting.Core.Ports.IGAgentRuntimePort, Aevatar.Scripting.Core",
+        var hasLegacyRuntimePort = System.Type.GetType(
+                "Aevatar.Foundation.Abstractions.IGAgentRuntimePort, Aevatar.Foundation.Abstractions",
                 throwOnError: false,
                 ignoreCase: false) != null;
 
@@ -184,10 +184,10 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
         supportsDynamicDecisionEvents.Should().BeTrue();
         enforcesDefinitionSnapshotLookup.Should().BeTrue();
-        hasFactoryPort.Should().BeTrue();
+        hasLegacyRuntimePort.Should().BeFalse();
         supportsCustomRuntimeState.Should().BeTrue();
 
-        _output.WriteLine("Flexibility capabilities verified: dynamic decision + snapshot enforcement + factory port + dynamic runtime payload.");
+        _output.WriteLine("Flexibility capabilities verified: dynamic decision + snapshot enforcement + no legacy runtime port + dynamic runtime payload.");
     }
 
     [Fact]

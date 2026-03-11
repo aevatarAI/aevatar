@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,26 +17,19 @@ public class ClaimLifecycleBoundaryTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var factory = provider.GetRequiredService<IGAgentRuntimePort>();
 
-        var orchestratorId = await factory.CreateAsync(
-            typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-            "claim-orchestrator-runtime",
-            CancellationToken.None);
-        var analystId = await factory.CreateAsync(
-            typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-            "claim-analyst-runtime",
-            CancellationToken.None);
+        var orchestratorId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("claim-orchestrator-runtime")).Id;
+        var analystId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("claim-analyst-runtime")).Id;
 
-        await factory.LinkAsync(orchestratorId, analystId, CancellationToken.None);
+        await runtime.LinkAsync(orchestratorId, analystId, CancellationToken.None);
         var analystActor = await runtime.GetAsync(analystId);
         (await analystActor!.GetParentIdAsync()).Should().Be(orchestratorId);
 
-        await factory.UnlinkAsync(analystId, CancellationToken.None);
+        await runtime.UnlinkAsync(analystId, CancellationToken.None);
         (await analystActor.GetParentIdAsync()).Should().BeNull();
 
-        await factory.DestroyAsync(analystId, CancellationToken.None);
-        await factory.DestroyAsync(orchestratorId, CancellationToken.None);
+        await runtime.DestroyAsync(analystId, CancellationToken.None);
+        await runtime.DestroyAsync(orchestratorId, CancellationToken.None);
 
         (await runtime.ExistsAsync(analystId)).Should().BeFalse();
         (await runtime.ExistsAsync(orchestratorId)).Should().BeFalse();
@@ -55,11 +47,8 @@ public class ClaimLifecycleBoundaryTests
         string actorId;
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
-            actorId = await factory.CreateAsync(
-                typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-                "claim-scope-runtime",
-                CancellationToken.None);
+            var scopedRuntime = scope.ServiceProvider.GetRequiredService<IActorRuntime>();
+            actorId = (await scopedRuntime.CreateAsync<ScriptRuntimeGAgent>("claim-scope-runtime")).Id;
         }
 
         (await runtime.ExistsAsync(actorId)).Should().BeTrue();

@@ -1057,7 +1057,7 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
             definitionType,
             "invoke-definition-" + context.RunId,
             ct);
-        await context.Capabilities.InvokeAgentAsync(
+        await context.Capabilities.SendToAsync(
             invokeDefinitionActorId,
             new Aevatar.Scripting.Abstractions.UpsertScriptDefinitionRequestedEvent
             {

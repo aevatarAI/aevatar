@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -16,6 +17,7 @@ using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
@@ -182,6 +184,7 @@ public class WorkflowGAgentCoverageTests
         var agent = CreateRunAgent(
             runtime: runtime,
             roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-rebind");
         agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -198,6 +201,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
+        runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -387,6 +391,7 @@ public class WorkflowGAgentCoverageTests
         var agent = CreateRunAgent(
             runtime: runtime,
             roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-replace");
         agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -403,6 +408,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
+        runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
@@ -716,6 +722,15 @@ public class WorkflowGAgentCoverageTests
         };
     }
 
+    private static void SetAgentId(WorkflowRunGAgent agent, string agentId)
+    {
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [agentId]);
+    }
+
     private static string BuildValidWorkflowYaml(
         string roleId,
         string roleName,
@@ -803,6 +818,7 @@ public class WorkflowGAgentCoverageTests
         public List<(string parent, string child)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
+        public string? ThrowOnGetAsyncActorId { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
         {
@@ -838,7 +854,9 @@ public class WorkflowGAgentCoverageTests
         }
 
         public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
+            string.Equals(id, ThrowOnGetAsyncActorId, StringComparison.Ordinal)
+                ? throw new InvalidOperationException($"Unexpected self GetAsync for actor '{id}'.")
+                : Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
 
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {

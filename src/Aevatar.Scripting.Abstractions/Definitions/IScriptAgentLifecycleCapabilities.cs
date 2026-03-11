@@ -4,11 +4,6 @@ namespace Aevatar.Scripting.Abstractions.Definitions;
 
 public interface IScriptAgentLifecycleCapabilities
 {
-    Task InvokeAgentAsync(
-        string targetAgentId,
-        IMessage eventPayload,
-        CancellationToken ct);
-
     Task<string> CreateAgentAsync(
         string agentTypeAssemblyQualifiedName,
         string? actorId,

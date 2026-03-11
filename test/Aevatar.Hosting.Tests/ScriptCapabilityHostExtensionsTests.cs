@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Scripting.Abstractions;
@@ -6,8 +7,8 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -80,8 +81,6 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
             x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentRuntimePort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }

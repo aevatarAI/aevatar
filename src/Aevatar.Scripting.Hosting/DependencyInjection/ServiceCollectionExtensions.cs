@@ -90,7 +90,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
         services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
-        services.TryAddSingleton<IGAgentRuntimePort, RuntimeGAgentRuntimePort>();
         services.AddScriptingProjectionComponents();
         services.TryAddSingleton<IAICapability>(sp =>
         {

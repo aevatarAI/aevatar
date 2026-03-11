@@ -145,6 +145,7 @@ public sealed class WorkflowRunGAgent
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
+        var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
         var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = definitionActorId ?? string.Empty,
@@ -160,7 +161,7 @@ public sealed class WorkflowRunGAgent
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
         RebuildCompiledWorkflowCache();
-        await ResetDerivedRuntimeStateAsync(ct);
+        await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
     }
 
@@ -637,6 +638,7 @@ public sealed class WorkflowRunGAgent
         string workflowYaml,
         CancellationToken ct = default)
     {
+        var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
         WorkflowDefinition parsed;
         try
         {
@@ -662,27 +664,72 @@ public sealed class WorkflowRunGAgent
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         RebuildCompiledWorkflowCache();
-        await ResetDerivedRuntimeStateAsync(ct);
+        await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
         return WorkflowCompilationResult.Success(parsed);
     }
 
-    private async Task ResetDerivedRuntimeStateAsync(CancellationToken ct)
+    private IReadOnlyCollection<string> CaptureDerivedChildActorIdsForReset()
     {
         var childActorIds = new HashSet<string>(_childAgentIds, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(Id))
+
+        foreach (var roleActorId in CaptureRoleActorIdsFromCurrentDefinition())
         {
-            var selfActor = await _runtime.GetAsync(Id);
-            if (selfActor != null)
+            if (!string.IsNullOrWhiteSpace(roleActorId))
+                childActorIds.Add(roleActorId);
+        }
+
+        foreach (var binding in State.SubWorkflowBindings)
+        {
+            var childActorId = binding.ChildActorId?.Trim();
+            if (!string.IsNullOrWhiteSpace(childActorId))
+                childActorIds.Add(childActorId);
+        }
+
+        foreach (var pending in State.PendingSubWorkflowInvocations)
+        {
+            var childActorId = pending.ChildActorId?.Trim();
+            if (!string.IsNullOrWhiteSpace(childActorId))
+                childActorIds.Add(childActorId);
+        }
+
+        return childActorIds;
+    }
+
+    private IReadOnlyCollection<string> CaptureRoleActorIdsFromCurrentDefinition()
+    {
+        var roleActorIds = new HashSet<string>(StringComparer.Ordinal);
+        var currentWorkflow = _compiledWorkflow;
+        if (currentWorkflow == null && !string.IsNullOrWhiteSpace(State.WorkflowYaml))
+        {
+            try
             {
-                foreach (var childActorId in await selfActor.GetChildrenIdsAsync())
-                {
-                    if (!string.IsNullOrWhiteSpace(childActorId))
-                        childActorIds.Add(childActorId);
-                }
+                currentWorkflow = _parser.Parse(State.WorkflowYaml);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Failed to parse current workflow while capturing role actor ids for reset.");
             }
         }
 
+        if (currentWorkflow == null)
+            return roleActorIds;
+
+        foreach (var role in currentWorkflow.Roles)
+        {
+            if (string.IsNullOrWhiteSpace(role.Id))
+                continue;
+
+            roleActorIds.Add(BuildChildActorId(role.Id));
+        }
+
+        return roleActorIds;
+    }
+
+    private async Task ResetDerivedRuntimeStateAsync(
+        IReadOnlyCollection<string> childActorIds,
+        CancellationToken ct)
+    {
         foreach (var childActorId in childActorIds)
         {
             await _runtime.UnlinkAsync(childActorId, ct);

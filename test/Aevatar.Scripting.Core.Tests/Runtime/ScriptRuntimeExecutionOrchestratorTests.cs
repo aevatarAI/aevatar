@@ -37,7 +37,8 @@ public class ScriptRuntimeExecutionOrchestratorTests
                 ScriptRevision: "rev-1",
                 SourceText: "source",
                 ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "hash-v1"),
+                ReadModelSchemaHash: "hash-v1",
+                MessageContext: new ScriptExecutionMessageContext(new NullEventPublisher(), null)),
             CancellationToken.None);
 
         result.Should().ContainSingle();
@@ -140,14 +141,6 @@ public class ScriptRuntimeExecutionOrchestratorTests
         public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
         {
             _ = targetActorId;
-            _ = eventPayload;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct)
-        {
-            _ = targetAgentId;
             _ = eventPayload;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
@@ -286,5 +279,26 @@ public class ScriptRuntimeExecutionOrchestratorTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class NullEventPublisher : IEventPublisher
+    {
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            EventDirection direction = EventDirection.Down,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
     }
 }

@@ -101,7 +101,7 @@ public class ScriptRuntimeGAgentReplayContractTests
         var ports = new NullScriptPorts();
         var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
-            new NullAgentRuntimePort(),
+            new NullActorRuntime(),
             ports,
             ports,
             ports,
@@ -248,36 +248,39 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             CancellationToken ct) => Task.FromResult("noop");
     }
 
-    private sealed class NullAgentRuntimePort : Aevatar.Scripting.Core.Ports.IGAgentRuntimePort
+    private sealed class NullActorRuntime : IActorRuntime
     {
-        public Task<string> CreateAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
-            Task.FromResult(actorId ?? "agent-created");
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
+            Task.FromResult<IActor>(new NullActor(id ?? "agent-created"));
 
-        public Task PublishAsync(
-            string sourceActorId,
-            IMessage eventPayload,
-            EventDirection direction,
-            string correlationId,
-            CancellationToken ct) => Task.CompletedTask;
+        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            Task.FromResult<IActor>(new NullActor(id ?? "agent-created"));
 
-        public Task SendToAsync(
-            string sourceActorId,
-            string targetActorId,
-            IMessage eventPayload,
-            string correlationId,
-            CancellationToken ct) => Task.CompletedTask;
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task InvokeAsync(
-            string targetAgentId,
-            IMessage eventPayload,
-            string correlationId,
-            CancellationToken ct) => Task.CompletedTask;
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task DestroyAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
 
-        public Task LinkAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NullActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent => throw new NotSupportedException();
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
     private sealed class NullScriptPorts :

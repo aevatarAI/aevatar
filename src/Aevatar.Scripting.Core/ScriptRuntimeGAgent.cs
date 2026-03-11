@@ -494,7 +494,8 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
-                ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
+                MessageContext: new ScriptExecutionMessageContext(EventPublisher, ActiveInboundEnvelope)),
             ct);
         await PersistDomainEventsAsync(committedEvents, ct);
 
@@ -521,7 +522,8 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
-                ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
+                MessageContext: new ScriptExecutionMessageContext(EventPublisher, ActiveInboundEnvelope)),
             ct);
         await PersistDomainEventsAsync(
             committedEvents.Concat<IMessage>([BuildDefinitionQueryClearedEvent(pending.RequestId)]),

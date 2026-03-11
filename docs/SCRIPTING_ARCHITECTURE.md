@@ -3,10 +3,10 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v9`
-- 更新时间：`2026-03-11`
+- 文档版本：`v10`
+- 更新时间：`2026-03-12`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` / `test/Aevatar.Integration.Slow.Tests` 的 Scripting 相关测试
-- 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
+- 非范围：`Aevatar.Foundation.*` 的内部运行时实现细节；本文只说明 Scripting 如何消费公共 Foundation 能力
 
 ## 2. 目标与约束
 
@@ -17,6 +17,7 @@
 3. 两条入口共享同一演化治理主链路（`Propose -> Validate -> Promote/Rollback`）。
 4. 运行期通信坚持纯事件模型：`EventEnvelope + Proto Event`，不依赖脚本侧转型读取目标 Grain 内部状态。
 5. `Workflow YAML` 与 `Script` 当前是并行能力：两条链路可以共存、对照验证，但不宣称已完全替代。
+6. 脚本运行中的 publish/send 能力由 `ScriptRuntimeGAgent` 显式下传执行消息上下文；Foundation 不再提供公共 messaging port/session 门面。
 
 强约束：
 
@@ -31,7 +32,7 @@
 | Abstractions | `Aevatar.Scripting.Abstractions` | Proto 状态/事件契约、脚本运行抽象 |
 | Core | `Aevatar.Scripting.Core` | 4 个主 Actor（Definition/Runtime/EvolutionManager/Catalog）与状态机 |
 | Application | `Aevatar.Scripting.Application` | 命令/查询模型、CQRS interaction 语义装配、运行编排器 |
-| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、运行时端口实现、查询超时与运行模式策略 |
+| Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、脚本专用查询/命令端口、查询超时与运行模式策略 |
 | Hosting | `Aevatar.Scripting.Hosting` | DI 组装、Host API 接入 |
 | Projection | `Aevatar.Scripting.Projection` | 执行与演化读模型投影 |
 
@@ -86,6 +87,16 @@ flowchart LR
 
 ## 5. 协议与查询响应模型
 
+### 5.1 运行期消息上下文
+
+- 运行期消息能力不再通过 Foundation 公共服务暴露。
+- `ScriptRuntimeGAgent` 在执行脚本时显式构造 `ScriptExecutionMessageContext`，把当前 actor 的 `IEventPublisher + inbound envelope` 作为执行上下文传给 `ScriptRuntimeExecutionOrchestrator`。
+- `ScriptInteractionCapabilities` 直接依赖这份执行上下文完成 `PublishAsync/SendToAsync`；`ScriptAgentLifecycleCapabilities` 只保留 `Create/Destroy/Link/Unlink`，并直接依赖 `IActorRuntime`。
+- 约束：
+  - Scripting 不再定义脚本私有的通用 actor 通信接口，也不再要求 Foundation 提供公共 actor messaging port。
+  - `Create/Destroy/Link/Unlink` 不承担消息语义；脚本内向其他 actor 发消息统一走 `IScriptRuntimeCapabilities.SendToAsync(...)`。
+
+### 5.2 Proto 与查询响应
 Proto 契约定义在：`src/Aevatar.Scripting.Abstractions/script_host_messages.proto`。
 
 新增查询事件组：
@@ -190,12 +201,19 @@ sequenceDiagram
 4. YAML/Script 等价与迁移回归：
    `test/Aevatar.Integration.Tests/WorkflowYamlScriptParityTests.cs`
 
-本次已执行验证（2026-03-11）：
+最近一次全量验证（2026-03-11）：
 
 1. `dotnet build aevatar.slnx --nologo`：通过。
 2. `dotnet test aevatar.slnx --nologo`：通过。
 3. `bash tools/ci/architecture_guards.sh`：通过。
 4. `bash tools/ci/test_stability_guards.sh`：通过。
+
+本轮局部验证（2026-03-12）：
+
+1. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter TextNormalizationProtocolContractTests`：通过。
+2. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter ScriptCapabilityHostExtensionsTests`：通过。
+3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter ScriptAgentLifecycleCapabilitiesTests`：通过。
+4. `bash tools/ci/architecture_guards.sh`：通过。
 
 ## 9. 已知架构债务
 
@@ -205,4 +223,4 @@ sequenceDiagram
 
 ## 10. 结论
 
-当前 `Aevatar.Scripting` 已满足“外部更新 + 自我演化 + 纯事件通信 + Orleans 3 节点一致性运行”目标，且重构落点集中在 `Scripting` 子系统内部。对外结论统一为：`Script` 是 `Workflow YAML` 的并行能力（已具备等价对照与迁移回归验证），而非已完成替代。
+当前 `Aevatar.Scripting` 已满足“外部更新 + 自我演化 + 纯事件通信 + Orleans 3 节点一致性运行”目标。本轮进一步收窄边界：Foundation 只保留 runtime/dispatch/context 原语，Scripting 的 actor 通信能力由子系统内部执行消息上下文承载。对外结论统一为：`Script` 是 `Workflow YAML` 的并行能力（已具备等价对照与迁移回归验证），而非已完成替代。

@@ -193,8 +193,6 @@ public sealed class CapabilityScript : IScriptPackageRuntime
 
         public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult("ok");
 
-        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
-
         public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
             Task.FromResult(actorId ?? "created");
 

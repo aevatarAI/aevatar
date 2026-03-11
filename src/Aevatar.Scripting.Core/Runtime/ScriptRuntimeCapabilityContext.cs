@@ -6,4 +6,5 @@ public sealed record ScriptRuntimeCapabilityContext(
     string CurrentRevision,
     string DefinitionActorId,
     string RunId,
-    string CorrelationId);
+    string CorrelationId,
+    ScriptExecutionMessageContext MessageContext);

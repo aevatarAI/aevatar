@@ -19,6 +19,7 @@ src/
 | Agent | 业务逻辑单元，处理事件、维护状态 | `IAgent` / `IAgent<TState>` |
 | Actor | Agent 的运行容器，提供串行处理与层级关系 | `IActor` |
 | Runtime | 构建在 Stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 | `IActorRuntime` / `IActorDispatchPort` |
+| Event Context | 当前 Actor 执行中的消息上下文，负责 publish/send 语义 | `IEventPublisher` / `IEventContext` |
 | Stream | `EventEnvelope` 的传输骨架与传播通道 | `IStream` / `IStreamProvider` |
 
 ## Aevatar.Foundation.Abstractions
@@ -34,6 +35,12 @@ src/
 - 核心 Proto：`agent_messages.proto`
 
 `EventEnvelope` 保持最小语义字段（`id`、`timestamp`、`payload`、`route`、`propagation`、`runtime`），路由传播细节通过 typed 子消息表达。
+
+补充口径：
+
+- Foundation 只保留稳定原语：`IActorRuntime` 负责 lifecycle/topology/lookup，`IActorDispatchPort` 负责外部 envelope 投递，`IEventPublisher` / `IEventContext` 负责当前 actor 执行中的 publish/send。
+- workflow、scripting 等上层如果需要更友好的能力面，应在各自子系统内部适配，不再向 Foundation 增加公共 messaging/session 门面。
+- 跨来源协议样例属于测试契约，不进入 Foundation 生产契约层。
 
 这里要明确一个经常被混淆的边界：
 
@@ -109,7 +116,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
 - `LocalActorPublisher`：按 `EventDirection` 路由事件
 - `LocalActorTypeProbe`：运行时类型探测
-- `AddAevatarRuntime()`：一键注册本地运行时依赖
+- `AddAevatarRuntime()`：一键注册本地运行时依赖（含 request/reply client）
 
 口径说明：
 
@@ -122,6 +129,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 2. `IStateStore<TState>` / `IEventStore` 使用非 InMemory 持久化实现。
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。
+
+`AddAevatarFoundationRuntimeOrleans()` 与本地 `AddAevatarRuntime()` 保持同一口径：都只暴露 `IActorRuntime` / `IActorDispatchPort` / `IEventPublisher` 这组基础原语；生命周期/拓扑仍由 `IActorRuntime` 提供，上层能力不依赖具体 runtime provider。
 
 ### Routing 细节
 
