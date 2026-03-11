@@ -10,8 +10,6 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly TimeSpan _decisionTimeout;
-    private readonly QueryScriptEvolutionDecisionRequestAdapter _queryAdapter = new();
-
     public RuntimeScriptEvolutionDecisionFallbackPort(
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
@@ -42,7 +40,11 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
                 managerActor,
                 ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
-                (requestId, replyStreamId) => _queryAdapter.Map(managerActorId, requestId, replyStreamId, proposalId),
+                (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateEvolutionDecisionQuery(
+                    managerActorId,
+                    requestId,
+                    replyStreamId,
+                    proposalId),
                 static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
                 ScriptingQueryRouteConventions.BuildEvolutionDecisionTimeoutMessage,
                 ct);

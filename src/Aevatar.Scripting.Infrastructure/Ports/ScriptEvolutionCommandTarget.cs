@@ -16,13 +16,13 @@ public sealed class ScriptEvolutionCommandTarget
       ICommandInteractionCleanupTarget<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion>,
       ICommandDispatchCleanupAware
 {
-    private readonly IScriptEvolutionProjectionLifecyclePort _projectionPort;
+    private readonly IScriptEvolutionProjectionPort _projectionPort;
 
     public ScriptEvolutionCommandTarget(
         IActor actor,
         string managerActorId,
         string proposalId,
-        IScriptEvolutionProjectionLifecyclePort projectionPort)
+        IScriptEvolutionProjectionPort projectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         ManagerActorId = string.IsNullOrWhiteSpace(managerActorId)

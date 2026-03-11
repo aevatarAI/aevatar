@@ -12,12 +12,12 @@ public sealed class ScriptEvolutionCommandTargetResolver
 {
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly IScriptEvolutionProjectionLifecyclePort _projectionPort;
+    private readonly IScriptEvolutionProjectionPort _projectionPort;
 
     public ScriptEvolutionCommandTargetResolver(
         RuntimeScriptActorAccessor actorAccessor,
         IScriptingActorAddressResolver addressResolver,
-        IScriptEvolutionProjectionLifecyclePort projectionPort)
+        IScriptEvolutionProjectionPort projectionPort)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));

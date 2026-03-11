@@ -160,7 +160,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }

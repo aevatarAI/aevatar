@@ -286,7 +286,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
 

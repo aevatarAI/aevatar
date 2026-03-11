@@ -9,10 +9,10 @@ namespace Aevatar.Workflow.Application.Runs;
 internal sealed class WorkflowRunCommandTargetBinder
     : ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>
 {
-    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
 
     public WorkflowRunCommandTargetBinder(
-        IWorkflowExecutionProjectionLifecyclePort projectionPort)
+        IWorkflowExecutionProjectionPort projectionPort)
     {
         _projectionPort = projectionPort;
     }

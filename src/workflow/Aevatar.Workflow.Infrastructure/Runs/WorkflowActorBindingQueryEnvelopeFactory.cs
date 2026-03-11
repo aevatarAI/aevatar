@@ -1,13 +1,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-internal sealed class QueryWorkflowActorBindingRequestAdapter
+internal static class WorkflowActorBindingQueryEnvelopeFactory
 {
-    public EventEnvelope Map(
+    public static EventEnvelope Create(
         string targetActorId,
         string requestId,
         string replyStreamId)
@@ -20,7 +19,7 @@ internal sealed class QueryWorkflowActorBindingRequestAdapter
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new QueryWorkflowActorBindingRequestedEvent
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new QueryWorkflowActorBindingRequestedEvent
             {
                 RequestId = requestId,
                 ReplyStreamId = replyStreamId,

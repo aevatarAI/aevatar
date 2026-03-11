@@ -14,7 +14,7 @@ internal sealed class WorkflowRunCommandTarget
       ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
-    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
     private bool _createdActorsDestroyed;
 
@@ -22,7 +22,7 @@ internal sealed class WorkflowRunCommandTarget
         IActor actor,
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
-        IWorkflowExecutionProjectionLifecyclePort projectionPort,
+        IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunActorPort actorPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));

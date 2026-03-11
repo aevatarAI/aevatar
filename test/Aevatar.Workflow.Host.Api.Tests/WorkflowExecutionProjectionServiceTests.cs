@@ -595,7 +595,7 @@ public class WorkflowExecutionProjectionServiceTests
             ownershipCoordinator);
         var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(sinkFailurePolicy);
 
-        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
+        var projectionPort = new WorkflowExecutionProjectionPortService(
             options,
             activationService,
             releaseService,
@@ -604,7 +604,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryPort = new WorkflowExecutionProjectionQueryService(
             options,
             queryReader);
-        return new ProjectionPortsHarness(lifecyclePort, queryPort);
+        return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
     private static ProjectionPortsHarness CreateServiceForStartFailure(
@@ -646,7 +646,7 @@ public class WorkflowExecutionProjectionServiceTests
             Enabled = true,
             EnableActorQueryEndpoints = true,
         };
-        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
+        var projectionPort = new WorkflowExecutionProjectionPortService(
             options,
             activationService,
             releaseService,
@@ -655,7 +655,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryPort = new WorkflowExecutionProjectionQueryService(
             options,
             queryReader);
-        return new ProjectionPortsHarness(lifecyclePort, queryPort);
+        return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
@@ -755,21 +755,21 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ProjectionPortsHarness
-        : IWorkflowExecutionProjectionLifecyclePort,
+        : IWorkflowExecutionProjectionPort,
           IWorkflowExecutionProjectionQueryPort
     {
-        private readonly IWorkflowExecutionProjectionLifecyclePort _lifecyclePort;
+        private readonly IWorkflowExecutionProjectionPort _projectionPort;
         private readonly IWorkflowExecutionProjectionQueryPort _queryPort;
 
         public ProjectionPortsHarness(
-            IWorkflowExecutionProjectionLifecyclePort lifecyclePort,
+            IWorkflowExecutionProjectionPort projectionPort,
             IWorkflowExecutionProjectionQueryPort queryPort)
         {
-            _lifecyclePort = lifecyclePort;
+            _projectionPort = projectionPort;
             _queryPort = queryPort;
         }
 
-        public bool ProjectionEnabled => _lifecyclePort.ProjectionEnabled;
+        public bool ProjectionEnabled => _projectionPort.ProjectionEnabled;
 
         public bool EnableActorQueryEndpoints => _queryPort.EnableActorQueryEndpoints;
 
@@ -779,24 +779,24 @@ public class WorkflowExecutionProjectionServiceTests
             string input,
             string commandId,
             CancellationToken ct = default)
-            => _lifecyclePort.EnsureActorProjectionAsync(rootActorId, workflowName, input, commandId, ct);
+            => _projectionPort.EnsureActorProjectionAsync(rootActorId, workflowName, input, commandId, ct);
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
-            => _lifecyclePort.AttachLiveSinkAsync(lease, sink, ct);
+            => _projectionPort.AttachLiveSinkAsync(lease, sink, ct);
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
-            => _lifecyclePort.DetachLiveSinkAsync(lease, sink, ct);
+            => _projectionPort.DetachLiveSinkAsync(lease, sink, ct);
 
         public Task ReleaseActorProjectionAsync(
             IWorkflowExecutionProjectionLease lease,
             CancellationToken ct = default)
-            => _lifecyclePort.ReleaseActorProjectionAsync(lease, ct);
+            => _projectionPort.ReleaseActorProjectionAsync(lease, ct);
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
             string actorId,

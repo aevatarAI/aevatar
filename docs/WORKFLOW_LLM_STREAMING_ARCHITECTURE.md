@@ -62,7 +62,7 @@ flowchart TB
     H --> CMD["ICommandDispatchService / ICommandInteractionService"]
     CMD --> RES["WorkflowRunCommandTargetResolver"]
     CMD --> BND["WorkflowRunCommandTargetBinder"]
-    BND --> LIF["IWorkflowExecutionProjectionLifecyclePort"]
+    BND --> LIF["IWorkflowExecutionProjectionPort"]
     LIF --> LEASE["WorkflowExecutionRuntimeLease"]
     LIF --> SUB["AttachLiveSinkAsync(lease, sink)"]
     CMD --> FAC["WorkflowChatRequestEnvelopeFactory"]

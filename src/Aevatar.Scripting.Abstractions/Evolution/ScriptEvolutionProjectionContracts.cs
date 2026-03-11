@@ -9,7 +9,7 @@ public interface IScriptEvolutionProjectionLease
     string ProposalId { get; }
 }
 
-public interface IScriptEvolutionProjectionLifecyclePort
+public interface IScriptEvolutionProjectionPort
     : IEventSinkProjectionLifecyclePort<IScriptEvolutionProjectionLease, ScriptEvolutionSessionCompletedEvent>
 {
     Task<IScriptEvolutionProjectionLease?> EnsureActorProjectionAsync(

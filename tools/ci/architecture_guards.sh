@@ -553,8 +553,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionLifecycleService.cs; then
-  echo "WorkflowExecutionProjectionLifecycleService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPortService.cs; then
+  echo "WorkflowExecutionProjectionPortService must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -563,7 +563,7 @@ if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Or
   exit 1
 fi
 
-lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionLifecyclePort.cs"
+lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
 query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
 
 if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then

@@ -96,8 +96,8 @@ Proto 契约定义在：`src/Aevatar.Scripting.Abstractions/script_host_messages
 
 Application 查询适配器：
 
-1. `QueryScriptDefinitionSnapshotRequestAdapter`
-2. `QueryScriptCatalogEntryRequestAdapter`
+1. `ScriptingQueryEnvelopeFactory.CreateDefinitionSnapshotQuery(...)`
+2. `ScriptingQueryEnvelopeFactory.CreateCatalogEntryQuery(...)`
 
 Infrastructure 查询/命令端口：
 

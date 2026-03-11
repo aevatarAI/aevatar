@@ -19,6 +19,9 @@ script_definition_actor_request_adapter="src/Aevatar.Scripting.Application/Appli
 script_runtime_actor_request_adapter="src/Aevatar.Scripting.Application/Application/RunScriptActorRequestAdapter.cs"
 script_catalog_promote_actor_request_adapter="src/Aevatar.Scripting.Application/Application/PromoteScriptRevisionActorRequestAdapter.cs"
 script_catalog_rollback_actor_request_adapter="src/Aevatar.Scripting.Application/Application/RollbackScriptRevisionActorRequestAdapter.cs"
+script_definition_query_adapter="src/Aevatar.Scripting.Application/Application/QueryScriptDefinitionSnapshotRequestAdapter.cs"
+script_catalog_query_adapter="src/Aevatar.Scripting.Application/Application/QueryScriptCatalogEntryRequestAdapter.cs"
+script_evolution_query_adapter="src/Aevatar.Scripting.Application/Application/QueryScriptEvolutionDecisionRequestAdapter.cs"
 evolution_service_file="src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionInteractionService.cs"
 hosting_di_file="src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs"
 
@@ -32,13 +35,18 @@ if [ -f "${script_definition_actor_request}" ] || [ -f "${script_runtime_actor_r
   exit 1
 fi
 
+if [ -f "${script_definition_query_adapter}" ] || [ -f "${script_catalog_query_adapter}" ] || [ -f "${script_evolution_query_adapter}" ]; then
+  echo "Scripting capability must not reintroduce per-query request adapter wrappers."
+  exit 1
+fi
+
 if ! rg -n "ICommandInteractionService<ScriptEvolutionProposal,\s*ScriptEvolutionAcceptedReceipt,\s*ScriptEvolutionStartError,\s*ScriptEvolutionSessionCompletedEvent,\s*ScriptEvolutionInteractionCompletion>" "${evolution_service_file}" >/dev/null; then
   echo "${evolution_service_file}"
   echo "RuntimeScriptEvolutionInteractionService must depend on the generic CQRS interaction service."
   exit 1
 fi
 
-if rg -n "IScriptEvolutionProjectionLifecyclePort|IScriptEvolutionDecisionFallbackPort|RuntimeScriptActorAccessor|IScriptingActorAddressResolver|EnsureAndAttachAsync|TryResolveAsync|DispatchAsync\(" "${evolution_service_file}"; then
+if rg -n "IScriptEvolutionProjectionPort|IScriptEvolutionDecisionFallbackPort|RuntimeScriptActorAccessor|IScriptingActorAddressResolver|EnsureAndAttachAsync|TryResolveAsync|DispatchAsync\(" "${evolution_service_file}"; then
   echo "${evolution_service_file}"
   echo "RuntimeScriptEvolutionInteractionService must not manually orchestrate projection/fallback/dispatch concerns."
   exit 1
