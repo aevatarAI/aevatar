@@ -70,15 +70,23 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>>(),
                 sp.GetRequiredService<ICommandDurableCompletionResolver<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>>>()));
-        services.TryAddSingleton<RuntimeScriptEvolutionLifecycleService>();
-        services.TryAddSingleton<RuntimeScriptDefinitionLifecycleService>();
-        services.TryAddSingleton<RuntimeScriptExecutionLifecycleService>();
+        services.TryAddSingleton<ICommandTargetDispatcher<ScriptingActorCommandTarget>, ActorCommandTargetDispatcher<ScriptingActorCommandTarget>>();
+        services.TryAddSingleton<ICommandReceiptFactory<ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt>, ScriptingCommandAcceptedReceiptFactory>();
+        AddSimpleScriptingCommandDispatch<UpsertScriptDefinitionCommand, UpsertScriptDefinitionCommandTargetResolver, UpsertScriptDefinitionCommandEnvelopeFactory>(services);
+        AddSimpleScriptingCommandDispatch<RunScriptRuntimeCommand, RunScriptRuntimeCommandTargetResolver, RunScriptRuntimeCommandEnvelopeFactory>(services);
+        AddSimpleScriptingCommandDispatch<PromoteScriptCatalogRevisionCommand, PromoteScriptCatalogRevisionCommandTargetResolver, PromoteScriptCatalogRevisionCommandEnvelopeFactory>(services);
+        AddSimpleScriptingCommandDispatch<RollbackScriptCatalogRevisionCommand, RollbackScriptCatalogRevisionCommandTargetResolver, RollbackScriptCatalogRevisionCommandEnvelopeFactory>(services);
+        services.TryAddSingleton<RuntimeScriptEvolutionInteractionService>();
+        services.TryAddSingleton<RuntimeScriptDefinitionCommandService>();
+        services.TryAddSingleton<RuntimeScriptProvisioningService>();
+        services.TryAddSingleton<RuntimeScriptCommandService>();
         services.TryAddSingleton<RuntimeScriptCatalogCommandService>();
         services.TryAddSingleton<RuntimeScriptCatalogQueryService>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
-        services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionLifecycleService>());
-        services.TryAddSingleton<IScriptDefinitionCommandPort>(sp => sp.GetRequiredService<RuntimeScriptDefinitionLifecycleService>());
-        services.TryAddSingleton<IScriptRuntimeCommandPort>(sp => sp.GetRequiredService<RuntimeScriptExecutionLifecycleService>());
+        services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>());
+        services.TryAddSingleton<IScriptDefinitionCommandPort>(sp => sp.GetRequiredService<RuntimeScriptDefinitionCommandService>());
+        services.TryAddSingleton<IScriptRuntimeProvisioningPort>(sp => sp.GetRequiredService<RuntimeScriptProvisioningService>());
+        services.TryAddSingleton<IScriptRuntimeCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCommandService>());
         services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
         services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
@@ -93,6 +101,19 @@ public static class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    private static void AddSimpleScriptingCommandDispatch<TCommand, TResolver, TEnvelopeFactory>(
+        IServiceCollection services)
+        where TCommand : class
+        where TResolver : class, ICommandTargetResolver<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>
+        where TEnvelopeFactory : class, ICommandEnvelopeFactory<TCommand>
+    {
+        services.TryAddSingleton<ICommandTargetResolver<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>, TResolver>();
+        services.TryAddSingleton<ICommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>, NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<TCommand>, TEnvelopeFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
+        services.TryAddSingleton<ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
     }
 
     private static bool? ResolveUseEventDrivenDefinitionQuery(IConfiguration? configuration)

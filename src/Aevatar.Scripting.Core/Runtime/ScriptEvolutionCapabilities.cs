@@ -11,6 +11,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
     private readonly ScriptRuntimeCapabilityContext _context;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
+    private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
 
@@ -18,12 +19,14 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         ScriptRuntimeCapabilityContext context,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
+        _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
     }
@@ -73,7 +76,7 @@ public sealed class ScriptEvolutionCapabilities : IScriptEvolutionCapabilities
         string scriptRevision,
         string? runtimeActorId,
         CancellationToken ct) =>
-        _runtimeCommandPort.SpawnRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
+        _runtimeProvisioningPort.EnsureRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
 
     public Task RunScriptInstanceAsync(
         string runtimeActorId,

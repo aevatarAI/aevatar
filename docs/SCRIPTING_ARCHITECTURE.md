@@ -102,9 +102,13 @@ Application 查询适配器：
 Infrastructure 查询/命令端口：
 
 1. `RuntimeScriptDefinitionSnapshotPort`
-2. `IScriptEvolutionProposalPort + RuntimeScriptEvolutionLifecycleService`
-   - `RuntimeScriptEvolutionLifecycleService` 内部统一委托 `ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>`
-3. `IScriptDefinitionCommandPort / IScriptRuntimeCommandPort / IScriptCatalogCommandPort / IScriptCatalogQueryPort`
+2. `IScriptEvolutionProposalPort + RuntimeScriptEvolutionInteractionService`
+   - `RuntimeScriptEvolutionInteractionService` 内部统一委托 `ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>`
+3. `IScriptDefinitionCommandPort + RuntimeScriptDefinitionCommandService`
+4. `IScriptRuntimeProvisioningPort + RuntimeScriptProvisioningService`
+5. `IScriptRuntimeCommandPort + RuntimeScriptCommandService`
+6. `IScriptCatalogCommandPort + RuntimeScriptCatalogCommandService`
+7. `IScriptCatalogQueryPort + RuntimeScriptCatalogQueryService`
 
 Core 响应处理要点：
 
@@ -132,7 +136,7 @@ Core 响应处理要点：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
-3. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionLifecycleService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
+3. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionInteractionService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
 
 两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 

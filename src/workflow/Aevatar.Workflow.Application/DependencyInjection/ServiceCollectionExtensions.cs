@@ -51,7 +51,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IWorkflowRunActorPort>(),
                 sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
-        services.TryAddSingleton<ICommandContextPolicy, WorkflowCommandContextPolicy>();
+        services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();
         services.AddSingleton<ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetBinder>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();

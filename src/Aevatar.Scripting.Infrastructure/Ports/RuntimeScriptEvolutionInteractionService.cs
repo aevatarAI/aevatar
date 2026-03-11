@@ -6,12 +6,12 @@ using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
-public sealed class RuntimeScriptEvolutionLifecycleService
+public sealed class RuntimeScriptEvolutionInteractionService
     : IScriptEvolutionProposalPort
 {
     private readonly ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion> _interactionService;
 
-    public RuntimeScriptEvolutionLifecycleService(
+    public RuntimeScriptEvolutionInteractionService(
         ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion> interactionService)
     {
         _interactionService = interactionService ?? throw new ArgumentNullException(nameof(interactionService));
