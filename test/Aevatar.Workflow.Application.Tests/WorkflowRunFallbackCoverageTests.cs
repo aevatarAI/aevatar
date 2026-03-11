@@ -162,7 +162,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             ],
         };
         var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-            new WorkflowRunDetachedDispatchService(
+            new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
                 pipeline,
                 outputStream,
                 new FakeWorkflowRunCompletionPolicy(),

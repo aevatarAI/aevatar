@@ -73,13 +73,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<RuntimeScriptEvolutionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptDefinitionLifecycleService>();
         services.TryAddSingleton<RuntimeScriptExecutionLifecycleService>();
-        services.TryAddSingleton<RuntimeScriptCatalogLifecycleService>();
+        services.TryAddSingleton<RuntimeScriptCatalogCommandService>();
+        services.TryAddSingleton<RuntimeScriptCatalogQueryService>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionLifecycleService>());
         services.TryAddSingleton<IScriptDefinitionCommandPort>(sp => sp.GetRequiredService<RuntimeScriptDefinitionLifecycleService>());
         services.TryAddSingleton<IScriptRuntimeCommandPort>(sp => sp.GetRequiredService<RuntimeScriptExecutionLifecycleService>());
-        services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogLifecycleService>());
-        services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogLifecycleService>());
+        services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
+        services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
         services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
         services.TryAddSingleton<IGAgentRuntimePort, RuntimeGAgentRuntimePort>();
         services.AddScriptingProjectionComponents();

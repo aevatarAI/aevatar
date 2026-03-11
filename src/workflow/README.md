@@ -61,6 +61,7 @@ flowchart LR
 5. `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 把 `ChatRequestEvent` 包进 `EventEnvelope` 后投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
 7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 持续回推事件给客户端。
+8. `resume/signal` 命令同样先进入 CQRS `ICommandDispatchService`，再由 `WorkflowResumeCommandEnvelopeFactory` / `WorkflowSignalCommandEnvelopeFactory` 构建 run control envelope。
 
 ## 状态边界
 

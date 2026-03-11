@@ -252,7 +252,7 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleResume_ShouldRejectMissingFields()
     {
-        var runtime = new FakeActorRuntime();
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
         var result = await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
             {
@@ -260,9 +260,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "run-1",
                 StepId = "step-1",
             },
-            runtime,
-            runtime,
-            new FakeWorkflowActorBindingReader(),
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -276,7 +274,11 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleResume_ShouldReturnNotFound_WhenActorMissing()
     {
-        var runtime = new FakeActorRuntime();
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.ActorNotFound("actor-404", "run-1")),
+        };
         var result = await WorkflowCapabilityEndpoints.HandleResume(
             new WorkflowResumeInput
             {
@@ -284,9 +286,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "run-1",
                 StepId = "step-1",
             },
-            runtime,
-            runtime,
-            new FakeWorkflowActorBindingReader(),
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -298,20 +298,12 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleResume_ShouldDispatchEnvelope_WhenActorIsWorkflowRun()
+    public async Task HandleResume_ShouldDispatchCommand_WhenActorIsWorkflowRun()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var bindingReader = new FakeWorkflowActorBindingReader
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
         {
-            Binding = new WorkflowActorBinding(
-                WorkflowActorKind.Run,
-                "actor-1",
-                "definition-1",
-                "run-1",
-                "direct",
-                "yaml",
-                new Dictionary<string, string>()),
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-1", "cmd-1")),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleResume(
@@ -320,36 +312,33 @@ public sealed class ChatEndpointsInternalTests
                 ActorId = "actor-1",
                 RunId = "run-1",
                 StepId = "step-1",
+                CommandId = "cmd-1",
+                Approved = true,
+                UserInput = "approved",
             },
-            runtime,
-            runtime,
-            bindingReader,
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        runtime.DispatchCalls.Should().ContainSingle();
-        runtime.DispatchCalls.Single().ActorId.Should().Be("actor-1");
-        runtime.DispatchCalls.Single().Envelope.Payload.TypeUrl.Should().Contain("WorkflowResumedEvent");
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().StepId.Should().Be("step-1");
+        service.Commands.Single().CommandId.Should().Be("cmd-1");
+        service.Commands.Single().Approved.Should().BeTrue();
+        service.Commands.Single().UserInput.Should().Be("approved");
     }
 
     [Fact]
     public async Task HandleResume_ShouldRejectMismatchedRunId()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var bindingReader = new FakeWorkflowActorBindingReader
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
         {
-            Binding = new WorkflowActorBinding(
-                WorkflowActorKind.Run,
-                "actor-1",
-                "definition-1",
-                "run-expected",
-                "direct",
-                "yaml",
-                new Dictionary<string, string>()),
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.RunBindingMismatch("actor-1", "run-other", "run-expected")),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleResume(
@@ -359,9 +348,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "run-other",
                 StepId = "step-1",
             },
-            runtime,
-            runtime,
-            bindingReader,
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -370,17 +357,16 @@ public sealed class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("run-expected");
-        runtime.DispatchCalls.Should().BeEmpty();
+        service.Commands.Should().ContainSingle();
     }
 
     [Fact]
     public async Task HandleSignal_ShouldRejectNonRunActor()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var bindingReader = new FakeWorkflowActorBindingReader
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
         {
-            Binding = WorkflowActorBinding.Unsupported("actor-1"),
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.ActorNotWorkflowRun("actor-1", "run-1")),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
@@ -390,9 +376,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "run-1",
                 SignalName = "approve",
             },
-            runtime,
-            runtime,
-            bindingReader,
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -401,13 +385,13 @@ public sealed class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("not a workflow run actor");
-        runtime.DispatchCalls.Should().BeEmpty();
+        service.Commands.Should().ContainSingle();
     }
 
     [Fact]
     public async Task HandleSignal_ShouldRejectMissingFields()
     {
-        var runtime = new FakeActorRuntime();
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
             new WorkflowSignalInput
             {
@@ -415,9 +399,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "",
                 SignalName = "approve",
             },
-            runtime,
-            runtime,
-            new FakeWorkflowActorBindingReader(),
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -431,18 +413,10 @@ public sealed class ChatEndpointsInternalTests
     [Fact]
     public async Task HandleSignal_ShouldRejectMismatchedRunId()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var bindingReader = new FakeWorkflowActorBindingReader
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
         {
-            Binding = new WorkflowActorBinding(
-                WorkflowActorKind.Run,
-                "actor-1",
-                "definition-1",
-                "run-expected",
-                "direct",
-                "yaml",
-                new Dictionary<string, string>()),
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.RunBindingMismatch("actor-1", "run-other", "run-expected")),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
@@ -452,9 +426,7 @@ public sealed class ChatEndpointsInternalTests
                 RunId = "run-other",
                 SignalName = "approve",
             },
-            runtime,
-            runtime,
-            bindingReader,
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -463,24 +435,20 @@ public sealed class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("run-expected");
-        runtime.DispatchCalls.Should().BeEmpty();
+        service.Commands.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task HandleSignal_ShouldDispatchEnvelope_AndGenerateCommandId_WhenMissing()
+    public async Task HandleSignal_ShouldDispatchCommand_AndGenerateCommandId_WhenMissing()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
-        var bindingReader = new FakeWorkflowActorBindingReader
+        var receipt = new WorkflowRunControlAcceptedReceipt(
+            "actor-1",
+            "run-1",
+            Guid.NewGuid().ToString("N"),
+            Guid.NewGuid().ToString("N"));
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
         {
-            Binding = new WorkflowActorBinding(
-                WorkflowActorKind.Run,
-                "actor-1",
-                "definition-1",
-                "run-1",
-                "direct",
-                "yaml",
-                new Dictionary<string, string>()),
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(receipt),
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleSignal(
@@ -491,9 +459,7 @@ public sealed class ChatEndpointsInternalTests
                 SignalName = "approve",
                 Payload = "yes",
             },
-            runtime,
-            runtime,
-            bindingReader,
+            service,
             CancellationToken.None);
 
         var http = CreateHttpContext();
@@ -501,9 +467,13 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        runtime.DispatchCalls.Should().ContainSingle();
-        runtime.DispatchCalls.Single().Envelope.Payload.TypeUrl.Should().Contain("SignalReceivedEvent");
-        runtime.DispatchCalls.Single().Envelope.Propagation.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().SignalName.Should().Be("approve");
+        service.Commands.Single().Payload.Should().Be("yes");
+        service.Commands.Single().CommandId.Should().BeNull();
+        body.Should().Contain(receipt.CommandId);
         body.Should().Contain("\"accepted\":true");
     }
 
@@ -626,84 +596,26 @@ public sealed class ChatEndpointsInternalTests
         }
     }
 
-    private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader
+    private sealed class RecordingDispatchService<TCommand, TReceipt, TError>
+        : ICommandDispatchService<TCommand, TReceipt, TError>
     {
-        public WorkflowActorBinding? Binding { get; set; }
+        public List<TCommand> Commands { get; } = [];
 
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(Binding);
-        }
-    }
+        public CommandDispatchResult<TReceipt, TError> Result { get; set; } =
+            CommandDispatchResult<TReceipt, TError>.Failure(default!);
 
-    private sealed class FakeActorRuntime : IActorRuntime, IActorDispatchPort
-    {
-        public Dictionary<string, IActor> StoredActors { get; } = new(StringComparer.Ordinal);
-        public List<(string ActorId, EventEnvelope Envelope)> DispatchCalls { get; } = [];
+        public Exception? DispatchException { get; set; }
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(StoredActors.TryGetValue(id, out var actor) ? actor : null);
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<CommandDispatchResult<TReceipt, TError>> DispatchAsync(
+            TCommand command,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            DispatchCalls.Add((actorId, envelope));
-            return Task.CompletedTask;
+            Commands.Add(command);
+            if (DispatchException != null)
+                throw DispatchException;
+            return Task.FromResult(Result);
         }
-
-        public Task<bool> ExistsAsync(string id) =>
-            Task.FromResult(StoredActors.ContainsKey(id));
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class FakeActor : IActor
-    {
-        public FakeActor(string id)
-        {
-            Id = id;
-            Agent = new FakeAgent(id + "-agent");
-        }
-
-        public string Id { get; }
-        public IAgent Agent { get; }
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class FakeAgent : IAgent
-    {
-        public FakeAgent(string id)
-        {
-            Id = id;
-        }
-
-        public string Id { get; }
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeHttpWebSocketFeature(FakeWebSocket socket) : IHttpWebSocketFeature

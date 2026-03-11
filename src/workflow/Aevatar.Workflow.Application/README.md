@@ -40,13 +40,14 @@
 - 通过 projection lifecycle port 建立 run-isolated projection lease
 - 产出供 CQRS Core 继续 dispatch 的 `CommandTargetBindingResult`
 
-### CQRS Interaction / WorkflowRunDetachedDispatchService
+### CQRS Interaction / Detached Dispatch
 
 - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
-- `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：只返回 `Accepted + commandId + actorId`
+- `DefaultDetachedCommandDispatchService<...>` 走 accepted-only 路径：只返回 `Accepted + commandId + actorId`
 - `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
+- `resume/signal` 入口也收敛为标准 CQRS 命令：Host 只依赖 `ICommandDispatchService<WorkflowResumeCommand/...>` 与 `ICommandDispatchService<WorkflowSignalCommand/...>`
 
 ## Query 语义
 
@@ -71,10 +72,16 @@ Aevatar.Workflow.Application/
 ├── Runs/
 │   ├── WorkflowRunAcceptedReceiptFactory.cs
 │   ├── WorkflowRunActorResolver.cs
+│   ├── WorkflowRunControlAcceptedReceiptFactory.cs
+│   ├── WorkflowRunControlCommandTarget.cs
+│   ├── WorkflowRunControlCommandTargetResolverBase.cs
 │   ├── WorkflowRunCommandTarget.cs
 │   ├── WorkflowRunCommandTargetBinder.cs
 │   ├── WorkflowRunCommandTargetResolver.cs
-│   ├── WorkflowRunDetachedDispatchService.cs
+│   ├── WorkflowResumeCommandEnvelopeFactory.cs
+│   ├── WorkflowResumeCommandTargetResolver.cs
+│   ├── WorkflowSignalCommandEnvelopeFactory.cs
+│   ├── WorkflowSignalCommandTargetResolver.cs
 │   └── WorkflowRunFinalizeEmitter.cs
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs

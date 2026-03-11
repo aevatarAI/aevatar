@@ -324,7 +324,7 @@ flowchart LR
 | `RuntimeScriptExecutionLifecycleService` | Host/Application 侧手工拼 create/run/dispatch | 拆回 resolver + envelope factory + dispatcher |
 | `RuntimeScriptEvolutionLifecycleService` | Host/Application 侧手工拼 propose/query/fallback | 拆回标准命令 + 通用 observation |
 | `RuntimeScriptDefinitionLifecycleService` | 把 definition upsert 当成私有 lifecycle 操作 | 改为标准命令入口 |
-| `RuntimeScriptCatalogLifecycleService` | 把 catalog promote/rollback/query 当成私有 lifecycle 操作 | promote/rollback 改命令，查询走 query/read model |
+| `RuntimeScriptCatalogCommandService` / `RuntimeScriptCatalogQueryService` | 旧 catalog lifecycle 总入口把读写揉在一起 | command/query split，promote/rollback 走命令，查询走 query/read model |
 
 ### 10.3 命令化原则
 
@@ -533,7 +533,7 @@ Scripting 目录重构目标：
 | `RuntimeScriptExecutionLifecycleService` | scripting resolver/factory/binder | 拆分 |
 | `RuntimeScriptEvolutionLifecycleService` | scripting resolver/factory/durable resolver | 拆分 |
 | `RuntimeScriptDefinitionLifecycleService` | scripting command path | 拆分 |
-| `RuntimeScriptCatalogLifecycleService` | command/query split | promote/rollback 走命令，查询走 query/read model |
+| `RuntimeScriptCatalogCommandService` / `RuntimeScriptCatalogQueryService` | command/query split | promote/rollback 走命令，查询走 query/read model |
 
 ## 15. 门禁与自动化约束
 

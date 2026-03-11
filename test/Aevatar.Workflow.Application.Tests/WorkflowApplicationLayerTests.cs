@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -190,14 +191,14 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task WorkflowRunDetachedDispatchService_ShouldReturnFailure_WhenDispatchFails()
+    public async Task DetachedCommandDispatchService_ShouldReturnFailure_WhenDispatchFails()
     {
         var pipeline = new FakeDispatchPipeline
         {
             Result = CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>
                 .Failure(WorkflowChatRunStartError.WorkflowNotFound),
         };
-        var service = new WorkflowRunDetachedDispatchService(
+        var service = CreateDetachedDispatchService(
             pipeline,
             new FakeEventOutputStream(),
             new FakeWorkflowRunCompletionPolicy(),
@@ -210,7 +211,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task WorkflowRunDetachedDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
+    public async Task DetachedCommandDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort
@@ -223,7 +224,7 @@ public sealed class WorkflowApplicationLayerTests
         {
             Events = [BuildEvent("progress"), BuildEvent("done")],
         };
-        var service = new WorkflowRunDetachedDispatchService(
+        var service = CreateDetachedDispatchService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
             outputStream,
             new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
@@ -250,6 +251,17 @@ public sealed class WorkflowApplicationLayerTests
             outputStream,
             completionPolicy,
             finalizeEmitter,
+            durableCompletionResolver);
+
+    private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
+        ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
+        IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope> outputStream,
+        ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> completionPolicy,
+        ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> durableCompletionResolver) =>
+        new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+            pipeline,
+            outputStream,
+            completionPolicy,
             durableCompletionResolver);
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(

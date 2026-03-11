@@ -365,7 +365,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
+    public async Task CatalogCommandService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
     {
         PromoteScriptRevisionRequestedEvent? captured = null;
         var runtime = new TestActorRuntime
@@ -377,12 +377,10 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = new RuntimeScriptCatalogLifecycleService(
+        var service = new RuntimeScriptCatalogCommandService(
             runtime,
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
-            new StaticAddressResolver(),
-            new FixedTimeouts());
+            new StaticAddressResolver());
 
         await service.PromoteCatalogRevisionAsync(
             catalogActorId: null,
@@ -401,7 +399,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_ShouldDispatchRollbackRequest_WithProvidedCatalogActorId()
+    public async Task CatalogCommandService_ShouldDispatchRollbackRequest_WithProvidedCatalogActorId()
     {
         RollbackScriptRevisionRequestedEvent? captured = null;
         var runtime = new TestActorRuntime
@@ -413,12 +411,10 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = new RuntimeScriptCatalogLifecycleService(
+        var service = new RuntimeScriptCatalogCommandService(
             runtime,
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider(), new RuntimeStreamRequestReplyClient()),
-            new StaticAddressResolver(),
-            new FixedTimeouts());
+            new StaticAddressResolver());
 
         await service.RollbackCatalogRevisionAsync(
             catalogActorId: "catalog-custom",
@@ -436,9 +432,9 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenScriptIdMissing()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenScriptIdMissing()
     {
-        var service = CreateCatalogLifecycleService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestActorRuntime());
 
         var entry = await service.GetCatalogEntryAsync(null, string.Empty, CancellationToken.None);
 
@@ -446,9 +442,9 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogActorMissing()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogActorMissing()
     {
-        var service = CreateCatalogLifecycleService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestActorRuntime());
 
         var entry = await service.GetCatalogEntryAsync(null, "script-1", CancellationToken.None);
 
@@ -456,10 +452,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenQueryRespondsNotFound()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenQueryRespondsNotFound()
     {
         var runtime = new TestActorRuntime();
-        var service = CreateCatalogLifecycleService(
+        var service = CreateCatalogQueryService(
             runtime,
             request => new ScriptCatalogEntryRespondedEvent
             {
@@ -474,10 +470,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldMapSnapshot_WhenFound()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldMapSnapshot_WhenFound()
     {
         var runtime = new TestActorRuntime();
-        var service = CreateCatalogLifecycleService(
+        var service = CreateCatalogQueryService(
             runtime,
             request => new ScriptCatalogEntryRespondedEvent
             {
@@ -709,7 +705,7 @@ public class RuntimeScriptInfrastructurePortsTests
             new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
-    private static RuntimeScriptCatalogLifecycleService CreateCatalogLifecycleService(
+    private static RuntimeScriptCatalogQueryService CreateCatalogQueryService(
         TestActorRuntime runtime,
         Func<QueryScriptCatalogEntryRequestedEvent, ScriptCatalogEntryRespondedEvent>? responseFactory = null)
     {
@@ -732,8 +728,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
             }));
 
-        return new RuntimeScriptCatalogLifecycleService(
-            runtime,
+        return new RuntimeScriptCatalogQueryService(
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),

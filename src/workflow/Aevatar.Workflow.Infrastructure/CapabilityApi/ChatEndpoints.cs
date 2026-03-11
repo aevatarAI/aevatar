@@ -191,22 +191,19 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
-        [FromServices] IActorRuntime runtime,
-        [FromServices] IActorDispatchPort dispatchPort,
-        [FromServices] IWorkflowActorBindingReader bindingReader,
+        [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(dispatchPort);
-        ArgumentNullException.ThrowIfNull(bindingReader);
+        ArgumentNullException.ThrowIfNull(resumeService);
 
         try
         {
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var stepId = (input.StepId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
                 string.IsNullOrWhiteSpace(stepId))
@@ -215,73 +212,33 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
             }
 
-            var actor = await runtime.GetAsync(actorId);
-            if (actor == null)
-            {
-                scope.MarkResult(StatusCodes.Status404NotFound);
-                return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
-            }
-
-            var binding = await bindingReader.GetAsync(actorId, ct);
-            if (binding?.ActorKind != WorkflowActorKind.Run)
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
-            }
-            if (string.IsNullOrWhiteSpace(binding.RunId))
-            {
-                scope.MarkResult(StatusCodes.Status409Conflict);
-                return Results.Conflict(new { error = $"Actor '{actorId}' does not have a bound run id." });
-            }
-            if (!string.Equals(binding.RunId.Trim(), runId, StringComparison.Ordinal))
-            {
-                scope.MarkResult(StatusCodes.Status409Conflict);
-                return Results.Conflict(new
-                {
-                    error = $"Actor '{actorId}' is bound to run '{binding.RunId}', not '{runId}'.",
-                });
-            }
-
-            var resumed = new WorkflowResumedEvent
-            {
-                RunId = runId,
-                StepId = stepId,
-                Approved = input.Approved,
-                UserInput = input.UserInput ?? string.Empty,
-            };
-            var commandId = (input.CommandId ?? string.Empty).Trim();
-            var correlationId = string.IsNullOrWhiteSpace(commandId)
-                ? Guid.NewGuid().ToString("N")
-                : commandId;
-
-            await dispatchPort.DispatchAsync(
-                actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(resumed),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "api.workflow.resume",
-                        Direction = EventDirection.Self,
-                        TargetActorId = actor.Id,
-                    },
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = correlationId,
-                    },
-                },
+            var dispatch = await resumeService.DispatchAsync(
+                new WorkflowResumeCommand(
+                    actorId,
+                    runId,
+                    stepId,
+                    commandId,
+                    input.Approved,
+                    input.UserInput),
                 ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
 
             return Results.Ok(new
             {
                 accepted = true,
-                actorId,
-                runId,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
                 stepId,
-                commandId = correlationId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
             });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -292,22 +249,19 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleSignal(
         WorkflowSignalInput input,
-        [FromServices] IActorRuntime runtime,
-        [FromServices] IActorDispatchPort dispatchPort,
-        [FromServices] IWorkflowActorBindingReader bindingReader,
+        [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(dispatchPort);
-        ArgumentNullException.ThrowIfNull(bindingReader);
+        ArgumentNullException.ThrowIfNull(signalService);
 
         try
         {
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var signalName = (input.SignalName ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
                 string.IsNullOrWhiteSpace(signalName))
@@ -316,71 +270,32 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and signalName are required." });
             }
 
-            var actor = await runtime.GetAsync(actorId);
-            if (actor == null)
-            {
-                scope.MarkResult(StatusCodes.Status404NotFound);
-                return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
-            }
-
-            var binding = await bindingReader.GetAsync(actorId, ct);
-            if (binding?.ActorKind != WorkflowActorKind.Run)
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
-            }
-            if (string.IsNullOrWhiteSpace(binding.RunId))
-            {
-                scope.MarkResult(StatusCodes.Status409Conflict);
-                return Results.Conflict(new { error = $"Actor '{actorId}' does not have a bound run id." });
-            }
-            if (!string.Equals(binding.RunId.Trim(), runId, StringComparison.Ordinal))
-            {
-                scope.MarkResult(StatusCodes.Status409Conflict);
-                return Results.Conflict(new
-                {
-                    error = $"Actor '{actorId}' is bound to run '{binding.RunId}', not '{runId}'.",
-                });
-            }
-
-            var commandId = (input.CommandId ?? string.Empty).Trim();
-            var correlationId = string.IsNullOrWhiteSpace(commandId)
-                ? Guid.NewGuid().ToString("N")
-                : commandId;
-
-            await dispatchPort.DispatchAsync(
-                actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(new SignalReceivedEvent
-                    {
-                        RunId = runId,
-                        SignalName = signalName,
-                        Payload = input.Payload ?? string.Empty,
-                    }),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "api.workflow.signal",
-                        Direction = EventDirection.Self,
-                        TargetActorId = actor.Id,
-                    },
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = correlationId,
-                    },
-                },
+            var dispatch = await signalService.DispatchAsync(
+                new WorkflowSignalCommand(
+                    actorId,
+                    runId,
+                    signalName,
+                    commandId,
+                    input.Payload),
                 ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
 
             return Results.Ok(new
             {
                 accepted = true,
-                actorId,
-                runId,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
                 signalName,
-                commandId = correlationId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
             });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -404,6 +319,46 @@ public static class WorkflowCapabilityEndpoints
                 }),
             },
         };
+
+    private static IResult MapRunControlDispatchFailure(
+        WorkflowRunControlStartError error,
+        ApiRequestScope scope)
+    {
+        var (statusCode, message) = error.Code switch
+        {
+            WorkflowRunControlStartErrorCode.InvalidActorId => (
+                StatusCodes.Status400BadRequest,
+                "actorId is required."),
+            WorkflowRunControlStartErrorCode.InvalidRunId => (
+                StatusCodes.Status400BadRequest,
+                "runId is required."),
+            WorkflowRunControlStartErrorCode.ActorNotFound => (
+                StatusCodes.Status404NotFound,
+                $"Actor '{error.ActorId}' not found."),
+            WorkflowRunControlStartErrorCode.ActorNotWorkflowRun => (
+                StatusCodes.Status400BadRequest,
+                $"Actor '{error.ActorId}' is not a workflow run actor."),
+            WorkflowRunControlStartErrorCode.RunBindingMissing => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' does not have a bound run id."),
+            WorkflowRunControlStartErrorCode.RunBindingMismatch => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' is bound to run '{error.BoundRunId}', not '{error.RequestedRunId}'."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Workflow control dispatch failed."),
+        };
+        scope.MarkResult(statusCode);
+        return Results.Json(new { error = message }, statusCode: statusCode);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? null
+            : normalized;
+    }
 
     private static async Task WriteJsonErrorResponseAsync(
         HttpContext http,
