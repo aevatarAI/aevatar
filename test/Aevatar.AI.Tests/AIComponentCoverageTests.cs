@@ -496,6 +496,76 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public void TornadoProvider_MapRequest_ShouldLeaveMetadataAndSamplingUnset_WhenRequestOmitsThem()
+    {
+        var provider = new TornadoLLMProvider(
+            "tor",
+            new LlmTornado.TornadoApi(LLmProviders.OpenAi, "key"),
+            "model-x");
+
+        var mappedRequest = InvokeNonPublic<LlmTornado.Chat.ChatRequest>(
+            provider,
+            "MapRequest",
+            new LLMRequest
+            {
+                Messages =
+                [
+                    new AevatarChatMessage { Role = "user", Content = null },
+                ],
+            });
+
+        mappedRequest.Messages.Should().ContainSingle();
+        mappedRequest.Messages[0].Content.Should().BeEmpty();
+        mappedRequest.Metadata.Should().BeNull();
+        mappedRequest.Temperature.Should().BeNull();
+        mappedRequest.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public void TornadoProvider_MapResponseAndToolCallConverters_ShouldHandleSparsePayloads()
+    {
+        var sparseResult = new ChatResult
+        {
+            Choices =
+            [
+                new ChatChoice
+                {
+                    Message = null,
+                    FinishReason = ChatMessageFinishReasons.Length,
+                },
+            ],
+        };
+
+        var response = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", sparseResult);
+        response.Content.Should().BeNull();
+        response.ToolCalls.Should().BeNull();
+        response.Usage.Should().BeNull();
+        response.FinishReason.Should().Contain("Length");
+
+        var generatedToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCall",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                FunctionCall = null,
+            });
+        generatedToolCall.Id.Should().NotBeNullOrWhiteSpace();
+        generatedToolCall.Name.Should().BeEmpty();
+        generatedToolCall.ArgumentsJson.Should().Be("{}");
+
+        var emptyDelta = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCallDelta",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                FunctionCall = null,
+            });
+        emptyDelta.Id.Should().BeEmpty();
+        emptyDelta.Name.Should().BeEmpty();
+        emptyDelta.ArgumentsJson.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task MCPConnector_ShouldCoverCoreExecutionBranches()
     {
         var connector = new MCPConnector(

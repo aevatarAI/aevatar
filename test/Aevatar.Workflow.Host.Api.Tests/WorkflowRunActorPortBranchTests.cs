@@ -14,6 +14,20 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowRunActorPortBranchTests
 {
     [Fact]
+    public async Task CreateDefinitionAsync_ShouldForwardPreferredActorId()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-preferred", new WorkflowGAgent()));
+        var port = CreatePort(runtime);
+
+        var actor = await port.CreateDefinitionAsync("definition-preferred", CancellationToken.None);
+
+        actor.Id.Should().Be("definition-preferred");
+        runtime.CreateRequests.Should().ContainSingle()
+            .Which.Should().Be((typeof(WorkflowGAgent), "definition-preferred"));
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionMatches_ShouldReuseDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -134,6 +148,30 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_WhenBindingReaderReturnsNullForExistingActor_ShouldFailFast()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.StoredActors["definition-missing-binding"] = new RecordingActor("definition-missing-binding", new WorkflowGAgent());
+        var port = CreatePort(
+            runtime,
+            new StaticWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
+            {
+                ["definition-missing-binding"] = null,
+            }));
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-missing-binding",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not a workflow definition actor*");
+    }
+
+    [Fact]
     public async Task ParseWorkflowYamlAsync_WhenEmptyOrMissingName_ShouldReturnInvalid()
     {
         var port = CreatePort(new RecordingActorRuntime());
@@ -150,6 +188,24 @@ public sealed class WorkflowRunActorPortBranchTests
         empty.Error.Should().Contain("required");
         missingName.Succeeded.Should().BeFalse();
         missingName.Error.Should().Contain("name");
+    }
+
+    [Fact]
+    public async Task ParseWorkflowYamlAsync_WhenStepTypeUnknown_ShouldReturnInvalid()
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            """
+            name: sample
+            steps:
+              - id: step1
+                type: does_not_exist
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain("does_not_exist");
     }
 
     [Fact]
@@ -191,6 +247,41 @@ public sealed class WorkflowRunActorPortBranchTests
 
         await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(null!, "name: x", "x", null, CancellationToken.None))
             .Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinitionAsync_ShouldDispatchEnvelopeWithInlineWorkflowMap()
+    {
+        var runtime = new RecordingActorRuntime();
+        var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
+        runtime.StoredActors[actor.Id] = actor;
+        var port = CreatePort(runtime);
+
+        await port.BindWorkflowDefinitionAsync(
+            actor,
+            "name: direct\nroles: []\nsteps: []\n",
+            "direct",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["child"] = "name: child\nroles: []\nsteps: []\n",
+            },
+            CancellationToken.None);
+
+        actor.LastHandledEnvelope.Should().NotBeNull();
+        actor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
+        var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
+        bind.WorkflowName.Should().Be("direct");
+        bind.InlineWorkflowYamls.Should().ContainKey("child");
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldRejectBlankActorId()
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var act = async () => await port.DestroyAsync(" ", CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]
