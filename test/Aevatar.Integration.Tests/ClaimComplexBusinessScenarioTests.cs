@@ -42,15 +42,13 @@ public class ClaimComplexBusinessScenarioTests
         const string revision = "rev-claim-complex-1";
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
 
-        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsertAdapter.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: revision,
-                    SourceText: ComplexClaimScriptSource,
-                    SourceHash: "hash-claim-complex-1"),
-                definitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                scriptId,
+                revision,
+                ComplexClaimScriptSource,
+                "hash-claim-complex-1"),
             CancellationToken.None);
 
         var caseData = new[]
@@ -70,18 +68,16 @@ public class ClaimComplexBusinessScenarioTests
             var aiCountBefore = aiCapability.Calls.Count;
 
             var runId = "run-" + claimCase.CaseId.ToLowerInvariant();
-            var runAdapter = new RunScriptActorRequestAdapter();
             await runtimeActor.HandleEventAsync(
-                runAdapter.Map(
-                    new RunScriptActorRequest(
-                        RunId: runId,
-                        InputPayload: BuildClaimPayload(
-                            claimCase.CaseId,
-                            claimCase.RiskScore,
-                            claimCase.CompliancePassed),
-                        ScriptRevision: revision,
-                        DefinitionActorId: definitionActorId),
-                    runtimeActorId),
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    runId,
+                    BuildClaimPayload(
+                        claimCase.CaseId,
+                        claimCase.RiskScore,
+                        claimCase.CompliancePassed),
+                    revision,
+                    definitionActorId),
                 CancellationToken.None);
 
             var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;

@@ -149,26 +149,22 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsertAdapter.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: orchestrator.ScriptId,
-                    ScriptRevision: orchestrator.Revision,
-                    SourceText: orchestrator.Source,
-                    SourceHash: orchestrator.SourceHash),
-                definitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                orchestrator.ScriptId,
+                orchestrator.Revision,
+                orchestrator.Source,
+                orchestrator.SourceHash),
             CancellationToken.None);
 
-        var runAdapter = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            runAdapter.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-flex",
-                    InputPayload: BuildClaimPayload("Case-B", 0.91, true),
-                    ScriptRevision: orchestrator.Revision,
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                runtimeActorId,
+                "run-flex",
+                BuildClaimPayload("Case-B", 0.91, true),
+                orchestrator.Revision,
+                definitionActorId),
             CancellationToken.None);
 
         var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;

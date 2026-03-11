@@ -11,11 +11,24 @@ script_lifecycle_facade="src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScrip
 script_command_adapter_base="src/Aevatar.Scripting.Infrastructure/Ports/ScriptActorCommandPortBase.cs"
 script_definition_lifecycle="src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionLifecycleService.cs"
 script_execution_lifecycle="src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptExecutionLifecycleService.cs"
+script_definition_actor_request="src/Aevatar.Scripting.Application/Application/UpsertScriptDefinitionActorRequest.cs"
+script_runtime_actor_request="src/Aevatar.Scripting.Application/Application/RunScriptActorRequest.cs"
+script_catalog_promote_actor_request="src/Aevatar.Scripting.Application/Application/PromoteScriptRevisionActorRequest.cs"
+script_catalog_rollback_actor_request="src/Aevatar.Scripting.Application/Application/RollbackScriptRevisionActorRequest.cs"
+script_definition_actor_request_adapter="src/Aevatar.Scripting.Application/Application/UpsertScriptDefinitionActorRequestAdapter.cs"
+script_runtime_actor_request_adapter="src/Aevatar.Scripting.Application/Application/RunScriptActorRequestAdapter.cs"
+script_catalog_promote_actor_request_adapter="src/Aevatar.Scripting.Application/Application/PromoteScriptRevisionActorRequestAdapter.cs"
+script_catalog_rollback_actor_request_adapter="src/Aevatar.Scripting.Application/Application/RollbackScriptRevisionActorRequestAdapter.cs"
 evolution_service_file="src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionInteractionService.cs"
 hosting_di_file="src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs"
 
 if [ -f "${script_lifecycle_contract}" ] || [ -f "${script_lifecycle_facade}" ] || [ -f "${script_command_adapter_base}" ] || [ -f "${script_definition_lifecycle}" ] || [ -f "${script_execution_lifecycle}" ]; then
   echo "Scripting capability must not reintroduce private lifecycle total-port facades or direct-dispatch adapter bases."
+  exit 1
+fi
+
+if [ -f "${script_definition_actor_request}" ] || [ -f "${script_runtime_actor_request}" ] || [ -f "${script_catalog_promote_actor_request}" ] || [ -f "${script_catalog_rollback_actor_request}" ] || [ -f "${script_definition_actor_request_adapter}" ] || [ -f "${script_runtime_actor_request_adapter}" ] || [ -f "${script_catalog_promote_actor_request_adapter}" ] || [ -f "${script_catalog_rollback_actor_request_adapter}" ]; then
+  echo "Scripting capability must not reintroduce legacy ActorRequest/ActorRequestAdapter command wrappers."
   exit 1
 fi
 
