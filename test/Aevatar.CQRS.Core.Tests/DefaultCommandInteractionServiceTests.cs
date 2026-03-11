@@ -149,6 +149,39 @@ public sealed class DefaultCommandInteractionServiceTests
         result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<string>("completed", true));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenDurableResolutionThrows_ShouldNotRetryDuringCleanup()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("progress");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-4");
+        var durableResolver = new ThrowingDurableResolver(new TimeoutException("durable-timeout"));
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                new CommandDispatchExecution<TestTarget, TestReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-1", "cmd-4", "corr-4", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-4" },
+                    Receipt = receipt,
+                })),
+            durableResolver: durableResolver);
+
+        var act = () => service.ExecuteAsync(
+            "command-4",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("durable-timeout");
+        durableResolver.Calls.Should().Be(1);
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+    }
+
     private static DefaultCommandInteractionService<string, TestTarget, TestReceipt, string, string, string, string> CreateService(
         ICommandDispatchPipeline<string, TestTarget, TestReceipt, string> dispatchPipeline,
         ICommandCompletionPolicy<string, string>? completionPolicy = null,
@@ -250,6 +283,22 @@ public sealed class DefaultCommandInteractionServiceTests
             ct.ThrowIfCancellationRequested();
             Calls++;
             return Task.FromResult(observation);
+        }
+    }
+
+    private sealed class ThrowingDurableResolver(Exception exception)
+        : ICommandDurableCompletionResolver<TestReceipt, string>
+    {
+        public int Calls { get; private set; }
+
+        public Task<CommandDurableCompletionObservation<string>> ResolveAsync(
+            TestReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+            ct.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromException<CommandDurableCompletionObservation<string>>(exception);
         }
     }
 

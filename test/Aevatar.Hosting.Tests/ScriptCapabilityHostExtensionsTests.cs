@@ -1,4 +1,7 @@
 using Aevatar.Hosting;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
@@ -62,6 +65,8 @@ public class ScriptCapabilityHostExtensionsTests
             x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptEvolutionProposalPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionCommandPort));
         services.Should().Contain(x =>

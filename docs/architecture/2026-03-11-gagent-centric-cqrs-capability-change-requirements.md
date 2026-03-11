@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
-- 版本：R1
+- 状态：Implemented
+- 版本：R2
 - 日期：2026-03-11
 - 适用范围：
   - `src/Aevatar.Foundation.*`
@@ -14,16 +14,23 @@
   - `src/Aevatar.Mainnet.Host.Api`
   - `src/workflow/Aevatar.Workflow.Host.Api`
 - 文档定位：
-  - 本文定义本轮架构变更的正式要求、工作包、验收标准与治理规则。
+  - 本文定义本轮架构变更的正式要求、工作包、验收标准与治理规则，并同步记录最终落地状态。
   - 本文聚焦 `GAgent` 中心化 capability 扩展模型，以及 `CQRS` 在该模型中的统一职责。
-  - 本文是变更要求文档，不是现状白皮书；未在代码中落地的内容均视为目标态。
+  - 本文已完成回写；若实现与原始目标式表述存在差异，以“当前执行快照”和各状态矩阵为准。
 - 关联文档：
   - `docs/CQRS_ARCHITECTURE.md`
   - `docs/FOUNDATION.md`
   - `docs/architecture/2026-03-09-cqrs-command-actor-receipt-projection-blueprint.md`
   - `docs/architecture/2026-03-11-gagent-centric-cqrs-capability-unification-blueprint.md`
 - 最近一次验证结果：
-  - 本次仅新增文档，未执行 `build/test`。
+  - `dotnet build aevatar.slnx --nologo`
+  - `dotnet test aevatar.slnx --nologo`
+  - `bash tools/ci/architecture_guards.sh`
+  - `bash tools/ci/projection_route_mapping_guard.sh`
+  - `bash tools/ci/workflow_binding_boundary_guard.sh`
+  - `bash tools/ci/test_stability_guards.sh`
+  - `bash tools/ci/solution_split_guards.sh`
+  - `bash tools/ci/solution_split_test_guards.sh`
 
 ## 2. 背景与关键决策（统一认知）
 
@@ -178,9 +185,9 @@
 | 问题域 | 证据路径 | 现状 |
 |---|---|---|
 | 交互编排样板 | `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs` | 已收敛为通用交互模板，业务仅保留 capability policy |
-| scripting command adapter 重复样板 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptDefinitionLifecycleService.cs` / `RuntimeScriptExecutionLifecycleService.cs` | 已拆总入口，但仍存在 capability-specific command adapter |
-| scripting orchestration facade 残留 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionFlowPort.cs` | 仍保留 capability-specific flow 组合层 |
-| 各类 capability-specific observation adapter | `src/workflow/Aevatar.Workflow.Projection/*` / `src/Aevatar.Scripting.Projection/*` | 已有共性，但仍未完全前移 |
+| scripting command adapter 样板 | `src/Aevatar.Scripting.Infrastructure/Ports/ScriptActorCommandPortBase.cs` / `RuntimeScriptDefinitionLifecycleService.cs` / `RuntimeScriptExecutionLifecycleService.cs` | 已用范型基类统一 `exists/get-or-create/dispatch` 骨架，端口层仅保留语义差异 |
+| scripting 演化入口 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs` | 已改为 CQRS generic interaction 包装器，不再手工拼 projection/fallback/cleanup |
+| 各类 capability-specific observation adapter | `src/workflow/Aevatar.Workflow.Projection/*` / `src/Aevatar.Scripting.Projection/*` | 继续共用统一 projection 主链，保留薄 capability alias |
 
 ### 6.3 当前样本显示出的两类实现模式
 
@@ -195,12 +202,12 @@
 
 | ID | 需求 | 验收标准 | 当前状态 | 证据 | 差距 |
 |---|---|---|---|---|---|
-| R1 | `CQRS Core` 统一命令阶段与观察阶段 | 存在通用 interaction template，至少两个样本可接入 | Partial | `DefaultCommandDispatchPipeline` 已存在 | 缺少 observation/finalize/release 通用抽象 |
+| R1 | `CQRS Core` 统一命令阶段与观察阶段 | 存在通用 interaction template，至少两个样本可接入 | Completed | `DefaultCommandInteractionService` 已落地，`workflow` 与 `scripting evolution` 已接入 | 无结构性缺口 |
 | R2 | capability 不得自带总入口 lifecycle port | 主链路移除 capability 私有 lifecycle facade | Completed | `IScriptLifecyclePort` / `RuntimeScriptLifecyclePort` 已删除 | 后续只继续压缩窄 adapter 与 flow 组合层 |
-| R3 | 机制层抽象不表达业务系统关系 | 通用接口、文档、守卫均无主从关系假设 | Partial | 现有部分文档仍带样本化描述 | 需收敛通用文档口径 |
-| R4 | 抽象、继承、范型使用有硬规则 | 新增书面规则与门禁 | Missing | 当前规则零散 | 需补变更纪律和 guard |
-| R5 | Projection 继续单主干 | 不新增并行 session/observe 链路 | Partial | 现有样本基本共用主链 | 需禁止 capability 私有观察通道继续增长 |
-| R6 | 业务层样板最小化 | 业务层代码主要剩 resolver/policy/reducer/state machine | Partial | 仍存在 capability 私有 interaction/lifecycle helper | 需抽走公共样板 |
+| R3 | 机制层抽象不表达业务系统关系 | 通用接口、文档、守卫均无主从关系假设 | Completed | 通用抽象与本文档均已按 `GAgent capability family` 回写 | 无 |
+| R4 | 抽象、继承、范型使用有硬规则 | 新增书面规则与门禁 | Completed | 规则已成文，门禁包含 `architecture_guards` / `script_inheritance_guard` / `scripting_interaction_boundary_guard` | 无 |
+| R5 | Projection 继续单主干 | 不新增并行 session/observe 链路 | Completed | `workflow` / `scripting` 观察继续走统一 projection 主链 | 无 |
+| R6 | 业务层样板最小化 | 业务层代码主要剩 resolver/policy/reducer/state machine | Completed | 通用交互、cleanup、fallback、dispatch 样板已前移或用范型基类收敛 | 无 |
 
 ## 8. 差距详解
 
@@ -368,7 +375,8 @@ flowchart LR
 - 目标：补齐命令后半段统一模板。
 - 范围：`Aevatar.CQRS.Core.Abstractions`、`Aevatar.CQRS.Core`
 - 产物：
-  - `ICommandObservationSource<...>`
+  - `ICommandEventTarget<...>`
+  - `ICommandInteractionCleanupTarget<...>`
   - `ICommandCompletionPolicy<...>`
   - `ICommandDurableCompletionResolver<...>`
   - `ICommandFinalizeEmitter<...>`
@@ -377,7 +385,7 @@ flowchart LR
   - 至少一个现有样本接入该模板。
   - 无业务名词泄露到公共接口。
 - 优先级：P0
-- 状态：Pending
+- 状态：Completed
 
 ### WP2：样本 A 接入通用模板
 
@@ -389,7 +397,7 @@ flowchart LR
 - DoD：
   - 业务层不再持有完整 observe/finalize 循环。
 - 优先级：P0
-- 状态：Pending
+- 状态：Completed
 
 ### WP3：样本 B 命令化拆分
 
@@ -402,7 +410,7 @@ flowchart LR
 - DoD：
   - 主链路不再依赖 capability 私有总入口接口。
 - 优先级：P0
-- 状态：Pending
+- 状态：Completed
 
 ### WP4：Projection Adapter 收敛
 
@@ -414,7 +422,7 @@ flowchart LR
 - DoD：
   - 不新增并行 session/observe 链路。
 - 优先级：P1
-- 状态：Pending
+- 状态：Completed
 
 ### WP5：门禁与纪律
 
@@ -426,7 +434,7 @@ flowchart LR
 - DoD：
   - 新增命令入口若绕过 CQRS 模板会被 guard 阻止。
 - 优先级：P0
-- 状态：Pending
+- 状态：Completed
 
 ## 11. 里程碑与依赖
 
@@ -474,28 +482,30 @@ flowchart LR
 
 ## 15. 执行清单（可勾选）
 
-- [ ] 补齐 `CQRS Core` observation 抽象
-- [ ] 引入通用 interaction template
-- [ ] 让样本 A 接入通用 interaction template
-- [ ] 拆除样本 B 的 capability 私有 lifecycle facade
-- [ ] 收敛 projection adapter 重复样板
-- [ ] 增加抽象/继承/范型使用守卫
-- [ ] 更新通用架构文档口径
-- [ ] 执行 `build/test/guards`
+- [x] 补齐 `CQRS Core` observation 抽象
+- [x] 引入通用 interaction template
+- [x] 让样本 A 接入通用 interaction template
+- [x] 拆除样本 B 的 capability 私有 lifecycle facade
+- [x] 收敛 projection adapter 重复样板
+- [x] 增加抽象/继承/范型使用守卫
+- [x] 更新通用架构文档口径
+- [x] 执行 `build/test/guards`
 
 ## 16. 当前执行快照（2026-03-11）
 
 - 已完成：
-  - 形成 `GAgent` 中心化 capability 统一 blueprint
-  - 形成本变更要求文档
+  - `CQRS Core` 已统一 `Resolve -> Context -> Envelope -> Dispatch -> Receipt -> Observe -> Finalize -> Release`
+  - `workflow` 命令/交互主链已完全接入 generic interaction template
+  - `scripting` 已删除 lifecycle total-port，并将 evolution 外部入口接入 generic interaction template
+  - `scripting` definition/runtime command 入口已通过 `ScriptActorCommandPortBase<TActor>` 收敛重复样板
+  - `Projection` 继续保持单主干，无并行 session/observe 总线
+  - 文档、测试、门禁已同步回写
 - 部分完成：
-  - 命令阶段统一已有基础实现
+  - 无
 - 未完成：
-  - observation/finalize/release 通用模板
-  - capability 私有 lifecycle 总入口清理
-  - 守卫与测试补齐
+  - 无
 - 阻塞项：
-  - 无硬阻塞，下一步进入 WP1 设计与实现阶段
+  - 无
 
 ## 17. 变更纪律
 

@@ -52,6 +52,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         var observedCompleted = false;
         var observedCompletion = _completionPolicy.IncompleteCompletion;
         var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
+        var durableCompletionAttempted = false;
         CommandInteractionResult<TReceipt, TError, TCompletion>? interactionResult = null;
         Exception? executionException = null;
 
@@ -76,6 +77,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
 
             if (!observedCompleted)
             {
+                durableCompletionAttempted = true;
                 durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct);
                 if (durableCompletion.HasTerminalCompletion)
                 {
@@ -105,7 +107,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         {
             try
             {
-                if (!observedCompleted)
+                if (!observedCompleted && !durableCompletionAttempted)
                 {
                     durableCompletion = await _durableCompletionResolver.ResolveAsync(
                         receipt,

@@ -1,9 +1,14 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Ports;
@@ -767,12 +772,28 @@ public class RuntimeScriptInfrastructurePortsTests
         TestFallbackPort fallbackPort,
         IScriptingPortTimeouts? timeouts = null)
     {
-        return new RuntimeScriptEvolutionLifecycleService(
-            new RuntimeScriptActorAccessor(runtime),
-            projectionPort,
-            fallbackPort,
-            new StaticAddressResolver(),
-            timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
+        var resolvedTimeouts = timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) };
+        var actorAccessor = new RuntimeScriptActorAccessor(runtime);
+        var addressResolver = new StaticAddressResolver();
+        var targetResolver = new ScriptEvolutionCommandTargetResolver(
+            actorAccessor,
+            addressResolver,
+            projectionPort);
+        var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
+            targetResolver,
+            new DefaultCommandContextPolicy(),
+            new ScriptEvolutionCommandTargetBinder(projectionPort),
+            new ScriptEvolutionEnvelopeFactory(),
+            new ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>(runtime),
+            new ScriptEvolutionAcceptedReceiptFactory());
+        var interactionService = new DefaultCommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>(
+            dispatchPipeline,
+            new ScriptEvolutionTimedEventOutputStream(resolvedTimeouts),
+            new ScriptEvolutionCompletionPolicy(),
+            new NoOpCommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>(),
+            new ScriptEvolutionDurableCompletionResolver(fallbackPort));
+
+        return new RuntimeScriptEvolutionLifecycleService(interactionService);
     }
 
     private sealed class TestActorRuntime : IActorRuntime, IActorDispatchPort

@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
-- 版本：R1
+- 状态：Implemented
+- 版本：R2
 - 日期：2026-03-11
 - 适用范围：
   - `src/Aevatar.Foundation.*`
@@ -22,7 +22,7 @@
   - `src/workflow/README.md`
 - 文档定位：
   - 本文描述“以 `GAgent` 为唯一业务事实边界，以 `CQRS` 为统一 capability 接入骨架”的目标态。
-  - 本文不是当前实现事实陈述，而是面向后续重构的完整蓝图。
+  - 本文保留原始重构蓝图与迁移分阶段设计，并同步记录最终落地结果。
   - 本文默认“不保留长期双轨兼容层”，以主干清晰、职责收敛、业务样板最小化为第一目标。
 
 ## 2. 一句话结论
@@ -35,6 +35,13 @@
 2. `CQRS` 必须是面向 `GAgent capability` 的统一命令/观察骨架，而不是某个业务子系统的私有工具箱。
 3. 所有业务系统都只是建立在同一套 `GAgent + CQRS + Projection` 模板上的 capability family。
 4. 业务层只保留领域语义、状态机、事件契约与读模型，不再重复实现接入样板。
+
+### 2.1 执行结果摘要（2026-03-11）
+
+1. `Aevatar.CQRS.Core` 已落地 generic interaction template，包括 completion policy、durable resolver、finalize emitter 与统一 cleanup。
+2. `workflow` 外部命令/交互主链已全面切到 `ICommandInteractionService<...>`。
+3. `scripting` 已删除 capability 私有 lifecycle total-port，`evolution` 外部入口改为 generic interaction，`definition/runtime` 命令入口改为范型 command port 骨架。
+4. `build/test/guards` 已通过，本文后续阶段性章节保留为迁移留痕；若与当前实现存在冲突，以本节与关联变更要求文档为准。
 
 ## 3. 目标与设计原则
 
@@ -70,7 +77,7 @@
 4. `Aevatar.CQRS.Projection.*` 已提供统一 projection lifecycle、ownership、session hub、store dispatch 基础设施。
 5. `workflow` 命令侧已经部分接入 `DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, TError>`。
 
-### 4.2 当前没有统一的部分
+### 4.2 当前没有统一的部分（重构前基线，保留用于追踪迁移动机）
 
 当前真正造成重复代码的，不是底座，而是 capability 接入模型没有统一。
 
@@ -79,13 +86,13 @@
 | 领域 | 当前做法 | 问题 |
 |---|---|---|
 | Workflow 命令入口 | `ICommandDispatchPipeline + ICommandInteractionService` | 已统一到 CQRS generic interaction template |
-| Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeCommandPort/... + RuntimeScript*LifecycleService` | 已拆掉总入口，但仍保留 capability-specific command adapter |
+| Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeCommandPort/... + RuntimeScript*LifecycleService` | 已拆掉总入口；evolution 已接入 generic interaction，definition/runtime 已收敛到范型 command adapter 基类 |
 | Workflow 读侧观察 | `IWorkflowExecutionProjectionLifecyclePort` + completion policy + durable resolver | 能力可用，但可抽象部分仍留在 workflow 私有层 |
 | Scripting 读侧观察 | `IScriptEvolutionProjectionLifecyclePort` + session codec/context | 与 workflow 共享底层基类，但仍各写一套 capability adapter |
 | Workflow 执行模型 | `WorkflowRunGAgent` 内部 module runtime | 是 actor 内部插件模型 |
 | Scripting 执行模型 | `ScriptRuntimeGAgent` + compiled runtime contract | 是多 actor 协作模型 |
 
-### 4.3 根因判断
+### 4.3 根因判断（重构前）
 
 当前重复不是因为 `CQRS` 毫无抽象，而是因为抽象停在了“dispatch 底座”层，没有上升到“capability 接入模板”层。
 
@@ -232,11 +239,11 @@ flowchart LR
 
 | 关注点 | 目标抽象 | 说明 |
 |---|---|---|
-| 实时观察绑定 | `ICommandObservationSource<TTarget, TLease, TEvent>` | 描述如何从 target 建立 projection lease / live sink |
+| 实时观察绑定 | `ICommandEventTarget<TEvent>` + `ICommandTargetBinder<TCommand, TTarget, TError>` | 通过 binder 建立 projection lease/live sink，并由 target 暴露 live event sink |
 | 事件完成判定 | `ICommandCompletionPolicy<TEvent, TCompletion>` | 从实时事件解析“是否完成、完成状态是什么” |
 | 持久完成兜底 | `ICommandDurableCompletionResolver<TReceipt, TCompletion>` | 当实时流未给出终态时，通过 read model/query 兜底 |
 | 完成态输出 | `ICommandFinalizeEmitter<TReceipt, TCompletion, TFrame>` | 将 receipt + completion 变成最终输出帧 |
-| 统一交互外观 | `ICommandInteractionService<TCommand, TReceipt, TError, TEvent, TFrame, TCompletion>` | 封装 `dispatch -> observe -> finalize -> release` |
+| 统一交互外观 | `ICommandInteractionService<TCommand, TReceipt, TError, TFrame, TCompletion>` | 封装 `dispatch -> observe -> finalize -> release` |
 
 设计要求：
 

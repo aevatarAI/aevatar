@@ -3,8 +3,8 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v8`
-- 更新时间：`2026-03-07`
+- 文档版本：`v9`
+- 更新时间：`2026-03-11`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` / `test/Aevatar.Integration.Slow.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*`（本轮无架构改动）
 
@@ -30,7 +30,7 @@
 |---|---|---|
 | Abstractions | `Aevatar.Scripting.Abstractions` | Proto 状态/事件契约、脚本运行抽象 |
 | Core | `Aevatar.Scripting.Core` | 4 个主 Actor（Definition/Runtime/EvolutionManager/Catalog）与状态机 |
-| Application | `Aevatar.Scripting.Application` | 命令/查询适配器，运行编排器 |
+| Application | `Aevatar.Scripting.Application` | 命令/查询模型、CQRS interaction 语义装配、运行编排器 |
 | Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、运行时端口实现、查询超时与运行模式策略 |
 | Hosting | `Aevatar.Scripting.Hosting` | DI 组装、Host API 接入 |
 | Projection | `Aevatar.Scripting.Projection` | 执行与演化读模型投影 |
@@ -103,6 +103,7 @@ Infrastructure 查询/命令端口：
 
 1. `RuntimeScriptDefinitionSnapshotPort`
 2. `IScriptEvolutionProposalPort + RuntimeScriptEvolutionLifecycleService`
+   - `RuntimeScriptEvolutionLifecycleService` 内部统一委托 `ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>`
 3. `IScriptDefinitionCommandPort / IScriptRuntimeCommandPort / IScriptCatalogCommandPort / IScriptCatalogQueryPort`
 
 Core 响应处理要点：
@@ -131,7 +132,7 @@ Core 响应处理要点：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
-3. 外部入口等待终态时走 `IScriptEvolutionProposalPort` 实现 `RuntimeScriptEvolutionLifecycleService` 的 `ensure projection -> attach sink -> dispatch -> wait -> detach/release` 链路。
+3. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionLifecycleService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
 
 两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
 
@@ -185,12 +186,12 @@ sequenceDiagram
 4. YAML/Script 等价与迁移回归：
    `test/Aevatar.Integration.Tests/WorkflowYamlScriptParityTests.cs`
 
-本次已执行验证（2026-03-02）：
+本次已执行验证（2026-03-11）：
 
-1. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo`：`58/58` 通过。
-2. `dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAutonomousEvolutionE2ETests|FullyQualifiedName~ScriptAutonomousEvolutionComprehensiveE2ETests|FullyQualifiedName~ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests"`：`6/6` 通过。
-3. `bash tools/ci/test_stability_guards.sh`：通过。
-4. `bash tools/ci/architecture_guards.sh`：通过。
+1. `dotnet build aevatar.slnx --nologo`：通过。
+2. `dotnet test aevatar.slnx --nologo`：通过。
+3. `bash tools/ci/architecture_guards.sh`：通过。
+4. `bash tools/ci/test_stability_guards.sh`：通过。
 
 ## 9. 已知架构债务
 
