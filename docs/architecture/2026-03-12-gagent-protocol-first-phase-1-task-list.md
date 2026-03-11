@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 状态：Completed
-- 版本：R2
+- 版本：R3
 - 日期：2026-03-12
 - 关联文档：
   - `docs/architecture/2026-03-12-gagent-implementation-source-unification-blueprint.md`
@@ -11,33 +11,41 @@
   - `docs/architecture/2026-03-12-gagent-protocol-first-minimal-implementation-plan.md`
   - `AGENTS.md`
 - 文档定位：
-  - 本文把“最小化实施文档”的第一阶段拆成可直接执行的任务清单。
+  - 本文记录第一阶段最终收口后的实际落地状态，而不是执行过程中的中间方案。
+  - 原始最小实施文档中的 `IActorMessagingPort`、`gagent_send`、`gagent_query` 仅是过渡方案；当前仓库代码已删除这些中间抽象。
   - 本文只覆盖第一阶段，不扩展到统一创建入口、definition schema、热替换或 Mainnet 全量改造。
 
 ## 1.1 完成结果
 
 - `T1` 到 `T13` 已完成。
-- 后续已按 runtime/disptach 分责进一步收窄公共接口：第一阶段落地的 fat port 已演进为 `IActorMessagingPort + IActorRuntime` 双边界。
+- 第一阶段最终没有保留公共 `IActorMessagingPort` 或 `IActorMessagingSession*`；Foundation 已回归最小原语边界：`IActorRuntime`、`IActorDispatchPort`、`IEventPublisher`、`IEventContext`。
+- Scripting 的 actor 内发送/发布能力已收敛为子系统内部运行时上下文 `ScriptExecutionMessageContext`；workflow 侧落地为 `actor_send` 模块，并直接通过 `IWorkflowExecutionContext.SendToAsync(...)` 发送。
+- 通用 `gagent_query` 方案未进入最终代码。query/reply 保持为协议自有 typed contract，不在 `Workflow.Core` 引入反射式通用查询模块。
+- 协议样本 `.proto` 已从生产 `Abstractions` 移出，放入集成测试项目，避免把测试契约编进 Foundation 生产包。
 - 已落地产物：
-  1. `src/Aevatar.Foundation.Abstractions/text_normalization_protocol.proto`
-  2. `src/Aevatar.Foundation.Abstractions/IActorMessagingPort.cs`
-  3. `src/Aevatar.Foundation.Runtime/Actors/RuntimeActorMessagingPort.cs`
-  4. `src/workflow/Aevatar.Workflow.Core/Modules/GAgentSendModule.cs`
-  5. `src/workflow/Aevatar.Workflow.Core/Modules/GAgentQueryModule.cs`
-  6. `test/Aevatar.Integration.Tests/TextNormalizationProtocolContractTests.cs`
+  1. `test/Aevatar.Integration.Tests/Protos/text_normalization_protocol.proto`
+  2. `test/Aevatar.Integration.Tests/TextNormalizationProtocolContractTests.cs`
+  3. `src/Aevatar.Scripting.Core/Runtime/ScriptExecutionMessageContext.cs`
+  4. `src/workflow/Aevatar.Workflow.Core/Modules/ActorSendModule.cs`
+  5. `docs/FOUNDATION.md`
+  6. `docs/SCRIPTING_ARCHITECTURE.md`
+  7. `src/workflow/README.md`
+  8. `tools/ci/architecture_guards.sh`
 - 已验证命令：
   1. `dotnet build aevatar.slnx --nologo`
-  2. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter TextNormalizationProtocolContractTests`
-  3. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "RuntimeActorMessagingPortTests|ScriptCapabilityHostExtensionsTests"`
-  4. `bash tools/ci/architecture_guards.sh`
+  2. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "ScriptCapabilityHostExtensionsTests"`
+  3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAgentLifecycleCapabilitiesTests|FullyQualifiedName~ScriptRuntimeGAgentReplayContractTests|FullyQualifiedName~ScriptRuntimeExecutionOrchestratorTests|FullyQualifiedName~RoslynScriptPackageCompilerTests|FullyQualifiedName~ClaimRoleIntegrationTests|FullyQualifiedName~ScriptPackageRuntimeContractTests"`
+  4. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~TextNormalizationProtocolContractTests|FullyQualifiedName~ClaimComplexBusinessScenarioTests|FullyQualifiedName~ClaimOrchestrationIntegrationTests|FullyQualifiedName~ClaimScriptDocumentDrivenFlexibilityTests|FullyQualifiedName~ClaimLifecycleBoundaryTests|FullyQualifiedName~ScriptGAgentFactoryLifecycleBoundaryTests|FullyQualifiedName~WorkflowGAgentCoverageTests"`
+  5. `bash tools/ci/architecture_guards.sh`
+  6. `bash tools/ci/test_stability_guards.sh`
 
 ## 2. 第一阶段目标
 
 第一阶段只达成四个结果：
 
 1. 建立第一组跨来源协议 `contract tests`
-2. 将通用 actor 通信能力从 `Scripting` 私有层中立化
-3. 为 workflow 增加最小通用 actor 通信面
+2. 将通用 actor 通信能力从 `Scripting` 私有层收敛回 `runtime/dispatch/context` 原语边界
+3. 为 workflow 增加最小通用 actor 发送能力，而不是继续堆专用步骤
 4. 增加最小治理守卫，阻止继续按来源分叉
 
 ## 3. 完成定义
@@ -45,8 +53,8 @@
 第一阶段完成时，必须满足：
 
 1. 至少有一个真实协议同时被静态 `GAgent`、workflow、scripting 中的至少两种来源实现，并通过同一套 contract tests。
-2. workflow 可以通过通用通信模块直接与协议兼容实例通信。
-3. 通用 actor 通信接口不再挂在 `Aevatar.Scripting.*` 私有语义下。
+2. workflow 可以通过最小通用发送模块和协议自有 typed contract 与协议兼容实例通信。
+3. 通用 actor 通信能力不再挂在 `Aevatar.Scripting.*` 私有语义下，也不再新增公共 all-in-one messaging/session 端口。
 4. Host/Application 中新增代码不能再解析 `actorId` 或按 workflow/script/static 来源分支。
 
 ## 4. 执行顺序
@@ -54,8 +62,8 @@
 严格按以下顺序推进：
 
 1. 先完成协议 contract test 样本设计
-2. 再中立化 actor 通信端口
-3. 再补 workflow 通用通信模块
+2. 再收窄公共边界到 `runtime/dispatch/context`
+3. 再补 workflow 最小通用发送模块
 4. 最后补治理守卫和文档收尾
 
 禁止一开始并行大改多个子系统。
@@ -89,8 +97,8 @@
 
 ### 涉及位置
 
-1. `src/Aevatar.Foundation.Abstractions` 或新的中立 abstractions 项目
-2. `test/Aevatar.Integration.Tests/`
+1. `test/Aevatar.Integration.Tests/`
+2. 若后续演进为正式共享协议，再拆到独立协议契约项目
 
 ### 验收
 
@@ -113,13 +121,13 @@
 
 ### 涉及位置
 
-建议新增：
+当前第一阶段最终落点：
 
-1. `src/Aevatar.Foundation.Abstractions/Protocols/`
+1. `test/Aevatar.Integration.Tests/Protos/`
 
-或按仓库现有习惯放在：
+后续若演进为正式共享协议：
 
-1. 新的中立 `Abstractions` 项目
+1. 再拆到独立协议契约项目，而不是回塞到 `Foundation.Abstractions`
 
 ### 产物
 
@@ -178,7 +186,7 @@
 ### 设计限制
 
 1. 第一阶段不要为这个样本新增复杂专用步骤
-2. 若现有步骤不够，优先为后续 `gagent_send/gagent_query` 模块预留最小能力
+2. 若现有步骤不够，优先为最终的 `actor_send` 模块和协议自有 query/reply 路径预留最小能力
 
 ### 验收
 
@@ -242,66 +250,65 @@
 
 1. 至少两种来源实现通过完全相同的 contract tests
 
-## T7. 中立化公共 actor 消息口
+## T7. 收窄公共边界，回归 runtime/dispatch/context 原语
 
 ### 目标
 
-把当前 `Scripting` 私有的通用 actor 通信能力迁移到公共层。
+把当前 `Scripting` 私有的通用 actor 通信能力收敛为公共稳定原语，而不是新建一个公共全能消息口。
 
 ### 第一阶段起点代码（历史）
 
 1. `src/Aevatar.Scripting.Core/Ports/IGAgentRuntimePort.cs`
 2. `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeGAgentRuntimePort.cs`
 
-### 最小改法
+### 最终实现
 
-第一阶段先做中立化；后续已进一步收窄为消息语义专用端口：
-
-1. 消息语义上移到 Foundation 公共层
-2. 生命周期/拓扑继续回归 `IActorRuntime`
-3. 调整 DI 注册位置
-4. 让 workflow 可直接引用
-
-### 当前保留的方法
-
-1. `PublishAsync`
-2. `SendToAsync`
-3. `InvokeAsync`
+1. Foundation 只保留 `IActorRuntime`、`IActorDispatchPort`、`IEventPublisher`、`IEventContext`
+2. 删除公共 `IActorMessagingPort` / `IActorMessagingSession*` 过渡层
+3. actor 内 `PublishAsync` / `SendToAsync` 继续作为执行上下文能力存在，而不是全局服务
+4. 调整 DI 与依赖归属，让 workflow 和 scripting 分别通过自身上下文或 facade 接入
 
 ### 禁止
 
-1. 第一阶段不要往接口里新增来源识别字段
+1. 第一阶段不要往公共抽象里新增来源识别字段
 2. 第一阶段不要引入统一来源注册模型
+3. 第一阶段不要把 runtime、dispatch、message context 混回一个接口
 
 ### 验收
 
-1. 公共消息接口与实现已经不再带 `Scripting` 私有语义
-2. 生命周期/拓扑不再与消息口混放
-3. workflow 项目可引用并编译通过
+1. 公共边界已经不再带 `Scripting` 私有语义
+2. 生命周期/拓扑、外部 dispatch、actor 内消息上下文已经分责
+3. workflow 与 scripting 项目都能在不依赖公共 messaging/session 层的情况下通过编译与测试
 
-## T8. 更新 scripting 对公共 actor 通信端口的依赖
+## T8. 更新 scripting 对公共原语与执行消息上下文的依赖
 
 ### 目标
 
-让 scripting 继续工作，但依赖新的公共端口。
+让 scripting 继续工作，但依赖新的公共原语和脚本内部执行消息上下文。
 
 ### 涉及位置
 
 1. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeCapabilityComposer.cs`
-2. `src/Aevatar.Scripting.Core/Runtime/ScriptInteractionCapabilities.cs`
-3. `src/Aevatar.Scripting.Core/Runtime/ScriptAgentLifecycleCapabilities.cs`
-4. `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
+2. `src/Aevatar.Scripting.Application/Runtime/ScriptRuntimeExecutionOrchestrator.cs`
+3. `src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs`
+4. `src/Aevatar.Scripting.Core/Runtime/ScriptExecutionMessageContext.cs`
+5. `src/Aevatar.Scripting.Core/Runtime/ScriptInteractionCapabilities.cs`
+6. `src/Aevatar.Scripting.Core/Runtime/ScriptAgentLifecycleCapabilities.cs`
+7. `src/Aevatar.Scripting.Hosting/DependencyInjection/ServiceCollectionExtensions.cs`
 
 ### 改造要求
 
-1. 只改依赖归属和命名
-2. 不改变现有运行语义
+1. `SendToAsync` / `PublishAsync` 通过 `ScriptExecutionMessageContext` 暴露
+2. lifecycle / topology 继续通过 `IActorRuntime`
+3. 删除与 `SendToAsync` 语义重复的 `InvokeAgentAsync`
+4. 不改变现有运行语义
 
 ### 验收
 
-1. scripting 测试不因端口中立化而退化
+1. scripting 测试不因边界收窄而退化
+2. scripting 不再依赖公共 messaging/session 过渡层
 
-## T9. 为 workflow 新增 `gagent_send` 模块
+## T9. 为 workflow 新增 `actor_send` 模块
 
 ### 目标
 
@@ -311,7 +318,7 @@
 
 1. 接收目标 `actorId`
 2. 接收 typed payload
-3. 通过公共 actor 通信端口 `SendToAsync`
+3. 通过 `IWorkflowExecutionContext.SendToAsync(...)`
 4. 回写最小执行结果
 
 ### 涉及位置
@@ -321,50 +328,46 @@
 
 ### 验收
 
-1. workflow 可通过 `gagent_send` 与静态或 script actor 通信
+1. workflow 可通过 `actor_send` 与静态或 script actor 通信
 
-## T10. 为 workflow 新增 `gagent_query` 模块
+## T10. 删除通用 `gagent_query` 方案，查询语义回归协议专属契约
 
 ### 目标
 
-提供最小通用 actor 查询能力。
+避免把反射式 query/reply 魔法字段引入 `Workflow.Core`，保持查询语义由协议自己拥有。
 
-### 模块职责
+### 最终约束
 
-1. 接收目标 `actorId`
-2. 接收 typed query payload
-3. 等待 typed reply
-4. 将回复写回 workflow execution state
-
-### 依赖
-
-1. 公共 actor 通信端口
-2. workflow execution state host
+1. `Workflow.Core` 不提供通用 `gagent_query` 模块
+2. 若协议需要 query/reply，必须通过协议自有 typed message 与显式 request/reply 路径实现
+3. 禁止在通用模块里反射注入 `request_id`、`reply_stream_id` 等魔法字段
 
 ### 涉及位置
 
 1. `src/workflow/Aevatar.Workflow.Core/Modules/`
 2. `src/workflow/Aevatar.Workflow.Core/WorkflowCoreModulePack.cs`
-3. 必要时新增最小 query/reply 等待辅助对象
 
 ### 验收
 
-1. workflow 可通过 `gagent_query` 完成一个真实协议 query/reply 循环
+1. `Workflow.Core` 中不存在通用 `gagent_query`
+2. query/reply 仍可通过协议专属 typed contract 完成真实闭环
 
 ## T11. 用协议样本接通 workflow 通用通信模块
 
 ### 目标
 
-证明新模块不是空壳。
+证明 `actor_send` 不是空壳，并且协议查询不需要通用反射模块。
 
 ### 任务
 
-1. 用 `gagent_send` 或 `gagent_query` 驱动 workflow 协议样本
-2. 让 workflow 样本通过协议 contract tests
+1. 用 `actor_send` 驱动 workflow 协议样本
+2. 由 source actor 使用显式协议契约完成 request/reply 查询路径
+3. 让 workflow 样本通过协议 contract tests
 
 ### 验收
 
 1. workflow 样本不再完全依赖专用通信步骤完成协议交互
+2. workflow 样本不依赖通用 `gagent_query`
 
 ## T12. 增加最小治理守卫
 
@@ -398,11 +401,13 @@
 1. `docs/FOUNDATION.md`
 2. `docs/SCRIPTING_ARCHITECTURE.md`
 3. `src/workflow/README.md`
-4. 本任务清单状态
+4. `docs/architecture/2026-03-12-gagent-protocol-first-minimal-implementation-plan.md` 的归档说明
+5. 本任务清单状态
 
 ### 验收
 
 1. 文档不再把公共 actor 通信能力描述成 `Scripting` 私有能力
+2. 文档不再把已删除的 `IActorMessagingPort`、`gagent_send`、`gagent_query` 描述成当前代码事实
 
 ## 6. 建议任务分组
 
@@ -444,8 +449,8 @@
 说明：
 
 1. 先把静态样本和 contract tests 跑起来，最快得到可验证基线。
-2. 再做公共 actor 通信端口中立化。
-3. 再让 workflow 通过新通信面接入。
+2. 再把公共边界收窄到 runtime/dispatch/context 原语。
+3. 再让 workflow 通过 `actor_send` 和协议自有查询路径接入。
 4. scripting 样本可以和端口中立化一起补齐。
 
 ## 8. 提交建议
@@ -453,8 +458,8 @@
 建议按以下提交粒度拆分：
 
 1. `feat/2026-03-12_protocol-contract-sample`
-2. `refactor/2026-03-12_common-gagent-runtime-port`
-3. `feat/2026-03-12_workflow-gagent-send-query`
+2. `refactor/2026-03-12_runtime-dispatch-context-boundary`
+3. `feat/2026-03-12_workflow-actor-send`
 4. `chore/2026-03-12_protocol-guards-and-docs`
 
 ## 9. 第一阶段验收命令建议
@@ -462,8 +467,10 @@
 至少执行：
 
 1. `dotnet build aevatar.slnx --nologo`
-2. `dotnet test aevatar.slnx --nologo --filter "FullyQualifiedName~Protocol|FullyQualifiedName~Workflow|FullyQualifiedName~Scripting"`
-3. `bash tools/ci/architecture_guards.sh`
+2. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "ScriptCapabilityHostExtensionsTests"`
+3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptAgentLifecycleCapabilitiesTests|FullyQualifiedName~ScriptRuntimeGAgentReplayContractTests|FullyQualifiedName~ScriptRuntimeExecutionOrchestratorTests|FullyQualifiedName~RoslynScriptPackageCompilerTests|FullyQualifiedName~ClaimRoleIntegrationTests|FullyQualifiedName~ScriptPackageRuntimeContractTests"`
+4. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~TextNormalizationProtocolContractTests|FullyQualifiedName~ClaimComplexBusinessScenarioTests|FullyQualifiedName~ClaimOrchestrationIntegrationTests|FullyQualifiedName~ClaimScriptDocumentDrivenFlexibilityTests|FullyQualifiedName~ClaimLifecycleBoundaryTests|FullyQualifiedName~ScriptGAgentFactoryLifecycleBoundaryTests|FullyQualifiedName~WorkflowGAgentCoverageTests"`
+5. `bash tools/ci/architecture_guards.sh`
 
 若新增或修改测试，还必须执行：
 
@@ -475,7 +482,7 @@
 只要把以下三件先做对，后续大部分架构问题都会变得可控：
 
 1. 用 contract tests 定义“什么叫同协议”
-2. 用公共 actor 通信端口定住“如何互通”
-3. 用 workflow 最小通用通信模块定住“如何编排互通”
+2. 用 `runtime/dispatch/context` 原语定住“如何互通”
+3. 用 workflow 的 `actor_send` 和协议自有 typed contract 定住“如何编排互通”
 
 这就是第一阶段的完整任务清单。

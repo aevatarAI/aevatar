@@ -2,19 +2,24 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-12
 - 关联文档：
   - `docs/architecture/2026-03-12-gagent-implementation-source-unification-blueprint.md`
   - `docs/architecture/2026-03-12-gagent-protocol-first-implementation-plan.md`
+  - `docs/architecture/2026-03-12-gagent-protocol-first-phase-1-task-list.md`
+  - `docs/FOUNDATION.md`
   - `AGENTS.md`
 - 文档定位：
-  - 本文只定义“第一阶段先改最核心部分”的最小实施方案。
+  - 本文保留为第一阶段原始最小实施方案记录。
+  - 当前仓库最终实现已进一步收边：不再保留公共 `IActorMessagingPort` 或通用 `gagent_query`，以 `docs/architecture/2026-03-12-gagent-protocol-first-phase-1-task-list.md` 和 `docs/FOUNDATION.md` 作为最终实现说明。
   - 本文不追求一步到位统一所有入口、所有来源、所有模块。
   - 本文目标是先把最关键、最可验证、最能降低后续架构漂移的点做对。
 
 ## 2. 一句话目标
+
+以下章节保留原始计划原文，仅用于回看当时的最小实施思路，不代表当前仓库最终边界。
 
 先不统一“实现来源模型”，只先统一三件最核心的事：
 
