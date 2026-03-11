@@ -174,7 +174,7 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
     }
 
     [Fact]
-    public void SerializeLegacy_ShouldReturnNull_ToAvoidLegacyDualWrite()
+    public void SerializeLegacy_ShouldReturnLegacyJson_ForMixedVersionCompatibility()
     {
         var codec = new WorkflowRunEventSessionCodec();
         var legacyCodec = (ILegacyProjectionSessionEventCodec<WorkflowRunEvent>)codec;
@@ -184,7 +184,13 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
             ThreadId = "thread-1",
         });
 
-        legacyPayload.Should().BeNull();
+        legacyPayload.Should().NotBeNullOrWhiteSpace();
+        legacyPayload.Should().Contain("\"type\":\"RUN_STARTED\"");
+        legacyCodec.DeserializeLegacy(WorkflowRunEventTypes.RunStarted, legacyPayload!)
+            .Should()
+            .BeOfType<WorkflowRunStartedEvent>()
+            .Which.ThreadId.Should()
+            .Be("thread-1");
     }
 
     private static ProjectionSessionEventTransportMessage ParseLegacyTransportMessage(

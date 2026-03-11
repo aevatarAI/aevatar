@@ -8,7 +8,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowCapabilityEndpointsCoverageTests
 {
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldPreferInlineWorkflowBundle()
+    public void ChatRunRequestNormalizer_ShouldPreserveWorkflowName_WhenInlineWorkflowBundleIsProvided()
     {
         var input = new ChatInput
         {
@@ -21,7 +21,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request.Should().BeEquivalentTo(new WorkflowChatRunRequest("hello", null, "actor-1", ["name: inline"]));
+        result.Request.Should().BeEquivalentTo(new WorkflowChatRunRequest("hello", "auto", "actor-1", ["name: inline"]));
     }
 
     [Fact]

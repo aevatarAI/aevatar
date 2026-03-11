@@ -21,6 +21,7 @@ internal static class ChatRunRequestNormalizer
     public static ChatRunRequestNormalizationResult Normalize(ChatInput input)
     {
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
+        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
         var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
@@ -36,16 +37,15 @@ internal static class ChatRunRequestNormalizer
 
         if (inlineWorkflowYamls.Count > 0)
         {
-            // Inline YAML takes precedence over workflow-name lookup, including the legacy single-YAML alias.
+            // Keep the explicit workflow name so resolver can reject mismatches against the entry YAML name.
             return ChatRunRequestNormalizationResult.Success(
                 new WorkflowChatRunRequest(
                     input.Prompt,
-                    WorkflowName: null,
+                    string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
                     normalizedAgentId,
                     inlineWorkflowYamls));
         }
 
-        var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
         {
             return ChatRunRequestNormalizationResult.Success(

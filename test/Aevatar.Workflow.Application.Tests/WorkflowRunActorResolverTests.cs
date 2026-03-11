@@ -96,6 +96,39 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ResolveOrCreateAsync_ShouldRejectInlineRun_WhenRequestedWorkflowNameDiffersFromEntryWorkflow()
+    {
+        const string entryWorkflowYaml =
+            """
+            name: inline_entry
+            roles: []
+            steps: []
+            """;
+        const string helperWorkflowYaml =
+            """
+            name: helper
+            roles: []
+            steps: []
+            """;
+        var actorPort = new RecordingWorkflowRunActorPort();
+        actorPort.ParseResults[entryWorkflowYaml] = WorkflowYamlParseResult.Success("inline_entry");
+        actorPort.ParseResults[helperWorkflowYaml] = WorkflowYamlParseResult.Success("helper");
+        var resolver = new WorkflowRunActorResolver(
+            new StaticWorkflowActorBindingReader(binding: null),
+            actorPort,
+            new InMemoryWorkflowDefinitionRegistry());
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "auto", null, [entryWorkflowYaml, helperWorkflowYaml]),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNameMismatch);
+        result.WorkflowNameForRun.Should().Be("inline_entry");
+        result.Actor.Should().BeNull();
+        actorPort.CreateRunBindings.Should().BeEmpty();
+    }
+
     private sealed class StaticWorkflowActorBindingReader : IWorkflowActorBindingReader
     {
         private readonly WorkflowActorBinding? _binding;

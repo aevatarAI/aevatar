@@ -31,7 +31,8 @@ public sealed record ChatInput
     /// <summary>
     /// Inline workflow YAML bundle for this request.
     /// The first item is treated as the entry workflow.
-    /// If present, this field takes precedence over <see cref="Workflow"/>.
+    /// If present, this field is the execution source; when <see cref="Workflow"/> is also provided,
+    /// the entry workflow name must still match that lookup value.
     /// </summary>
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
 }

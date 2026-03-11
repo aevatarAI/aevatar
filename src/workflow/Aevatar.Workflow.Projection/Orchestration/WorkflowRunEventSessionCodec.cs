@@ -33,7 +33,7 @@ public sealed class WorkflowRunEventSessionCodec : IProjectionSessionEventCodec<
     public string? SerializeLegacy(WorkflowRunEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        return null;
+        return JsonSerializer.Serialize(evt, evt.GetType(), JsonOptions);
     }
 
     public WorkflowRunEvent? Deserialize(string eventType, ByteString payload)
