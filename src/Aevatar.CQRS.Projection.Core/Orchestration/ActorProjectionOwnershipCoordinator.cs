@@ -102,8 +102,14 @@ public sealed class ActorProjectionOwnershipCoordinator : IProjectionOwnershipCo
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            PublisherId = CoordinatorPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = correlationId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = CoordinatorPublisherId,
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
         };
 }

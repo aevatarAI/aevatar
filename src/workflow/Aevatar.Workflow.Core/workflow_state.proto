@@ -209,7 +209,11 @@ message ParallelItemResult
   string output = 2;
   string error = 3;
   string worker_id = 4;
-  map<string, string> metadata = 5;
+  map<string, string> annotations = 5;
+  string next_step_id = 6;
+  string branch_key = 7;
+  string assigned_variable = 8;
+  string assigned_value = 9;
 }
 
 message VoteConfigState

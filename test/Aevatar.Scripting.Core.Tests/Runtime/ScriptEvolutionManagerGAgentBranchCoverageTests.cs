@@ -428,12 +428,14 @@ public class ScriptEvolutionManagerGAgentBranchCoverageTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = evt;
             _ = direction;
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -442,10 +444,12 @@ public class ScriptEvolutionManagerGAgentBranchCoverageTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(new PublishedMessage(targetActorId, evt));
             return Task.CompletedTask;

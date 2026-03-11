@@ -4,6 +4,7 @@ public sealed record WorkflowChatRunRequest(
     string Prompt,
     string? WorkflowName,
     string? ActorId,
+    string? SessionId = null,
     // Inline workflow YAML bundle; first item is the entry workflow.
     IReadOnlyList<string>? WorkflowYamls = null);
 
@@ -47,34 +48,4 @@ public sealed record WorkflowChatRunInteractionResult(
     WorkflowChatRunFinalizeResult? FinalizeResult)
 {
     public bool Succeeded => Error == WorkflowChatRunStartError.None;
-}
-
-public sealed record WorkflowStateSnapshotPayload
-{
-    public required string ActorId { get; init; }
-    public required string WorkflowName { get; init; }
-    public required string CommandId { get; init; }
-    public required string ProjectionCompletionStatus { get; init; }
-    public required bool ProjectionCompleted { get; init; }
-    public required bool SnapshotAvailable { get; init; }
-    public object? Snapshot { get; init; }
-}
-
-public sealed record WorkflowOutputFrame
-{
-    public required string Type { get; init; }
-    public long? Timestamp { get; init; }
-    public string? ThreadId { get; init; }
-    public object? Result { get; init; }
-    public string? Message { get; init; }
-    public string? Code { get; init; }
-    public string? StepName { get; init; }
-    public string? MessageId { get; init; }
-    public string? Role { get; init; }
-    public string? Delta { get; init; }
-    public object? Snapshot { get; init; }
-    public string? ToolCallId { get; init; }
-    public string? ToolName { get; init; }
-    public string? Name { get; init; }
-    public object? Value { get; init; }
 }

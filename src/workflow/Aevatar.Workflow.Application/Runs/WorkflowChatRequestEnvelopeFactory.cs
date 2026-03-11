@@ -10,9 +10,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 {
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
-        var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
-                        !string.IsNullOrWhiteSpace(metadataSessionId)
-            ? metadataSessionId
+        var sessionId = !string.IsNullOrWhiteSpace(command.SessionId)
+            ? command.SessionId
             : context.CorrelationId;
 
         var chatRequest = new ChatRequestEvent
@@ -26,10 +25,16 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
-            PublisherId = "api",
-            Direction = EventDirection.Self,
-            CorrelationId = context.CorrelationId,
-            TargetActorId = context.TargetId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "api",
+                Direction = EventDirection.Self,
+                TargetActorId = context.TargetId,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = context.CorrelationId,
+            },
         };
         return envelope;
     }

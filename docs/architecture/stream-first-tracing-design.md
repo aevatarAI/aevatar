@@ -7,7 +7,7 @@
 This design keeps a single implementation path:
 
 - stream/event pipeline is the source of propagation truth
-- tracing is built on `EventEnvelope` metadata + structured logs + API visibility
+- tracing is built on `EventEnvelope.Propagation.Trace` + structured logs + API visibility
 
 ## 2. Goals
 
@@ -31,12 +31,12 @@ Only these three keys are default and required:
    - Purpose: OpenTelemetry/Jaeger trace correlation
 
 2. `correlation_id`
-   - Source: `EventEnvelope.CorrelationId`
+   - Source: `EventEnvelope.Propagation.CorrelationId`
    - Writer: `DefaultCorrelationLinkPolicy` — inherits from inbound envelope when outbound is empty
    - Purpose: business-level request/run correlation
 
 3. `causation_id`
-   - Source: `EventEnvelope.Metadata["trace.causation_id"]`
+   - Source: `EventEnvelope.Propagation.CausationEventId`
    - Writer: `DefaultEnvelopePropagationPolicy` via `DefaultCorrelationLinkPolicy` — set to `inboundEnvelope.Id` (the direct upstream event ID)
    - Purpose: one-hop upstream cause tracking
    - Note: empty at API entry point (no upstream event exists)
@@ -95,7 +95,7 @@ The three keys occupy orthogonal dimensions. No single key can replace another:
 flowchart LR
     A["API Entry"] -->|"Activity starts"| B["Publisher"]
     B -->|"inject trace.trace_id"| C["EventEnvelope"]
-    C -->|"PropagationPolicy copies metadata"| D["Stream"]
+    C -->|"PropagationPolicy copies propagation context"| D["Stream"]
     D --> E["Handler"]
     E -->|"read 3 keys → BeginScope"| F["Structured Logs"]
     E -->|"publish child event"| B
@@ -107,15 +107,15 @@ At event publish time (`LocalActorPublisher`, `OrleansGrainEventPublisher`):
 
 - Create `EventEnvelope`
 - Apply `DefaultEnvelopePropagationPolicy` first:
-  - Copies **all non-blocked metadata** from inbound envelope to outbound (including `trace.trace_id` already set by upstream hops)
+  - Copies inbound `EnvelopePropagation` into outbound envelope when the outbound side has not already set a field
   - Resolves `correlation_id` and `causation_id` via `DefaultCorrelationLinkPolicy`
-- Then overwrite tracing metadata from current runtime `Activity` when available:
-  - `metadata["trace.trace_id"]`
-  - `metadata["trace.span_id"]`
-  - `metadata["trace.flags"]` (hex)
-- Write runtime metadata through one shared helper:
-  - `source_actor_id` always
-  - `route_target_count` when publish-time target cardinality is known
+- Then overwrite tracing fields from current runtime `Activity` when available:
+  - `EventEnvelope.Propagation.Trace.TraceId`
+  - `EventEnvelope.Propagation.Trace.SpanId`
+  - `EventEnvelope.Propagation.Trace.TraceFlags`
+- Write runtime fields through one shared helper:
+  - `EventEnvelope.Runtime.SourceActorId` always
+  - `EventEnvelope.Runtime.RouteTargetCount` when publish-time target cardinality is known
     - Local runtime: always known
     - Orleans runtime: `Self`/`Up`/direct-send known; stream fan-out (`Down`/`Both`) can be unknown at publish time
 
@@ -126,23 +126,23 @@ At event publish time (`LocalActorPublisher`, `OrleansGrainEventPublisher`):
 At event handle entry (`LocalActor.EnqueueAsync`, `RuntimeActorGrain.HandleEnvelopeAsync`):
 
 - Read:
-  - `trace_id` from `metadata["trace.trace_id"]` (fallback to `Activity.Current?.TraceId` — primarily useful in Local runtime; in Orleans stream handlers `Activity.Current` may be null, so envelope metadata is the authoritative source)
-  - `correlation_id` from `EventEnvelope.CorrelationId`
-  - `causation_id` from `metadata["trace.causation_id"]`
+  - `trace_id` from `EventEnvelope.Propagation.Trace.TraceId` (fallback to `Activity.Current?.TraceId` — primarily useful in Local runtime; in Orleans stream handlers `Activity.Current` may be null, so envelope propagation is the authoritative source)
+  - `correlation_id` from `EventEnvelope.Propagation.CorrelationId`
+  - `causation_id` from `EventEnvelope.Propagation.CausationEventId`
 - Create one structured logging scope with these three keys
 - Use same key names in Local and Orleans
 - Missing values resolve to `""` (never throw)
 
-### 5.3 Metadata Constants
+### 5.3 Typed Tracing Fields
 
-Keep metadata keys centralized in `Aevatar.Foundation.Abstractions/Propagation/EnvelopeMetadataKeys.cs`:
+Tracing and publish-time context no longer rely on metadata key constants. The current model is:
 
-- `EnvelopeMetadataKeys.TraceId = "trace.trace_id"`
-- `EnvelopeMetadataKeys.TraceSpanId = "trace.span_id"`
-- `EnvelopeMetadataKeys.TraceFlags = "trace.flags"`
-- `EnvelopeMetadataKeys.TraceCausationId = "trace.causation_id"`
-- `EnvelopeMetadataKeys.SourceActorId = "__source_actor_id"`
-- `EnvelopeMetadataKeys.RouteTargetCount = "__route_target_count"`
+- `EventEnvelope.Propagation.Trace.TraceId`
+- `EventEnvelope.Propagation.Trace.SpanId`
+- `EventEnvelope.Propagation.Trace.TraceFlags`
+- `EventEnvelope.Propagation.CausationEventId`
+- `EventEnvelope.Runtime.SourceActorId`
+- `EventEnvelope.Runtime.RouteTargetCount`
 
 ## 6. API Visibility
 
@@ -203,7 +203,7 @@ Rules:
 
 ## 9. Acceptance Criteria
 
-1. Stream event chains preserve tracing keys in metadata across hops.
+1. Stream event chains preserve tracing fields in `EnvelopePropagation` across hops.
 2. Local and Orleans runtime logs both contain three keys on success/failure paths.
 3. API responses expose `correlationId` quickly to developers.
 4. Jaeger traces can be correlated with logs by `trace_id`.
@@ -214,7 +214,7 @@ Rules:
 ### 10.1 Unit / Component
 
 - Publisher injects `trace.trace_id` when `Activity.Current` exists.
-- Publisher rewrites trace metadata (`trace.trace_id` / `trace.span_id` / `trace.flags`) from current `Activity` when available.
+- Publisher rewrites typed trace fields (`TraceId` / `SpanId` / `TraceFlags`) from current `Activity` when available.
 - Log scope state contains 3 keys with expected fallback behavior.
 
 ### 10.2 API Host Tests
@@ -235,13 +235,12 @@ Rules:
 
 ## 11. Implementation Steps (Minimal Path)
 
-1. Add tracing metadata keys (`trace.trace_id`, `trace.span_id`, `trace.flags`) to `EnvelopeMetadataKeys`.
-2. Add runtime tracing helper (`Aevatar.Foundation.Runtime/Observability/TracingContextHelpers.cs`):
+1. Add runtime tracing helper (`Aevatar.Foundation.Runtime/Observability/TracingContextHelpers.cs`):
    - `PopulateTraceId(envelope)` — write `trace_id`/`span_id`/`flags` from current `Activity`
    - `CreateLogScopeState(envelope)` — build 3-key dictionary for `BeginScope`
-3. Add publish-context helper (`Aevatar.Foundation.Runtime/Propagation/EnvelopePublishContextHelpers.cs`):
-   - `ApplyOutboundPublishContext(...)` — shared publish-time logic for propagation + trace overwrite + runtime metadata
-4. Wire shared publish-context helper into `LocalActorPublisher` and `OrleansGrainEventPublisher`:
+2. Add publish-context helper (`Aevatar.Foundation.Runtime/Propagation/EnvelopePublishContextHelpers.cs`):
+   - `ApplyOutboundPublishContext(...)` — shared publish-time logic for propagation + trace overwrite + typed runtime fields
+3. Wire shared publish-context helper into `LocalActorPublisher` and `OrleansGrainEventPublisher`:
    - call propagation first, then tracing overwrite
    - write `route_target_count` only when publish-time count is known
 5. Wire `TracingContextHelpers.CreateLogScopeState` into `LocalActor.EnqueueAsync` and `RuntimeActorGrain.HandleEnvelopeAsync` as `BeginScope`.

@@ -34,8 +34,8 @@ public class MakerRecursiveRegressionTests
 
         recursiveResults.Should().ContainSingle(x => x.StepId == "solve_root");
         var root = recursiveResults.Single(x => x.StepId == "solve_root");
-        root.Metadata["maker.stage"].Should().Be("leaf");
-        root.Metadata["maker.atomic_decision"].Should().Be("True");
+        root.Annotations["maker.stage"].Should().Be("leaf");
+        root.Annotations["maker.atomic_decision"].Should().Be("True");
         recursiveResults.Should().NotContain(x => x.StepId.StartsWith("solve_root_child_", StringComparison.Ordinal));
 
         provider.StageCounters["decompose"].Should().Be(0);
@@ -61,18 +61,18 @@ public class MakerRecursiveRegressionTests
         provider.StageCounters["compose"].Should().BeGreaterThan(0);
 
         var root = recursiveResults.Single(x => x.StepId == "solve_root");
-        root.Metadata["maker.stage"].Should().Be("composed");
-        root.Metadata["maker.atomic_decision"].Should().Be("False");
+        root.Annotations["maker.stage"].Should().Be("composed");
+        root.Annotations["maker.atomic_decision"].Should().Be("False");
 
         var childResults = recursiveResults
             .Where(x => x.StepId.StartsWith("solve_root_child_", StringComparison.Ordinal))
             .ToList();
         childResults.Should().HaveCount(2);
-        childResults.Should().OnlyContain(x => x.Metadata["maker.stage"] == "leaf");
+        childResults.Should().OnlyContain(x => x.Annotations["maker.stage"] == "leaf");
     }
 
     private static bool IsRecursiveResult(StepCompletedEvent step) =>
-        step.Metadata.TryGetValue("maker.recursive", out var value) && value == "true";
+        step.Annotations.TryGetValue("maker.recursive", out var value) && value == "true";
 
     private static TestEnvironment BuildEnvironment(DeterministicMakerProvider provider)
     {
@@ -107,9 +107,15 @@ public class MakerRecursiveRegressionTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -123,9 +129,15 @@ public class MakerRecursiveRegressionTests
                 WorkflowName = "maker_regression",
                 RunId = "maker-regression-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
@@ -150,8 +162,11 @@ public class MakerRecursiveRegressionTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));

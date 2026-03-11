@@ -21,7 +21,13 @@ public class StreamForwardingRulesTests
     [Fact]
     public void Matches_WhenDirectionFilteredOut_ShouldReturnFalse()
     {
-        var envelope = new EventEnvelope { Direction = EventDirection.Up };
+        var envelope = new EventEnvelope
+        {
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Up,
+            },
+        };
         var binding = StreamForwardingRules.CreateHierarchyBinding("source", "target");
 
         StreamForwardingRules.Matches(binding, envelope).Should().BeFalse();
@@ -32,8 +38,11 @@ public class StreamForwardingRulesTests
     {
         var envelope = new EventEnvelope
         {
-            Direction = EventDirection.Down,
             Payload = Any.Pack(new StringValue { Value = "x" }),
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
         var binding = StreamForwardingRules.CreateHierarchyBinding("source", "target");
         binding.EventTypeFilter.Add(envelope.Payload!.TypeUrl);
@@ -45,7 +54,9 @@ public class StreamForwardingRulesTests
     public void IsTargetDispatchAllowed_ShouldSkipSelfAndLoopTargets()
     {
         var envelope = new EventEnvelope();
-        envelope.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "a,b,c";
+        ForwardingVisitChain.AppendIfMissing(envelope, "a");
+        ForwardingVisitChain.AppendIfMissing(envelope, "b");
+        ForwardingVisitChain.AppendIfMissing(envelope, "c");
 
         StreamForwardingRules.IsTargetDispatchAllowed("a", "a", envelope).Should().BeFalse();
         StreamForwardingRules.IsTargetDispatchAllowed("a", "b", envelope).Should().BeFalse();
@@ -53,12 +64,15 @@ public class StreamForwardingRulesTests
     }
 
     [Fact]
-    public void BuildForwardedEnvelope_ShouldStampForwardingMetadata()
+    public void BuildForwardedEnvelope_ShouldStampForwardingState()
     {
         var envelope = new EventEnvelope
         {
-            Direction = EventDirection.Down,
             Payload = Any.Pack(new StringValue { Value = "payload" }),
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
 
         var forwarded = StreamForwardingRules.BuildForwardedEnvelope(
@@ -67,13 +81,11 @@ public class StreamForwardingRulesTests
             "child",
             StreamForwardingMode.TransitOnly);
 
-        forwarded.Metadata[PublisherChainMetadata.PublishersMetadataKey].Should().Be("root");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey]
-            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardedValue);
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("root");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("child");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
-            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeTransit);
+        ForwardingVisitChain.Contains(forwarded, "root").Should().BeTrue();
+        StreamForwardingEnvelopeState.IsForwarded(forwarded).Should().BeTrue();
+        StreamForwardingEnvelopeState.GetSourceStreamId(forwarded).Should().Be("root");
+        StreamForwardingEnvelopeState.GetTargetStreamId(forwarded).Should().Be("child");
+        StreamForwardingEnvelopeState.GetMode(forwarded).Should().Be(StreamForwardingHandleMode.TransitOnly);
         forwarded.Payload!.Unpack<StringValue>().Value.Should().Be("payload");
     }
 
@@ -82,8 +94,11 @@ public class StreamForwardingRulesTests
     {
         var envelope = new EventEnvelope
         {
-            Direction = EventDirection.Down,
             Payload = Any.Pack(new StringValue { Value = "payload" }),
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         };
         var binding = StreamForwardingRules.CreateHierarchyBinding("root", "child");
 
@@ -95,18 +110,27 @@ public class StreamForwardingRulesTests
 
         matched.Should().BeTrue();
         forwarded.Should().NotBeNull();
-        forwarded!.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("child");
+        StreamForwardingEnvelopeState.GetTargetStreamId(forwarded!).Should().Be("child");
     }
 
     [Fact]
     public void ShouldSkipTransitOnlyHandling_WhenTransitEnvelopeTargetsSelf_ShouldReturnTrue()
     {
-        var envelope = new EventEnvelope { Direction = EventDirection.Both };
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey] =
-            StreamForwardingEnvelopeMetadata.ForwardedValue;
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey] = "self";
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey] =
-            StreamForwardingEnvelopeMetadata.ForwardModeTransit;
+        var envelope = new EventEnvelope
+        {
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Both,
+            },
+            Runtime = new EnvelopeRuntime
+            {
+                Forwarding = new EnvelopeForwardingContext
+                {
+                    TargetStreamId = "self",
+                    Mode = StreamForwardingHandleMode.TransitOnly,
+                },
+            },
+        };
 
         StreamForwardingRules.ShouldSkipTransitOnlyHandling("self", envelope).Should().BeTrue();
     }
@@ -114,12 +138,21 @@ public class StreamForwardingRulesTests
     [Fact]
     public void ShouldSkipTransitOnlyHandling_WhenHandleMode_ShouldReturnFalse()
     {
-        var envelope = new EventEnvelope { Direction = EventDirection.Down };
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey] =
-            StreamForwardingEnvelopeMetadata.ForwardedValue;
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey] = "self";
-        envelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey] =
-            StreamForwardingEnvelopeMetadata.ForwardModeHandle;
+        var envelope = new EventEnvelope
+        {
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
+            Runtime = new EnvelopeRuntime
+            {
+                Forwarding = new EnvelopeForwardingContext
+                {
+                    TargetStreamId = "self",
+                    Mode = StreamForwardingHandleMode.HandleThenForward,
+                },
+            },
+        };
 
         StreamForwardingRules.ShouldSkipTransitOnlyHandling("self", envelope).Should().BeFalse();
     }

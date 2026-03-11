@@ -19,23 +19,23 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldGenerateIdsAndCopyMetadata()
+    public void WorkflowCommandContextPolicy_Create_ShouldGenerateIdsAndCopyHeaders()
     {
         var policy = new WorkflowCommandContextPolicy();
-        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["k1"] = "v1",
         };
 
-        var context = policy.Create("actor-1", metadata);
+        var context = policy.Create("actor-1", headers);
 
         context.TargetId.Should().Be("actor-1");
         context.CommandId.Should().NotBeNullOrWhiteSpace();
         context.CorrelationId.Should().Be(context.CommandId);
-        context.Metadata.Should().ContainKey("k1").WhoseValue.Should().Be("v1");
+        context.Headers.Should().ContainKey("k1").WhoseValue.Should().Be("v1");
 
-        metadata["k1"] = "mutated";
-        context.Metadata["k1"].Should().Be("v1");
+        headers["k1"] = "mutated";
+        context.Headers["k1"].Should().Be("v1");
     }
 
     [Fact]
@@ -89,13 +89,13 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

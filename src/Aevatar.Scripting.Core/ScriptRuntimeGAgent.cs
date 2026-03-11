@@ -252,7 +252,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         }
 
         if (pending.TimeoutLease == null ||
-            !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.TimeoutLease))
+            !RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, pending.TimeoutLease))
         {
             Logger.LogDebug(
                 "Ignoring script definition query timeout without matching lease metadata. runtime_actor_id={RuntimeActorId} request_id={RequestId}",

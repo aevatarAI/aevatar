@@ -6,7 +6,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
 public sealed class OrleansActorDispatchPort : IActorDispatchPort
 {
-    private const string DirectDispatchFailurePropagationMetadataKey = "aevatar.dispatch.propagate_failure";
     private readonly IGrainFactory _grainFactory;
 
     public OrleansActorDispatchPort(IGrainFactory grainFactory)
@@ -25,7 +24,7 @@ public sealed class OrleansActorDispatchPort : IActorDispatchPort
             throw new InvalidOperationException($"Actor {actorId} is not initialized.");
 
         var dispatchEnvelope = envelope.Clone();
-        dispatchEnvelope.Metadata[DirectDispatchFailurePropagationMetadataKey] = bool.TrueString;
+        dispatchEnvelope.EnsureRuntime().EnsureDispatch().PropagateFailure = true;
         await grain.HandleEnvelopeAsync(dispatchEnvelope.ToByteArray());
     }
 }

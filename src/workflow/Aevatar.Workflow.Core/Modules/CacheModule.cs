@@ -55,8 +55,8 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                     Success = true,
                     Output = cached.Value,
                 };
-                hit.Metadata["cache.hit"] = "true";
-                hit.Metadata["cache.key"] = ShortenKey(cacheKey);
+                hit.Annotations["cache.hit"] = "true";
+                hit.Annotations["cache.key"] = ShortenKey(cacheKey);
                 await ctx.PublishAsync(hit, EventDirection.Self, ct);
                 return;
             }
@@ -130,8 +130,8 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                     Output = evt.Output,
                     Error = evt.Error,
                 };
-                completed.Metadata["cache.hit"] = "false";
-                completed.Metadata["cache.key"] = ShortenKey(cacheKey);
+                completed.Annotations["cache.hit"] = "false";
+                completed.Annotations["cache.key"] = ShortenKey(cacheKey);
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
             }
         }

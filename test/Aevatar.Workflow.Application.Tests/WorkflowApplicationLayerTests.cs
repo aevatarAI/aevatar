@@ -6,6 +6,8 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -44,7 +46,10 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunInteractionService_ShouldEmitFramesSnapshotAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var pipeline = new FakeDispatchPipeline
@@ -53,11 +58,11 @@ public sealed class WorkflowApplicationLayerTests
         };
         var outputStreamer = new FakeWorkflowRunOutputStreamer
         {
-            Frames = [BuildFrame("progress"), BuildFrame("done")],
+            Events = [BuildEvent("progress"), BuildEvent("done")],
         };
         var completionPolicy = new FakeWorkflowRunCompletionPolicy
         {
-            TerminalFrameType = "done",
+            TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
             TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
         };
         var snapshotEmitter = new FakeWorkflowRunStateSnapshotEmitter();
@@ -68,7 +73,7 @@ public sealed class WorkflowApplicationLayerTests
             snapshotEmitter,
             new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
-        var emittedFrames = new ConcurrentQueue<WorkflowOutputFrame>();
+        var emittedFrames = new ConcurrentQueue<WorkflowRunEventEnvelope>();
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
 
         var result = await service.ExecuteAsync(
@@ -109,10 +114,10 @@ public sealed class WorkflowApplicationLayerTests
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = new WorkflowRunInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
-            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("done")] },
+            new FakeWorkflowRunOutputStreamer { Events = [BuildEvent("done")] },
             new FakeWorkflowRunCompletionPolicy
             {
-                TerminalFrameType = "done",
+                TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
                 TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
             },
             new FakeWorkflowRunStateSnapshotEmitter(),
@@ -143,8 +148,8 @@ public sealed class WorkflowApplicationLayerTests
         };
         var service = new WorkflowRunInteractionService(
             pipeline,
-            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("progress")] },
-            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeWorkflowRunOutputStreamer { Events = [BuildEvent("progress")] },
+            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
             new FakeWorkflowRunStateSnapshotEmitter(),
             new FakeDurableCompletionResolver(
                 new WorkflowRunDurableCompletionObservation(
@@ -171,8 +176,8 @@ public sealed class WorkflowApplicationLayerTests
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = new WorkflowRunInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
-            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("progress")] },
-            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeWorkflowRunOutputStreamer { Events = [BuildEvent("progress")] },
+            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
             new FakeWorkflowRunStateSnapshotEmitter(),
             new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
@@ -212,17 +217,20 @@ public sealed class WorkflowApplicationLayerTests
     public async Task WorkflowRunDetachedDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
     {
         var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var outputStreamer = new FakeWorkflowRunOutputStreamer
         {
-            Frames = [BuildFrame("progress"), BuildFrame("done")],
+            Events = [BuildEvent("progress"), BuildEvent("done")],
         };
         var service = new WorkflowRunDetachedDispatchService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
             outputStreamer,
-            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
             new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
@@ -231,7 +239,7 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
         await outputStreamer.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await projectionPort.Released.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         projectionPort.DetachCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
@@ -262,14 +270,27 @@ public sealed class WorkflowApplicationLayerTests
             createdActorIds ?? [],
             projectionPort,
             actorPort);
-        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEvent>());
+        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
 
-    private static WorkflowOutputFrame BuildFrame(string type) =>
-        new()
+    private static WorkflowRunEventEnvelope BuildEvent(string type) =>
+        string.Equals(type, "done", StringComparison.Ordinal)
+            ? new WorkflowRunEventEnvelope
+            {
+                RunFinished = new WorkflowRunFinishedEventPayload
+                {
+                    ThreadId = "actor-1",
+                    Result = Any.Pack(new WorkflowRunResultPayload { Output = type }),
+                },
+            }
+            : new WorkflowRunEventEnvelope
         {
-            Type = type,
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = type,
+                Payload = Any.Pack(new StringValue { Value = type }),
+            },
         };
 
     private sealed class FakeDispatchPipeline
@@ -291,39 +312,34 @@ public sealed class WorkflowApplicationLayerTests
 
     private sealed class FakeWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
     {
-        public IReadOnlyList<WorkflowOutputFrame> Frames { get; set; } = [];
+        public IReadOnlyList<WorkflowRunEventEnvelope> Events { get; set; } = [];
         public int StreamCalls { get; private set; }
         public TaskCompletionSource<bool> StreamStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task StreamAsync(
-            IEventSink<WorkflowRunEvent> sink,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             CancellationToken ct = default)
         {
             _ = sink;
             StreamCalls++;
             StreamStarted.TrySetResult(true);
 
-            foreach (var frame in Frames)
-                await emitAsync(frame, ct);
+            foreach (var evt in Events)
+                await emitAsync(evt, ct);
         }
 
-        public WorkflowOutputFrame Map(WorkflowRunEvent evt)
-        {
-            _ = evt;
-            return BuildFrame("mapped");
-        }
+        public WorkflowRunEventEnvelope Map(WorkflowRunEventEnvelope evt) => evt;
     }
 
     private sealed class FakeWorkflowRunCompletionPolicy : IWorkflowRunCompletionPolicy
     {
-        public string? TerminalFrameType { get; set; }
+        public WorkflowRunEventEnvelope.EventOneofCase? TerminalEventCase { get; set; }
         public WorkflowProjectionCompletionStatus TerminalStatus { get; set; } = WorkflowProjectionCompletionStatus.Completed;
 
-        public bool TryResolve(WorkflowOutputFrame frame, out WorkflowProjectionCompletionStatus status)
+        public bool TryResolve(WorkflowRunEventEnvelope evt, out WorkflowProjectionCompletionStatus status)
         {
-            if (!string.IsNullOrWhiteSpace(TerminalFrameType) &&
-                string.Equals(frame.Type, TerminalFrameType, StringComparison.Ordinal))
+            if (TerminalEventCase.HasValue && evt.EventCase == TerminalEventCase.Value)
             {
                 status = TerminalStatus;
                 return true;
@@ -342,7 +358,7 @@ public sealed class WorkflowApplicationLayerTests
             WorkflowChatRunAcceptedReceipt receipt,
             WorkflowProjectionCompletionStatus projectionCompletionStatus,
             bool projectionCompleted,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             CancellationToken ct = default)
         {
             _ = emitAsync;
@@ -374,7 +390,7 @@ public sealed class WorkflowApplicationLayerTests
     private sealed class FakeProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
         public bool ProjectionEnabled => true;
-        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEvent> Sink)> DetachCalls { get; } = [];
+        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DetachException { get; set; }
@@ -390,13 +406,13 @@ public sealed class WorkflowApplicationLayerTests
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
         {
             DetachCalls.Add((lease, sink));
@@ -434,6 +450,8 @@ public sealed class WorkflowApplicationLayerTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public List<string> DestroyCalls { get; } = [];
+        public int ExpectedDestroyCount { get; set; } = int.MaxValue;
+        public TaskCompletionSource<bool> DestroyCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DestroyException { get; set; }
 
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
@@ -445,6 +463,8 @@ public sealed class WorkflowApplicationLayerTests
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
         {
             DestroyCalls.Add(actorId);
+            if (DestroyCalls.Count >= ExpectedDestroyCount)
+                DestroyCompleted.TrySetResult(true);
             if (DestroyException != null)
                 throw DestroyException;
 

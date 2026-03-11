@@ -8,6 +8,6 @@ public interface IWorkflowRunStateSnapshotEmitter
         WorkflowChatRunAcceptedReceipt receipt,
         WorkflowProjectionCompletionStatus projectionCompletionStatus,
         bool projectionCompleted,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default);
 }

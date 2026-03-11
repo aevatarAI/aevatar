@@ -27,7 +27,7 @@
 3. 入站消息以 Raw `EventEnvelope` 进入统一 Pipeline
 4. 按优先级依次执行处理器，并触发 Hook
 5. 若业务需要形成事实，Actor 显式持久化领域事件到 EventStore
-6. 出站 envelope 按传播策略自动继承 `correlation_id` 并写入 `metadata["trace.causation_id"]`
+6. 出站 envelope 按传播策略自动继承 `EnvelopePropagation.CorrelationId` 并写入 `EnvelopePropagation.CausationEventId`
 7. Agent 停用时 flush pending events，并按策略持久化快照（可选）
 
 ## 口径澄清

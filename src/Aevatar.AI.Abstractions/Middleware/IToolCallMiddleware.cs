@@ -35,6 +35,6 @@ public sealed class ToolCallContext
     /// <summary>When true, tool execution is skipped and Result is returned as-is.</summary>
     public bool Terminate { get; set; }
 
-    /// <summary>Arbitrary metadata shared across the middleware chain.</summary>
-    public IDictionary<string, object> Metadata { get; } = new Dictionary<string, object>();
+    /// <summary>Arbitrary items shared across the middleware chain.</summary>
+    public IDictionary<string, object> Items { get; } = new Dictionary<string, object>();
 }

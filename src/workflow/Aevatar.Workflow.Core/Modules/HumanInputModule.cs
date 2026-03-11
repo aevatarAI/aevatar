@@ -77,8 +77,8 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 SuspensionType = "human_input",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
+                VariableName = variable,
             };
-            suspended.Metadata["variable"] = variable;
 
             await ctx.PublishAsync(suspended, EventDirection.Both, ct);
             return;

@@ -7,15 +7,15 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionProjectionLifecycleService
-    : EventSinkProjectionLifecyclePortServiceBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEvent>,
+    : EventSinkProjectionLifecyclePortServiceBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionLifecyclePort
 {
     public WorkflowExecutionProjectionLifecycleService(
         WorkflowExecutionProjectionOptions options,
         IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent> liveSinkForwarder)
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> liveSinkForwarder)
         : base(
             () => options.Enabled,
             activationService,

@@ -4,8 +4,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 internal sealed class RuntimeEnvelopeRetryPolicy
 {
-    private const string RetryLastErrorMetadataKey = "aevatar.retry.last_error";
-
     private RuntimeEnvelopeRetryPolicy(int maxAttempts, int retryDelayMs)
     {
         MaxAttempts = maxAttempts;
@@ -51,11 +49,12 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         }
 
         retryEnvelope = originalEnvelope.Clone();
-        retryEnvelope.Metadata[RuntimeEnvelopeDeduplication.RetryAttemptMetadataKey] = nextAttempt.ToString();
-        retryEnvelope.Metadata[RetryLastErrorMetadataKey] = exception.GetType().Name;
+        var retry = retryEnvelope.EnsureRuntime().EnsureRetry();
+        retry.Attempt = nextAttempt;
+        retry.LastErrorType = exception.GetType().Name;
         var originEventId = ResolveOriginEventId(originalEnvelope);
         if (!string.IsNullOrWhiteSpace(originEventId))
-            retryEnvelope.Metadata[RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey] = originEventId;
+            retry.OriginEventId = originEventId;
         return true;
     }
 
@@ -73,12 +72,6 @@ internal sealed class RuntimeEnvelopeRetryPolicy
 
     private static string? ResolveOriginEventId(EventEnvelope envelope)
     {
-        if (envelope.Metadata.TryGetValue(RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey, out var originEventId) &&
-            !string.IsNullOrWhiteSpace(originEventId))
-        {
-            return originEventId;
-        }
-
-        return string.IsNullOrWhiteSpace(envelope.Id) ? null : envelope.Id;
+        return RuntimeEnvelopeDeduplication.ResolveOriginId(envelope);
     }
 }

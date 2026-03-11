@@ -210,13 +210,13 @@ public sealed class ToolCallLoop
     private static void AnnotateRequestIdentity(LLMCallContext context)
     {
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
-            context.Metadata[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
+            context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
         if (context.Request.Metadata != null &&
             context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
             !string.IsNullOrWhiteSpace(callId))
         {
-            context.Metadata[LLMRequestMetadataKeys.CallId] = callId;
+            context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }
     }
 

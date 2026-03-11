@@ -220,20 +220,20 @@ public abstract class GAgentBase : IAgent
     protected Task PublishAsync<TEvent>(TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope, metadata);
+        EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope, options);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope, metadata);
+        EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope, options);
 
     protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
@@ -246,7 +246,7 @@ public abstract class GAgentBase : IAgent
                 {
                     ActorId = Id,
                     CallbackId = callbackId,
-                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, metadata),
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, options),
                     DueTime = dueTime,
                 },
                 ct);
@@ -257,7 +257,7 @@ public abstract class GAgentBase : IAgent
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
@@ -271,7 +271,7 @@ public abstract class GAgentBase : IAgent
                 {
                     ActorId = Id,
                     CallbackId = callbackId,
-                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, metadata),
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, options),
                     DueTime = dueTime,
                     Period = period,
                 },
@@ -336,8 +336,8 @@ public abstract class GAgentBase : IAgent
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, IReadOnlyDictionary<string, string>? metadata) where T : Google.Protobuf.IMessage => Task.CompletedTask;
-        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, IReadOnlyDictionary<string, string>? metadata) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

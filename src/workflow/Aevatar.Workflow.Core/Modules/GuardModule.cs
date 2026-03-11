@@ -48,18 +48,21 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
             };
-            completed.Metadata["guard.skipped"] = "true";
-            completed.Metadata["guard.reason"] = reason;
+            completed.Annotations["guard.skipped"] = "true";
+            completed.Annotations["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }
         else if (onFail == "branch" && request.Parameters.TryGetValue("branch_target", out var target))
         {
             var completed = new StepCompletedEvent
             {
-                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
+                StepId = request.StepId,
+                RunId = request.RunId,
+                Success = true,
+                Output = input,
+                NextStepId = target,
             };
-            completed.Metadata["next_step"] = target;
-            completed.Metadata["guard.reason"] = reason;
+            completed.Annotations["guard.reason"] = reason;
             await ctx.PublishAsync(completed, EventDirection.Self, ct);
         }
         else

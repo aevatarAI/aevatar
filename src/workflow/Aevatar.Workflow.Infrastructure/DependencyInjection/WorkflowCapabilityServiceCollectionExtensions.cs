@@ -20,7 +20,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();
-        services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionAGUIEventProjector>();
+        services.AddWorkflowExecutionProjectionProjector<WorkflowExecutionRunEventProjector>();
         services.AddWorkflowApplication();
         services.AddWorkflowDefinitionFileSource(options =>
         {

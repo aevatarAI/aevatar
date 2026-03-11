@@ -1,5 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -20,34 +22,37 @@ public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotE
         WorkflowChatRunAcceptedReceipt receipt,
         WorkflowProjectionCompletionStatus projectionCompletionStatus,
         bool projectionCompleted,
-        Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+        Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
         var snapshot = await TryGetSnapshotAsync(receipt.ActorId, ct);
-        var snapshotPayload = new WorkflowStateSnapshotPayload
+        var snapshotPayload = new WorkflowProjectionStateSnapshotPayload
         {
             ActorId = receipt.ActorId,
             WorkflowName = receipt.WorkflowName,
             CommandId = receipt.CommandId,
             ProjectionCompleted = projectionCompleted,
-            ProjectionCompletionStatus = projectionCompletionStatus.ToString(),
+            ProjectionCompletionStatus = MapStatus(projectionCompletionStatus),
             SnapshotAvailable = snapshot != null,
-            Snapshot = snapshot,
+            Snapshot = snapshot == null ? null : MapSnapshot(snapshot),
         };
 
         await emitAsync(
-            _outputStreamer.Map(new WorkflowStateSnapshotEvent
+            new WorkflowRunEventEnvelope
             {
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Snapshot = snapshotPayload,
-            }),
+                StateSnapshot = new WorkflowStateSnapshotEventPayload
+                {
+                    Snapshot = Any.Pack(snapshotPayload),
+                },
+            },
             ct);
     }
 
-    private async Task<object?> TryGetSnapshotAsync(string actorId, CancellationToken ct)
+    private async Task<WorkflowActorSnapshot?> TryGetSnapshotAsync(string actorId, CancellationToken ct)
     {
         try
         {
@@ -62,4 +67,34 @@ public sealed class WorkflowRunStateSnapshotEmitter : IWorkflowRunStateSnapshotE
             return null;
         }
     }
+
+    private static WorkflowProjectionCompletionStatusPayload MapStatus(WorkflowProjectionCompletionStatus status) =>
+        status switch
+        {
+            WorkflowProjectionCompletionStatus.Completed => WorkflowProjectionCompletionStatusPayload.Completed,
+            WorkflowProjectionCompletionStatus.TimedOut => WorkflowProjectionCompletionStatusPayload.TimedOut,
+            WorkflowProjectionCompletionStatus.Failed => WorkflowProjectionCompletionStatusPayload.Failed,
+            WorkflowProjectionCompletionStatus.Stopped => WorkflowProjectionCompletionStatusPayload.Stopped,
+            WorkflowProjectionCompletionStatus.NotFound => WorkflowProjectionCompletionStatusPayload.NotFound,
+            WorkflowProjectionCompletionStatus.Disabled => WorkflowProjectionCompletionStatusPayload.Disabled,
+            _ => WorkflowProjectionCompletionStatusPayload.Unknown,
+        };
+
+    private static WorkflowActorSnapshotPayload MapSnapshot(WorkflowActorSnapshot snapshot) =>
+        new()
+        {
+            ActorId = snapshot.ActorId,
+            WorkflowName = snapshot.WorkflowName,
+            LastCommandId = snapshot.LastCommandId,
+            StateVersion = snapshot.StateVersion,
+            LastEventId = snapshot.LastEventId,
+            LastUpdatedAtUtc = Timestamp.FromDateTimeOffset(snapshot.LastUpdatedAt.ToUniversalTime()),
+            LastSuccess = snapshot.LastSuccess,
+            LastOutput = snapshot.LastOutput,
+            LastError = snapshot.LastError,
+            TotalSteps = snapshot.TotalSteps,
+            RequestedSteps = snapshot.RequestedSteps,
+            CompletedSteps = snapshot.CompletedSteps,
+            RoleReplyCount = snapshot.RoleReplyCount,
+        };
 }

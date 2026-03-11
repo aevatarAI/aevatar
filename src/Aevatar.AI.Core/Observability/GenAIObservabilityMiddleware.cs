@@ -33,7 +33,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
             if (GenAIActivitySource.EnableSensitiveData && context.Result != null)
                 activity?.SetTag("gen_ai.response.output", context.Result);
 
-            if (context.Metadata.TryGetValue("gen_ai.provider.name", out var providerObj) &&
+            if (context.Items.TryGetValue("gen_ai.provider.name", out var providerObj) &&
                 providerObj is string providerName &&
                 !string.IsNullOrWhiteSpace(providerName))
             {
@@ -117,7 +117,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
 
         var requestId = context.Request.RequestId;
         if (string.IsNullOrWhiteSpace(requestId) &&
-            context.Metadata.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+            context.Items.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
             requestIdObj is string metadataRequestId)
         {
             requestId = metadataRequestId;

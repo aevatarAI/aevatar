@@ -19,10 +19,10 @@ public class RuntimeGAgentRuntimePortInvocationTests
         await port.InvokeAsync("actor-1", new StringValue { Value = "hello" }, "run-1", CancellationToken.None);
 
         actor.ReceivedEnvelope.Should().NotBeNull();
-        actor.ReceivedEnvelope!.TargetActorId.Should().Be("actor-1");
-        actor.ReceivedEnvelope!.PublisherId.Should().Be("scripting.gagent.invocation");
-        actor.ReceivedEnvelope!.Direction.Should().Be(EventDirection.Self);
-        actor.ReceivedEnvelope!.CorrelationId.Should().Be("run-1");
+        actor.ReceivedEnvelope!.Route!.TargetActorId.Should().Be("actor-1");
+        actor.ReceivedEnvelope!.Route.PublisherActorId.Should().Be("scripting.gagent.invocation");
+        actor.ReceivedEnvelope!.Route.Direction.Should().Be(EventDirection.Self);
+        actor.ReceivedEnvelope!.Propagation!.CorrelationId.Should().Be("run-1");
         actor.ReceivedEnvelope!.Payload!.Is(StringValue.Descriptor).Should().BeTrue();
     }
 

@@ -165,8 +165,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
 
         var concrete = provider.GetRequiredService<WorkflowRunOutputStreamer>();
         var outputStreamer = provider.GetRequiredService<IWorkflowRunOutputStreamer>();
-        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>();
-        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>();
+        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
+        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
 
         outputStreamer.Should().BeSameAs(concrete);
         eventOutputStream.Should().BeSameAs(concrete);
@@ -174,7 +174,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldUseSessionIdFromMetadata()
+    public void EnvelopeFactory_ShouldUseSessionIdFromCommand()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -184,19 +184,16 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
-            });
-        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal));
+        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1", SessionId: "session-42");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
-        envelope.TargetActorId.Should().Be("actor-1");
-        envelope.CorrelationId.Should().Be("corr-1");
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.PublisherId.Should().Be("api");
+        envelope.Route!.TargetActorId.Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
+        envelope.Route.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
     }
@@ -217,14 +214,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(command, new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
-            new Dictionary<string, string>
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "   ",
-            }));
+            new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 }

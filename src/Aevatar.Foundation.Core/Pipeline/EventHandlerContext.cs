@@ -50,19 +50,19 @@ internal sealed class EventHandlerContext : IEventHandlerContext
 
     /// <summary>Publishes an event to stream routing.</summary>
     public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default, IReadOnlyDictionary<string, string>? metadata = null) where TEvent : IMessage =>
-        _publisher.PublishAsync(evt, direction, ct, InboundEnvelope, metadata);
+        CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
+        _publisher.PublishAsync(evt, direction, ct, InboundEnvelope, options);
 
     /// <summary>Sends an event directly to the target actor.</summary>
     public Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
-        CancellationToken ct = default, IReadOnlyDictionary<string, string>? metadata = null) where TEvent : IMessage =>
-        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope, metadata);
+        CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
+        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope, options);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
         return _durableCallbackScheduler.ScheduleTimeoutAsync(
@@ -70,7 +70,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
             {
                 ActorId = AgentId,
                 CallbackId = callbackId,
-                TriggerEnvelope = BuildSelfEnvelope(evt, metadata),
+                TriggerEnvelope = BuildSelfEnvelope(evt, options),
                 DueTime = dueTime,
             },
             ct);
@@ -81,7 +81,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
         return _durableCallbackScheduler.ScheduleTimerAsync(
@@ -89,7 +89,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
             {
                 ActorId = AgentId,
                 CallbackId = callbackId,
-                TriggerEnvelope = BuildSelfEnvelope(evt, metadata),
+                TriggerEnvelope = BuildSelfEnvelope(evt, options),
                 DueTime = dueTime,
                 Period = period,
             },
@@ -106,6 +106,6 @@ internal sealed class EventHandlerContext : IEventHandlerContext
 
     private EventEnvelope BuildSelfEnvelope(
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata) =>
-        SelfEventEnvelopeFactory.Create(AgentId, evt, InboundEnvelope, metadata);
+        EventEnvelopePublishOptions? options) =>
+        SelfEventEnvelopeFactory.Create(AgentId, evt, InboundEnvelope, options);
 }

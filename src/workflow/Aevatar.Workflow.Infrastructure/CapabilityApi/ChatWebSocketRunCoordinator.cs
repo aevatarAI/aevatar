@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -60,13 +61,13 @@ internal static class ChatWebSocketRunCoordinator
             correlationId = executionResult.Receipt.CorrelationId;
         return;
 
-        async ValueTask SendAguiEventAndRecordAsync(WorkflowOutputFrame frame, CancellationToken token)
+        async ValueTask SendAguiEventAndRecordAsync(WorkflowRunEventEnvelope frame, CancellationToken token)
         {
             var context = ResolveContext();
             await ChatWebSocketProtocol.SendAsync(
                 socket,
                 ChatWebSocketEnvelopeFactory.CreateAguiEvent(
-                    command.RequestId, frame, context.CorrelationId),
+                    command.RequestId, ChatJsonPayloads.ToJsonElement(frame), context.CorrelationId),
                 token,
                 responseMessageType);
             scope.RecordFirstResponse();

@@ -313,8 +313,8 @@ public sealed class SubWorkflowOrchestratorTests
         var parentCompletion = harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Subject;
         parentCompletion.StepId.Should().Be("step-b");
         parentCompletion.RunId.Should().Be("parent-run");
-        parentCompletion.Metadata["workflow_call.child_actor_id"].Should().Be("child-transient");
-        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be("child-run-2");
+        parentCompletion.Annotations["workflow_call.child_actor_id"].Should().Be("child-transient");
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be("child-run-2");
         harness.Runtime.Unlinked.Should().ContainSingle("child-transient");
         harness.Runtime.Destroyed.Should().ContainSingle("child-transient");
     }

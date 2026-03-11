@@ -38,7 +38,7 @@ public sealed class LocalActorPublisher : IEventPublisher
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         var routeTargetCount = GetRouteTargetCount(direction);
@@ -47,8 +47,11 @@ public sealed class LocalActorPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = _actorId,
-            Direction = direction,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = _actorId,
+                Direction = direction,
+            },
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -56,7 +59,7 @@ public sealed class LocalActorPublisher : IEventPublisher
             _envelopePropagationPolicy,
             _actorId,
             routeTargetCount,
-            metadata);
+            options);
 
         switch (direction)
         {
@@ -83,7 +86,7 @@ public sealed class LocalActorPublisher : IEventPublisher
         TEvent evt,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         var envelope = new EventEnvelope
@@ -91,9 +94,12 @@ public sealed class LocalActorPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = _actorId,
-            Direction = EventDirection.Self, // Point-to-point: target handles it as Self
-            TargetActorId = targetActorId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = _actorId,
+                Direction = EventDirection.Self, // Point-to-point: target handles it as Self
+                TargetActorId = targetActorId,
+            },
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -101,7 +107,7 @@ public sealed class LocalActorPublisher : IEventPublisher
             _envelopePropagationPolicy,
             _actorId,
             routeTargetCount: 1,
-            metadata);
+            options);
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
     }
 

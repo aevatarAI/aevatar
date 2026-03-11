@@ -636,7 +636,7 @@
       stepStates[data.stepId] = data.success ? "completed" : "failed";
       updateStepNode(data.stepId);
       if (isSelectedWorkflowTuring()) {
-        updateTuringMachineState(data.metadata);
+        updateTuringMachineState(data);
       }
       if (data.success) {
         addLogEntry("completed", `\u2713 ${data.stepId}`, data.output);
@@ -669,7 +669,7 @@
         stepId: data.stepId || "",
         prompt: data.prompt || "",
         timeoutSeconds: data.timeoutSeconds || 0,
-        metadata: data.metadata || {},
+        variableName: data.variableName || data.VariableName || "",
       });
     });
 
@@ -935,7 +935,7 @@
           <button id="${prefix}-interaction-signal" class="btn btn-primary">Send signal</button>
         </div>`;
     } else {
-      const variableName = interaction.metadata?.variable ? ` (${interaction.metadata.variable})` : "";
+      const variableName = interaction.variableName ? ` (${interaction.variableName})` : "";
       controlHtml = `
         <textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="Input for human step${esc(variableName)}"></textarea>
         <div class="interaction-actions">
@@ -1197,14 +1197,16 @@
     return selectedWorkflowMeta?.category === "turing";
   }
 
-  function updateTuringMachineState(metadata) {
-    if (!metadata) return;
-    const target = metadata["assign.target"];
+  function updateTuringMachineState(stepCompletion) {
+    if (!stepCompletion) return;
+    const target = stepCompletion.assignedVariable || stepCompletion.AssignedVariable || "";
     if (!target) return;
 
-    const value = Object.prototype.hasOwnProperty.call(metadata, "assign.value")
-      ? metadata["assign.value"]
-      : "";
+    const value = Object.prototype.hasOwnProperty.call(stepCompletion, "assignedValue")
+      ? stepCompletion.assignedValue
+      : (Object.prototype.hasOwnProperty.call(stepCompletion, "AssignedValue")
+          ? stepCompletion.AssignedValue
+          : "");
 
     turingMachineState[target] = value ?? "";
     renderTuringMachineState();
@@ -1915,7 +1917,11 @@
           success: value.success === true,
           output: readCustomValue(value, "output", "Output"),
           error: value.error ?? value.Error ?? null,
-          metadata: value.metadata || {},
+          annotations: value.annotations || value.Annotations || {},
+          nextStepId: readCustomValue(value, "nextStepId", "NextStepId"),
+          branchKey: readCustomValue(value, "branchKey", "BranchKey"),
+          assignedVariable: readCustomValue(value, "assignedVariable", "AssignedVariable"),
+          assignedValue: readCustomValue(value, "assignedValue", "AssignedValue"),
         },
       };
     }
@@ -1929,7 +1935,7 @@
           suspensionType: readCustomValue(value, "suspensionType", "SuspensionType") || "human_input",
           prompt: readCustomValue(value, "prompt", "Prompt"),
           timeoutSeconds: value.timeoutSeconds ?? value.TimeoutSeconds ?? 0,
-          metadata: value.metadata || {},
+          variableName: readCustomValue(value, "variableName", "VariableName"),
         },
       };
     }
@@ -2206,7 +2212,7 @@
         stepId: data.stepId || "",
         prompt: data.prompt || "",
         timeoutSeconds: data.timeoutSeconds || 0,
-        metadata: data.metadata || {},
+        variableName: data.variableName || data.VariableName || "",
       });
     } else if (eventType === "workflow.waiting_signal") {
       if (data.runId && !pgAutoRunId) pgAutoRunId = data.runId;
@@ -2450,7 +2456,7 @@
         stepId: data.stepId || "",
         prompt: data.prompt || "",
         timeoutSeconds: data.timeoutSeconds || 0,
-        metadata: data.metadata || {},
+        variableName: data.variableName || data.VariableName || "",
       });
     } else if (eventType === "workflow.waiting_signal") {
       if (data.runId && !pgRunRunId) pgRunRunId = data.runId;

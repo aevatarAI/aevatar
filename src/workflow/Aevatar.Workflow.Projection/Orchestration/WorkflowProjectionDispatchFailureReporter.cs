@@ -10,11 +10,11 @@ public sealed class WorkflowProjectionDispatchFailureReporter
     : IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>
 {
     private const string ProjectionDispatchFailureCode = "PROJECTION_DISPATCH_FAILED";
-    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
+    private readonly IProjectionSessionEventHub<WorkflowRunEventEnvelope> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionDispatchFailureReporter(
-        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
+        IProjectionSessionEventHub<WorkflowRunEventEnvelope> runEventStreamHub,
         IProjectionClock clock)
     {
         _runEventStreamHub = runEventStreamHub;
@@ -35,11 +35,14 @@ public sealed class WorkflowProjectionDispatchFailureReporter
             return ValueTask.CompletedTask;
 
         var payloadType = envelope.Payload?.TypeUrl ?? "(none)";
-        var evt = new WorkflowRunErrorEvent
+        var evt = new WorkflowRunEventEnvelope
         {
-            Code = ProjectionDispatchFailureCode,
-            Message = $"Projection dispatch failed. eventId={envelope.Id}, payloadType={payloadType}, reason={exception.Message}",
             Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
+            RunError = new WorkflowRunErrorEventPayload
+            {
+                Code = ProjectionDispatchFailureCode,
+                Message = $"Projection dispatch failed. eventId={envelope.Id}, payloadType={payloadType}, reason={exception.Message}",
+            },
         };
 
         return new ValueTask(

@@ -24,14 +24,76 @@ enum EventDirection {
 // Event envelope: 8 semantic fields (reduced from 16).
 
 message EventEnvelope {
-  string                      id              = 1;
-  google.protobuf.Timestamp   timestamp       = 2;
-  google.protobuf.Any         payload         = 3;
-  string                      publisher_id    = 4;
-  EventDirection              direction       = 5;
-  string                      correlation_id  = 6;
-  string                      target_actor_id = 7;  // Point-to-point target
-  map<string, string>         metadata        = 8;  // Extensible metadata
+  string                      id          = 1;
+  google.protobuf.Timestamp   timestamp   = 2;
+  google.protobuf.Any         payload     = 3;
+  EnvelopeRoute               route       = 4;
+  EnvelopePropagation         propagation = 5;
+  EnvelopeRuntime             runtime     = 6;
+}
+
+message EnvelopeRoute {
+  string         publisher_actor_id = 1;
+  EventDirection direction          = 2;
+  string         target_actor_id    = 3;
+}
+
+message TraceContext {
+  string trace_id    = 1;
+  string span_id     = 2;
+  string trace_flags = 3;
+}
+
+message EnvelopePropagation {
+  string                   correlation_id    = 1;
+  string                   causation_event_id = 2;
+  TraceContext             trace             = 3;
+  map<string, string>      baggage           = 4;
+}
+
+message DeliveryDeduplication {
+  string operation_id = 1;
+}
+
+message EnvelopeRetryContext {
+  string origin_event_id = 1;
+  int32  attempt         = 2;
+  string last_error_type = 3;
+}
+
+enum StreamForwardingHandleMode {
+  STREAM_FORWARDING_HANDLE_MODE_UNSPECIFIED      = 0;
+  STREAM_FORWARDING_HANDLE_MODE_HANDLE_THEN_FORWARD = 1;
+  STREAM_FORWARDING_HANDLE_MODE_TRANSIT_ONLY     = 2;
+}
+
+message EnvelopeForwardingContext {
+  repeated string             visited_stream_ids = 1;
+  string                      source_stream_id   = 2;
+  string                      target_stream_id   = 3;
+  StreamForwardingHandleMode  mode               = 4;
+}
+
+message EnvelopeCallbackContext {
+  string callback_id            = 1;
+  int64  generation             = 2;
+  int64  fire_index             = 3;
+  int64  fired_at_unix_time_ms  = 4;
+}
+
+message EnvelopeDispatchControl {
+  bool propagate_failure = 1;
+}
+
+message EnvelopeRuntime {
+  string                  source_actor_id   = 1;
+  int64                   route_target_count = 2;
+  DeliveryDeduplication   deduplication     = 3;
+  EnvelopeRetryContext    retry             = 4;
+  EnvelopeCallbackContext callback          = 5;
+  EnvelopeForwardingContext forwarding      = 6;
+  EnvelopeDispatchControl dispatch          = 7;
+  repeated string         visited_actor_ids = 8;
 }
 
 // State events (Event Sourcing).

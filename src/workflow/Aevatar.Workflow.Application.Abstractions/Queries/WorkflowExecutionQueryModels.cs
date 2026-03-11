@@ -166,7 +166,15 @@ public sealed class WorkflowRunStepTrace
     public string OutputPreview { get; set; } = string.Empty;
     public string Error { get; set; } = string.Empty;
     public Dictionary<string, string> RequestParameters { get; set; } = [];
-    public Dictionary<string, string> CompletionMetadata { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
+    public string NextStepId { get; set; } = string.Empty;
+    public string BranchKey { get; set; } = string.Empty;
+    public string AssignedVariable { get; set; } = string.Empty;
+    public string AssignedValue { get; set; } = string.Empty;
+    public string SuspensionType { get; set; } = string.Empty;
+    public string SuspensionPrompt { get; set; } = string.Empty;
+    public int? SuspensionTimeoutSeconds { get; set; }
+    public string RequestedVariableName { get; set; } = string.Empty;
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

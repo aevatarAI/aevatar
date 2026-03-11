@@ -11,21 +11,21 @@ namespace Aevatar.CQRS.Core.Tests;
 public class DefaultCommandContextPolicyTests
 {
     [Fact]
-    public void Create_ShouldGenerateIds_AndCloneMetadata_WhenIdsNotProvided()
+    public void Create_ShouldGenerateIds_AndCloneHeaders_WhenIdsNotProvided()
     {
         var policy = new DefaultCommandContextPolicy();
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["k"] = "v",
         };
 
-        var context = policy.Create("actor-1", metadata);
+        var context = policy.Create("actor-1", headers);
 
         context.TargetId.Should().Be("actor-1");
         context.CommandId.Should().NotBeNullOrWhiteSpace();
         context.CorrelationId.Should().Be(context.CommandId);
-        context.Metadata.Should().ContainKey("k").WhoseValue.Should().Be("v");
-        context.Metadata.Should().NotBeSameAs(metadata);
+        context.Headers.Should().ContainKey("k").WhoseValue.Should().Be("v");
+        context.Headers.Should().NotBeSameAs(headers);
     }
 
     [Fact]
@@ -422,11 +422,11 @@ internal sealed class CustomCommandContextPolicy : ICommandContextPolicy
 {
     public CommandContext Create(
         string targetId,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         string? commandId = null,
         string? correlationId = null)
     {
-        return new CommandContext(targetId, "custom-cmd", "custom-corr", metadata ?? new Dictionary<string, string>());
+        return new CommandContext(targetId, "custom-cmd", "custom-corr", headers ?? new Dictionary<string, string>());
     }
 }
 

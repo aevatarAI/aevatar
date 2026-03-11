@@ -558,7 +558,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["branch"] = "yes" },
+                BranchKey = "yes",
             }),
             ctx,
             CancellationToken.None);
@@ -591,7 +591,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["next_step"] = "s3" },
+                NextStepId = "s3",
             }),
             ctx,
             CancellationToken.None);
@@ -879,11 +879,8 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "ignored",
-                Metadata =
-                {
-                    ["assign.target"] = "counter",
-                    ["assign.value"] = "1",
-                },
+                AssignedVariable = "counter",
+                AssignedValue = "1",
             }),
             ctx,
             CancellationToken.None);
@@ -963,8 +960,11 @@ public sealed class WorkflowLoopModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test-publisher",
+                Direction = EventDirection.Self,
+            },
         };
     }
 

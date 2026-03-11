@@ -101,8 +101,11 @@ public class ScriptExecutionReadModelProjectorTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = "script-host",
-        Direction = EventDirection.Self,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "script-host",
+            Direction = EventDirection.Self,
+        },
     };
 
     private sealed class InMemoryScriptProjectionStoreDispatcher

@@ -85,18 +85,24 @@ public class FoundationAbstractionsProtoCoverageTests
         {
             Id = "envelope-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = "actor-1",
-            Direction = EventDirection.Both,
             Payload = Any.Pack(new StringValue { Value = "message" }),
-            CorrelationId = "corr-1",
-            TargetActorId = "actor-2",
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "actor-1",
+                Direction = EventDirection.Both,
+                TargetActorId = "actor-2",
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+            },
         };
-        envelope.Metadata["trace"] = "t-1";
+        envelope.Propagation.Baggage["trace"] = "t-1";
 
         var envelopeParsed = EventEnvelope.Parser.ParseFrom(envelope.ToByteArray());
         envelopeParsed.ShouldBe(envelope);
         envelopeParsed.CalculateSize().ShouldBeGreaterThan(0);
-        envelopeParsed.Metadata["trace"].ShouldBe("t-1");
+        envelopeParsed.Propagation.Baggage["trace"].ShouldBe("t-1");
         envelopeParsed.Payload.Unpack<StringValue>().Value.ShouldBe("message");
         ((IMessage)envelopeParsed).Descriptor.Name.ShouldBe(nameof(EventEnvelope));
 
@@ -107,7 +113,7 @@ public class FoundationAbstractionsProtoCoverageTests
         envelopeMerged.Equals((object?)null).ShouldBeFalse();
 
         Action setEnvelopeIdNull = () => envelope.Id = null!;
-        Action setPublisherNull = () => envelope.PublisherId = null!;
+        Action setPublisherNull = () => envelope.Route.PublisherActorId = null!;
         Action setStateAgentNull = () => state.AgentId = null!;
         Action setStateTypeNull = () => state.EventType = null!;
         Action setStateEventIdNull = () => state.EventId = null!;

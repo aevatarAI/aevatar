@@ -318,9 +318,15 @@ foreach (var workflowName in workflowsToRun)
             WorkflowYaml = yaml,
             WorkflowName = workflowName,
         }),
-        PublisherId = "primitives.demo",
-        Direction = EventDirection.Self,
-        CorrelationId = Guid.NewGuid().ToString("N"),
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "primitives.demo",
+            Direction = EventDirection.Self,
+        },
+        Propagation = new EnvelopePropagation
+        {
+            CorrelationId = Guid.NewGuid().ToString("N"),
+        },
     });
 
     var tcs = new TaskCompletionSource<(bool Success, string Output, string Error)>();
@@ -343,21 +349,21 @@ foreach (var workflowName in workflowsToRun)
         if (payload.Is(WorkflowCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<WorkflowCompletedEvent>();
-            if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+            if (string.Equals(envelope.Route?.PublisherActorId, actor.Id, StringComparison.Ordinal))
                 tcs.TrySetResult((evt.Success, evt.Output, evt.Error));
         }
 
         if (payload.Is(ChatResponseEvent.Descriptor))
         {
             var evt = payload.Unpack<ChatResponseEvent>();
-            if (string.Equals(envelope.PublisherId, actor.Id, StringComparison.Ordinal))
+            if (string.Equals(envelope.Route?.PublisherActorId, actor.Id, StringComparison.Ordinal))
                 tcs.TrySetResult((false, string.Empty, evt.Content));
         }
 
         if (payload.Is(TextMessageEndEvent.Descriptor))
         {
             var evt = payload.Unpack<TextMessageEndEvent>();
-            var publisher = envelope.PublisherId ?? "";
+            var publisher = envelope.Route?.PublisherActorId ?? "";
             if (string.Equals(publisher, actor.Id, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(evt.Content))
             {
@@ -386,8 +392,11 @@ foreach (var workflowName in workflowsToRun)
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = $"demo-{workflowName}" }),
-        PublisherId = "primitives.demo",
-        Direction = EventDirection.Self,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = "primitives.demo",
+            Direction = EventDirection.Self,
+        },
     });
 
     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));

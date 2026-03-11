@@ -4,7 +4,7 @@ public interface ICommandContextPolicy
 {
     CommandContext Create(
         string targetId,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         string? commandId = null,
         string? correlationId = null);
 }

@@ -19,7 +19,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
-    private const string DirectDispatchFailurePropagationMetadataKey = "aevatar.dispatch.propagate_failure";
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -140,11 +139,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 return;
         }
 
-        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
+        if (VisitedActorChain.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
 
         var selfActorId = this.GetPrimaryKeyString();
-        switch (envelope.Direction)
+        switch (envelope.Route?.Direction ?? EventDirection.Unspecified)
         {
             case EventDirection.Self:
             case EventDirection.Up:
@@ -158,8 +157,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     break;
                 }
 
-                if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.SourceActorId, out var sourceActorId) &&
-                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
+                if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -407,10 +405,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = envelope.Metadata.TryGetValue(RuntimeEnvelopeDeduplication.RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-                       !string.IsNullOrWhiteSpace(metadataOriginId)
-            ? metadataOriginId
-            : envelope.Id;
+        var originId = RuntimeEnvelopeDeduplication.ResolveOriginId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
             originId = envelope.Id ?? Guid.NewGuid().ToString("N");
@@ -450,7 +445,5 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     }
 
     private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
-        envelope.Metadata.TryGetValue(DirectDispatchFailurePropagationMetadataKey, out var value) &&
-        bool.TryParse(value, out var propagate) &&
-        propagate;
+        envelope.Runtime?.Dispatch?.PropagateFailure == true;
 }

@@ -382,9 +382,12 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                 RequestId = query.RequestId,
                 RunId = "run-no-metadata",
             }),
-            PublisherId = agent.Id,
-            TargetActorId = agent.Id,
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = agent.Id,
+                TargetActorId = agent.Id,
+                Direction = EventDirection.Self,
+            },
         });
 
         agent.State.LastRunId.Should().BeEmpty();
@@ -636,9 +639,12 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                     RequestId = requestId,
                     RunId = runId,
                 }),
-                PublisherId = actorId,
-                TargetActorId = actorId,
-                Direction = EventDirection.Self,
+                Route = new EnvelopeRoute
+                {
+                    PublisherActorId = actorId,
+                    TargetActorId = actorId,
+                    Direction = EventDirection.Self,
+                },
             });
     }
 
@@ -769,12 +775,14 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = evt;
             _ = direction;
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -783,10 +791,12 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             if (SendToException != null)
                 throw SendToException;

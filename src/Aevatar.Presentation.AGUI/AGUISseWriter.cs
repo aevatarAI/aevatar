@@ -5,8 +5,9 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.Presentation.AGUI;
@@ -17,31 +18,33 @@ namespace Aevatar.Presentation.AGUI;
 /// </summary>
 public sealed class AGUISseWriter : IAsyncDisposable
 {
-    private readonly HttpResponse _response;
-    private readonly JsonSerializerOptions _json;
+    private static readonly TypeRegistry DefaultTypeRegistry = TypeRegistry.FromFiles(
+        AGUIEvent.Descriptor.File,
+        AnyReflection.Descriptor,
+        StructReflection.Descriptor,
+        WrappersReflection.Descriptor);
 
-    public AGUISseWriter(HttpResponse response, JsonSerializerOptions? json = null)
+    private readonly HttpResponse _response;
+    private readonly JsonFormatter _jsonFormatter;
+
+    public AGUISseWriter(HttpResponse response, TypeRegistry? typeRegistry = null)
     {
         _response = response;
-        _json = json ?? DefaultJsonOptions;
+        _jsonFormatter = new JsonFormatter(
+            JsonFormatter.Settings.Default
+                .WithFormatDefaultValues(false)
+                .WithTypeRegistry(typeRegistry ?? DefaultTypeRegistry));
     }
 
     public async Task WriteAsync(AGUIEvent evt, CancellationToken ct)
     {
         if (evt == null) return;
 
-        // 用运行时类型序列化，保留派生类字段
-        var payload = JsonSerializer.Serialize((object)evt, evt.GetType(), _json);
+        var payload = _jsonFormatter.Format(evt);
         var bytes = Encoding.UTF8.GetBytes($"data: {payload}\n\n");
         await _response.Body.WriteAsync(bytes, ct);
         await _response.Body.FlushAsync(ct);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-    public static readonly JsonSerializerOptions DefaultJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 }

@@ -15,13 +15,20 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
             Prompt = "hello",
             Workflow = "auto",
             AgentId = " actor-1 ",
+            SessionId = " session-1 ",
             WorkflowYamls = ["name: inline"],
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request.Should().BeEquivalentTo(new WorkflowChatRunRequest("hello", "auto", "actor-1", ["name: inline"]));
+        result.Request.Should().BeEquivalentTo(
+            new WorkflowChatRunRequest(
+                "hello",
+                "auto",
+                "actor-1",
+                SessionId: "session-1",
+                WorkflowYamls: ["name: inline"]));
     }
 
     [Fact]
@@ -37,7 +44,13 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request.Should().BeEquivalentTo(new WorkflowChatRunRequest("hello", null, "actor-1", ["name: inline"]));
+        result.Request.Should().BeEquivalentTo(
+            new WorkflowChatRunRequest(
+                "hello",
+                null,
+                "actor-1",
+                SessionId: null,
+                WorkflowYamls: ["name: inline"]));
     }
 
     [Fact]

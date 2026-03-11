@@ -257,8 +257,8 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
         if (pending.TimeoutLease != null)
             return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.TimeoutLease);
 
-        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
-               string.Equals(metadata.CallbackId, pending.TimeoutCallbackId, StringComparison.Ordinal);
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.TimeoutCallbackId, StringComparison.Ordinal);
     }
 
     private static string ResolveOriginEnvelopeId(EventEnvelope envelope) =>

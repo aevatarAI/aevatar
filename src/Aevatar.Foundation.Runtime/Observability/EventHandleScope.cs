@@ -41,7 +41,11 @@ public struct EventHandleScope : IDisposable
 
         var activity = AevatarActivitySource.StartHandleEvent(actorId, envelope);
         var logScope = logger.BeginScope(TracingContextHelpers.CreateLogScopeState(envelope));
-        return new EventHandleScope(Stopwatch.StartNew(), activity, logScope, envelope.Direction.ToString());
+        return new EventHandleScope(
+            Stopwatch.StartNew(),
+            activity,
+            logScope,
+            (envelope.Route?.Direction ?? EventDirection.Unspecified).ToString());
     }
 
     public void MarkError(Exception ex)

@@ -1,5 +1,3 @@
-using Aevatar.Foundation.Abstractions.Propagation;
-
 namespace Aevatar.Foundation.Runtime.Deduplication;
 
 /// <summary>
@@ -7,9 +5,6 @@ namespace Aevatar.Foundation.Runtime.Deduplication;
 /// </summary>
 public static class RuntimeEnvelopeDeduplication
 {
-    public const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
-    public const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
-
     public static bool TryBuildDedupKey(
         string actorId,
         EventEnvelope envelope,
@@ -29,14 +24,14 @@ public static class RuntimeEnvelopeDeduplication
 
     public static string? ResolveOriginId(EventEnvelope envelope)
     {
-        if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.DedupOriginId, out var dedupOriginId) &&
-            !string.IsNullOrWhiteSpace(dedupOriginId))
+        var dedupOriginId = envelope.Runtime?.Deduplication?.OperationId;
+        if (!string.IsNullOrWhiteSpace(dedupOriginId))
         {
             return dedupOriginId;
         }
 
-        if (envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var retryOriginId) &&
-            !string.IsNullOrWhiteSpace(retryOriginId))
+        var retryOriginId = envelope.Runtime?.Retry?.OriginEventId;
+        if (!string.IsNullOrWhiteSpace(retryOriginId))
         {
             return retryOriginId;
         }
@@ -46,9 +41,7 @@ public static class RuntimeEnvelopeDeduplication
 
     public static int GetAttempt(EventEnvelope envelope)
     {
-        if (!envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var value))
-            return 0;
-
-        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : 0;
+        var attempt = envelope.Runtime?.Retry?.Attempt ?? 0;
+        return attempt > 0 ? attempt : 0;
     }
 }

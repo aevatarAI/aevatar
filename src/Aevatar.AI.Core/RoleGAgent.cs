@@ -21,8 +21,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
-using System.Globalization;
-
 namespace Aevatar.AI.Core;
 
 /// <summary>
@@ -30,7 +28,6 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 {
-    private const string LlmTimeoutMetadataKey = "aevatar.llm_timeout_ms";
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
     private string _appliedEventModules = string.Empty;
@@ -190,14 +187,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     private static int ResolveLlmTimeoutMs(ChatRequestEvent request)
     {
-        if (request.Metadata.TryGetValue(LlmTimeoutMetadataKey, out var raw) &&
-            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var timeoutMs) &&
-            timeoutMs > 0)
-        {
-            return timeoutMs;
-        }
-
-        return 0;
+        return request.TimeoutMs > 0 ? request.TimeoutMs : 0;
     }
 
     private static string BuildLlmFailureContent(string? message)
@@ -215,11 +205,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
-        IReadOnlyDictionary<string, string>? requestMetadata = request.Metadata.Count == 0
+        IReadOnlyDictionary<string, string>? metadata = request.RequestMetadata.Count == 0
             ? null
-            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
+            : new Dictionary<string, string>(request.RequestMetadata, StringComparer.Ordinal);
 
-        await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, requestMetadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, metadata, streamCt))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {

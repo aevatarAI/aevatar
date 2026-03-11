@@ -509,7 +509,7 @@ public class WorkflowGAgentCoverageTests
         parentCompletion.RunId.Should().Be("parent-run");
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("child-done");
-        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
     }
 
@@ -703,10 +703,16 @@ public class WorkflowGAgentCoverageTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = publisherId,
-            Direction = direction,
             Payload = Any.Pack(message),
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId,
+                Direction = direction,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         };
     }
 
@@ -763,9 +769,12 @@ public class WorkflowGAgentCoverageTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = sourceEnvelope;
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
@@ -774,10 +783,13 @@ public class WorkflowGAgentCoverageTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             Sent.Add((targetActorId, evt));
+            _ = sourceEnvelope;
+            _ = options;
             Published.Add((evt, EventDirection.Self));
             return Task.CompletedTask;
         }

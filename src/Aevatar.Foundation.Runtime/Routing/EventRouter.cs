@@ -55,7 +55,7 @@ public sealed class EventRouter
         var updated = AddPublisher(envelope, ActorId);
         await handleSelf(updated);
 
-        switch (envelope.Direction)
+        switch (updated.Route?.Direction ?? EventDirection.Unspecified)
         {
             case EventDirection.Self: break;
             case EventDirection.Up:
@@ -76,12 +76,13 @@ public sealed class EventRouter
     }
 
     private static HashSet<string> GetPublishers(EventEnvelope e) =>
-        e.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var csv) && !string.IsNullOrEmpty(csv)
-            ? [..csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)] : [];
+        e.Runtime?.VisitedActorIds.Count > 0
+            ? [..e.Runtime.VisitedActorIds]
+            : [];
 
     private static EventEnvelope AddPublisher(EventEnvelope e, string id)
     {
-        PublisherChainMetadata.AppendIfMissing(e, id);
+        VisitedActorChain.AppendIfMissing(e, id);
         return e;
     }
 }

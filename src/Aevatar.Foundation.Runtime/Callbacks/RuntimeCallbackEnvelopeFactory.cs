@@ -25,14 +25,15 @@ public static class RuntimeCallbackEnvelopeFactory
         var envelope = triggerEnvelope.Clone();
         envelope.Id = Guid.NewGuid().ToString("N");
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        envelope.TargetActorId = actorId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] =
-            generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] =
-            fireIndex.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] =
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        var route = envelope.EnsureRoute();
+        route.TargetActorId = actorId;
+        route.Direction = EventDirection.Self;
+
+        var callback = envelope.EnsureRuntime().EnsureCallback();
+        callback.CallbackId = callbackId;
+        callback.Generation = generation;
+        callback.FireIndex = fireIndex;
+        callback.FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         return envelope;
     }
 
@@ -66,8 +67,9 @@ public static class RuntimeCallbackEnvelopeFactory
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
 
         var envelope = triggerEnvelope.Clone();
-        if (string.IsNullOrWhiteSpace(envelope.TargetActorId))
-            envelope.TargetActorId = actorId;
+        var route = envelope.EnsureRoute();
+        if (string.IsNullOrWhiteSpace(route.TargetActorId))
+            route.TargetActorId = actorId;
         return envelope;
     }
 }

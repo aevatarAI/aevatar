@@ -59,7 +59,10 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(protobuf),
-                    Direction = EventDirection.Down,
+                    Route = new EnvelopeRoute
+                    {
+                        Direction = EventDirection.Down,
+                    },
                 },
                 _ => null,
             };

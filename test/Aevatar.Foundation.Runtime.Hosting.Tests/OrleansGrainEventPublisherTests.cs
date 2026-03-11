@@ -28,7 +28,7 @@ public class OrleansGrainEventPublisherTests
         await publisher.PublishAsync(new StringValue { Value = "hello" }, EventDirection.Self, CancellationToken.None);
 
         dispatched.Should().NotBeNull();
-        dispatched!.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).Should().BeFalse();
+        dispatched!.Runtime?.VisitedActorIds.Should().BeEmpty();
         streams.GetProduced("actor-self").Should().BeEmpty();
     }
 
@@ -43,7 +43,7 @@ public class OrleansGrainEventPublisherTests
             getParentId: () => "parent-actor");
 
         var inbound = new EventEnvelope();
-        inbound.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "parent-actor";
+        VisitedActorChain.AppendIfMissing(inbound, "parent-actor");
 
         await publisher.PublishAsync(
             new StringValue { Value = "reply" },
@@ -52,9 +52,7 @@ public class OrleansGrainEventPublisherTests
             inbound);
 
         var delivered = streams.GetProduced("parent-actor").Should().ContainSingle().Subject;
-        delivered.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
-            .Should().BeTrue();
-        chain.Should().Be("parent-actor,child-actor");
+        delivered.Runtime!.VisitedActorIds.Should().ContainSingle().Which.Should().Be("child-actor");
     }
 
     [Fact]
@@ -74,7 +72,7 @@ public class OrleansGrainEventPublisherTests
         await publisher.SendToAsync("actor-self", new StringValue { Value = "direct" }, CancellationToken.None);
 
         dispatched.Should().NotBeNull();
-        dispatched!.Metadata.ContainsKey(PublisherChainMetadata.PublishersMetadataKey).Should().BeFalse();
+        dispatched!.Runtime?.VisitedActorIds.Should().BeEmpty();
         streams.GetProduced("actor-self").Should().BeEmpty();
     }
 
@@ -88,7 +86,7 @@ public class OrleansGrainEventPublisherTests
             onDispatchToSelf: _ => Task.CompletedTask);
 
         var inbound = new EventEnvelope();
-        inbound.Metadata[PublisherChainMetadata.PublishersMetadataKey] = "upstream";
+        VisitedActorChain.AppendIfMissing(inbound, "upstream");
 
         await publisher.SendToAsync(
             "receiver",
@@ -97,9 +95,7 @@ public class OrleansGrainEventPublisherTests
             inbound);
 
         var delivered = streams.GetProduced("receiver").Should().ContainSingle().Subject;
-        delivered.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
-            .Should().BeTrue();
-        chain.Should().Be("upstream,sender");
+        delivered.Runtime!.VisitedActorIds.Should().ContainSingle().Which.Should().Be("sender");
     }
 
     [Fact]
@@ -115,9 +111,7 @@ public class OrleansGrainEventPublisherTests
 
         var delivered = streams.GetProduced("receiver").Should().ContainSingle().Subject;
         delivered.Payload!.Unpack<StringValue>().Value.Should().Be("stream");
-        delivered.Metadata.TryGetValue(PublisherChainMetadata.PublishersMetadataKey, out var chain)
-            .Should().BeTrue();
-        chain.Should().Be("sender");
+        delivered.Runtime!.VisitedActorIds.Should().ContainSingle().Which.Should().Be("sender");
     }
 
     [Fact]
@@ -148,10 +142,9 @@ public class OrleansGrainEventPublisherTests
 
         var childAEnvelope = streams.GetProduced("child-a").Should().ContainSingle().Subject;
         childAEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("task");
-        childAEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("root");
-        childAEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("child-a");
-        childAEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
-            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        StreamForwardingEnvelopeState.GetSourceStreamId(childAEnvelope).Should().Be("root");
+        StreamForwardingEnvelopeState.GetTargetStreamId(childAEnvelope).Should().Be("child-a");
+        StreamForwardingEnvelopeState.GetMode(childAEnvelope).Should().Be(StreamForwardingHandleMode.HandleThenForward);
         streams.GetProduced("child-b").Should().BeEmpty();
     }
 
@@ -197,10 +190,9 @@ public class OrleansGrainEventPublisherTests
         streams.GetProduced("middle").Should().BeEmpty();
         var leafEnvelope = streams.GetProduced("leaf").Should().ContainSingle().Subject;
         leafEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("transit");
-        leafEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("middle");
-        leafEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("leaf");
-        leafEnvelope.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
-            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        StreamForwardingEnvelopeState.GetSourceStreamId(leafEnvelope).Should().Be("middle");
+        StreamForwardingEnvelopeState.GetTargetStreamId(leafEnvelope).Should().Be("leaf");
+        StreamForwardingEnvelopeState.GetMode(leafEnvelope).Should().Be(StreamForwardingHandleMode.HandleThenForward);
     }
 
     [Fact]
@@ -225,7 +217,7 @@ public class OrleansGrainEventPublisherTests
 
         var middleEnvelope = streams.GetProduced("middle").Should().ContainSingle().Subject;
         selfDispatchCount.Should().Be(0);
-        middleEnvelope.Metadata[PublisherChainMetadata.PublishersMetadataKey].Should().Be("root");
+        middleEnvelope.Runtime?.VisitedActorIds.Should().BeEmpty();
     }
 
     private static OrleansGrainEventPublisher CreatePublisher(

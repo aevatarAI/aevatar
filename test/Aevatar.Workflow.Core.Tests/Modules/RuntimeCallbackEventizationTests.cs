@@ -785,7 +785,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task LlmCallModule_ShouldReuseDispatchDedupMetadata_WhenDispatchIsReplayed()
+    public async Task LlmCallModule_ShouldReuseDispatchDedupState_WhenDispatchIsReplayed()
     {
         var module = new LLMCallModule();
         var ctx = new SchedulingContext();
@@ -805,8 +805,9 @@ public class RuntimeCallbackEventizationTests
             .Single(x => x.Event is ChatRequestEvent);
         var firstChatRequest = (ChatRequestEvent)firstDispatch.Event;
         firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
-        firstDispatch.Metadata.Should().ContainKey(EnvelopeMetadataKeys.DedupOriginId);
-        var dedupOriginId = firstDispatch.Metadata[EnvelopeMetadataKeys.DedupOriginId];
+        firstDispatch.Options.Should().NotBeNull();
+        firstDispatch.Options!.Delivery.Should().NotBeNull();
+        var dedupOriginId = firstDispatch.Options.Delivery!.DeduplicationOperationId;
         dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
 
         var state = ctx.LoadState<LLMCallModuleState>("llm_call");
@@ -824,7 +825,7 @@ public class RuntimeCallbackEventizationTests
         var replayChatRequest = (ChatRequestEvent)replayDispatch.Event;
         replayChatRequest.SessionId.Should().Be(firstChatRequest.SessionId);
         replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
-        replayDispatch.Metadata[EnvelopeMetadataKeys.DedupOriginId].Should().Be(dedupOriginId);
+        replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
 
         ctx.LoadState<LLMCallModuleState>("llm_call")
             .PendingBySessionId[firstChatRequest.SessionId]
@@ -1049,7 +1050,7 @@ public class RuntimeCallbackEventizationTests
                 RunId = "run-next",
                 Success = true,
                 Output = "done",
-                Metadata = { ["next_step"] = "missing-step" },
+                NextStepId = "missing-step",
             }),
             ctx,
             CancellationToken.None);
@@ -1168,38 +1169,37 @@ public class RuntimeCallbackEventizationTests
 
     private static EventEnvelope Wrap(
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EnvelopeCallbackContext? callback = null)
     {
-        var envelope = new EventEnvelope
+        return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test",
+                Direction = EventDirection.Self,
+            },
+            Runtime = callback == null
+                ? null
+                : new EnvelopeRuntime
+                {
+                    Callback = callback.Clone(),
+                },
         };
-
-        if (metadata != null)
-        {
-            foreach (var pair in metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
-        }
-
-        return envelope;
     }
 
-    private static IReadOnlyDictionary<string, string> MetadataFor(
+    private static EnvelopeCallbackContext MetadataFor(
         ScheduledCallback callback,
         long? generation = null,
         long fireIndex = 0) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
+        new()
         {
-            [RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId,
-            [RuntimeCallbackMetadataKeys.CallbackGeneration] = (generation ?? callback.Generation)
-                .ToString(CultureInfo.InvariantCulture),
-            [RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture),
-            [RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                .ToString(CultureInfo.InvariantCulture),
+            CallbackId = callback.CallbackId,
+            Generation = generation ?? callback.Generation,
+            FireIndex = fireIndex,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
     private static WorkflowExecutionKernel CreateKernel(
@@ -1242,24 +1242,24 @@ public class RuntimeCallbackEventizationTests
             TEvent evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            return RecordOutboundAsync(evt, direction, targetActorId: null, metadata, ct);
+            return RecordOutboundAsync(evt, direction, targetActorId: null, options, ct);
         }
 
         public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            return RecordOutboundAsync(evt, EventDirection.Self, targetActorId, metadata, ct);
+            return RecordOutboundAsync(evt, EventDirection.Self, targetActorId, options, ct);
         }
 
         private Task RecordOutboundAsync<TEvent>(
             TEvent evt,
             EventDirection direction,
             string? targetActorId,
-            IReadOnlyDictionary<string, string>? metadata,
+            EventEnvelopePublishOptions? options,
             CancellationToken ct)
             where TEvent : IMessage
         {
@@ -1275,9 +1275,7 @@ public class RuntimeCallbackEventizationTests
                 evt,
                 direction,
                 targetActorId,
-                metadata == null
-                    ? new Dictionary<string, string>(StringComparer.Ordinal)
-                    : new Dictionary<string, string>(metadata, StringComparer.Ordinal)));
+                options));
             return Task.CompletedTask;
         }
 
@@ -1323,11 +1321,11 @@ public class RuntimeCallbackEventizationTests
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = dueTime;
-            _ = metadata;
+            _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
@@ -1340,12 +1338,12 @@ public class RuntimeCallbackEventizationTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = dueTime;
             _ = period;
-            _ = metadata;
+            _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
@@ -1425,5 +1423,5 @@ public class RuntimeCallbackEventizationTests
         IMessage Event,
         EventDirection Direction,
         string? TargetActorId,
-        IReadOnlyDictionary<string, string> Metadata);
+        EventEnvelopePublishOptions? Options);
 }

@@ -99,7 +99,7 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = parent, RunId = runId, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
                 };
-                completed.Metadata["race.winner"] = evt.StepId;
+                completed.Annotations["race.winner"] = evt.StepId;
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
 
                 if (state.Received >= state.Total)

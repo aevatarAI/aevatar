@@ -35,7 +35,7 @@ public sealed class OrleansActorStreamCoverageTests
         var source = provider.GetRecordedStream("actor-1");
         source.Published.Should().ContainSingle();
         source.Published[0].Payload!.Unpack<StringValue>().Value.Should().Be("hello");
-        source.Published[0].Direction.Should().Be(EventDirection.Down);
+        source.Published[0].Route!.Direction.Should().Be(EventDirection.Down);
     }
 
     [Fact]
@@ -46,7 +46,10 @@ public sealed class OrleansActorStreamCoverageTests
         var envelope = new EventEnvelope
         {
             Id = "evt-1",
-            Direction = EventDirection.Both,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Both,
+            },
             Payload = Any.Pack(new StringValue { Value = "direct" }),
         };
 
@@ -55,7 +58,7 @@ public sealed class OrleansActorStreamCoverageTests
         var source = provider.GetRecordedStream("actor-1");
         source.Published.Should().ContainSingle();
         source.Published[0].Id.Should().Be("evt-1");
-        source.Published[0].Direction.Should().Be(EventDirection.Both);
+        source.Published[0].Route!.Direction.Should().Be(EventDirection.Both);
         source.Published[0].Payload!.Unpack<StringValue>().Value.Should().Be("direct");
     }
 
@@ -99,9 +102,8 @@ public sealed class OrleansActorStreamCoverageTests
         provider.GetRecordedStream("target-handle").Published.Should().ContainSingle();
         provider.GetRecordedStream("target-transit").Published.Should().BeEmpty();
         provider.GetRecordedStream("target-up-only").Published.Should().BeEmpty();
-        provider.GetRecordedStream("target-handle").Published[0]
-            .Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey]
-            .Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        StreamForwardingEnvelopeState.GetMode(provider.GetRecordedStream("target-handle").Published[0])
+            .Should().Be(StreamForwardingHandleMode.HandleThenForward);
     }
 
     [Fact]
@@ -185,7 +187,10 @@ public sealed class OrleansActorStreamCoverageTests
         {
             Id = "evt-envelope",
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         });
 
         received.Should().ContainSingle(x => x.Id == "evt-envelope");
@@ -213,18 +218,27 @@ public sealed class OrleansActorStreamCoverageTests
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-null",
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
         });
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-mismatch",
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
             Payload = Any.Pack(new Int32Value { Value = 42 }),
         });
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-match",
-            Direction = EventDirection.Down,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Down,
+            },
             Payload = Any.Pack(new StringValue { Value = "ok" }),
         });
 

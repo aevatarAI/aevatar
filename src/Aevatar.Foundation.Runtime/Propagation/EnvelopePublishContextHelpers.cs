@@ -12,7 +12,7 @@ public static class EnvelopePublishContextHelpers
         IEnvelopePropagationPolicy propagationPolicy,
         string sourceActorId,
         long? routeTargetCount = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         ArgumentNullException.ThrowIfNull(propagationPolicy);
@@ -20,16 +20,37 @@ public static class EnvelopePublishContextHelpers
         propagationPolicy.Apply(envelope, sourceEnvelope);
         TracingContextHelpers.PopulateTraceId(envelope, overwrite: true);
 
-        if (!string.IsNullOrWhiteSpace(sourceActorId))
-            envelope.Metadata[EnvelopeMetadataKeys.SourceActorId] = sourceActorId;
+        var route = envelope.EnsureRoute();
+        if (!string.IsNullOrWhiteSpace(sourceActorId) && string.IsNullOrWhiteSpace(route.PublisherActorId))
+            route.PublisherActorId = sourceActorId;
+
+        var runtime = envelope.EnsureRuntime();
+        if (!string.IsNullOrWhiteSpace(sourceActorId) && string.IsNullOrWhiteSpace(runtime.SourceActorId))
+            runtime.SourceActorId = sourceActorId;
 
         if (routeTargetCount.HasValue)
-            envelope.Metadata[EnvelopeMetadataKeys.RouteTargetCount] = routeTargetCount.Value.ToString();
+            runtime.RouteTargetCount = routeTargetCount.Value;
 
-        if (metadata == null)
-            return;
+        if (options?.Propagation != null)
+            MergePropagation(envelope.EnsurePropagation(), options.Propagation);
 
-        foreach (var pair in metadata)
-            envelope.Metadata[pair.Key] = pair.Value;
+        if (!string.IsNullOrWhiteSpace(options?.Delivery?.DeduplicationOperationId))
+            runtime.EnsureDeduplication().OperationId = options.Delivery.DeduplicationOperationId;
+    }
+
+    private static void MergePropagation(EnvelopePropagation target, EventEnvelopePropagationOverrides overrides)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(overrides);
+
+        if (!string.IsNullOrWhiteSpace(overrides.CorrelationId))
+            target.CorrelationId = overrides.CorrelationId;
+        if (!string.IsNullOrWhiteSpace(overrides.CausationEventId))
+            target.CausationEventId = overrides.CausationEventId;
+        if (overrides.Trace != null)
+            target.Trace = overrides.Trace.Clone();
+
+        foreach (var pair in overrides.Baggage)
+            target.Baggage[pair.Key] = pair.Value;
     }
 }

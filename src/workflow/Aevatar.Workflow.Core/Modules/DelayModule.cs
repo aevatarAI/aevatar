@@ -161,8 +161,8 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
         if (pending.Lease != null)
             return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease);
 
-        return RuntimeCallbackEnvelopeMetadataReader.TryRead(envelope, out var metadata) &&
-               string.Equals(metadata.CallbackId, pending.CallbackId, StringComparison.Ordinal);
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.CallbackId, StringComparison.Ordinal);
     }
 
     private static string ResolveOriginEnvelopeId(EventEnvelope envelope) =>

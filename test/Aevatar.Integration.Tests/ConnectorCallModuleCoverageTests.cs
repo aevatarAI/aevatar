@@ -74,8 +74,8 @@ public sealed class ConnectorCallModuleCoverageTests
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("payload");
-        completed.Metadata["connector.skipped"].Should().Be("true");
-        completed.Metadata["connector.skip_reason"].Should().Be("connector_not_found");
+        completed.Annotations["connector.skipped"].Should().Be("true");
+        completed.Annotations["connector.skip_reason"].Should().Be("connector_not_found");
     }
 
     [Fact]
@@ -110,8 +110,8 @@ public sealed class ConnectorCallModuleCoverageTests
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("ok");
-        completed.Metadata["connector.attempts"].Should().Be("2");
-        completed.Metadata["connector.name"].Should().Be("retryable");
+        completed.Annotations["connector.attempts"].Should().Be("2");
+        completed.Annotations["connector.name"].Should().Be("retryable");
     }
 
     [Fact]
@@ -139,9 +139,9 @@ public sealed class ConnectorCallModuleCoverageTests
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("original");
-        completed.Metadata["connector.continued_on_error"].Should().Be("true");
-        completed.Metadata["connector.timeout_ms"].Should().Be("100");
-        completed.Metadata.Should().ContainKey("connector.error");
+        completed.Annotations["connector.continued_on_error"].Should().Be("true");
+        completed.Annotations["connector.timeout_ms"].Should().Be("100");
+        completed.Annotations.Should().ContainKey("connector.error");
     }
 
     private static TestEventHandlerContext CreateContext()
@@ -157,11 +157,17 @@ public sealed class ConnectorCallModuleCoverageTests
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            CorrelationId = correlationId ?? string.Empty,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = "test-publisher",
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
     }
 

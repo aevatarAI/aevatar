@@ -111,7 +111,10 @@ internal static class Program
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Self,
+        Route = new EnvelopeRoute
+        {
+            PublisherActorId = publisherId,
+            Direction = EventDirection.Self,
+        },
     };
 }

@@ -50,7 +50,10 @@ public sealed class InMemoryStreamingCoverageTests
             Id = "evt-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Self,
+            },
         };
 
         await stream.ProduceAsync(envelope);
@@ -321,7 +324,7 @@ public sealed class InMemoryStreamingCoverageTests
     }
 
     [Fact]
-    public async Task StreamProvider_ShouldForwardToTargetStreamAndSetForwardingMetadata()
+    public async Task StreamProvider_ShouldForwardToTargetStreamAndSetForwardingState()
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var provider = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
@@ -346,10 +349,10 @@ public sealed class InMemoryStreamingCoverageTests
 
         var forwarded = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
         forwarded.Payload!.Unpack<StringValue>().Value.Should().Be("relay");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey].Should().Be(StreamForwardingEnvelopeMetadata.ForwardedValue);
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("source");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("target");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey].Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        StreamForwardingEnvelopeState.IsForwarded(forwarded).Should().BeTrue();
+        StreamForwardingEnvelopeState.GetSourceStreamId(forwarded).Should().Be("source");
+        StreamForwardingEnvelopeState.GetTargetStreamId(forwarded).Should().Be("target");
+        StreamForwardingEnvelopeState.GetMode(forwarded).Should().Be(StreamForwardingHandleMode.HandleThenForward);
     }
 
     [Fact]

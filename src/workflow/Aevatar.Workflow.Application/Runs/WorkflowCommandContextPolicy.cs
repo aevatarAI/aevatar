@@ -10,7 +10,7 @@ public sealed class WorkflowCommandContextPolicy : ICommandContextPolicy
 {
     public CommandContext Create(
         string targetId,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         string? commandId = null,
         string? correlationId = null)
     {
@@ -23,10 +23,10 @@ public sealed class WorkflowCommandContextPolicy : ICommandContextPolicy
         var resolvedCorrelationId = string.IsNullOrWhiteSpace(correlationId)
             ? resolvedCommandId
             : correlationId;
-        var resolvedMetadata = metadata == null
+        var resolvedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+            : new Dictionary<string, string>(headers, StringComparer.Ordinal);
 
-        return new CommandContext(targetId, resolvedCommandId, resolvedCorrelationId, resolvedMetadata);
+        return new CommandContext(targetId, resolvedCommandId, resolvedCorrelationId, resolvedHeaders);
     }
 }

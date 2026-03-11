@@ -145,11 +145,11 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     WorkerId = evt.WorkerId,
                 };
 
-                foreach (var (key, value) in evt.Metadata)
-                    final.Metadata[key] = value;
-                final.Metadata["parallel.used_vote"] = "true";
-                final.Metadata["parallel.vote_step_id"] = evt.StepId;
-                final.Metadata["parallel.workers_success"] = workersSuccess.ToString();
+                foreach (var (key, value) in evt.Annotations)
+                    final.Annotations[key] = value;
+                final.Annotations["parallel.used_vote"] = "true";
+                final.Annotations["parallel.vote_step_id"] = evt.StepId;
+                final.Annotations["parallel.workers_success"] = workersSuccess.ToString();
 
                 await ctx.PublishAsync(final, EventDirection.Self, ct);
                 return;
@@ -204,7 +204,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         Success = allSuccess,
                         Output = merged,
                     };
-                    completed.Metadata["parallel.used_vote"] = "false";
+                    completed.Annotations["parallel.used_vote"] = "false";
                     await ctx.PublishAsync(completed, EventDirection.Self, ct);
                 }
             }

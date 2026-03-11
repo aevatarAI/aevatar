@@ -28,8 +28,8 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
     public bool CanHandle(EventEnvelope envelope)
     {
         if (_meta.IsAllEventHandler) return true;
-        if (!_meta.AllowSelfHandling && envelope.PublisherId == _agent.Id) return false;
-        if (_meta.OnlySelfHandling && envelope.Direction != EventDirection.Self) return false;
+        if (!_meta.AllowSelfHandling && envelope.Route?.PublisherActorId == _agent.Id) return false;
+        if (_meta.OnlySelfHandling && envelope.Route?.Direction != EventDirection.Self) return false;
         if (envelope.Payload == null) return false;
         return envelope.Payload.TypeUrl == GetTypeUrl(_meta.ParameterType);
     }

@@ -24,28 +24,3 @@ public sealed class AsyncLocalAgentContextAccessor : IAgentContextAccessor
     private static readonly AsyncLocal<IAgentContext?> Store = new();
     public IAgentContext? Context { get => Store.Value; set => Store.Value = value; }
 }
-
-/// <summary>Injects AgentContext into EventEnvelope metadata and extracts it back.</summary>
-public static class AgentContextPropagator
-{
-    private const string Prefix = "__ctx_";
-
-    /// <summary>Writes current context into envelope metadata.</summary>
-    public static void Inject(IAgentContext? context, EventEnvelope envelope)
-    {
-        if (context == null) return;
-        foreach (var (key, value) in context.GetAll())
-            if (value != null)
-                envelope.Metadata[$"{Prefix}{key}"] = value.ToString() ?? "";
-    }
-
-    /// <summary>Restores context from envelope metadata.</summary>
-    public static IAgentContext Extract(EventEnvelope envelope)
-    {
-        var ctx = new AsyncLocalAgentContext();
-        foreach (var (key, value) in envelope.Metadata)
-            if (key.StartsWith(Prefix))
-                ctx.Set(key[Prefix.Length..], value);
-        return ctx;
-    }
-}

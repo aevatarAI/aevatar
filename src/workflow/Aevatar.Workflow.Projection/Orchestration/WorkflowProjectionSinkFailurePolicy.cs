@@ -6,17 +6,17 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionSinkFailurePolicy
-    : EventSinkProjectionFailurePolicyBase<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
+    : EventSinkProjectionFailurePolicyBase<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>
 {
     public const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
     public const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
 
-    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
+    private readonly IProjectionSessionEventHub<WorkflowRunEventEnvelope> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionSinkFailurePolicy(
-        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent> sinkSubscriptionManager,
-        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
+        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> sinkSubscriptionManager,
+        IProjectionSessionEventHub<WorkflowRunEventEnvelope> runEventStreamHub,
         IProjectionClock clock)
         : base(sinkSubscriptionManager)
     {
@@ -26,8 +26,8 @@ public sealed class WorkflowProjectionSinkFailurePolicy
 
     protected override async ValueTask OnBackpressureAsync(
         WorkflowExecutionRuntimeLease runtimeLease,
-        IEventSink<WorkflowRunEvent> sink,
-        WorkflowRunEvent sourceEvent,
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        WorkflowRunEventEnvelope sourceEvent,
         EventSinkBackpressureException exception,
         CancellationToken ct)
     {
@@ -42,8 +42,8 @@ public sealed class WorkflowProjectionSinkFailurePolicy
 
     protected override async ValueTask OnInvalidOperationAsync(
         WorkflowExecutionRuntimeLease runtimeLease,
-        IEventSink<WorkflowRunEvent> sink,
-        WorkflowRunEvent sourceEvent,
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        WorkflowRunEventEnvelope sourceEvent,
         InvalidOperationException exception,
         CancellationToken ct)
     {
@@ -60,17 +60,20 @@ public sealed class WorkflowProjectionSinkFailurePolicy
         WorkflowExecutionRuntimeLease runtimeLease,
         string code,
         string message,
-        WorkflowRunEvent sourceEvent)
+        WorkflowRunEventEnvelope sourceEvent)
     {
         if (string.IsNullOrWhiteSpace(runtimeLease.ActorId) || string.IsNullOrWhiteSpace(runtimeLease.CommandId))
             return;
 
-        var evtType = sourceEvent.Type;
-        var runError = new WorkflowRunErrorEvent
+        var evtType = WorkflowRunEventTypes.GetEventType(sourceEvent);
+        var runError = new WorkflowRunEventEnvelope
         {
-            Code = code,
-            Message = $"Live sink delivery failed. eventType={evtType}, reason={message}",
             Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
+            RunError = new WorkflowRunErrorEventPayload
+            {
+                Code = code,
+                Message = $"Live sink delivery failed. eventType={evtType}, reason={message}",
+            },
         };
 
         try

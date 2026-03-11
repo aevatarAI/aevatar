@@ -255,8 +255,8 @@ flowchart LR
 |---|---|---|---|---|
 | `actorId` | `WorkflowRunActorResolver` | Workflow Actor 维度 | Actor Runtime | 投影上下文、查询接口 |
 | `commandId` | `WorkflowCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
-| `correlationId` | `WorkflowCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.CorrelationId` |
-| `sessionId` | `WorkflowRunCommandMetadataKeys.SessionId` | 本次 chat 会话维度 | Command metadata | `ChatRequestEvent.SessionId` |
+| `correlationId` | `WorkflowCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
+| `sessionId` | `WorkflowChatRunRequest.SessionId` + `WorkflowChatRequestEnvelopeFactory` fallback | 本次 chat 会话维度 | Command payload | `ChatRequestEvent.SessionId` |
 | `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
 | `messageId` | AGUI mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
 

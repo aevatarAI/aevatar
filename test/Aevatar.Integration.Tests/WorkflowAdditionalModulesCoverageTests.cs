@@ -70,8 +70,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Published.Should().ContainSingle();
         ctx.Published[0].direction.Should().Be(EventDirection.Both);
         var emitted = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
-        emitted.Metadata["emit.event_type"].Should().Be("audit");
-        emitted.Metadata["emit.payload"].Should().Be("{\"k\":1}");
+        emitted.Annotations["emit.event_type"].Should().Be("audit");
+        emitted.Annotations["emit.payload"].Should().Be("{\"k\":1}");
         ctx.Published.Clear();
 
         await emit.HandleAsync(
@@ -85,8 +85,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var defaultEmit = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        defaultEmit.Metadata["emit.event_type"].Should().Be("custom");
-        defaultEmit.Metadata["emit.payload"].Should().Be("fallback-payload");
+        defaultEmit.Annotations["emit.event_type"].Should().Be("custom");
+        defaultEmit.Annotations["emit.payload"].Should().Be("fallback-payload");
     }
 
     [Fact]
@@ -144,9 +144,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
-        completions["switch-1"].Metadata["branch"].Should().Be("foo");
-        completions["switch-2"].Metadata["branch"].Should().Be("bar");
-        completions["switch-3"].Metadata["branch"].Should().Be("_default");
+        completions["switch-1"].BranchKey.Should().Be("foo");
+        completions["switch-2"].BranchKey.Should().Be("bar");
+        completions["switch-3"].BranchKey.Should().Be("_default");
     }
 
     [Fact]
@@ -519,7 +519,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         pendingCompletions.Should().HaveCount(2);
         pendingCompletions.Should().ContainSingle(x => x.StepId == "cache-1" && x.Success && x.Output == "cached-value");
         pendingCompletions.Should().ContainSingle(x => x.StepId == "cache-2" && x.Success && x.Output == "cached-value");
-        pendingCompletions.Should().OnlyContain(x => x.Metadata["cache.hit"] == "false");
+        pendingCompletions.Should().OnlyContain(x => x.Annotations["cache.hit"] == "false");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -537,7 +537,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         hitCompletion.StepId.Should().Be("cache-3");
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-value");
-        hitCompletion.Metadata["cache.hit"].Should().Be("true");
+        hitCompletion.Annotations["cache.hit"].Should().Be("true");
     }
 
     [Fact]
@@ -608,9 +608,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["guard-pass"].Success.Should().BeTrue();
         completions["guard-skip"].Success.Should().BeTrue();
-        completions["guard-skip"].Metadata["guard.skipped"].Should().Be("true");
+        completions["guard-skip"].Annotations["guard.skipped"].Should().Be("true");
         completions["guard-branch"].Success.Should().BeTrue();
-        completions["guard-branch"].Metadata["next_step"].Should().Be("manual_review");
+        completions["guard-branch"].NextStepId.Should().Be("manual_review");
         completions["guard-fail"].Success.Should().BeFalse();
         completions["guard-fail"].Error.Should().Contain("guard check");
     }
@@ -806,7 +806,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
-        suspended.Metadata["variable"].Should().Be("answer");
+        suspended.VariableName.Should().Be("answer");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1023,7 +1023,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         winner.StepId.Should().Be("race-1");
         winner.Success.Should().BeTrue();
         winner.Output.Should().Be("winner-output");
-        winner.Metadata["race.winner"].Should().Be("race-1_race_1");
+        winner.Annotations["race.winner"].Should().Be("race-1_race_1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1467,7 +1467,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         reduced.StepId.Should().Be("mr-1");
         reduced.Success.Should().BeTrue();
         reduced.Output.Should().Be("FINAL");
-        reduced.Metadata["map_reduce.phase"].Should().Be("reduce");
+        reduced.Annotations["map_reduce.phase"].Should().Be("reduce");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1530,9 +1530,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var lowScore = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         lowScore.StepId.Should().Be("eval-1");
         lowScore.Success.Should().BeTrue();
-        lowScore.Metadata["evaluate.score"].Should().Be("3.5");
-        lowScore.Metadata["evaluate.passed"].Should().Be("False");
-        lowScore.Metadata["branch"].Should().Be("retry_path");
+        lowScore.Annotations["evaluate.score"].Should().Be("3.5");
+        lowScore.Annotations["evaluate.passed"].Should().Be("False");
+        lowScore.BranchKey.Should().Be("retry_path");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1559,8 +1559,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var highScore = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         highScore.StepId.Should().Be("eval-2");
-        highScore.Metadata["evaluate.passed"].Should().Be("True");
-        highScore.Metadata.Should().NotContainKey("branch");
+        highScore.Annotations["evaluate.passed"].Should().Be("True");
+        highScore.BranchKey.Should().BeEmpty();
     }
 
     [Fact]
@@ -1595,8 +1595,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         passCompleted.StepId.Should().Be("reflect-1");
         passCompleted.Success.Should().BeTrue();
         passCompleted.Output.Should().Be("draft-1");
-        passCompleted.Metadata["reflect.rounds"].Should().Be("1");
-        passCompleted.Metadata["reflect.passed"].Should().Be("True");
+        passCompleted.Annotations["reflect.rounds"].Should().Be("1");
+        passCompleted.Annotations["reflect.passed"].Should().Be("True");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1647,8 +1647,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         maxRoundCompleted.StepId.Should().Be("reflect-2");
         maxRoundCompleted.Success.Should().BeTrue();
         maxRoundCompleted.Output.Should().Be("draft-2-better");
-        maxRoundCompleted.Metadata["reflect.rounds"].Should().Be("2");
-        maxRoundCompleted.Metadata["reflect.passed"].Should().Be("False");
+        maxRoundCompleted.Annotations["reflect.rounds"].Should().Be("2");
+        maxRoundCompleted.Annotations["reflect.passed"].Should().Be("False");
     }
 
     [Fact]
@@ -1745,7 +1745,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var approved = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         approved.Success.Should().BeTrue();
         approved.Output.Should().Be("looks good");
-        approved.Metadata["branch"].Should().Be("true");
+        approved.BranchKey.Should().Be("true");
     }
 
     [Fact]
@@ -1780,7 +1780,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var rejected = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         rejected.Success.Should().BeTrue();
-        rejected.Metadata["branch"].Should().Be("false");
+        rejected.BranchKey.Should().Be("false");
         rejected.Output.Should().Contain("original-yaml");
         rejected.Output.Should().Contain("change the model to gpt-4");
     }
@@ -1815,7 +1815,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var rejected = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        rejected.Metadata["branch"].Should().Be("false");
+        rejected.BranchKey.Should().Be("false");
         rejected.Output.Should().Be("keep-me");
     }
 
@@ -2007,8 +2007,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId ?? "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId ?? "test-publisher",
+                Direction = EventDirection.Self,
+            },
         };
     }
 

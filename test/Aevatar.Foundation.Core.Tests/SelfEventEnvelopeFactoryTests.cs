@@ -10,28 +10,26 @@ namespace Aevatar.Foundation.Core.Tests;
 public class SelfEventEnvelopeFactoryTests
 {
     [Fact]
-    public async Task ScheduleSelfDurableTimeoutAsync_ShouldStripRuntimeRetryMetadata_AndPreserveBusinessMetadata()
+    public async Task ScheduleSelfDurableTimeoutAsync_ShouldStripRuntimeRetryContext_AndPreservePropagation()
     {
         var scheduler = new RecordingCallbackScheduler();
         var agent = new RetrySchedulingAgent(scheduler);
 
         var envelope = TestHelper.Envelope(new PingEvent { Message = "retry" }, publisherId: "source-1");
-        envelope.CorrelationId = "corr-1";
-        envelope.Metadata["trace.trace_id"] = "trace-1";
-        envelope.Metadata["custom.key"] = "custom-value";
-        envelope.Metadata["aevatar.retry.origin_event_id"] = "origin-1";
-        envelope.Metadata["aevatar.retry.attempt"] = "2";
-        envelope.Metadata["aevatar.retry.last_error"] = "InvalidOperationException";
+        envelope.EnsurePropagation().CorrelationId = "corr-1";
+        envelope.Propagation.EnsureTrace().TraceId = "trace-1";
+        envelope.Propagation.Baggage["custom.key"] = "custom-value";
+        envelope.EnsureRuntime().EnsureRetry().OriginEventId = "origin-1";
+        envelope.Runtime.Retry.Attempt = 2;
+        envelope.Runtime.Retry.LastErrorType = "InvalidOperationException";
 
         await agent.HandleEventAsync(envelope);
 
         var scheduled = scheduler.Timeouts.Should().ContainSingle().Subject;
-        scheduled.TriggerEnvelope.CorrelationId.Should().Be("corr-1");
-        scheduled.TriggerEnvelope.Metadata["trace.trace_id"].Should().Be("trace-1");
-        scheduled.TriggerEnvelope.Metadata["custom.key"].Should().Be("custom-value");
-        scheduled.TriggerEnvelope.Metadata.ContainsKey("aevatar.retry.origin_event_id").Should().BeFalse();
-        scheduled.TriggerEnvelope.Metadata.ContainsKey("aevatar.retry.attempt").Should().BeFalse();
-        scheduled.TriggerEnvelope.Metadata.ContainsKey("aevatar.retry.last_error").Should().BeFalse();
+        scheduled.TriggerEnvelope.Propagation.CorrelationId.Should().Be("corr-1");
+        scheduled.TriggerEnvelope.Propagation.Trace.TraceId.Should().Be("trace-1");
+        scheduled.TriggerEnvelope.Propagation.Baggage["custom.key"].Should().Be("custom-value");
+        scheduled.TriggerEnvelope.Runtime.Should().BeNull();
     }
 
     private sealed class RetrySchedulingAgent : GAgentBase

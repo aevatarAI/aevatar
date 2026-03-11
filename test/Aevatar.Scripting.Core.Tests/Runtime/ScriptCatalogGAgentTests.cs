@@ -404,12 +404,14 @@ public class ScriptCatalogGAgentTests
             T evt,
             EventDirection direction = EventDirection.Down,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where T : IMessage
         {
             _ = evt;
             _ = direction;
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -418,10 +420,12 @@ public class ScriptCatalogGAgentTests
             string targetActorId,
             T evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null, IReadOnlyDictionary<string, string>? metadata = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where T : IMessage
         {
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(new PublishedMessage(targetActorId, evt));
             return Task.CompletedTask;

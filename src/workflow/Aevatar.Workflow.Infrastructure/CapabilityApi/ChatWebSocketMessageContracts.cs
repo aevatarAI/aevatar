@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -29,7 +30,7 @@ internal sealed record ChatWebSocketRunEventEnvelope
     public string Type { get; init; } = ChatWebSocketMessageTypes.AguiEvent;
     public required string RequestId { get; init; }
     public string CorrelationId { get; init; } = string.Empty;
-    public required WorkflowOutputFrame Payload { get; init; }
+    public required JsonElement Payload { get; init; }
 }
 
 internal sealed record ChatWebSocketCommandErrorEnvelope
@@ -63,10 +64,9 @@ internal static class ChatWebSocketEnvelopeFactory
 
     public static ChatWebSocketRunEventEnvelope CreateAguiEvent(
         string requestId,
-        WorkflowOutputFrame payload,
+        JsonElement payload,
         string correlationId)
     {
-        ArgumentNullException.ThrowIfNull(payload);
         return new ChatWebSocketRunEventEnvelope
         {
             RequestId = requestId,

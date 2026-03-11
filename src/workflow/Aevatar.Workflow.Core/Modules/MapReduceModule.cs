@@ -112,7 +112,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = reduceParent, RunId = runId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
                 };
-                completed.Metadata["map_reduce.phase"] = "reduce";
+                completed.Annotations["map_reduce.phase"] = "reduce";
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
                 return;
             }

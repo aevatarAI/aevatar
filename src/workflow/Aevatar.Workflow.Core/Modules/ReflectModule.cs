@@ -94,8 +94,8 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = state2.StepId, RunId = state2.RunId, Success = true, Output = state2.CurrentDraft,
                 };
-                completed.Metadata["reflect.rounds"] = round.ToString();
-                completed.Metadata["reflect.passed"] = passed.ToString();
+                completed.Annotations["reflect.rounds"] = round.ToString();
+                completed.Annotations["reflect.passed"] = passed.ToString();
                 await ctx.PublishAsync(completed, EventDirection.Self, ct);
                 return;
             }

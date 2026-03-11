@@ -16,7 +16,7 @@ public sealed class LLMRequest
     /// <summary>稳定请求标识，用于 replay/dedup/outbox 等跨边界关联。</summary>
     public string? RequestId { get; init; }
 
-    /// <summary>透传给 provider/middleware 的附加元数据。</summary>
+    /// <summary>透传给 provider/middleware 的附加 metadata。</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
     /// <summary>可选工具列表，供 LLM 选择调用。</summary>

@@ -203,20 +203,20 @@ public class MiddlewarePipelineTests
         ctx.Response!.Content.Should().Be("cached");
     }
 
-    // ─── Metadata Sharing ───
+    // ─── Item Sharing ───
 
     [Fact]
-    public async Task AgentRunContext_MetadataSharedAcrossMiddleware()
+    public async Task AgentRunContext_ItemsSharedAcrossMiddleware()
     {
         var mw1 = new DelegateAgentRunMiddleware(async (ctx, next) =>
         {
-            ctx.Metadata["key"] = "value";
+            ctx.Items["key"] = "value";
             await next();
         });
         var mw2 = new DelegateAgentRunMiddleware(async (ctx, next) =>
         {
-            ctx.Metadata["key"].Should().Be("value");
-            ctx.Metadata["key2"] = "value2";
+            ctx.Items["key"].Should().Be("value");
+            ctx.Items["key2"] = "value2";
             await next();
         });
 
@@ -225,7 +225,7 @@ public class MiddlewarePipelineTests
 
         await MiddlewarePipeline.RunAgentAsync([mw1, mw2], ctx, () =>
         {
-            capturedKey2 = ctx.Metadata["key2"];
+            capturedKey2 = ctx.Items["key2"];
             return Task.CompletedTask;
         });
 

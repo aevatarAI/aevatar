@@ -273,20 +273,21 @@ public sealed class WorkflowRunGAgent
             return;
 
         var completed = envelope.Payload.Unpack<WorkflowCompletedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
         if (await _subWorkflowOrchestrator.TryHandleCompletionAsync(
                 completed,
-                envelope.PublisherId,
+                publisherActorId,
                 State,
                 CancellationToken.None))
         {
             return;
         }
 
-        if (!string.Equals(envelope.PublisherId, Id, StringComparison.Ordinal))
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
         {
             Logger.LogDebug(
                 "Ignore external WorkflowCompletedEvent from publisher={PublisherId} run={RunId}.",
-                envelope.PublisherId,
+                publisherActorId,
                 completed.RunId);
             return;
         }
@@ -789,9 +790,15 @@ public sealed class WorkflowRunGAgent
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(initialize),
-            PublisherId = Id,
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = Id,
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         };
     }
 }

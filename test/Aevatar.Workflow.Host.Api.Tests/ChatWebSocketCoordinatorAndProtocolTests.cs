@@ -4,6 +4,7 @@ using System.Text;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -34,7 +35,14 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
-                await emitAsync(new WorkflowOutputFrame { Type = "delta", Delta = "hello" }, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "message-1",
+                        Delta = "hello",
+                    },
+                }, ct);
                 return new WorkflowChatRunInteractionResult(
                     WorkflowChatRunStartError.None,
                     receipt,
@@ -89,12 +97,12 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
     private sealed class FakeWorkflowRunInteractionService : IWorkflowRunInteractionService
     {
-        public Func<Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
+        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
             (_, _, _) => Task.FromResult(new WorkflowChatRunInteractionResult(WorkflowChatRunStartError.None, null, null));
 
         public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {

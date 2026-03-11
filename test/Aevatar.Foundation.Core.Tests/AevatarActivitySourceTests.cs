@@ -83,8 +83,11 @@ public sealed class AevatarActivitySourceTests
         var envelope = new EventEnvelope
         {
             Id = "evt-2",
-            Direction = EventDirection.Both,
-            PublisherId = "publisher-1",
+            Route = new EnvelopeRoute
+            {
+                Direction = EventDirection.Both,
+                PublisherActorId = "publisher-1",
+            },
         };
 
         using var activity = AevatarActivitySource.StartHandleEvent("agent-1", envelope);

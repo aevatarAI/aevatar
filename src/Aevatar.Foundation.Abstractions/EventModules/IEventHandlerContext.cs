@@ -23,7 +23,7 @@ public interface IEventHandlerContext
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default);
 
     /// <summary>Schedules a durable self timer callback.</summary>
@@ -32,7 +32,7 @@ public interface IEventHandlerContext
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default);
 
     /// <summary>Cancels a durable callback using lease/CAS semantics.</summary>

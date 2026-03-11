@@ -282,7 +282,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("DONE");
-        completed.Metadata["while.iterations"].Should().Be("2");
+        completed.Annotations["while.iterations"].Should().Be("2");
     }
 
     [Fact]
@@ -635,8 +635,8 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        completion.Metadata["cache.key"].Should().EndWith("...");
-        completion.Metadata["cache.key"].Length.Should().Be(63);
+        completion.Annotations["cache.key"].Should().EndWith("...");
+        completion.Annotations["cache.key"].Length.Should().Be(63);
     }
 
     [Fact]
@@ -684,8 +684,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         missCompletion.StepId.Should().Be("cache-parent-1");
         missCompletion.Success.Should().BeTrue();
         missCompletion.Output.Should().Be("cached-output");
-        missCompletion.Metadata["cache.hit"].Should().Be("false");
-        missCompletion.Metadata.Should().ContainKey("cache.key");
+        missCompletion.Annotations["cache.hit"].Should().Be("false");
+        missCompletion.Annotations.Should().ContainKey("cache.key");
 
         ctx.Published.Clear();
 
@@ -708,8 +708,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         hitCompletion.StepId.Should().Be("cache-parent-2");
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-output");
-        hitCompletion.Metadata["cache.hit"].Should().Be("true");
-        hitCompletion.Metadata.Should().ContainKey("cache.key");
+        hitCompletion.Annotations["cache.hit"].Should().Be("true");
+        hitCompletion.Annotations.Should().ContainKey("cache.key");
     }
 
     [Fact]
@@ -764,7 +764,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
         foreach (var completion in waiterCompletions)
         {
-            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            completion.Annotations.TryGetValue("cache.hit", out var hit).Should().BeTrue();
             hit.Should().Be("false");
         }
 
@@ -849,7 +849,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
-        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
+        chat.TimeoutMs.Should().Be(1800000);
         ctx.Published.Last().direction.Should().Be(EventDirection.Self);
     }
 
@@ -1184,13 +1184,13 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
-        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
-        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
+        completions["assign-1"].AssignedVariable.Should().Be("x");
+        completions["assign-1"].AssignedValue.Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
-        completions["cond-1"].Metadata["branch"].Should().Be("true");
+        completions["cond-1"].BranchKey.Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
-        completions["cond-2"].Metadata["branch"].Should().Be("false");
+        completions["cond-2"].BranchKey.Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 
@@ -1209,8 +1209,11 @@ public sealed class WorkflowCoreModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId ?? "test-publisher",
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId ?? "test-publisher",
+                Direction = EventDirection.Self,
+            },
         };
     }
 

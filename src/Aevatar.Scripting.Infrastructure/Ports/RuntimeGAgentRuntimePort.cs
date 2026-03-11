@@ -68,10 +68,16 @@ public sealed class RuntimeGAgentRuntimePort : IGAgentRuntimePort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(eventPayload),
-            PublisherId = InvocationPublisherId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetAgentId,
-            CorrelationId = correlationId ?? string.Empty,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = InvocationPublisherId,
+                Direction = EventDirection.Self,
+                TargetActorId = targetAgentId,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
 
         await _dispatchPort.DispatchAsync(targetAgentId, envelope, ct);
@@ -134,9 +140,15 @@ public sealed class RuntimeGAgentRuntimePort : IGAgentRuntimePort
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = string.IsNullOrWhiteSpace(sourceActorId) ? RoutingPublisherId : sourceActorId,
-            CorrelationId = correlationId ?? string.Empty,
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = string.IsNullOrWhiteSpace(sourceActorId) ? RoutingPublisherId : sourceActorId,
+                Direction = EventDirection.Self,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
     }
 }

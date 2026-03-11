@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
@@ -58,34 +57,30 @@ public class RunManagerTests
     }
 }
 
-public class AgentContextPropagatorTests
+public class AsyncLocalAgentContextTests
 {
     [Fact]
-    public void InjectAndExtract_Roundtrip_PreservesValues()
+    public void GetAll_ShouldSnapshotCurrentValues()
     {
         var context = new AsyncLocalAgentContext();
         context.Set("traceId", "trace-1");
         context.Set("tenant", "tenant-a");
 
-        var envelope = TestHelper.Envelope(new PingEvent { Message = "hello" });
-        AgentContextPropagator.Inject(context, envelope);
-        var extracted = AgentContextPropagator.Extract(envelope);
+        var snapshot = context.GetAll();
 
-        extracted.Get<string>("traceId").Should().Be("trace-1");
-        extracted.Get<string>("tenant").Should().Be("tenant-a");
+        snapshot.Should().ContainKey("traceId").WhoseValue.Should().Be("trace-1");
+        snapshot.Should().ContainKey("tenant").WhoseValue.Should().Be("tenant-a");
     }
 
     [Fact]
-    public void Extract_IgnoresMetadataWithoutContextPrefix()
+    public void Remove_ShouldDropExistingValue()
     {
-        var envelope = TestHelper.Envelope(new PingEvent { Message = "hello" });
-        envelope.Metadata["plain"] = "value";
-        envelope.Metadata["__ctx_correlationId"] = "corr-1";
+        var context = new AsyncLocalAgentContext();
+        context.Set("correlationId", "corr-1");
 
-        var extracted = AgentContextPropagator.Extract(envelope);
+        context.Remove("correlationId");
 
-        extracted.Get<string>("correlationId").Should().Be("corr-1");
-        extracted.Get<string>("plain").Should().BeNull();
+        context.Get<string>("correlationId").Should().BeNull();
     }
 }
 
@@ -225,11 +220,11 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var collector = (CollectorAgent)actor.Agent;
         var first = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
         first.Id = "env-1";
-        first.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-dedup-1";
+        first.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
 
         var second = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
         second.Id = "env-2";
-        second.Metadata[EnvelopeMetadataKeys.DedupOriginId] = "logical-dedup-1";
+        second.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
 
         await actor.HandleEventAsync(first);
         await actor.HandleEventAsync(second);

@@ -2,7 +2,6 @@ syntax = "proto3";
 
 option csharp_namespace = "Aevatar.Workflow.Projection.Transport";
 
-import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 
@@ -49,7 +48,15 @@ message WorkflowExecutionStepTraceSnapshot {
   string output_preview = 8;
   string error = 9;
   map<string, string> request_parameters = 10;
-  map<string, string> completion_metadata = 11;
+  map<string, string> completion_annotations = 11;
+  string next_step_id = 12;
+  string branch_key = 13;
+  string assigned_variable = 14;
+  string assigned_value = 15;
+  string suspension_type = 16;
+  string suspension_prompt = 17;
+  int32 suspension_timeout_seconds = 18;
+  string requested_variable_name = 19;
 }
 
 message WorkflowExecutionRoleReplySnapshot {
@@ -77,103 +84,4 @@ message WorkflowExecutionSummarySnapshot {
   int32 completed_steps = 3;
   int32 role_reply_count = 4;
   map<string, int32> step_type_counts = 5;
-}
-
-message WorkflowProjectionObject {
-  map<string, WorkflowProjectionValue> fields = 1;
-}
-
-message WorkflowProjectionList {
-  repeated WorkflowProjectionValue values = 1;
-}
-
-message WorkflowProjectionValue {
-  oneof kind {
-    google.protobuf.NullValue null_value = 1;
-    string string_value = 2;
-    bool bool_value = 3;
-    int64 int64_value = 4;
-    uint64 uint64_value = 5;
-    double double_value = 6;
-    string decimal_value = 7;
-    WorkflowProjectionObject object_value = 8;
-    WorkflowProjectionList list_value = 9;
-  }
-}
-
-message WorkflowRunSessionEventEnvelope {
-  google.protobuf.Int64Value timestamp = 1;
-
-  oneof event {
-    WorkflowRunStartedEventPayload run_started = 2;
-    WorkflowRunFinishedEventPayload run_finished = 3;
-    WorkflowRunErrorEventPayload run_error = 4;
-    WorkflowStepStartedEventPayload step_started = 5;
-    WorkflowStepFinishedEventPayload step_finished = 6;
-    WorkflowTextMessageStartEventPayload text_message_start = 7;
-    WorkflowTextMessageContentEventPayload text_message_content = 8;
-    WorkflowTextMessageEndEventPayload text_message_end = 9;
-    WorkflowStateSnapshotEventPayload state_snapshot = 10;
-    WorkflowToolCallStartEventPayload tool_call_start = 11;
-    WorkflowToolCallEndEventPayload tool_call_end = 12;
-    WorkflowCustomEventPayload custom = 13;
-  }
-}
-
-message WorkflowRunStartedEventPayload {
-  string thread_id = 1;
-}
-
-message WorkflowRunFinishedEventPayload {
-  string thread_id = 1;
-  google.protobuf.Value legacy_result = 2;
-  WorkflowProjectionValue result = 3;
-}
-
-message WorkflowRunErrorEventPayload {
-  string message = 1;
-  google.protobuf.StringValue code = 2;
-}
-
-message WorkflowStepStartedEventPayload {
-  string step_name = 1;
-}
-
-message WorkflowStepFinishedEventPayload {
-  string step_name = 1;
-}
-
-message WorkflowTextMessageStartEventPayload {
-  string message_id = 1;
-  string role = 2;
-}
-
-message WorkflowTextMessageContentEventPayload {
-  string message_id = 1;
-  string delta = 2;
-}
-
-message WorkflowTextMessageEndEventPayload {
-  string message_id = 1;
-}
-
-message WorkflowStateSnapshotEventPayload {
-  google.protobuf.Value legacy_snapshot = 1;
-  WorkflowProjectionValue snapshot = 2;
-}
-
-message WorkflowToolCallStartEventPayload {
-  string tool_call_id = 1;
-  string tool_name = 2;
-}
-
-message WorkflowToolCallEndEventPayload {
-  string tool_call_id = 1;
-  google.protobuf.StringValue result = 2;
-}
-
-message WorkflowCustomEventPayload {
-  string name = 1;
-  google.protobuf.Value legacy_value = 2;
-  WorkflowProjectionValue value = 3;
 }

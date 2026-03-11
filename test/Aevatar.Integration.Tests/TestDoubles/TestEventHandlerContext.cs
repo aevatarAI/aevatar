@@ -97,9 +97,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         TEvent evt,
         EventDirection direction = EventDirection.Down,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
+        _ = options;
         Published.Add((evt, direction));
         OnPublish?.Invoke(evt, direction);
         return Task.CompletedTask;
@@ -109,10 +110,11 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         _ = targetActorId;
+        _ = options;
         return PublishAsync(evt, EventDirection.Self, ct);
     }
 
@@ -120,10 +122,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
-        var lease = Schedule(callbackId, evt, dueTime, period: null, metadata);
+        var lease = Schedule(callbackId, evt, dueTime, period: null, options);
         return Task.FromResult(lease);
     }
 
@@ -132,10 +134,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
-        var lease = Schedule(callbackId, evt, dueTime, period, metadata);
+        var lease = Schedule(callbackId, evt, dueTime, period, options);
         return Task.FromResult(lease);
     }
 
@@ -157,19 +159,26 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(callback.Event),
-            PublisherId = publisherId ?? AgentId,
-            Direction = EventDirection.Self,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId ?? AgentId,
+                Direction = EventDirection.Self,
+            },
         };
 
-        foreach (var pair in callback.Metadata)
-            envelope.Metadata[pair.Key] = pair.Value;
+        if (callback.Options?.Propagation != null)
+            ApplyPropagationOverrides(envelope.EnsurePropagation(), callback.Options.Propagation);
 
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] =
-            callback.Generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = "0";
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] =
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.DeduplicationOperationId))
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = callback.Options.Delivery.DeduplicationOperationId;
+
+        envelope.EnsureRuntime().Callback = new EnvelopeCallbackContext
+        {
+            CallbackId = callback.CallbackId,
+            Generation = callback.Generation,
+            FireIndex = 0,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
         return envelope;
     }
 
@@ -178,14 +187,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         IMessage evt,
         TimeSpan dueTime,
         TimeSpan? period,
-        IReadOnlyDictionary<string, string>? metadata)
+        EventEnvelopePublishOptions? options)
     {
         var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
         _generations[callbackId] = generation;
-
-        var copiedMetadata = metadata is null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(metadata, StringComparer.Ordinal);
 
         Scheduled.Add(new ScheduledCallback(
             callbackId,
@@ -193,9 +198,32 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             evt,
             dueTime,
             period,
-            copiedMetadata));
+            CloneOptions(options)));
 
         return new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory);
+    }
+
+    private static EventEnvelopePublishOptions? CloneOptions(EventEnvelopePublishOptions? options)
+    {
+        if (options == null)
+            return null;
+
+        return options.DeepClone();
+    }
+
+    private static void ApplyPropagationOverrides(
+        EnvelopePropagation target,
+        EventEnvelopePropagationOverrides overrides)
+    {
+        if (!string.IsNullOrWhiteSpace(overrides.CorrelationId))
+            target.CorrelationId = overrides.CorrelationId;
+        if (!string.IsNullOrWhiteSpace(overrides.CausationEventId))
+            target.CausationEventId = overrides.CausationEventId;
+        if (overrides.Trace != null)
+            target.Trace = overrides.Trace.Clone();
+
+        foreach (var pair in overrides.Baggage)
+            target.Baggage[pair.Key] = pair.Value;
     }
 }
 
@@ -205,7 +233,7 @@ internal sealed record ScheduledCallback(
     IMessage Event,
     TimeSpan DueTime,
     TimeSpan? Period,
-    IReadOnlyDictionary<string, string> Metadata);
+    EventEnvelopePublishOptions? Options);
 
 internal sealed record CanceledCallback(
     RuntimeCallbackLease Lease)

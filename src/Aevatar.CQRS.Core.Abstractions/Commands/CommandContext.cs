@@ -4,4 +4,4 @@ public sealed record CommandContext(
     string TargetId,
     string CommandId,
     string CorrelationId,
-    IReadOnlyDictionary<string, string> Metadata);
+    IReadOnlyDictionary<string, string> Headers);

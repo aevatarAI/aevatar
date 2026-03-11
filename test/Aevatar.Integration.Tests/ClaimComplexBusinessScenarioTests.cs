@@ -140,9 +140,15 @@ public class ClaimComplexBusinessScenarioTests
                     Id = "evt-" + runId,
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(committed),
-                    PublisherId = runtimeActorId,
-                    Direction = EventDirection.Self,
-                    CorrelationId = runId,
+                    Route = new EnvelopeRoute
+                    {
+                        PublisherActorId = runtimeActorId,
+                        Direction = EventDirection.Self,
+                    },
+                    Propagation = new EnvelopePropagation
+                    {
+                        CorrelationId = runId,
+                    },
                 },
                 CancellationToken.None);
             var readModel = await dispatcher.GetAsync(runtimeActorId, CancellationToken.None);

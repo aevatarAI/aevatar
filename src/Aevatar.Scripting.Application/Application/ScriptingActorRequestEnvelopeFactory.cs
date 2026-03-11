@@ -25,10 +25,16 @@ internal static class ScriptingActorRequestEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            PublisherId = resolvedPublisherId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
-            CorrelationId = correlationId ?? string.Empty,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = resolvedPublisherId,
+                Direction = EventDirection.Self,
+                TargetActorId = targetActorId,
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
     }
 }

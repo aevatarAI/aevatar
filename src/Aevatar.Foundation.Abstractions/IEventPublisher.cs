@@ -16,11 +16,11 @@ public interface IEventPublisher
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
     Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : IMessage;
+        EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
 
     /// <summary>Sends an event directly to a target actor.</summary>
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
     Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null) where TEvent : IMessage;
+        EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
 }
