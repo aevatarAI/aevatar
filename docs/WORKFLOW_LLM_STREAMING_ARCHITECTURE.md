@@ -254,15 +254,15 @@ flowchart LR
 | 标识 | 生成位置 | 语义范围 | 事实源 | 主要消费点 |
 |---|---|---|---|---|
 | `actorId` | `WorkflowRunActorResolver` | Workflow Actor 维度 | Actor Runtime | 投影上下文、查询接口 |
-| `commandId` | `WorkflowCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
-| `correlationId` | `WorkflowCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
+| `commandId` | `DefaultCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
+| `correlationId` | `DefaultCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
 | `sessionId` | `WorkflowChatRunRequest.SessionId` + `WorkflowChatRequestEnvelopeFactory` fallback | 本次 chat 会话维度 | Command payload | `ChatRequestEvent.SessionId` |
 | `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
 | `messageId` | AGUI mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
 
 锚点：
 
-1. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowCommandContextPolicy.cs:20`
+1. `src/Aevatar.CQRS.Core/Commands/DefaultCommandContextPolicy.cs:7`
 2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunAcceptedReceiptFactory.cs`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs:13`
 4. `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs:8`

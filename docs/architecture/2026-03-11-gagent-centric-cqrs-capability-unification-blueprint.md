@@ -86,7 +86,7 @@
 | 领域 | 当前做法 | 问题 |
 |---|---|---|
 | Workflow 命令入口 | `ICommandDispatchPipeline + ICommandInteractionService` | 已统一到 CQRS generic interaction template |
-| Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeCommandPort/... + RuntimeScript*LifecycleService` | 已拆掉总入口；evolution 已接入 generic interaction，definition/runtime 已收敛到范型 command adapter 基类 |
+| Scripting 命令入口 | `IScriptDefinitionCommandPort/IScriptRuntimeProvisioningPort/IScriptRuntimeCommandPort/... + RuntimeScript*CommandService/ProvisioningService` | 已拆掉总入口；evolution 已接入 generic interaction，definition/runtime/catalog command 已统一到标准 dispatch pipeline，runtime create/reuse 独立为 provisioning port |
 | Workflow 读侧观察 | `IWorkflowExecutionProjectionLifecyclePort` + completion policy + durable resolver | 能力可用，但可抽象部分仍留在 workflow 私有层 |
 | Scripting 读侧观察 | `IScriptEvolutionProjectionLifecyclePort` + session codec/context | 与 workflow 共享底层基类，但仍各写一套 capability adapter |
 | Workflow 执行模型 | `WorkflowRunGAgent` 内部 module runtime | 是 actor 内部插件模型 |
@@ -321,9 +321,9 @@ flowchart LR
 |---|---|---|
 | `IScriptLifecyclePort` | 聚合多个命令/查询/生命周期操作，绕开标准 CQRS | 删除 |
 | `RuntimeScriptLifecyclePort` | capability 私有 host facade | 删除 |
-| `RuntimeScriptExecutionLifecycleService` | Host/Application 侧手工拼 create/run/dispatch | 拆回 resolver + envelope factory + dispatcher |
-| `RuntimeScriptEvolutionLifecycleService` | Host/Application 侧手工拼 propose/query/fallback | 拆回标准命令 + 通用 observation |
-| `RuntimeScriptDefinitionLifecycleService` | 把 definition upsert 当成私有 lifecycle 操作 | 改为标准命令入口 |
+| `RuntimeScriptProvisioningService` | runtime create/reuse 语义混在命令端口 | 独立为 provisioning port，只处理 actor lifecycle |
+| `RuntimeScriptEvolutionInteractionService` | Host/Application 侧手工拼 propose/query/fallback | 拆回标准命令 + 通用 observation |
+| `RuntimeScriptDefinitionCommandService` / `RuntimeScriptCommandService` | definition/run 入口绕开标准 command path | 改为标准命令入口 |
 | `RuntimeScriptCatalogCommandService` / `RuntimeScriptCatalogQueryService` | 旧 catalog lifecycle 总入口把读写揉在一起 | command/query split，promote/rollback 走命令，查询走 query/read model |
 
 ### 10.3 命令化原则
@@ -530,9 +530,9 @@ Scripting 目录重构目标：
 | `WorkflowRunFinalizeEmitter` | workflow capability | 保留为 generic finalize emitter 实现 |
 | `IScriptLifecyclePort` | 删除 | 由标准 command/query/interaction 替代 |
 | `RuntimeScriptLifecyclePort` | 删除 | 同上 |
-| `RuntimeScriptExecutionLifecycleService` | scripting resolver/factory/binder | 拆分 |
-| `RuntimeScriptEvolutionLifecycleService` | scripting resolver/factory/durable resolver | 拆分 |
-| `RuntimeScriptDefinitionLifecycleService` | scripting command path | 拆分 |
+| `RuntimeScriptProvisioningService` | runtime lifecycle | 与 command dispatch 分责 |
+| `RuntimeScriptEvolutionInteractionService` | scripting resolver/factory/durable resolver | 保留为 generic interaction facade |
+| `RuntimeScriptDefinitionCommandService` / `RuntimeScriptCommandService` | scripting command path | 标准 dispatch pipeline |
 | `RuntimeScriptCatalogCommandService` / `RuntimeScriptCatalogQueryService` | command/query split | promote/rollback 走命令，查询走 query/read model |
 
 ## 15. 门禁与自动化约束

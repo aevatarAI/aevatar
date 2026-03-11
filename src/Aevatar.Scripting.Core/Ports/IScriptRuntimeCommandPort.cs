@@ -4,12 +4,6 @@ namespace Aevatar.Scripting.Core.Ports;
 
 public interface IScriptRuntimeCommandPort
 {
-    Task<string> SpawnRuntimeAsync(
-        string definitionActorId,
-        string scriptRevision,
-        string? runtimeActorId,
-        CancellationToken ct);
-
     Task RunRuntimeAsync(
         string runtimeActorId,
         string runId,

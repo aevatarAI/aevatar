@@ -1,25 +1,20 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Core;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogCommandService
-    : ScriptActorCommandPortBase<ScriptCatalogGAgent>,
-      IScriptCatalogCommandPort
+    : IScriptCatalogCommandPort
 {
-    private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly PromoteScriptRevisionActorRequestAdapter _promoteRevisionAdapter = new();
-    private readonly RollbackScriptRevisionActorRequestAdapter _rollbackRevisionAdapter = new();
+    private readonly ICommandDispatchService<PromoteScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _promoteDispatchService;
+    private readonly ICommandDispatchService<RollbackScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _rollbackDispatchService;
 
     public RuntimeScriptCatalogCommandService(
-        IActorDispatchPort dispatchPort,
-        RuntimeScriptActorAccessor actorAccessor,
-        IScriptingActorAddressResolver addressResolver)
-        : base(dispatchPort, actorAccessor)
+        ICommandDispatchService<PromoteScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> promoteDispatchService,
+        ICommandDispatchService<RollbackScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> rollbackDispatchService)
     {
-        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
+        _promoteDispatchService = promoteDispatchService ?? throw new ArgumentNullException(nameof(promoteDispatchService));
+        _rollbackDispatchService = rollbackDispatchService ?? throw new ArgumentNullException(nameof(rollbackDispatchService));
     }
 
     public async Task PromoteCatalogRevisionAsync(
@@ -32,19 +27,18 @@ public sealed class RuntimeScriptCatalogCommandService
         string proposalId,
         CancellationToken ct)
     {
-        var resolvedCatalogActorId = await EnsureCatalogActorAsync(catalogActorId, ct);
-
-        await DispatchAsync(
-            resolvedCatalogActorId,
-            new PromoteScriptRevisionActorRequest(
-                ScriptId: scriptId ?? string.Empty,
-                Revision: revision ?? string.Empty,
-                DefinitionActorId: definitionActorId ?? string.Empty,
-                SourceHash: sourceHash ?? string.Empty,
-                ProposalId: proposalId ?? string.Empty,
-                ExpectedBaseRevision: expectedBaseRevision ?? string.Empty),
-            _promoteRevisionAdapter.Map,
+        var result = await _promoteDispatchService.DispatchAsync(
+            new PromoteScriptCatalogRevisionCommand(
+                catalogActorId,
+                scriptId,
+                expectedBaseRevision,
+                revision,
+                definitionActorId,
+                sourceHash,
+                proposalId),
             ct);
+        if (!result.Succeeded)
+            throw result.Error?.ToException() ?? new InvalidOperationException("Script catalog promotion dispatch failed.");
     }
 
     public async Task RollbackCatalogRevisionAsync(
@@ -56,34 +50,16 @@ public sealed class RuntimeScriptCatalogCommandService
         string expectedCurrentRevision,
         CancellationToken ct)
     {
-        var resolvedCatalogActorId = await EnsureCatalogActorAsync(catalogActorId, ct);
-
-        await DispatchAsync(
-            resolvedCatalogActorId,
-            new RollbackScriptRevisionActorRequest(
-                ScriptId: scriptId ?? string.Empty,
-                TargetRevision: targetRevision ?? string.Empty,
-                Reason: reason ?? string.Empty,
-                ProposalId: proposalId ?? string.Empty,
-                ExpectedCurrentRevision: expectedCurrentRevision ?? string.Empty),
-            _rollbackRevisionAdapter.Map,
+        var result = await _rollbackDispatchService.DispatchAsync(
+            new RollbackScriptCatalogRevisionCommand(
+                catalogActorId,
+                scriptId,
+                targetRevision,
+                reason,
+                proposalId,
+                expectedCurrentRevision),
             ct);
-    }
-
-    private string ResolveCatalogActorId(string? catalogActorId) =>
-        string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
-            : catalogActorId;
-
-    private async Task<string> EnsureCatalogActorAsync(
-        string? catalogActorId,
-        CancellationToken ct)
-    {
-        var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        _ = await GetOrCreateActorAsync(
-            resolvedCatalogActorId,
-            "Script catalog actor not found",
-            ct);
-        return resolvedCatalogActorId;
+        if (!result.Succeeded)
+            throw result.Error?.ToException() ?? new InvalidOperationException("Script catalog rollback dispatch failed.");
     }
 }

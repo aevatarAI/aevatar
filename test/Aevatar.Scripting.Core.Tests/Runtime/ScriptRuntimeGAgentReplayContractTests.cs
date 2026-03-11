@@ -105,6 +105,7 @@ public class ScriptRuntimeGAgentReplayContractTests
             ports,
             ports,
             ports,
+            ports,
             ports);
 
         var orchestrator = new ScriptRuntimeExecutionOrchestrator(
@@ -282,6 +283,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
     private sealed class NullScriptPorts :
         IScriptEvolutionProposalPort,
         IScriptDefinitionCommandPort,
+        IScriptRuntimeProvisioningPort,
         IScriptRuntimeCommandPort,
         IScriptCatalogCommandPort
     {
@@ -320,7 +322,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.FromResult(definitionActorId ?? "definition-1");
         }
 
-        public Task<string> SpawnRuntimeAsync(
+        public Task<string> EnsureRuntimeAsync(
             string definitionActorId,
             string scriptRevision,
             string? runtimeActorId,

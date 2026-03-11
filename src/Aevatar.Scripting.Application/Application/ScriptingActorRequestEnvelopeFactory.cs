@@ -4,7 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application;
 
-internal static class ScriptingActorRequestEnvelopeFactory
+public static class ScriptingActorRequestEnvelopeFactory
 {
     private const string RequestPublisherId = "scripting.application";
 

@@ -11,6 +11,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
     private readonly IGAgentRuntimePort _agentRuntimePort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
+    private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
 
@@ -19,6 +20,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
         IGAgentRuntimePort agentRuntimePort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort)
     {
@@ -26,6 +28,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
         _agentRuntimePort = agentRuntimePort ?? throw new ArgumentNullException(nameof(agentRuntimePort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
+        _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
     }
@@ -47,6 +50,7 @@ public sealed class ScriptRuntimeCapabilityComposer : IScriptRuntimeCapabilityCo
             context,
             _proposalPort,
             _definitionCommandPort,
+            _runtimeProvisioningPort,
             _runtimeCommandPort,
             _catalogCommandPort);
 

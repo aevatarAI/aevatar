@@ -185,8 +185,8 @@
 | 问题域 | 证据路径 | 现状 |
 |---|---|---|
 | 交互编排样板 | `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs` | 已收敛为通用交互模板，业务仅保留 capability policy |
-| scripting command adapter 样板 | `src/Aevatar.Scripting.Infrastructure/Ports/ScriptActorCommandPortBase.cs` / `RuntimeScriptDefinitionLifecycleService.cs` / `RuntimeScriptExecutionLifecycleService.cs` | 已用范型基类统一 `exists/get-or-create/dispatch` 骨架，端口层仅保留语义差异 |
-| scripting 演化入口 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionLifecycleService.cs` | 已改为 CQRS generic interaction 包装器，不再手工拼 projection/fallback/cleanup |
+| scripting command adapter 样板 | `src/Aevatar.Scripting.Infrastructure/Ports/ScriptingActorCommandTarget.cs` / `RuntimeScriptDefinitionCommandService.cs` / `RuntimeScriptCommandService.cs` / `RuntimeScriptCatalogCommandService.cs` | 已删除直投 adapter 基类，改为标准 command pipeline + 统一 target/receipt 注册 |
+| scripting 演化入口 | `src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptEvolutionInteractionService.cs` | 已改为 CQRS generic interaction 包装器，不再手工拼 projection/fallback/cleanup |
 | 各类 capability-specific observation adapter | `src/workflow/Aevatar.Workflow.Projection/*` / `src/Aevatar.Scripting.Projection/*` | 继续共用统一 projection 主链，保留薄 capability alias |
 
 ### 6.3 当前样本显示出的两类实现模式
@@ -497,7 +497,7 @@ flowchart LR
   - `CQRS Core` 已统一 `Resolve -> Context -> Envelope -> Dispatch -> Receipt -> Observe -> Finalize -> Release`
   - `workflow` 命令/交互主链已完全接入 generic interaction template
   - `scripting` 已删除 lifecycle total-port，并将 evolution 外部入口接入 generic interaction template
-  - `scripting` definition/runtime command 入口已通过 `ScriptActorCommandPortBase<TActor>` 收敛重复样板
+  - `scripting` definition/runtime/catalog command 入口已接入标准 `ICommandDispatchService` 主链，runtime 创建已独立为 `IScriptRuntimeProvisioningPort`
   - `Projection` 继续保持单主干，无并行 session/observe 总线
   - 文档、测试、门禁已同步回写
 - 部分完成：
