@@ -202,4 +202,25 @@ public class WorkflowHostingExtensionsCoverageTests
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*InMemory document provider is not allowed*");
     }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_WhenProductionAndInMemoryGraphEnabled_ShouldNotThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:Environment"] = "Production",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+            })
+            .Build();
+
+        Action act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().NotThrow();
+    }
 }

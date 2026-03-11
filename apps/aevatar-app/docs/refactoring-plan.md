@@ -23,7 +23,7 @@ Soul Garden 是一个"灵魂花园"愿望实现应用，用户创建代表目标
 - **AI 能力通过 Workflow 执行** — 内容生成、图片生成、肯定语生成
 - **App Manager 是 Host 内的 Application Service 集合** — 承载同步引擎 + 限流 + 用户管理，跨 `Aevatar.App.Application`（业务服务）和 `Aevatar.App.Host.Api`（端点 + Filter）两个项目
 - **保留实体同步协议 v6.1** — 移植到 .NET + GAgent State，前端无需改动同步逻辑
-- **图片存储使用 Chrono Storage** — 通过 Application Service REST 直调
+- **图片存储使用 AWS S3 兼容存储** — 通过 AWSSDK.S3 客户端直调
 - **不考虑兼容性** — 旧版 CF Worker 接口、MongoDB 数据结构全部废弃
 
 ### 1.2 新旧架构对照
@@ -36,8 +36,8 @@ Soul Garden 是一个"灵魂花园"愿望实现应用，用户创建代表目标
 | 手写 AI 调用（OpenAI + Gemini） | WorkflowGAgent + RoleGAgent（YAML 声明式） |
 | 实体同步协议 v6.1 (MongoDB) | 实体同步协议 v6.1 移植到 GAgent (Actor 内存操作) |
 | 扁平实体 `sync_entities` 集合 | `SyncEntityGAgent.State.entities` (Protobuf map) |
-| `sync_log` 幂等缓存 (72h TTL) | 移除（Actor 单线程 + 3 规则天然幂等） |
-| Chrono / R2 双模存储 | 统一 Chrono Storage（Application REST） |
+| `sync_log` 幂等缓存 (72h TTL) | `ProcessedSyncIds` 滑动窗口 (最近 32 条) |
+| Chrono / R2 双模存储 | AWS S3 兼容对象存储（AWSSDK.S3） |
 | JWT 认证中间件 (Firebase / Aevatar OAuth / Trial) | ASP.NET Core Authentication (Firebase RS256 + Trial HS256)；**Aevatar OAuth 废弃** |
 | 旧版 CF Worker 兼容接口 | 废弃，不保留 |
 | 环境变量直连 LLM | Aevatar LLM Provider + Connector 配置 |
@@ -62,13 +62,13 @@ Soul Garden 是一个"灵魂花园"愿望实现应用，用户创建代表目标
   • 账户删除 / 匿名化
   • 并发控制（图片生成/上传共享并发池）
 
-通用基础设施 → Chrono Platform
-  • 图片对象存储（Chrono Storage）
+通用基础设施 → AWS S3 兼容存储
+  • 图片对象存储（AWS S3 / MinIO / S3 兼容）
 
 不需要的 → 直接删除
   • CF Worker 旧版兼容接口
   • MongoDB 相关代码
-  • R2 存储后端（统一 Chrono Storage）
+  • R2 存储后端（统一 AWS S3 兼容存储）
   • sync_log 幂等缓存（Actor 单线程 + 3 规则天然幂等，不再需要）
 ```
 
@@ -88,7 +88,7 @@ Soul Garden 是一个"灵魂花园"愿望实现应用，用户创建代表目标
   • 用户管理（UserAccountGAgent / UserProfileGAgent / AuthLookupGAgent）
   • 认证框架（Firebase / Trial）
   • AI 生成协调（AIGenerationAppService — Workflow 触发 + fallback）
-  • 图片存储（ImageStorageAppService — Chrono Storage REST）
+  • 图片存储（ImageStorageAppService — AWS S3 兼容存储）
   • 并发控制（ImageConcurrencyCoordinator / ImageConcurrencyGAgent）
   • REST API 端点（所有 /api/* 路由）
 
@@ -119,7 +119,7 @@ App 配置包（随 App 变化，不改代码）：
   • apps/<app-name>/config/    — App 专属配置（appsettings / quota / fallbacks）
   • apps/<app-name>/workflows/ — App 专属 Workflow YAML
   • apps/<app-name>/connectors/ — App 专属 Connector 配置
-  • apps/soul-garden/src/      — 平台运行时代码（与 App 无关）
+  • apps/aevatar-app/src/      — 平台运行时代码（与 App 无关）
 ```
 
 ---
@@ -151,8 +151,8 @@ graph TB
         WF --> ROLES
     end
 
-    subgraph "Chrono Platform (REST API)"
-        CS["Chrono Storage Service<br/>REST: /api/buckets/*"]
+    subgraph "对象存储"
+        S3["AWS S3<br/>(兼容 S3 协议对象存储)"]
     end
 
     subgraph "外部服务"
@@ -165,7 +165,7 @@ graph TB
     end
 
     APP -->|"REST"| GM
-    GM -->|"REST"| CS
+    GM -->|"AWSSDK.S3"| S3
     ROLES -->|"LLM 调用"| LLM
     ROLES -->|"Gemini 调用"| GEMINI
     BIZ -->|"Grain State"| REDIS
@@ -177,9 +177,12 @@ graph TB
 ```csharp
 // Aevatar.App.Host.Api / Program.cs
 var builder = WebApplication.CreateBuilder(args);
+ConfigureFallbackConfiguration(builder.Configuration);
+AppStartupValidation.ValidateRequiredConfiguration(
+    builder.Configuration, builder.Environment, startupLogger);
 
 // ── Aevatar Runtime (Orleans Silo) ──
-builder.AddAevatarDefaultHost(options =>
+builder.AddAevatarDefaultHost(configureHost: options =>
 {
     options.ServiceName = "Aevatar.App.Host.Api";
     options.EnableWebSockets = true;
@@ -189,9 +192,11 @@ builder.AddAevatarDefaultHost(options =>
 builder.AddAppDistributedOrleansHost();
 builder.AddWorkflowCapabilityWithAIDefaults();
 
-// ── Auth（显式注册）──
-builder.Services.AddSingleton<AppAuthService>();
-builder.Services
+// ── Auth ──
+builder.Services.AddScoped<IAppAuthContextAccessor, AppAuthContextAccessor>();
+builder.Services.Configure<AppAuthOptions>(options => { /* Firebase/Trial 配置 */ });
+builder.Services.AddSingleton<IAppAuthService, AppAuthService>();
+var authBuilder = builder.Services
     .AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme = AppAuthSchemeProvider.AppAuthScheme;
@@ -201,14 +206,46 @@ builder.Services
     {
         options.ForwardDefaultSelector = context => AppAuthSchemeProvider.SelectScheme(context);
     })
-    .AddScheme<AuthenticationSchemeOptions, FirebaseAuthHandler>(AppAuthSchemeProvider.FirebaseScheme, _ => { });
+    .AddScheme<AuthenticationSchemeOptions, FirebaseAuthHandler>(
+        AppAuthSchemeProvider.FirebaseScheme, _ => { });
+if (builder.Environment.IsDevelopment())
+    authBuilder.AddScheme<AuthenticationSchemeOptions, TrialAuthHandler>(
+        AppAuthSchemeProvider.TrialScheme, _ => { });
+
+// ── AI / Storage / Concurrency / Projection ──
+builder.Services.AddOptions<AppQuotaOptions>().Bind(cfg.GetSection("App:Quota"));
+builder.Services.AddOptions<FallbackOptions>()
+    .Configure<IConfiguration>((o, c) => { c.GetSection("fallbacks").Bind(o); c.GetSection("App:Fallbacks").Bind(o); });
+builder.Services.AddSingleton<IActorAccessAppService, ActorAccessAppService>();
+builder.Services.AddSingleton<IImageConcurrencyCoordinator>(...);
+// Projection: Elasticsearch (生产) 或 InMemory (开发)
+if (projectionProvider == "Elasticsearch")
+    builder.Services.AddAppElasticsearchProjection(builder.Configuration);
+builder.Services.AddAppProjection();
+builder.Services.AddSingleton<IFallbackContent, FallbackContent>();
+builder.Services.AddSingleton<IAIGenerationAppService, AIGenerationAppService>();
+builder.Services.AddSingleton<IAuthAppService, AuthAppService>();
+builder.Services.AddSingleton<IGenerationAppService, GenerationAppService>();
+// CompletionPort: Redis (Garnet 持久化时) 或 InMemory (开发)
+builder.Services.Configure<CompletionPortOptions>(cfg.GetSection("CompletionPort"));
+if (persistenceBackend == "Garnet")
+    builder.Services.AddSingleton<ICompletionPort, RedisCompletionPort>();
+else
+    builder.Services.AddSingleton<ICompletionPort, InMemoryCompletionPort>();
+builder.Services.AddSingleton<ISyncAppService, SyncAppService>();
+builder.Services.AddSingleton<IUserAppService, UserAppService>();
+// S3 存储（AWS S3 / MinIO / 兼容 S3 协议的对象存储）
+builder.Services.Configure<ImageStorageOptions>(cfg.GetSection("App:Storage"));
+builder.Services.AddSingleton<IAmazonS3>(...);
+builder.Services.AddSingleton<IS3StorageClient, AwsS3StorageClient>();
+builder.Services.AddSingleton<IImageStorageAppService, ImageStorageAppService>();
 
 // ── CORS ──
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins(config.AllowedOrigins)      // 配置键 App:AllowedOrigins（逗号分隔）
+        policy.WithOrigins(allowedOrigins)
               .AllowCredentials()
               .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
               .WithHeaders("Content-Type", "Authorization", "x-app-user-id");
@@ -218,20 +255,23 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 app.UseCors();
 app.UseAevatarDefaultHost();
+app.UseAuthentication();
+
+// ── Error handling (全局异常处理中间件) ──
+app.UseMiddleware<AppErrorMiddleware>();
 
 // ── sendBeacon 兼容 (text/plain → application/json) ──
 app.Use(async (context, next) =>
 {
     if (context.Request.Path.StartsWithSegments("/api/sync")
         && context.Request.Method == "POST"
-        && context.Request.ContentType?.StartsWith("text/plain") == true)
+        && context.Request.ContentType?.Contains("text/plain") == true)
     {
         context.Request.ContentType = "application/json";
     }
     await next();
 });
 
-app.UseAuthentication();
 app.UseWhen(
     context => context.Request.Path.StartsWithSegments("/api/users")
         || context.Request.Path.StartsWithSegments("/api/state")
@@ -270,11 +310,12 @@ app.Run();
     "TrialAuthEnabled": true,
     "TrialTokenSecret": "dev-secret-32-chars-minimum-here!",
     "Storage": {
-      "PlatformApiUrl": "http://localhost:8080",
-      "PipelineId": "soul-garden-pipeline",
-      "PlatformApiToken": "",
+      "Region": "us-east-1",
+      "BucketName": "soul-garden",
+      "AccessKeyId": "",
+      "SecretAccessKey": "",
       "CdnUrl": "",
-      "Bucket": "soul-garden"
+      "MaxFileSizeBytes": 104857600
     },
     "ImageConcurrency": {
       "MaxTotal": 20,
@@ -297,8 +338,7 @@ app.Run();
 
 - `App:Id` 必须非空
 - `Firebase:ProjectId` 在生产环境必须配置
-- `App:Storage:PlatformApiUrl`、`App:Storage:PipelineId`、`App:Storage:PlatformApiToken` 用于判定存储可用性（`ImageStorageAppService.IsConfigured()` 依赖此三项）；缺失任意一项不会阻止启动，但会导致 `/health` storage 检查退化为 `error` 且上传/删除接口不可用
-- `App:Storage:Bucket` 不允许为空（用于跨 App 数据隔离）
+- `App:Storage:BucketName` 不允许为空（用于跨 App 数据隔离）；`ImageStorageAppService.IsConfigured()` 依赖 `BucketName` 非空
 - `Orleans:ClusterId` 和 `Orleans:ServiceId` 不同 App 实例必须不同（数据隔离保证）
 
 **环境变量覆盖（部署时按需覆盖 appsettings.json）：**
@@ -312,11 +352,12 @@ ASP.NET Core 环境变量 provider 自动将 `__` 映射为 `:`，无需手动 o
 | `App:TrialAuthEnabled` | `App__TrialAuthEnabled` | Trial 认证开关 |
 | `App:TrialTokenSecret` | `App__TrialTokenSecret` | Trial 签名密钥 |
 | `App:AllowedOrigins` | `App__AllowedOrigins` | CORS 来源（逗号分隔） |
-| `App:Storage:PlatformApiUrl` | `App__Storage__PlatformApiUrl` | 存储 API 地址 |
-| `App:Storage:PipelineId` | `App__Storage__PipelineId` | 存储 Pipeline ID（上传/删除路径必需） |
-| `App:Storage:PlatformApiToken` | `App__Storage__PlatformApiToken` | 存储 API Token（Bearer 认证，上传/删除必需） |
+| `App:Storage:Region` | `App__Storage__Region` | AWS S3 Region（如 `us-east-1`） |
+| `App:Storage:BucketName` | `App__Storage__BucketName` | S3 存储桶名称（跨 App 隔离） |
+| `App:Storage:AccessKeyId` | `App__Storage__AccessKeyId` | S3 Access Key ID（可选，空时使用默认凭证链） |
+| `App:Storage:SecretAccessKey` | `App__Storage__SecretAccessKey` | S3 Secret Access Key |
 | `App:Storage:CdnUrl` | `App__Storage__CdnUrl` | CDN URL（图片公开访问地址前缀，可选） |
-| `App:Storage:Bucket` | `App__Storage__Bucket` | 存储桶名称（跨 App 隔离） |
+| `App:Storage:MaxFileSizeBytes` | `App__Storage__MaxFileSizeBytes` | 最大文件大小（默认 100MB） |
 | `Firebase:ProjectId` | `Firebase__ProjectId` | Firebase 项目 ID |
 | `Orleans:ClusterId` | `Orleans__ClusterId` | Orleans 集群 ID |
 | `Orleans:ServiceId` | `Orleans__ServiceId` | Orleans 服务 ID |
@@ -742,14 +783,16 @@ public async Task<AffirmationResult> GenerateAffirmationAsync(
 classDiagram
     class SyncEntityGAgent {
         <<GAgent per userId>>
-        +SyncAsync(SyncRequest request) SyncResponse
-        +GetStateAsync() StateResponse
+        +HandleSyncEntities(EntitiesSyncRequestedEvent) Task
+        +HandleSoftDeleteEntities(EntitiesSoftDeleteRequestedEvent) Task
+        +HandleHardDeleteEntities(EntitiesHardDeleteRequestedEvent) Task
     }
 
     class SyncEntityState {
         <<Protobuf State>>
         +map~string, SyncEntity~ entities
         +SyncMeta meta
+        +repeated string processed_sync_ids
     }
 
     class SyncEntity {
@@ -777,10 +820,10 @@ classDiagram
 
     class UserAccountGAgent {
         <<GAgent per userId>>
-        +GetOrCreateAsync(AuthInfo info) User
-        +LinkProviderAsync(string provider, string providerId)
-        +UpdateLoginAsync(string email, bool emailVerified)
-        +DeleteAsync(bool hard)
+        +HandleRegisterUser(UserRegisteredEvent) Task
+        +HandleLinkProvider(UserProviderLinkedEvent) Task
+        +HandleUpdateLogin(UserLoginUpdatedEvent) Task
+        +HandleDeleteAccount(AccountDeletedEvent) Task
     }
 
     class UserAccountState {
@@ -790,10 +833,9 @@ classDiagram
 
     class UserProfileGAgent {
         <<GAgent per userId>>
-        +CreateAsync(Profile profile) Profile
-        +UpdateAsync(Profile profile) Profile
-        +GetAsync() Profile
-        +DeleteAsync()
+        +HandleCreateProfile(ProfileCreatedEvent) Task
+        +HandleUpdateProfile(ProfileUpdatedEvent) Task
+        +HandleDeleteProfile(ProfileDeletedEvent) Task
     }
 
     class UserProfileState {
@@ -803,9 +845,8 @@ classDiagram
 
     class AuthLookupGAgent {
         <<GAgent per lookup key>>
-        +GetUserIdAsync() string
-        +SetUserIdAsync(string lookupKey, string userId)
-        +ClearAsync()
+        +HandleSetAuthLookup(AuthLookupSetEvent) Task
+        +HandleClearAuthLookup(AuthLookupClearedEvent) Task
     }
 
     class AuthLookupState {
@@ -895,11 +936,22 @@ SyncAsync 内部流程:
 
 幂等性保证:
   - Actor 单线程执行：同一用户的 Sync 请求串行处理，不存在并发 race condition
+  - syncId 幂等窗口：State.ProcessedSyncIds 保留最近 32 个已处理的 syncId，重复 syncId 直接跳过
   - 3 规则天然幂等：重复发送的实体（旧 revision）被规则 3 拒绝，不会重复写入
-  - 不再需要 sync_log 幂等缓存
+  - 不再需要 sync_log 幂等缓存（72h TTL MongoDB 集合）
 ```
 
 ### 4.3 领域事件
+
+**命令事件（外部触发 → GAgent 处理）：**
+
+| 事件 | 触发场景 | 携带数据 |
+|------|---------|---------|
+| `EntitiesSyncRequestedEvent` | Application 层发起同步 | syncId, userId, clientRevision, entities[] |
+| `EntitiesSoftDeleteRequestedEvent` | Application 层发起软删除 | userId |
+| `EntitiesHardDeleteRequestedEvent` | Application 层发起硬删除 | userId |
+
+**领域事件（GAgent 内部产出）：**
 
 | 事件 | 触发场景 | 携带数据 |
 |------|---------|---------|
@@ -909,9 +961,14 @@ SyncAsync 内部流程:
 | `EntityDeletedEvent` | 同步中软删除实体 | userId, clientId, entityType, revision, deletedAt |
 | `CascadeDeleteEvent` | 级联软删除子实体 | userId, parentClientId, deletedClientIds[], depth, deletedAt |
 | `UserRegisteredEvent` | 用户注册 | userId, authProvider, authProviderId, email, emailVerified, registeredAt |
+| `UserProviderLinkedEvent` | 跨 provider 关联 | userId, authProvider, authProviderId, emailVerified |
+| `UserLoginUpdatedEvent` | 登录信息更新 | userId, email, emailVerified, lastLoginAt |
 | `ProfileCreatedEvent` | 资料创建 | userId, firstName, lastName, interests, purpose, timezone, createdAt |
 | `ProfileUpdatedEvent` | 资料更新 | userId, profile (Profile), updatedAt |
+| `ProfileDeletedEvent` | 资料删除 | userId |
 | `AccountDeletedEvent` | 账户删除 | userId, email, mode (soft/hard), entitiesAnonymizedCount, entitiesDeletedCount, deletedAt |
+| `AuthLookupSetEvent` | 认证查找写入 | lookupKey, userId |
+| `AuthLookupClearedEvent` | 认证查找清除 | lookupKey |
 
 ### 4.4 Soul Garden 应用层约定
 
@@ -1018,11 +1075,124 @@ SyncAsync 内部流程:
 
 ---
 
-## 5. App Manager (Host 内 Application Service)
+## 5. Projection Pipeline（投影读模型）
 
-> **"App Manager" 概念说明**：本文中 "App Manager" 是逻辑概念，指 Host 进程内承载业务逻辑的 Application Service 集合，物理上跨两个项目：`Aevatar.App.Application`（业务服务：AI 生成协调、图片存储、校验、认证、并发控制）和 `Aevatar.App.Host.Api`（REST 端点、EndpointFilter、Bootstrap）。两者共同构成 App Manager 的完整能力。限额参数通过 `App:Quota` 配置声明，`GET /api/sync/limits` 直接返回给前端，当前阶段后端不做限额判定。
+### 5.1 架构概述
 
-### 5.1 架构
+Application 层的查询操作不直接读取 GAgent State，而是通过 **Projection Pipeline** 将 GAgent 发射的领域事件投影到 ReadModel，由 Application Service 查询 ReadModel 获取数据。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+graph LR
+    subgraph "GAgent 层（事件源）"
+        SYNC["SyncEntityGAgent"]
+        UA["UserAccountGAgent"]
+        UP["UserProfileGAgent"]
+        AL["AuthLookupGAgent"]
+    end
+
+    subgraph "Projection Pipeline"
+        MGR["AppProjectionManager<br/>（订阅管理）"]
+        DISP["ProjectionDispatcher<br/>（事件分发）"]
+        subgraph "Projectors"
+            P_SYNC["AppSyncEntityProjector"]
+            P_UA["AppUserAccountProjector"]
+            P_UP["AppUserProfileProjector"]
+            P_AL["AppAuthLookupProjector"]
+        end
+        subgraph "Reducers"
+            R_SYNC["SyncEntityReducers<br/>(Created/Updated/Synced/Deleted)"]
+            R_UA["UserAccountReducers<br/>(Registered/Linked/Login/Deleted)"]
+            R_UP["UserProfileReducers<br/>(Created/Updated/Deleted)"]
+            R_AL["AuthLookupReducers<br/>(Set/Cleared)"]
+        end
+    end
+
+    subgraph "ReadModel Store"
+        S_SYNC["AppSyncEntityReadModel"]
+        S_UA["AppUserAccountReadModel"]
+        S_UP["AppUserProfileReadModel"]
+        S_AL["AppAuthLookupReadModel"]
+    end
+
+    SYNC -->|"events"| DISP
+    UA -->|"events"| DISP
+    UP -->|"events"| DISP
+    AL -->|"events"| DISP
+    DISP --> P_SYNC --> R_SYNC --> S_SYNC
+    DISP --> P_UA --> R_UA --> S_UA
+    DISP --> P_UP --> R_UP --> S_UP
+    DISP --> P_AL --> R_AL --> S_AL
+```
+
+### 5.2 核心组件
+
+| 组件 | 类名 | 职责 |
+|------|------|------|
+| 投影管理器 | `AppProjectionManager` | 管理 Actor → Projection 订阅生命周期，确保 Actor 事件流被投影消费 |
+| 上下文工厂 | `DefaultAppProjectionContextFactory` | 创建 `AppProjectionContext`（含 ActorId、事件去重集合） |
+| 投影基类 | `AppProjectorBase<TReadModel>` | 按 ActorId 前缀过滤事件、按 `EventTypeUrl` 路由到 Reducer、调用 Store 持久化 |
+| 事件 Reducer 基类 | `AppEventReducerBase<TReadModel, TEvent>` | Protobuf 事件解包 + 类型安全的 Reduce 抽象 |
+| 文档存储 | `IProjectionDocumentStore<TReadModel, TKey>` | ReadModel 持久化（InMemory / Elasticsearch） |
+
+### 5.3 ReadModel 定义
+
+| ReadModel | 主键 | 核心字段 | 对应 Projector |
+|-----------|------|---------|---------------|
+| `AppSyncEntityReadModel` | `syncentity:{userId}` | UserId, ServerRevision, Entities (Dict), SyncResults (最近 16 条), SyncResultOrder | `AppSyncEntityProjector` |
+| `AppUserAccountReadModel` | `useraccount:{userId}` | UserId, AuthProvider, AuthProviderId, Email, EmailVerified, CreatedAt, LastLoginAt, Deleted | `AppUserAccountProjector` |
+| `AppUserProfileReadModel` | `userprofile:{userId}` | UserId, FirstName, LastName, Gender, Timezone, Purpose, Interests, DateOfBirth, HasProfile, ProfileUpdatedAt | `AppUserProfileProjector` |
+| `AppAuthLookupReadModel` | `authlookup:{lookupKey}` | LookupKey, UserId | `AppAuthLookupProjector` |
+| `AppSyncEntityLastResultReadModel` | — | UserId, SyncId, ClientRevision, ServerRevision, Accepted, Rejected | — |
+
+### 5.4 Completion Port（同步等待机制）
+
+同步操作（`POST /api/sync`）的流程需要等待 Projection 完成后再读取 ReadModel 构建响应。`ICompletionPort` 提供了这个桥接机制：
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    participant App as "SyncAppService"
+    participant Actor as "SyncEntityGAgent"
+    participant Proj as "AppSyncEntityProjector"
+    participant CP as "ICompletionPort"
+    participant Store as "ReadModel Store"
+
+    App->>Actor: SendCommandAsync(EntitiesSyncRequestedEvent)
+    App->>CP: WaitAsync(syncId)
+    Actor->>Actor: 3 规则处理 → 发射 EntityCreated/Updated + EntitiesSyncedEvent
+    Actor-->>Proj: 事件流
+    Proj->>Proj: Reduce → 更新 ReadModel
+    Proj->>CP: Complete(syncId)
+    CP-->>App: WaitAsync 返回
+    App->>Store: GetAsync(actorId)
+    Store-->>App: AppSyncEntityReadModel
+    App->>App: 构建 SyncResult
+```
+
+**两种实现：**
+
+| 实现 | 类名 | 适用场景 | 机制 |
+|------|------|---------|------|
+| Redis | `RedisCompletionPort` | 生产（Garnet 持久化后端） | Redis Pub/Sub 通道 + 本地 TCS，支持跨进程通知 |
+| 内存 | `InMemoryCompletionPort` | 开发/测试 | `ConcurrentDictionary<string, TaskCompletionSource>` + 超时 |
+
+### 5.5 存储后端
+
+| 存储后端 | 类名 | 适用场景 | 配置 |
+|----------|------|---------|------|
+| InMemory | `AppInMemoryDocumentStore<TReadModel, TKey>` | 开发/测试 | 默认（`AddAppProjection()` 自动注册） |
+| Elasticsearch | `AppElasticsearchProjectionExtensions` | 生产 | `App:Projection:Provider=Elasticsearch`，需在 `AddAppProjection()` 前调用 |
+
+> Elasticsearch 后端对 `SyncEntity` ReadModel 的 `Entities` 和 `SyncResults` 字段设置 `enabled: false` 以避免 ES 字段数限制。
+
+---
+
+## 6. App Manager (Host 内 Application Service)
+
+> **"App Manager" 概念说明**：本文中 "App Manager" 是逻辑概念，指 Host 进程内承载业务逻辑的 Application Service 集合，物理上跨两个项目：`Aevatar.App.Application`（业务服务：AI 生成协调、图片存储、校验、认证、并发控制、Projection 读模型查询）和 `Aevatar.App.Host.Api`（REST 端点、EndpointFilter、Bootstrap）。两者共同构成 App Manager 的完整能力。Application Service 查询数据时通过 Projection ReadModel Store 读取，不直接访问 GAgent State。限额参数通过 `App:Quota` 配置声明，`GET /api/sync/limits` 直接返回给前端，当前阶段后端不做限额判定。
+
+### 6.1 架构
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -1032,8 +1202,12 @@ graph TB
             GM_AUTH["认证服务<br/>(JWT 验证)"]
             GM_API["REST API 端点<br/>(Minimal API)"]
             GM_AI["AI 触发<br/>(IWorkflowRunCommandService)"]
-            GM_UPLOAD["图片上传<br/>(→ Chrono Storage REST)"]
+            GM_UPLOAD["图片上传<br/>(→ AWS S3)"]
             GM_CONC["并发控制<br/>(ImageConcurrencyCoordinator)"]
+        end
+
+        subgraph "Projection Pipeline"
+            PROJ["ReadModel Store<br/>(InMemory / Elasticsearch)"]
         end
 
         subgraph "Orleans Silo (Agent Runtime)"
@@ -1044,21 +1218,26 @@ graph TB
             WF_ROLES["WorkflowGAgent / RoleGAgent"]
         end
 
-        GM_AUTH -->|"IGrainFactory"| AL
-        GM_API -->|"IGrainFactory"| UG
-        GM_API -->|"IGrainFactory"| UA
-        GM_API -->|"IGrainFactory"| UP
+        GM_AUTH -->|"IProjectionDocumentStore"| PROJ
+        GM_API -->|"查询 ReadModel"| PROJ
+        GM_API -->|"IActorAccessAppService<br/>(发送命令)"| UG
+        GM_API -->|"IActorAccessAppService"| UA
+        GM_API -->|"IActorAccessAppService"| UP
         GM_AI -->|"IWorkflowRunCommandService"| WF_ROLES
+        UG -->|"events"| PROJ
+        UA -->|"events"| PROJ
+        UP -->|"events"| PROJ
+        AL -->|"events"| PROJ
     end
 
-    GM_UPLOAD --> CS["Chrono Storage REST"]
+    GM_UPLOAD --> S3["AWS S3<br/>(兼容 S3 协议对象存储)"]
     UG -->|"Grain State"| REDIS["Garnet/Redis"]
     UA -->|"Grain State"| REDIS
     UP -->|"Grain State"| REDIS
     AL -->|"Grain State"| REDIS
 ```
 
-### 5.2 职责清单
+### 6.2 职责清单
 
 ```
 App Manager (Host 内 Application Service):
@@ -1118,7 +1297,7 @@ App Manager (Host 内 Application Service):
 │   └── POST /api/upload/plant-image      → 上传植物图片 (不写 Actor State)
 │       ├── 输入: {stage, imageData (base64 PNG)}
 │       ├── 并发控制 (imagePool, 优先级高于生成)
-│       ├── 上传到 Chrono Storage
+│       ├── 上传到 AWS S3
 │       └── 返回: {success, imageUrl}
 └── 健康检查
     ├── GET /health                       → 完整检查 (Grain State + Storage + 并发池状态)
@@ -1126,7 +1305,7 @@ App Manager (Host 内 Application Service):
     └── GET /health/ready                 → 就绪探针
 ```
 
-### 5.3 API 端点与旧版映射
+### 6.3 API 端点与旧版映射
 
 #### 新 API 端点 (完整清单)
 
@@ -1199,7 +1378,7 @@ GET    /                               # 服务信息 + 可用端点列表 (🔓
 | `DELETE /api/data/reset` | `DELETE /api/users/me` | **合并** |
 | `GET /api/test-route` | — | **废弃** (调试用) |
 
-### 5.4 API 请求/响应规格
+### 6.4 API 请求/响应规格
 
 #### 🔓 `GET /`（仅调试/运维，前端不调用）
 
@@ -1426,7 +1605,7 @@ GET    /                               # 服务信息 + 可用端点列表 (🔓
         "bankEligible": true,
         "bankHash": "abc123",
         "deletedAt": null,
-        "createdAt": "ISO",we
+        "createdAt": "ISO",
         "updatedAt": "ISO"
       }
     }
@@ -1581,16 +1760,16 @@ GET    /                               # 服务信息 + 可用端点列表 (🔓
 { "success": true, "imageUrl": "string（公开访问 URL）" }
 ```
 
-> 上传到 Chrono Storage，返回 URL。不写 Actor State。有并发控制（`imagePool`，优先级高于生成）。
+> 上传到 AWS S3，返回 URL。不写 Actor State。有并发控制（`imagePool`，优先级高于生成）。
 
 ---
 
-## 6. 项目结构
+## 7. 项目结构
 
-### 6.1 目录布局
+### 7.1 目录布局
 
 ```
-apps/soul-garden/
+apps/aevatar-app/
 │
 ├── src/                                        # ═══ 平台运行时代码（通用，不随 App 变化）═══
 │   ├── Aevatar.App.GAgents/                    # GAgent 层 (Actor + Protobuf 领域模型 + 业务规则)
@@ -1599,58 +1778,103 @@ apps/soul-garden/
 │   │   │   ├── sync_entity.proto                 # SyncEntityGAgent (State + Events)
 │   │   │   ├── user_account.proto               # UserAccountGAgent (State + Events)
 │   │   │   ├── user_profile.proto               # UserProfileGAgent (State + Events)
-│   │   │   ├── auth_lookup.proto                # AuthLookupGAgent (State + Events)
-│   │   │   └── image_concurrency.proto          # ImageConcurrencyGAgent (State + Events)
+│   │   │   └── auth_lookup.proto                # AuthLookupGAgent (State + Events)
 │   │   ├── Rules/
 │   │   │   └── SyncRules.cs                     # 3 条同步规则 (新建/更新/过期)
-│   │   ├── Results.cs                           # GAgent 操作结果类型
+│   │   ├── SyncEntityResults.cs                 # GAgent 操作结果类型 (SyncResult/StateResult)
 │   │   ├── SyncEntityGAgent.cs                  # 同步引擎 GAgent (3 规则 + revision + 级联删除)
-│   │   ├── SyncEntityGAgent.Helpers.cs          # 同步引擎辅助方法
+│   │   ├── SyncEntityGAgent.Helpers.cs          # 同步引擎辅助方法 (级联删除 + TransitionState)
 │   │   ├── UserAccountGAgent.cs                 # 用户账户 GAgent
 │   │   ├── UserProfileGAgent.cs                 # 用户资料 GAgent
-│   │   ├── AuthLookupGAgent.cs                  # 认证查找 GAgent (per lookup key)
-│   │   └── ImageConcurrencyGAgent.cs            # 图片并发控制 GAgent
+│   │   └── AuthLookupGAgent.cs                  # 认证查找 GAgent (per lookup key)
 │   │
-│   ├── Aevatar.App.Application/                # 应用层 (薄层，API 端点到 GAgent 的桥接)
+│   ├── Aevatar.App.Application/                # 应用层 (业务编排 + Projection 查询)
 │   │   ├── Aevatar.App.Application.csproj
 │   │   ├── Contracts/
 │   │   │   ├── SyncRequestDto.cs                # 同步请求 DTO
 │   │   │   ├── SyncResponseDto.cs               # 同步响应 DTO
 │   │   │   └── EntityDto.cs                     # 单个实体 DTO (强类型字段)
 │   │   ├── Services/
-│   │   │   ├── AIGenerationAppService.cs        # AI 生成协调 (触发 Workflow)
-│   │   │   ├── GenerationOrchestrationAppService.cs  # AI 生成编排 (委托 AI 服务)
-│   │   │   ├── SyncOrchestrationAppService.cs   # 同步编排
-│   │   │   ├── UserOrchestrationAppService.cs   # 用户编排
-│   │   │   ├── AuthOrchestrationAppService.cs   # 认证编排
-│   │   │   ├── ActorAccessAppService.cs         # Actor 访问 (IGrainFactory 封装)
-│   │   │   ├── ImageStorageAppService.cs        # 图片上传 (Chrono Storage REST)
-│   │   │   ├── Prompts.cs                       # Prompt 模板常量 (→ 平台化后改为配置读取)
-│   │   │   └── FallbackContent.cs               # AI 失败占位内容池 (→ 平台化后从 fallbacks.json 读取)
+│   │   │   ├── AIGenerationAppService.cs        # AI 生成协调 (触发 Workflow + Connector)
+│   │   │   ├── IAIGenerationAppService.cs       # AI 生成协调接口
+│   │   │   ├── GenerationAppService.cs          # 生成编排 (委托 AI 服务 + fallback 兜底)
+│   │   │   ├── IGenerationAppService.cs         # 生成编排接口
+│   │   │   ├── SyncAppService.cs                # 同步编排 (→ Projection ReadModel 查询)
+│   │   │   ├── ISyncAppService.cs               # 同步编排接口
+│   │   │   ├── UserAppService.cs                # 用户编排 (→ Projection ReadModel 查询)
+│   │   │   ├── IUserAppService.cs               # 用户编排接口
+│   │   │   ├── AuthAppService.cs                # 认证编排 (→ Projection ReadModel 查询)
+│   │   │   ├── IAuthAppService.cs               # 认证编排接口
+│   │   │   ├── ActorAccessAppService.cs         # Actor 访问 (IActorRuntime 封装)
+│   │   │   ├── IActorAccessAppService.cs        # Actor 访问接口
+│   │   │   ├── ImageStorageAppService.cs        # 图片上传 (AWS S3 兼容存储)
+│   │   │   ├── IImageStorageAppService.cs       # 图片存储接口
+│   │   │   ├── AwsS3StorageClient.cs            # S3 存储客户端 (AWSSDK.S3)
+│   │   │   ├── Prompts.cs                       # Prompt 模板常量
+│   │   │   ├── FallbackContent.cs               # AI 失败占位内容池 (从 fallbacks.json 或配置加载)
+│   │   │   ├── IFallbackContent.cs              # 占位内容接口
+│   │   │   └── AppQuotaOptions.cs               # 限额参数 Options
+│   │   ├── Completion/
+│   │   │   ├── ICompletionPort.cs               # 同步等待接口 (WaitAsync/Complete)
+│   │   │   └── InMemoryCompletionPort.cs        # 内存实现 (开发/测试)
 │   │   ├── Concurrency/
-│   │   │   └── ImageConcurrencyCoordinator.cs   # 图片并发协调 (应用层入口)
+│   │   │   ├── IImageConcurrencyCoordinator.cs  # 并发协调接口
+│   │   │   └── ImageConcurrencyCoordinator.cs   # 进程内并发协调 (lock + 队列 + 超时)
+│   │   ├── Projection/
+│   │   │   ├── AppProjectionContext.cs          # 投影上下文 (事件去重)
+│   │   │   ├── DependencyInjection/
+│   │   │   │   └── AppProjectionServiceCollectionExtensions.cs  # DI 注册
+│   │   │   ├── Orchestration/
+│   │   │   │   ├── AppProjectionManager.cs      # 投影订阅管理
+│   │   │   │   ├── IAppProjectionManager.cs     # 投影管理接口
+│   │   │   │   ├── DefaultAppProjectionContextFactory.cs
+│   │   │   │   └── IAppProjectionContextFactory.cs
+│   │   │   ├── Projectors/
+│   │   │   │   ├── AppProjectorBase.cs          # 投影基类 (前缀过滤 + Reducer 路由)
+│   │   │   │   ├── AppSyncEntityProjector.cs    # 同步实体投影 (含 CompletionPort 通知)
+│   │   │   │   ├── AppUserAccountProjector.cs   # 用户账户投影
+│   │   │   │   ├── AppUserProfileProjector.cs   # 用户资料投影
+│   │   │   │   └── AppAuthLookupProjector.cs    # 认证查找投影
+│   │   │   ├── ReadModels/
+│   │   │   │   ├── AppSyncEntityReadModel.cs    # 同步实体读模型
+│   │   │   │   ├── AppSyncEntityLastResultReadModel.cs
+│   │   │   │   ├── SyncEntityEntry.cs           # 读模型内实体条目 POCO
+│   │   │   │   ├── AppUserAccountReadModel.cs   # 用户账户读模型
+│   │   │   │   ├── AppUserProfileReadModel.cs   # 用户资料读模型
+│   │   │   │   └── AppAuthLookupReadModel.cs    # 认证查找读模型
+│   │   │   ├── Reducers/
+│   │   │   │   ├── AppEventReducerBase.cs       # Reducer 基类 (Protobuf 解包)
+│   │   │   │   ├── SyncEntityReducers.cs        # 同步实体事件 Reducer
+│   │   │   │   ├── UserAccountReducers.cs       # 用户账户事件 Reducer
+│   │   │   │   ├── UserProfileReducers.cs       # 用户资料事件 Reducer
+│   │   │   │   └── AuthLookupReducers.cs        # 认证查找事件 Reducer
+│   │   │   └── Stores/
+│   │   │       └── AppInMemoryDocumentStore.cs  # 内存文档存储 (开发/测试)
 │   │   ├── Validation/
 │   │   │   ├── SyncRequestValidator.cs          # FluentValidation AbstractValidator<SyncRequestDto>
-│   │   │   ├── EntityValidator.cs               # FluentValidation AbstractValidator<EntityDto>
-│   │   │   └── ValidationResult.cs              # 校验结果封装
+│   │   │   └── EntityValidator.cs               # FluentValidation AbstractValidator<EntityDto>
 │   │   ├── Errors/
 │   │   │   └── AppErrorMiddleware.cs            # 全局异常处理中间件
-│   │   ├── Policies/                            # (当前为空，后续实现通用限额策略)
 │   │   └── Auth/
 │   │       ├── FirebaseAuthHandler.cs           # Firebase RS256 签名验证
 │   │       ├── TrialAuthHandler.cs              # Trial HS256 签名验证 (仅 dev/test)
 │   │       ├── AppAuthSchemeProvider.cs          # 多 scheme 路由选择 (Firebase → Trial)
 │   │       ├── AppAuthService.cs                # 认证服务 (token 验证 + JWKS 缓存)
+│   │       ├── IAppAuthService.cs               # 认证服务接口
 │   │       ├── AppUserProvisioningMiddleware.cs  # findOrCreateUser
 │   │       ├── OptionalAuthMiddleware.cs        # 公开 + 可选增强 API
-│   │       ├── AuthContextExtensions.cs         # AuthContext HttpContext 扩展
+│   │       ├── IAppAuthContextAccessor.cs       # 认证上下文访问器接口
 │   │       └── AuthPrincipalExtensions.cs       # Claims 提取扩展
 │   │
 │   └── Aevatar.App.Host.Api/                  # 宿主层
 │       ├── Aevatar.App.Host.Api.csproj
-│       ├── Program.cs                           # Bootstrap (读取统一 App:* 配置)
+│       ├── Program.cs                           # Bootstrap (启动校验 + DI + Middleware + Endpoints)
 │       ├── Hosting/
-│       │   └── AppDistributedHostBuilderExtensions.cs
+│       │   ├── AppDistributedHostBuilderExtensions.cs  # Orleans 分布式配置
+│       │   ├── AppElasticsearchProjectionExtensions.cs # Elasticsearch 投影存储注册
+│       │   └── AppStartupValidation.cs          # 启动配置校验 (fail-fast)
+│       ├── Completion/
+│       │   └── RedisCompletionPort.cs           # Redis Pub/Sub CompletionPort (生产)
 │       ├── Endpoints/
 │       │   ├── StateEndpoints.cs                # GET /api/state
 │       │   ├── SyncEndpoints.cs                 # POST /api/sync, GET /api/sync/limits
@@ -1681,9 +1905,13 @@ apps/soul-garden/
 │   └── garden.connectors.json                  # Connector 配置 (gemini_imagen / gemini_tts)
 │
 ├── test/
-│   ├── Aevatar.App.GAgents.Tests/
-│   ├── Aevatar.App.Application.Tests/
-│   └── Aevatar.App.Host.Api.Tests/
+│   ├── Aevatar.App.GAgents.Tests/               # GAgent 单元 + 端到端测试 (11 文件)
+│   │   └── (SyncEntity/UserAccount/UserProfile/AuthLookup/SyncRules 测试)
+│   ├── Aevatar.App.Application.Tests/            # Application 层单元测试 (26 文件)
+│   │   ├── Projection/                           # Reducer + Projector 测试
+│   │   └── (Auth/Services/Validation/Contracts/Concurrency 测试)
+│   └── Aevatar.App.Host.Api.Tests/               # API 集成测试 (12 文件)
+│       └── (Sync/Generate/Upload/Auth/User 集成测试 + AppTestFixture)
 │
 ├── Dockerfile                                  # 容器化构建（产出通用镜像）
 │
@@ -1695,7 +1923,7 @@ apps/soul-garden/
 
 ```
 apps/
-├── soul-garden/          # 第一个 App（含平台运行时源码 + Soul Garden 配置包）
+├── aevatar-app/          # 第一个 App（含平台运行时源码 + Soul Garden 配置包）
 │   ├── src/              # 平台运行时代码
 │   ├── config/           # Soul Garden 配置包
 │   ├── workflows/        # Soul Garden Workflow
@@ -1713,7 +1941,7 @@ apps/
 
 > 新 App 部署时复用 Soul Garden 构建产出的同一 Docker 镜像，仅通过 `AEVATAR_HOME` 环境变量指向新 App 的配置包目录，加上 `appsettings.json` 环境变量覆盖。
 
-### 6.2 项目依赖关系
+### 7.2 项目依赖关系
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -1735,13 +1963,13 @@ graph TB
     style APP fill:#fff3e6,stroke:#cc6600
     style GAGENTS fill:#e6ffe6,stroke:#006600
     style HOST fill:#ffe6e6,stroke:#cc0000
-```©
+```
 
 ---
 
-## 7. 数据流与持久化
+## 8. 数据流与持久化
 
-### 7.1 创建植物完整时序（AI 生成 + 同步存储）
+### 8.1 创建植物完整时序（AI 生成 + 同步存储）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -1766,53 +1994,60 @@ sequenceDiagram
     Note over Client: Step 2: 通过同步写入 Actor State
     Client->>GM: POST /api/sync {syncId, clientRevision, entities: {manifestation: {...}}}
 
-    GM->>UG: SyncAsync(SyncRequest)
-    Note over UG: Actor 内部 (单线程)：<br/>3 规则处理 → 写 State.entities<br/>allocateRevision → State.meta.revision++<br/>构建增量 EntityMap
+    GM->>UG: SendCommandAsync(EntitiesSyncRequestedEvent)
+    Note over UG: Actor 内部 (单线程)：<br/>3 规则处理 → 写 State.entities<br/>allocateRevision → State.meta.revision++<br/>发射领域事件 → Projection 更新 ReadModel
+    Note over GM: CompletionPort.WaitAsync(syncId)<br/>→ 等待 Projection 完成<br/>→ 从 ReadModel 构建响应
 
-    UG-->>GM: SyncResponse
     GM-->>Client: 200 {syncId, serverRevision, entities, accepted, rejected}
 ```
 
-### 7.2 实体同步时序
+### 8.2 实体同步时序
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant Client as "App Client"
-    participant GM as "App Manager"
-    participant UG as "SyncEntityGAgent"
+    participant Sync as "SyncAppService"
+    participant Actor as "SyncEntityGAgent"
+    participant Proj as "Projection Pipeline"
+    participant CP as "CompletionPort"
+    participant Store as "ReadModel Store"
 
-    Client->>GM: POST /api/sync {syncId, clientRevision, entities: EntityMap}
+    Client->>Sync: POST /api/sync {syncId, clientRevision, entities}
 
-    GM->>UG: SyncAsync(SyncRequest)
-    Note over UG: Actor 单线程执行（天然串行，无并发 race condition）
+    Sync->>Actor: SendCommandAsync(EntitiesSyncRequestedEvent)
+    Sync->>CP: WaitAsync(syncId)
 
-    UG->>UG: flattenEntities(EntityMap)
-    UG->>UG: 覆盖 userId (安全)
-    UG->>UG: 实体数量校验 (≤ 500)
+    Note over Actor: Actor 单线程执行（天然串行）
+
+    Actor->>Actor: flattenEntities + 覆盖 userId
+    Actor->>Actor: 实体数量校验 (≤ 500)
 
     loop 每个实体
         alt revision === 0 且不在 State.entities
-            UG->>UG: State.meta.revision++ → 写入 State.entities
-            Note over UG: accepted[]
-        else revision === State.entities[clientId].revision
-            UG->>UG: State.meta.revision++ → 更新 State.entities
+            Actor->>Actor: revision++ → 写入 State + 发射 EntityCreatedEvent
+        else revision === existing.revision
+            Actor->>Actor: revision++ → 更新 State + 发射 EntityUpdatedEvent
             alt deletedAt 不为空
-                UG->>UG: cascadeDelete (refs, 最大深度 5)
+                Actor->>Actor: cascadeDelete (max depth 5) + 发射 CascadeDeleteEvent
             end
-            Note over UG: accepted[]
         else 其他
-            Note over UG: rejected[] (Stale: client=X, server=Y)
+            Note over Actor: rejected (Stale)
         end
     end
 
-    UG->>UG: 构建增量 EntityMap (revision > clientRevision)
-
-    UG-->>GM: SyncResponse
-    GM-->>Client: 200 {syncId, serverRevision, entities, accepted, rejected}
+    Actor->>Actor: 发射 EntitiesSyncedEvent
+    Actor-->>Proj: 事件流
+    Proj->>Proj: Reducers 更新 ReadModel
+    Proj->>CP: Complete(syncId)
+    CP-->>Sync: WaitAsync 返回
+    Sync->>Store: GetAsync(actorId)
+    Store-->>Sync: AppSyncEntityReadModel
+    Sync->>Sync: 构建 SyncResult (delta entities + accepted + rejected)
+    Sync-->>Client: 200 {syncId, serverRevision, entities, accepted, rejected}
 ```
 
-### 7.3 持久化策略
+### 8.3 持久化策略
 
 | 数据 | 旧实现 (MongoDB) | 新实现 (GAgent State) | 说明 |
 |------|-----------------|---------------------|------|
@@ -1820,14 +2055,14 @@ sequenceDiagram
 | 用户资料 | `profiles` 集合 | `UserProfileGAgent.State` | Protobuf: `Profile` |
 | 同步实体 (所有业务数据) | `sync_entities` 集合 | `SyncEntityGAgent.State.entities` | Protobuf: `map<string, SyncEntity>` |
 | 同步元数据 | `sync_meta` 集合 | `SyncEntityGAgent.State.meta` | Protobuf: `SyncMeta` |
-| 同步幂等日志 | `sync_log` 集合 (72h TTL) | **移除** | Actor 单线程 + 3 规则天然幂等 |
+| 同步幂等日志 | `sync_log` 集合 (72h TTL) | `State.ProcessedSyncIds` (最近 32 条) | 精简为 Actor State 内滑动窗口 |
 | 认证索引 | `users` 集合索引 | `AuthLookupGAgent.State` (per key) | Protobuf: `AuthLookupState { lookup_key, user_id }`，lookup_key 格式: `firebase:{uid}` / `trial:{trialId}` / `email:{email}` |
-| 图片文件 | Chrono / R2 (双模) | Chrono Storage (统一) | S3/MinIO |
+| 图片文件 | Chrono / R2 (双模) | AWS S3 (兼容 S3 协议对象存储) | AWSSDK.S3 |
 | 应用配置 | `app_config` 集合 (仅启动 seed) | `appsettings.json` + 环境变量 | 不再存储到 Actor State |
 | 同步树 | `sync_trees` 集合 | **废弃** | 已在 Node.js 版本废弃 |
 | Workflow/Agent 状态 | N/A | Aevatar State Store | Garnet/Redis |
 
-### 7.4 Protobuf 定义（按 GAgent 分文件，State + Events 合并）
+### 8.4 Protobuf 定义（按 GAgent 分文件，State + Events 合并）
 
 > **命名风格约定**：Protobuf 使用 `snake_case`（如 `client_id`、`entity_type`），C# 生成属性为 `PascalCase`（如 `ClientId`、`EntityType`），API JSON 序列化输出为 `camelCase`（如 `clientId`、`entityType`）。三者语义相同，仅随层级自动转换。本文 4.1 类图按 Protobuf 视角展示字段，5.4 API 规格按 JSON 视角展示字段。
 
@@ -1843,6 +2078,7 @@ import "google/protobuf/struct.proto";
 message SyncEntityState {
   map<string, SyncEntity> entities = 1;  // clientId → entity
   SyncMeta meta = 2;
+  repeated string processed_sync_ids = 3;  // 最近 32 个已处理 syncId（幂等窗口）
 }
 
 message SyncEntity {
@@ -1980,6 +2216,20 @@ message UserRegisteredEvent {
   google.protobuf.Timestamp registered_at = 6;
 }
 
+message UserProviderLinkedEvent {
+  string user_id = 1;
+  string auth_provider = 2;
+  string auth_provider_id = 3;
+  bool email_verified = 4;
+}
+
+message UserLoginUpdatedEvent {
+  string user_id = 1;
+  string email = 2;
+  bool email_verified = 3;
+  google.protobuf.Timestamp last_login_at = 4;
+}
+
 message AccountDeletedEvent {
   string user_id = 1;
   string email = 2;
@@ -2034,6 +2284,10 @@ message ProfileUpdatedEvent {
   Profile profile = 2;
   google.protobuf.Timestamp updated_at = 3;
 }
+
+message ProfileDeletedEvent {
+  string user_id = 1;
+}
 ```
 
 ```protobuf
@@ -2063,9 +2317,9 @@ message AuthLookupClearedEvent {
 
 ---
 
-## 8. 实体同步协议 v6.1 移植方案
+## 9. 实体同步协议 v6.1 移植方案
 
-### 8.1 为什么保留同步协议
+### 9.1 为什么保留同步协议
 
 实体同步协议 v6.1 是 Aevatar App 的核心数据流，具有以下优势：
 
@@ -2074,7 +2328,7 @@ message AuthLookupClearedEvent {
 3. **协议简洁** — 仅 3 条规则（新建/更新/过期），实现简单、行为可预测
 4. **前端依赖** — 客户端已深度集成此协议，保留可避免前端重写
 
-### 8.2 移植策略：MongoDB → GAgent State
+### 9.2 移植策略：MongoDB → GAgent State
 
 ```
 保留不变:
@@ -2089,49 +2343,56 @@ message AuthLookupClearedEvent {
 迁移变更:
   - MongoDB findOneAndUpdate → Actor State 内存字典操作
   - MongoDB $inc 原子操作 → Actor 单线程 State.meta.revision++（天然原子）
-  - MongoDB TTL 索引 (sync_log) → 移除（Actor 单线程 + 3 规则天然幂等）
+  - MongoDB TTL 索引 (sync_log) → 精简为 State.ProcessedSyncIds 滑动窗口（最近 32 条）
   - MongoDB ObjectId → 直接使用 clientId 作为 map key
   - MongoDB 嵌入文档 → Protobuf google.protobuf.Struct (inputs/output/state) + map<string, string> (refs)
-  - syncId 幂等缓存 → 移除（Actor 单线程 + 3 规则天然幂等）；syncId 仅保留为请求-响应关联标识（echo back）
+  - syncId 幂等缓存 (sync_log 72h TTL) → 精简为 State.ProcessedSyncIds 滑动窗口（最近 32 个）；重复 syncId 直接跳过
 ```
 
-### 8.3 .NET 同步引擎架构
+### 9.3 .NET 同步引擎架构
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 graph TB
     API["POST /api/sync"]
     VALIDATE["SyncRequestValidator<br/>(FluentValidation + 强类型 DTO)"]
-    GM["App Manager Endpoint"]
+    SYNC_SVC["SyncAppService"]
     UG["SyncEntityGAgent<br/>(Actor 单线程)"]
     STATE_STORE["Garnet/Redis<br/>(Grain State Store)"]
+    PROJ["Projection Pipeline"]
+    RM["ReadModel Store"]
+    CP["CompletionPort"]
 
     API --> VALIDATE
-    VALIDATE --> GM
-    GM -->|"IGrainFactory.GetGrain(userId)"| UG
+    VALIDATE --> SYNC_SVC
+    SYNC_SVC -->|"IActorAccessAppService<br/>(发送命令)"| UG
+    SYNC_SVC -->|"WaitAsync(syncId)"| CP
     UG -->|"ReadState / WriteState"| STATE_STORE
+    UG -->|"事件流"| PROJ
+    PROJ --> RM
+    PROJ -->|"Complete(syncId)"| CP
+    SYNC_SVC -->|"查询 ReadModel"| RM
 
     STATE_API["GET /api/state"]
-    STATE_API --> GM
-    GM -->|"IGrainFactory.GetGrain(userId)"| UG
+    STATE_API --> SYNC_SVC
+    SYNC_SVC -->|"查询 ReadModel"| RM
 
     subgraph "SyncEntityGAgent 内部"
-        SYNC["SyncAsync():<br/>3 规则 + revision++ + 级联删除"]
-        GET_STATE["GetStateAsync():<br/>过滤 deletedAt=null + 分组"]
+        SYNC["HandleSyncEntities():<br/>3 规则 + revision++ + 级联删除 + 发射事件"]
     end
 ```
 
-### 8.4 关键实现映射
+### 9.4 关键实现映射
 
 | Node.js (旧) | .NET (新) | 说明 |
 |--------------|----------|------|
-| `syncEngine.processSync()` | `SyncEntityGAgent.SyncAsync()` | 核心同步处理 (Actor 内部) |
-| `syncHelpers.groupEntities()` | `SyncEntityGAgent.GroupEntities()` | 扁平 → EntityMap |
-| `syncHelpers.flattenEntities()` | `SyncEntityGAgent.FlattenEntities()` | EntityMap → 扁平 |
-| `syncHelpers.allocateRevision()` | `SyncEntityGAgent.State.meta.revision++` | Actor 单线程天然原子 |
-| `syncHelpers.getCurrentRevision()` | `SyncEntityGAgent.State.meta.revision` | 直接读 State |
-| `syncHelpers.cascadeDelete()` | `SyncEntityGAgent.CascadeDelete()` | 级联软删除 (max depth 5) |
-| `syncHelpers.hashInputs()` | `SyncEntityGAgent.HashInputs()` | SHA-256 内容银行匹配 |
+| `syncEngine.processSync()` | `SyncEntityGAgent.HandleSyncEntities()` | 核心同步处理 (Actor 事件处理) |
+| `syncHelpers.groupEntities()` | `EntityMapMapper.ToDto()` | 扁平 → EntityMap (Application 层) |
+| `syncHelpers.flattenEntities()` | `EntityMapMapper.FromDto()` | EntityMap → 扁平 (Application 层) |
+| `syncHelpers.allocateRevision()` | `SyncEntityGAgent.State.Meta.Revision++` | Actor 单线程天然原子 |
+| `syncHelpers.getCurrentRevision()` | `AppSyncEntityReadModel.ServerRevision` | 从 Projection ReadModel 读取 |
+| `syncHelpers.cascadeDelete()` | `SyncEntityGAgent.CollectCascadeDeleteEvents()` | 级联软删除 (max depth 5) |
+| `syncHelpers.hashInputs()` | — | SHA-256 通过 BankHash 字段传递 |
 | `validation.validateSyncRequest()` | `SyncRequestValidator` | FluentValidation AbstractValidator；字段类型/存在性由强类型 DTO + DataAnnotations 自动完成，仅保留嵌套 EntityMap 遍历等业务规则 |
 | `validation.validateEntity()` | `EntityValidator` | FluentValidation AbstractValidator；原 TS 中 ~70% typeof 检查被 C# 类型系统消化 |
 | `limits.checkCanPlant()` | **移除**（后端不判定） | 限额参数通过 `GET /api/sync/limits` 返回给前端，前端自行判定 |
@@ -2139,14 +2400,14 @@ graph TB
 | `limits.pruneExpiredEvents()` | **移除** | 旧版死代码，从未被路由调用 |
 | `limits.recordSeedEvent()` | **移除** | 旧版死代码，从未被路由调用 |
 | `limits.recordWaterEvent()` | **移除** | 旧版死代码，从未被路由调用 |
-| `syncEngine.checkIdempotency()` | **移除** | Actor 单线程 + 3 规则天然幂等 |
-| `syncEngine.cacheResponse()` | **移除** | 不再需要 sync_log |
+| `syncEngine.checkIdempotency()` | `State.ProcessedSyncIds.Contains(syncId)` | 精简为 32 条滑动窗口，重复跳过 |
+| `syncEngine.cacheResponse()` | **移除** | 不再需要 sync_log（通过 Projection ReadModel 的 SyncResults 保留最近 16 条结果） |
 
 ---
 
-## 9. 认证架构
+## 10. 认证架构
 
-### 9.1 认证模型概述
+### 10.1 认证模型概述
 
 Aevatar App 的认证模型是 **token-first, 隐式注册**：
 - 用户从外部获取 token，直接用 `Authorization: Bearer <token>` 访问 API
@@ -2155,7 +2416,7 @@ Aevatar App 的认证模型是 **token-first, 隐式注册**：
 
 **生产环境仅使用 Firebase Authentication**。Trial 仅在本地开发和测试中使用。
 
-### 9.2 认证 Provider（按环境区分）
+### 10.2 认证 Provider（按环境区分）
 
 | Provider | 算法 | 环境 | Token 来源 | 验证方式 | Token 有效期 |
 |----------|------|------|-----------|---------|------------|
@@ -2165,7 +2426,7 @@ Aevatar App 的认证模型是 **token-first, 隐式注册**：
 
 > 旧版 Node.js 代码支持三种认证方式（OR 链式验证：Firebase → Aevatar OAuth → Trial）。新版**废弃 Aevatar OAuth**（仅解析 claims 不验证签名，安全性不足），仅保留 Firebase + Trial（OR 链式验证：Firebase → Trial）。**生产环境仅配置和使用 Firebase**。
 
-### 9.3 Firebase 认证详情（生产）
+### 10.3 Firebase 认证详情（生产）
 
 **前端流程：**
 1. 用户通过 Firebase Auth SDK 登录（支持 Google Sign-In、Apple Sign-In 等社交登录）
@@ -2228,7 +2489,7 @@ Firebase ID Token → sub (Firebase UID)
 
 **JWKS 缓存：** Firebase JWKS 采用单例懒加载模式缓存，避免重复网络请求。
 
-### 9.4 Trial 注册流程（开发/测试）
+### 10.4 Trial 注册流程（开发/测试）
 
 > 此端点仅在开发/测试环境中使用，生产环境可选择不配置 `TRIAL_TOKEN_SECRET`。
 
@@ -2275,7 +2536,7 @@ sequenceDiagram
 - `alg: HS256`，使用 `TRIAL_TOKEN_SECRET` 环境变量签名
 - **无 `exp`**，永不过期（后端通过用户状态控制访问权限）
 
-### 9.5 隐式登录 / 自动用户创建 (`findOrCreateUser`)
+### 10.5 隐式登录 / 自动用户创建 (`findOrCreateUser`)
 
 每次受保护 API 请求，auth middleware 验证 token 后执行以下逻辑：
 
@@ -2308,7 +2569,7 @@ flowchart TB
 4. **每次请求都触发**：每次 API 请求都经过 `AuthLookupGAgent → UserAccountGAgent` 确保 `lastLoginAt` 实时更新
 5. **AuthLookupGAgent 是 per-key 的**：每个查找键（`firebase:{uid}` / `trial:{trialId}` / `email:{email}`）对应一个独立 GAgent 实例，State 包含 `lookup_key`（认证查找键）和 `user_id`（目标用户），无限水平扩展
 
-### 9.6 认证中间件行为
+### 10.6 认证中间件行为
 
 | 中间件 | 行为 | 使用场景 |
 |--------|------|---------|
@@ -2321,14 +2582,14 @@ flowchart TB
 - `GET /api/remote-config`
 - `POST /api/auth/register-trial`（仅开发/测试环境使用）
 
-### 9.7 认证相关配置
+### 10.7 认证相关配置
 
 | 配置键 | 环境变量（`__` 格式） | 生产必需 | 说明 |
 |--------|---------|---------|------|
 | `Firebase:ProjectId` | `Firebase__ProjectId` | **是** | Firebase 项目 ID |
 | `App:TrialTokenSecret` | `App__TrialTokenSecret` | 否（开发用） | 试用令牌签名密钥（至少 32 字符），生产可选 |
 
-### 9.8 ASP.NET Core 实现方案
+### 10.8 ASP.NET Core 实现方案
 
 迁移到 .NET 后，使用 ASP.NET Core Authentication 框架实现：
 
@@ -2363,11 +2624,11 @@ builder.Services
 
 ---
 
-## 10. 图片存储集成
+## 11. 图片存储集成
 
-### 10.1 存储架构
+### 11.1 存储架构
 
-旧实现支持 Chrono / R2 双模存储。新实现**统一使用 Chrono Storage**。
+旧实现支持 Chrono / R2 双模存储。新实现**统一使用 AWS S3 兼容对象存储**（通过 `AWSSDK.S3` 客户端，可对接 AWS S3、MinIO 或其他 S3 兼容存储）。
 
 **AI 生成图片不在服务端保存**，以 base64 返回给前端，由前端决定是否上传：
 
@@ -2376,37 +2637,38 @@ AI 图片生成 (不保存):
   前端 → POST /api/generate/plant-image → Workflow (Gemini) → 返回 base64 给前端
 
 图片上传 (前端主动触发):
-  前端 → POST /api/upload/plant-image (携带 base64) → App Manager → Chrono Storage
+  前端 → POST /api/upload/plant-image (携带 base64) → App Manager → AWS S3
   App Manager → 返回 imageUrl 给前端
 
 前端同步:
   前端 → POST /api/sync → 将 imageUrl 写入 entity
 
 读取路径:
-  Client → Chrono CDN URL (公开访问)
+  Client → CDN URL 或 S3 URL (公开访问)
 ```
 
-### 10.2 存储约定（配置驱动）
+### 11.2 存储约定（配置驱动）
 
-存储相关配置从 `App:Storage` 配置节读取。`ImageStorageAppService.IsConfigured()` 依赖 `PlatformApiUrl` + `PipelineId` + `PlatformApiToken` 三项全部非空，缺失任意一项将导致 `/health` storage 检查退化为 `error` 且上传/删除接口不可用：
+存储相关配置从 `App:Storage` 配置节读取，绑定到 `ImageStorageOptions`。`ImageStorageAppService.IsConfigured()` 依赖 `BucketName` 非空：
 
 | 配置键 | Soul Garden 值 | 必需 | 说明 |
 |--------|---------------|------|------|
-| `App:Storage:PlatformApiUrl` | `http://localhost:8080` | **是** | Chrono Storage API 地址 |
-| `App:Storage:PipelineId` | `soul-garden-pipeline` | **是** | Pipeline ID（构建上传/删除 endpoint 路径） |
-| `App:Storage:PlatformApiToken` | *(部署时提供)* | **是** | API Token（Bearer 认证，上传/删除请求必需） |
-| `App:Storage:CdnUrl` | *(部署时提供)* | 否 | CDN URL 前缀（上传响应无 URL 时的 fallback 拼接） |
-| `App:Storage:Bucket` | `soul-garden` | **是** | 存储桶名称（跨 App 数据隔离） |
+| `App:Storage:Region` | `us-east-1` | 否 | AWS S3 Region |
+| `App:Storage:BucketName` | `soul-garden` | **是** | S3 存储桶名称（跨 App 数据隔离） |
+| `App:Storage:AccessKeyId` | *(部署时提供)* | 否 | S3 Access Key ID（空时使用 AWS 默认凭证链） |
+| `App:Storage:SecretAccessKey` | *(部署时提供)* | 否 | S3 Secret Access Key |
+| `App:Storage:CdnUrl` | *(部署时提供)* | 否 | CDN URL 前缀（可选，用于构建公开访问 URL） |
+| `App:Storage:MaxFileSizeBytes` | `104857600` | 否 | 最大文件大小（默认 100MB） |
 
 - 图片 key 格式: `{userId}/{manifestationId}_{stage}_{timestamp}.png`。其中 `manifestationId` 来自服务端生成的 `upload_{guid}`（上传链路）。
 - 按 userId 前缀隔离，支持按前缀批量删除（账户删除时）
-- 新 App 通过配置不同的 `App:Storage:Bucket` 实现存储隔离
+- 新 App 通过配置不同的 `App:Storage:BucketName` 实现存储隔离
 
 ---
 
-## 11. 多 App 部署架构
+## 12. 多 App 部署架构
 
-### 11.1 部署模型
+### 12.1 部署模型
 
 同一个 Docker 镜像（`aevatar-app-runtime`），通过环境变量 + 配置挂载部署为不同业务 App：
 
@@ -2437,7 +2699,7 @@ graph TB
     NA_CFG --> NA_DATA
 ```
 
-### 11.2 数据隔离策略
+### 12.2 数据隔离策略
 
 每个 App 部署为独立服务实例，通过以下维度实现完全隔离：
 
@@ -2445,24 +2707,23 @@ graph TB
 |----------|--------|---------|
 | Orleans 集群 | `Orleans:ClusterId` / `Orleans:ServiceId` | 不同 App 不在同一集群中，Grain State 完全独立 |
 | 持久化存储 | `AevatarActorRuntime:OrleansGarnetConnectionString` | 可使用独立 Garnet/Redis 实例或不同 database index |
-| 对象存储 | `App:Storage:Bucket` | 每个 App 独立 bucket |
+| 对象存储 | `App:Storage:BucketName` | 每个 App 独立 S3 bucket |
 | 认证 | `Firebase:ProjectId` | 每个 App 可绑定不同 Firebase 项目 |
 | 连接器密钥 | `connectors.json` 中 `defaultHeaders` | 每个 App 使用独立 API key |
 
-### 11.3 新 App 上线检查清单
+### 12.3 新 App 上线检查清单
 
 ```
 部署新 App 前确认：
   1. ✅ 配置包完整性
-     □ appsettings.json — App:Id / Firebase:ProjectId / Orleans:ClusterId / App:Storage:{PlatformApiUrl,PipelineId,PlatformApiToken,Bucket} / App:Quota
+     □ appsettings.json — App:Id / Firebase:ProjectId / Orleans:ClusterId / App:Storage:BucketName / App:Quota
      □ fallbacks.json — AI 占位内容
      □ workflows/*.yaml — 至少一个 Workflow 定义
      □ connectors.json — 所需的 Connector 配置 + API key
 
   2. ✅ 隔离验证
      □ Orleans:ClusterId 与现有 App 实例不冲突
-     □ App:Storage:Bucket 与现有 App 不同
-     □ App:Storage:PipelineId / PlatformApiToken 已配置（否则 /health storage 退化）
+     □ App:Storage:BucketName 与现有 App 不同
      □ Garnet/Redis 连接串或 database index 隔离
 
   3. ✅ 功能验证
@@ -2472,7 +2733,7 @@ graph TB
      □ AI 生成端点通过（或 fallback 正确返回占位内容）
 ```
 
-### 11.4 docker-compose 模板（新 App 部署参考）
+### 12.4 docker-compose 模板（新 App 部署参考）
 
 ```yaml
 services:
@@ -2504,12 +2765,12 @@ services:
       Firebase__ProjectId: "new-app-firebase-project"
       App__TrialAuthEnabled: "true"
       App__TrialTokenSecret: "dev-secret-32-chars-minimum-here!"
-      # ── 存储（必须与其他 App 不同；PlatformApiUrl + PipelineId + PlatformApiToken 三项全部非空才可用）──
-      App__Storage__PlatformApiUrl: http://localhost:8080
-      App__Storage__PipelineId: "new-app-pipeline"
-      App__Storage__PlatformApiToken: ""            # 部署时替换为实际 token
+      # ── 存储（BucketName 必须与其他 App 不同）──
+      App__Storage__Region: "us-east-1"
+      App__Storage__BucketName: "new-app"
+      App__Storage__AccessKeyId: ""                 # 部署时替换（或使用 AWS 默认凭证链）
+      App__Storage__SecretAccessKey: ""
       App__Storage__CdnUrl: ""                      # CDN 前缀（可选）
-      App__Storage__Bucket: "new-app"
       # ── 限额 ──
       App__PaywallEnabled: "false"
       # ── 配置包路径 ──
@@ -2525,9 +2786,9 @@ services:
 
 ---
 
-## 12. 关键设计决策
+## 13. 关键设计决策
 
-### 12.1 为什么用 GAgent 而不是 PostgreSQL？
+### 13.1 为什么用 GAgent 而不是 PostgreSQL？
 
 | 考量 | PostgreSQL | GAgent State (Garnet/Redis) |
 |------|------------|---------------------------|
@@ -2545,7 +2806,7 @@ services:
 - 单用户实体量有限（maxSavedPlants=10，每植物 ~1 affirmation），State 体积可控
 - 如果未来需要全局分析或 bank 功能，可通过 Projection Pipeline 异步投影到读模型
 
-### 12.2 为什么不用 per-Entity Actor？
+### 13.2 为什么不用 per-Entity Actor？
 
 | 考量 | per-Entity Actor | per-User GAgent (当前方案) |
 |------|-----------------|---------------------------|
@@ -2557,7 +2818,7 @@ services:
 
 同步协议的核心是 revision 比较和原子递增，所有实体共享同一个 revision 计数器，天然适合放在同一个 Actor 中。
 
-### 12.3 为什么保留 WorkflowGAgent 而不是直接调 LLM？
+### 13.3 为什么保留 WorkflowGAgent 而不是直接调 LLM？
 
 | 考量 | 直接调 LLM | WorkflowGAgent |
 |------|----------|----------------|
@@ -2566,7 +2827,7 @@ services:
 | 可观测性 | 自建 logging | Aevatar Projection Pipeline 自动记录 |
 | 扩展性 | 改代码 | 改 YAML |
 
-### 12.4 废弃清单
+### 13.4 废弃清单
 
 | 组件 | 原因 |
 |------|------|
@@ -2581,7 +2842,7 @@ services:
 | `services/ai.ts` (直调 OpenAI) | 通过 WorkflowGAgent 执行 |
 | `services/ai.ts` — `regenerateContent()` | 旧版代码中已无路由调用，废弃 |
 | `services/gemini.ts` (直调 Gemini) | 通过 Aevatar LLM Provider 封装 |
-| `services/storage.ts` (双模 R2/Chrono) | 统一 Chrono Storage |
+| `services/storage.ts` (双模 R2/Chrono) | AWS S3 兼容存储 |
 | **数据层** | |
 | `db.ts` (MongoDB 连接) | 迁移到 GAgent State (Protobuf) |
 | `sync_trees` 集合 | 已在 Node.js 版本废弃 (迁移脚本残留) |
@@ -2589,7 +2850,7 @@ services:
 | `scripts/migrate-sync-trees-to-entities.ts` | 旧版迁移脚本，废弃 |
 | `app_config` 集合 | 改用 `appsettings.json` + 环境变量 |
 | **基础设施** | |
-| R2 存储后端 | 统一使用 Chrono Storage（旧版 `useR2Storage` 硬编码为 `true`，生产实际使用 R2；新版废弃） |
+| R2 存储后端 | 统一使用 AWS S3 兼容存储（旧版 `useR2Storage` 硬编码为 `true`，生产实际使用 R2；新版废弃） |
 | `@aws-sdk/client-s3` 依赖 | 不再直连 R2 |
 | MongoDB 原生驱动 | 迁移到 GAgent State (Orleans Grain State) |
 
@@ -2597,7 +2858,7 @@ services:
 
 ---
 
-## 13. 迁移策略
+## 14. 迁移策略
 
 ### Phase 1: 基础设施 (1-2 周)
 
@@ -2621,7 +2882,7 @@ services:
 ### Phase 2: GAgent 实现 + 认证 + API 端点 (1-2 周)
 
 - [x] `SyncEntityGAgent` 实现
-  - [x] `SyncAsync()` — 完整内部流程：
+  - [x] `HandleSyncEntities(EntitiesSyncRequestedEvent)` — 完整内部流程：
     - [x] 扁平化 EntityMap → Entity[]
     - [x] userId 强制覆盖（安全原则，防止客户端伪造）
     - [x] 实体数量校验 (≤ 500)
@@ -2631,23 +2892,24 @@ services:
     - [x] 编辑检测: source → edited, bankEligible → false
     - [x] 构建增量 EntityMap (revision > clientRevision)
     - [x] 发射领域事件: `EntitiesSyncedEvent` + 逐实体 `EntityCreated/Updated/Deleted/CascadeDeleteEvent`
-  - [x] `HashInputs()` — SHA-256 bank_hash 计算（内容银行匹配）
-  - [x] `GetStateAsync()` — 过滤 deletedAt=null + 按 entityType 分组
+  - [x] `HandleSoftDeleteEntities` / `HandleHardDeleteEntities` — 软删除匿名化 / 硬删除全清除
+  - [x] `CollectCascadeDeleteEvents()` — 递归级联删除事件收集（最大深度 5）
+  - [x] `TransitionState()` — 事件溯源状态转换（Apply Created/Updated/Synced/Deleted）
 - [x] `UserAccountGAgent` 实现
-  - [x] `CreateAsync()` / `GetOrCreateAsync()` — 用户创建 → 发射 `UserRegisteredEvent`
-  - [x] `LinkProviderAsync()` / `UpdateLoginAsync()` — 跨 provider 关联 / 登录更新
-  - [x] `DeleteAsync(hard)` — 账户删除 (软/硬) → 发射 `AccountDeletedEvent`
-    - [x] 软删除: userId → deleted_xxx, 匿名化 inputs 中的用户敏感内容, 清除 UserAccountGAgent + UserProfileGAgent State
-    - [x] 硬删除: 清除 SyncEntityGAgent + UserAccountGAgent + UserProfileGAgent 所有状态 + 清除关联 AuthLookupGAgent
+  - [x] `HandleRegisterUser()` — 用户注册/重复注册（已有用户发 `UserLoginUpdatedEvent`）
+  - [x] `HandleLinkProvider()` — 跨 provider 关联（发 `UserProviderLinkedEvent`）
+  - [x] `HandleUpdateLogin()` — 登录信息更新
+  - [x] `HandleDeleteAccount()` — 账户删除 → 清空 State
+  - [x] `TransitionState()` — 事件溯源状态转换
 - [x] `UserProfileGAgent` 实现
-  - [x] `CreateAsync(fields)` — 创建资料 (409 若已存在) → 发射 `ProfileCreatedEvent`
-  - [x] `UpdateAsync(fields)` — 更新资料 (404 若不存在) → 发射 `ProfileUpdatedEvent`
-  - [x] `GetAsync()` — 获取资料
-  - [x] `DeleteAsync()` — 删除资料 (账户删除时联动)
+  - [x] `HandleCreateProfile()` — 创建资料 (409 若已存在)
+  - [x] `HandleUpdateProfile()` — 更新资料 (404 若不存在)
+  - [x] `HandleDeleteProfile()` — 删除资料 (账户删除时联动)
+  - [x] `TransitionState()` — 事件溯源状态转换
 - [x] `AuthLookupGAgent` 实现 (per lookup key)
-  - [x] `GetUserIdAsync()` — 按 grain key 查找 userId
-  - [x] `SetUserIdAsync(lookupKey, userId)` — 写入 lookup_key + userId 映射
-  - [x] `ClearAsync()` — 清除映射 (用户删除时)
+  - [x] `HandleSetAuthLookup()` — 写入 lookup_key + userId 映射
+  - [x] `HandleClearAuthLookup()` — 清除映射 (用户删除时)
+  - [x] `TransitionState()` — 事件溯源状态转换
   - [x] key 格式: `firebase:{uid}` / `trial:{trialId}` / `email:{email}`
 - [x] 请求校验器实现 (Application 层 `Validation/` 目录)
   - [x] `SyncRequestValidator` — FluentValidation AbstractValidator\<SyncRequestDto\>，嵌套 EntityMap 遍历、实体上限 500 校验
@@ -2714,15 +2976,15 @@ services:
     - [x] garden_image: 占位图 (isPlaceholder: true)
     - [x] garden_speech: 无 fallback（失败直接返回错误）
 - [x] `ImageStorageAppService` 实现 (Application 层 `Services/` 目录)
-  - [x] Chrono Storage REST 调用（上传/删除）
-  - [x] 存储约定: Bucket `soul-garden`，key 格式 `{userId}/{manifestationId}_{stage}_{timestamp}.png`（上传链路的 `manifestationId` 为服务端生成 `upload_{guid}`）
+  - [x] AWS S3 存储调用（AWSSDK.S3，通过 `IS3StorageClient` 抽象）
+  - [x] 存储约定: BucketName `soul-garden`，key 格式 `{userId}/{manifestationId}_{stage}_{timestamp}.png`（上传链路的 `manifestationId` 为服务端生成 `upload_{guid}`）
 - [x] AI 生成 API 端点（只返回原始内容，不写 Actor State）
   - [x] `POST /api/generate/manifestation` — 触发 Workflow + fallback（不做后端限流）
   - [x] `POST /api/generate/affirmation` — 触发 Workflow + fallback（不做后端限流）
   - [x] `POST /api/generate/plant-image` — 并发控制 + 触发 Workflow + isPlaceholder
   - [x] `POST /api/generate/speech` — 触发 Workflow + 无 fallback
 - [x] 图片上传端点
-  - [x] `POST /api/upload/plant-image` — 并发控制 + Chrono Storage REST + 返回 imageUrl（不写 State）
+  - [x] `POST /api/upload/plant-image` — 并发控制 + AWS S3 上传 + 返回 imageUrl（不写 State）
 - [x] 并发控制 (`ImageConcurrencyCoordinator` → `ImageConcurrencyGAgent` — maxTotal:20, maxQueueSize:100, queueTimeoutMs:30s, 上传优先级高于生成)
 - [x] 并发 EndpointFilter — **仅挂载到需要并发控制的端点**：
   - [x] `GenerateGuardFilter` → `POST /api/generate/plant-image`（其他 generate 端点无并发控制）
@@ -2737,6 +2999,54 @@ services:
     - [x] Fallback 占位内容池测试 — 随机选取覆盖 5 条 + 固定 fallback 兜底
     - [x] Prompt 构建测试 — manifestation/affirmation/image(per-stage)/speech 模板插值正确性
     - [x] ImageStorageAppService 测试 — key 格式正确 / 上传调用 / 按前缀删除调用
+
+### Phase 3.5: Projection Pipeline + Completion Port (1 周)
+
+- [x] Projection 基础设施
+  - [x] `AppProjectionContext` — 投影上下文（事件去重 + Actor/Stream 订阅）
+  - [x] `DefaultAppProjectionContextFactory` — 上下文工厂
+  - [x] `AppProjectionManager` — 投影订阅管理（EnsureSubscribed / Unsubscribe）
+  - [x] `AppProjectorBase<TReadModel>` — 投影基类（前缀过滤 + Reducer 路由 + Store 持久化）
+  - [x] `AppEventReducerBase<TReadModel, TEvent>` — Reducer 基类（Protobuf Any 解包 + 类型安全 Reduce）
+  - [x] `AppInMemoryDocumentStore<TReadModel, TKey>` — 内存文档存储（开发/测试）
+  - [x] `AppProjectionServiceCollectionExtensions` — DI 注册（5 个 ReadModel Store + Reducers + Projectors + 基础设施）
+- [x] ReadModel 定义
+  - [x] `AppSyncEntityReadModel` — Entities (Dict) + SyncResults (最近 16 条) + ServerRevision
+  - [x] `AppSyncEntityLastResultReadModel`
+  - [x] `SyncEntityEntry` — 读模型内实体条目 POCO（含 Clone 方法）
+  - [x] `AppUserAccountReadModel`
+  - [x] `AppUserProfileReadModel`
+  - [x] `AppAuthLookupReadModel`
+- [x] Projectors
+  - [x] `AppSyncEntityProjector` — 含 CompletionPort.Complete(syncId) 通知
+  - [x] `AppUserAccountProjector`
+  - [x] `AppUserProfileProjector`
+  - [x] `AppAuthLookupProjector`
+- [x] Reducers
+  - [x] `SyncEntityReducers` — EntityCreated/Updated/Synced/AccountDeleted → ReadModel
+  - [x] `UserAccountReducers` — Registered/ProviderLinked/LoginUpdated/Deleted → ReadModel
+  - [x] `UserProfileReducers` — Created/Updated/Deleted → ReadModel
+  - [x] `AuthLookupReducers` — Set/Cleared → ReadModel
+- [x] Completion Port
+  - [x] `ICompletionPort` — WaitAsync / Complete 接口
+  - [x] `InMemoryCompletionPort` — ConcurrentDictionary + TCS（开发/测试）
+  - [x] `RedisCompletionPort` — Redis Pub/Sub + 本地 TCS（生产，支持跨进程）
+  - [x] `CompletionPortOptions` — Channel 名 + Timeout 配置
+- [x] Application Service 改造为 Projection 查询
+  - [x] `SyncAppService` — 通过 ICompletionPort.WaitAsync 等待投影完成，从 IProjectionDocumentStore<AppSyncEntityReadModel> 查询
+  - [x] `UserAppService` — 从 IProjectionDocumentStore<AppUserAccountReadModel/AppUserProfileReadModel> 查询
+  - [x] `AuthAppService` — 从 IProjectionDocumentStore<AppAuthLookupReadModel> 查询 + IAppProjectionManager 订阅管理
+- [x] Elasticsearch 后端集成
+  - [x] `AppElasticsearchProjectionExtensions` — 注册 Elasticsearch Document Store，SyncEntity 的 Entities/SyncResults 设置 `enabled: false`
+- [x] 启动校验
+  - [x] `AppStartupValidation` — App:Id / App:Storage:BucketName / Orleans:ClusterId/ServiceId 非空校验 + Firebase:ProjectId 生产必需
+- [x] **Phase 3.5 单元测试**
+  - [x] `Aevatar.App.Application.Tests/Projection/`
+    - [x] `AppProjectorBaseTests` — 前缀过滤 / Reducer 路由 / 事件去重
+    - [x] `SyncEntityReducerTests` — Created/Updated/Synced/Deleted 各 Reducer
+    - [x] `UserAccountReducerTests`
+    - [x] `UserProfileReducerTests`
+    - [x] `AuthLookupReducerTests`
 
 ### Phase 4: 端到端集成测试 + 优化 (1 周)
 
@@ -2773,13 +3083,12 @@ services:
 
 - [x] Program.cs 移除 `Garden:*` 配置回退，统一读取 `App:*` 键
   - [x] `App:ImageConcurrency:MaxTotal` — 移除 `?? cfg["Garden:ImageConcurrency:MaxTotal"]`
-  - [x] `App:Storage:PlatformApiUrl` — 移除 `?? cfg["Garden:ChronoStorageBaseUrl"]`
-  - [x] `App:Storage:Bucket` — 移除 `?? cfg["Garden:ChronoStorageBucket"]`
+  - [x] `App:Storage:BucketName` — 移除 `?? cfg["Garden:ChronoStorageBucket"]`（存储配置改为 `ImageStorageOptions`）
   - [x] `App:PaywallEnabled` — 移除 `|| cfg.GetValue<bool>("Garden:PaywallEnabled")`
 - [x] Program.cs 移除 `ApplyEnvironmentOverrides` 旧环境变量兼容层（`CHRONO_STORAGE_*`、`PAYWALL_ENABLED`、`APP_ID` 等），ASP.NET Core 环境变量 provider 自动处理 `App__*` → `App:*` 映射
 - [x] `ALLOWED_ORIGINS` 顶级扁平键迁移为 `App:AllowedOrigins`，docker-compose 使用 `App__AllowedOrigins`
-- [x] 启动校验：`App:Id` / `App:Storage:Bucket` / `Orleans:ClusterId` 非空校验，缺失 fail-fast
-- [x] 启动校验扩展：`App:Storage:PipelineId` / `App:Storage:PlatformApiToken` 缺失时输出 warning 日志，不 fail-fast；`IsConfigured()` 在运行时判断，`/health` storage 退化为 `error`（degraded 503）
+- [x] 启动校验：`App:Id` / `App:Storage:BucketName` / `Orleans:ClusterId` 非空校验，缺失 fail-fast
+- [x] 启动校验扩展：`App:Storage:BucketName` 非空校验；`IsConfigured()` 在运行时判断
 
 **6.2 限额策略（已移除后端判定，仅配置声明）：**
 
@@ -2799,7 +3108,7 @@ services:
 **6.4 Soul Garden 配置包提取（无代码改动）：**
 
 - [x] 限额参数已移至 `App:Quota` 配置节（appsettings.json），无需独立 quota.json
-- [x] 创建 `apps/soul-garden/config/fallbacks.json`（从 FallbackContent 常量提取）
+- [x] 创建 `apps/aevatar-app/config/fallbacks.json`（从 FallbackContent 常量提取）
 - [x] 更新 `appsettings.json`：统一 `App:*` 键，移除 `Garden:*` 节
 - [x] 更新 `docker-compose.garden.yml`：环境变量改为 `App__*` 格式
 
@@ -2817,7 +3126,7 @@ services:
 
 ---
 
-## 14. 技术栈
+## 15. 技术栈
 
 | 层级 | 旧技术 | 新技术 |
 |------|--------|--------|
@@ -2827,7 +3136,7 @@ services:
 | **事件流** | — | Orleans Stream (Kafka / MassTransit) |
 | **AI 文本** | OpenAI 兼容 API (直调) | Aevatar LLM Provider (MEAI) |
 | **AI 图片** | Gemini API (直调) | Aevatar LLM Provider (Gemini) |
-| **对象存储** | Chrono / R2 (双模) | Chrono Storage (统一) |
+| **对象存储** | Chrono / R2 (双模) | AWS S3 兼容存储 (AWSSDK.S3) |
 | **认证** | jose (JWT) | ASP.NET Core Authentication |
 | **校验** | Zod | FluentValidation / DataAnnotations |
 | **测试** | Vitest | xUnit + FluentAssertions |
