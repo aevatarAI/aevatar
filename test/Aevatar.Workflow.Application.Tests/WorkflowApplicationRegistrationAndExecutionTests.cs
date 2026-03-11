@@ -184,7 +184,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
-            Metadata: new Dictionary<string, string>(StringComparer.Ordinal));
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal));
         var command = new WorkflowChatRunRequest("hello", "direct", "actor-1", SessionId: "session-42");
 
         var envelope = factory.CreateEnvelope(command, context);

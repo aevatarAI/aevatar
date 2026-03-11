@@ -33,7 +33,7 @@ src/
 - Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
 
-`EventEnvelope` 保持最小语义字段（id、timestamp、payload、publisher、direction、correlation、target、metadata），路由传播细节放在运行时实现中。
+`EventEnvelope` 保持最小语义字段（`id`、`timestamp`、`payload`、`route`、`propagation`、`runtime`），路由传播细节通过 typed 子消息表达。
 
 这里要明确一个经常被混淆的边界：
 
@@ -132,9 +132,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 `EventRouter.RouteAsync(...)` 的核心行为：
 
-1. 检查 `metadata["__publishers"]`，如果当前 Actor 已处理过则直接跳过（环路保护）
+1. 检查 `EventEnvelope.Runtime.VisitedActorIds`，如果当前 Actor 已在访问链中则直接跳过（环路保护）
 2. 当前 Actor 先处理事件
-3. 按 `EventDirection` 转发到父/子节点
+3. 将当前 Actor 追加到 `VisitedActorIds` 后，按 `EventDirection` 转发到父/子节点
 
 这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播 envelope 消息，层级快照则交给 Store 管理。
 
@@ -181,7 +181,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
-- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
+- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.Propagation.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：

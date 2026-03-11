@@ -114,7 +114,7 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
         StepRequestEvent request,
         string error,
         CancellationToken ct,
-        Dictionary<string, string>? metadata = null,
+        Dictionary<string, string>? annotations = null,
         string runId = "")
     {
         var completed = new StepCompletedEvent
@@ -124,9 +124,9 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
             Success = false,
             Error = error,
         };
-        if (metadata != null)
+        if (annotations != null)
         {
-            foreach (var (key, value) in metadata)
+            foreach (var (key, value) in annotations)
                 completed.Annotations[key] = value;
         }
 

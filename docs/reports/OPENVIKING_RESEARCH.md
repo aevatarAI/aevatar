@@ -211,7 +211,7 @@ aevatar://
 └── session/{runId}/           # 会话上下文
 ```
 
-这与 Aevatar 的 `EventEnvelope.Metadata` 传播机制天然兼容——URI 可以作为 metadata key 引用上下文。
+这与 Aevatar 的 `EnvelopePropagation.Baggage` 传播机制天然兼容——URI 可以作为跨 hop 传播的上下文引用值。
 
 #### B. 三级信息分层 (L0/L1/L2)
 
@@ -279,7 +279,7 @@ Phase 3: 记忆自演进
 | OpenViking 模块 | Aevatar 对应位置 | 实现策略 |
 |----------------|-----------------|---------|
 | VikingFS + AGFS | `Aevatar.Context.Core` | 重新实现，用 `IFileProvider` 或直接文件系统；不需要 C++ 扩展 |
-| Viking URI | `Aevatar.Context.Abstractions` | `AevatarUri` 值对象，与 `EventEnvelope.Metadata` 集成 |
+| Viking URI | `Aevatar.Context.Abstractions` | `AevatarUri` 值对象，与 `EnvelopePropagation.Baggage` / 上下文检索集成 |
 | L0/L1/L2 | `Aevatar.Context.Extraction` | 依赖 `ILLMProvider` 生成；自底向上遍历逻辑在此实现 |
 | Vector Index | `Aevatar.Context.Retrieval` | 可接入 MEAI 的 `IEmbeddingGenerator` + 本地 HNSW 或外部向量库 |
 | IntentAnalyzer | `Aevatar.Context.Retrieval` | LLM 意图分析 → TypedQuery 生成 |

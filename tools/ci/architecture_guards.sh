@@ -52,6 +52,21 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+if rg -n "CommandContext\.Metadata|AgentRunContext\.Metadata|LLMCallContext\.Metadata|ToolCallContext\.Metadata|GAgentExecutionHookContext\.Metadata" \
+  src test
+then
+  echo "Legacy internal metadata bags are forbidden in core contexts. Use Headers / Items / typed fields where semantics are explicit."
+  exit 1
+fi
+
+if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadata|WorkflowRunCommandMetadataKeys\.SessionId|EventEnvelope\.CorrelationId" \
+  docs src/Aevatar.Foundation.Core/README.md \
+  -g '!docs/architecture/*blueprint*.md'
+then
+  echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
+  exit 1
+fi
+
 if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver|ProjectionReadModelBindingException" src test; then
   echo "BindingResolver-based projection routing is forbidden. Use capability-based Document/Graph routing."
   exit 1

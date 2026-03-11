@@ -79,7 +79,7 @@ public sealed class ChatRuntime
             _history.Add(ChatMessage.User(runContext.UserMessage));
             var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
             var provider = _providerFactory();
-            runContext.Metadata["gen_ai.provider.name"] = provider.Name;
+            runContext.Items["gen_ai.provider.name"] = provider.Name;
             var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
             var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
@@ -137,7 +137,7 @@ public sealed class ChatRuntime
                     _history.Add(ChatMessage.User(runContext.UserMessage));
                     var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                     var provider = _providerFactory();
-                    runContext.Metadata["gen_ai.provider.name"] = provider.Name;
+                    runContext.Items["gen_ai.provider.name"] = provider.Name;
                     var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
                     var request = new LLMRequest
@@ -296,13 +296,13 @@ public sealed class ChatRuntime
     private static void AnnotateRequestIdentity(LLMCallContext context)
     {
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
-            context.Metadata[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
+            context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
         if (context.Request.Metadata != null &&
             context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
             !string.IsNullOrWhiteSpace(callId))
         {
-            context.Metadata[LLMRequestMetadataKeys.CallId] = callId;
+            context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }
     }
 
