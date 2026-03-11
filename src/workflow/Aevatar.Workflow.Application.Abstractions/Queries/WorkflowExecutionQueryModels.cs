@@ -10,6 +10,7 @@ public sealed class WorkflowActorSnapshot
     public string ActorId { get; set; } = string.Empty;
     public string WorkflowName { get; set; } = string.Empty;
     public string LastCommandId { get; set; } = string.Empty;
+    public WorkflowRunCompletionStatus CompletionStatus { get; set; } = WorkflowRunCompletionStatus.Unknown;
     public long StateVersion { get; set; }
     public string LastEventId { get; set; } = string.Empty;
     public DateTimeOffset LastUpdatedAt { get; set; }

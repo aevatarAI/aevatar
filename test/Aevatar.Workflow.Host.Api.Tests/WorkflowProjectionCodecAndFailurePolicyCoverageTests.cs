@@ -75,6 +75,36 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
     }
 
     [Fact]
+    public void SerializeAndDeserialize_ShouldPreserveHighPrecisionNumbers()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var evt = new WorkflowRunFinishedEvent
+        {
+            ThreadId = "thread-precision",
+            Result = new Dictionary<string, object?>
+            {
+                ["bigLong"] = 9007199254740993L,
+                ["bigULong"] = 18446744073709551615UL,
+                ["amount"] = 12345678901234567890.123456789m,
+            },
+            Timestamp = 321,
+        };
+
+        var payload = codec.Serialize(evt);
+        var deserialized = codec.Deserialize(evt.Type, payload);
+
+        var finished = deserialized.Should().BeOfType<WorkflowRunFinishedEvent>().Subject;
+        var result = finished.Result.Should().BeOfType<Dictionary<string, object?>>().Subject;
+        result["bigLong"].Should().Be(9007199254740993L);
+        result["bigLong"].Should().BeOfType<long>();
+        result["bigULong"].Should().Be(18446744073709551615UL);
+        result["bigULong"].Should().BeOfType<ulong>();
+        result["amount"].Should().Be(12345678901234567890.123456789m);
+        result["amount"].Should().BeOfType<decimal>();
+        finished.Timestamp.Should().Be(321);
+    }
+
+    [Fact]
     public void Deserialize_WhenPayloadIsLegacyJsonStringValue_ShouldFallback()
     {
         var codec = new WorkflowRunEventSessionCodec();

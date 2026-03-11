@@ -24,7 +24,6 @@ public static class ServiceCollectionExtensions
         // Application registers NoopWorkflowExecutionReportArtifactSink via TryAddSingleton;
         // Infrastructure must use Replace to override it.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
-        services.TryAddSingleton<RuntimeWorkflowActorAccessor>();
         services.TryAddSingleton<RuntimeWorkflowQueryClient>();
         services.TryAddSingleton<IWorkflowActorBindingReader, RuntimeWorkflowActorBindingReader>();
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();

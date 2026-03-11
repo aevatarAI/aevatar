@@ -11,6 +11,7 @@ internal sealed class WorkflowRunDetachedDispatchService
     private readonly ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _dispatchPipeline;
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowRunCompletionPolicy _completionPolicy;
+    private readonly IWorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly ILogger<WorkflowRunDetachedDispatchService> _logger;
 
@@ -18,12 +19,14 @@ internal sealed class WorkflowRunDetachedDispatchService
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> dispatchPipeline,
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowRunCompletionPolicy completionPolicy,
+        IWorkflowRunDurableCompletionResolver durableCompletionResolver,
         WorkflowDirectFallbackPolicy fallbackPolicy,
         ILogger<WorkflowRunDetachedDispatchService>? logger = null)
     {
         _dispatchPipeline = dispatchPipeline;
         _outputStreamer = outputStreamer;
         _completionPolicy = completionPolicy;
+        _durableCompletionResolver = durableCompletionResolver;
         _fallbackPolicy = fallbackPolicy;
         _logger = logger ?? NullLogger<WorkflowRunDetachedDispatchService>.Instance;
     }
@@ -89,8 +92,17 @@ internal sealed class WorkflowRunDetachedDispatchService
                 {
                     try
                     {
+                        var destroyCreatedActors = projectionCompleted;
+                        if (!destroyCreatedActors)
+                        {
+                            var durableCompletion = await _durableCompletionResolver.ResolveAsync(
+                                receipt.ActorId,
+                                CancellationToken.None);
+                            destroyCreatedActors = durableCompletion.HasTerminalStatus;
+                        }
+
                         await target.ReleaseAsync(
-                            destroyCreatedActors: projectionCompleted,
+                            destroyCreatedActors: destroyCreatedActors,
                             ct: CancellationToken.None);
                     }
                     catch (Exception ex)

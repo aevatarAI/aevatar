@@ -11,6 +11,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
     private readonly IWorkflowRunOutputStreamer _outputStreamer;
     private readonly IWorkflowRunCompletionPolicy _completionPolicy;
     private readonly IWorkflowRunStateSnapshotEmitter _stateSnapshotEmitter;
+    private readonly IWorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly ILogger<WorkflowRunInteractionService> _logger;
 
@@ -19,6 +20,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         IWorkflowRunOutputStreamer outputStreamer,
         IWorkflowRunCompletionPolicy completionPolicy,
         IWorkflowRunStateSnapshotEmitter stateSnapshotEmitter,
+        IWorkflowRunDurableCompletionResolver durableCompletionResolver,
         WorkflowDirectFallbackPolicy fallbackPolicy,
         ILogger<WorkflowRunInteractionService>? logger = null)
     {
@@ -26,6 +28,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         _outputStreamer = outputStreamer;
         _completionPolicy = completionPolicy;
         _stateSnapshotEmitter = stateSnapshotEmitter;
+        _durableCompletionResolver = durableCompletionResolver;
         _fallbackPolicy = fallbackPolicy;
         _logger = logger ?? NullLogger<WorkflowRunInteractionService>.Instance;
     }
@@ -68,6 +71,7 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         var projectionCompletionStatus = WorkflowProjectionCompletionStatus.Unknown;
         WorkflowChatRunInteractionResult? interactionResult = null;
         Exception? executionException = null;
+        var durableCompletion = WorkflowRunDurableCompletionObservation.Incomplete;
 
         try
         {
@@ -89,7 +93,18 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
                 ct);
 
             if (!projectionCompleted)
-                projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
+            {
+                durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt.ActorId, ct);
+                if (durableCompletion.HasTerminalStatus)
+                {
+                    projectionCompleted = true;
+                    projectionCompletionStatus = durableCompletion.Status;
+                }
+                else
+                {
+                    projectionCompletionStatus = WorkflowProjectionCompletionStatus.Failed;
+                }
+            }
 
             await _stateSnapshotEmitter.EmitAsync(
                 receipt,
@@ -113,8 +128,17 @@ internal sealed class WorkflowRunInteractionService : IWorkflowRunInteractionSer
         {
             try
             {
+                var destroyCreatedActors = projectionCompleted;
+                if (!destroyCreatedActors)
+                {
+                    durableCompletion = await _durableCompletionResolver.ResolveAsync(
+                        receipt.ActorId,
+                        CancellationToken.None);
+                    destroyCreatedActors = durableCompletion.HasTerminalStatus;
+                }
+
                 await target.ReleaseAsync(
-                    destroyCreatedActors: projectionCompleted,
+                    destroyCreatedActors: destroyCreatedActors,
                     ct: CancellationToken.None);
             }
             catch (Exception ex) when (interactionResult != null || executionException != null)

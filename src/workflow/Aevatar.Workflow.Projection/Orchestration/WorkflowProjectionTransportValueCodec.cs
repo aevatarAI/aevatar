@@ -2,17 +2,41 @@ using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Workflow.Projection.Transport;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 internal static class WorkflowProjectionTransportValueCodec
 {
-    public static Value Serialize(object? value) =>
+    public static WorkflowProjectionValue Serialize(object? value) =>
         value == null
             ? CreateNullValue()
             : SerializeCore(value);
 
-    public static object? Deserialize(Value? value)
+    public static object? Deserialize(WorkflowProjectionValue? value)
+    {
+        if (value == null)
+            return null;
+
+        return value.KindCase switch
+        {
+            WorkflowProjectionValue.KindOneofCase.NullValue => null,
+            WorkflowProjectionValue.KindOneofCase.StringValue => value.StringValue,
+            WorkflowProjectionValue.KindOneofCase.BoolValue => value.BoolValue,
+            WorkflowProjectionValue.KindOneofCase.Int64Value => NormalizeInt64(value.Int64Value),
+            WorkflowProjectionValue.KindOneofCase.Uint64Value => NormalizeUInt64(value.Uint64Value),
+            WorkflowProjectionValue.KindOneofCase.DoubleValue => value.DoubleValue,
+            WorkflowProjectionValue.KindOneofCase.DecimalValue => decimal.Parse(value.DecimalValue, CultureInfo.InvariantCulture),
+            WorkflowProjectionValue.KindOneofCase.ObjectValue => value.ObjectValue.Fields.ToDictionary(
+                x => x.Key,
+                x => Deserialize(x.Value),
+                StringComparer.Ordinal),
+            WorkflowProjectionValue.KindOneofCase.ListValue => value.ListValue.Values.Select(Deserialize).ToList(),
+            _ => null,
+        };
+    }
+
+    public static object? DeserializeLegacy(Value? value)
     {
         if (value == null)
             return null;
@@ -22,50 +46,62 @@ internal static class WorkflowProjectionTransportValueCodec
             Value.KindOneofCase.NullValue => null,
             Value.KindOneofCase.StringValue => value.StringValue,
             Value.KindOneofCase.BoolValue => value.BoolValue,
-            Value.KindOneofCase.NumberValue => NormalizeNumber(value.NumberValue),
+            Value.KindOneofCase.NumberValue => NormalizeLegacyNumber(value.NumberValue),
             Value.KindOneofCase.StructValue => value.StructValue.Fields.ToDictionary(
                 x => x.Key,
-                x => Deserialize(x.Value),
+                x => DeserializeLegacy(x.Value),
                 StringComparer.Ordinal),
-            Value.KindOneofCase.ListValue => value.ListValue.Values.Select(Deserialize).ToList(),
+            Value.KindOneofCase.ListValue => value.ListValue.Values.Select(DeserializeLegacy).ToList(),
             _ => null,
         };
     }
 
-    private static Value SerializeCore(object value)
+    private static WorkflowProjectionValue SerializeCore(object value)
     {
         return value switch
         {
-            Value protobufValue => protobufValue.Clone(),
-            Struct protobufStruct => new Value { StructValue = protobufStruct.Clone() },
-            ListValue protobufList => new Value { ListValue = protobufList.Clone() },
-            string text => Value.ForString(text),
-            bool boolean => Value.ForBool(boolean),
-            byte number => Value.ForNumber(number),
-            sbyte number => Value.ForNumber(number),
-            short number => Value.ForNumber(number),
-            ushort number => Value.ForNumber(number),
-            int number => Value.ForNumber(number),
-            uint number => Value.ForNumber(number),
-            long number => Value.ForNumber(number),
-            ulong number => Value.ForNumber(number),
-            float number => Value.ForNumber(number),
-            double number => Value.ForNumber(number),
-            decimal number => Value.ForNumber(Convert.ToDouble(number, CultureInfo.InvariantCulture)),
-            System.Enum enumValue => Value.ForString(enumValue.ToString()),
-            Guid guid => Value.ForString(guid.ToString("D")),
-            DateTimeOffset dateTimeOffset => Value.ForString(dateTimeOffset.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
-            DateTime dateTime => Value.ForString(ToUtc(dateTime).ToString("O", CultureInfo.InvariantCulture)),
-            Uri uri => Value.ForString(uri.ToString()),
-            IDictionary dictionary => new Value { StructValue = SerializeDictionary(dictionary) },
-            IEnumerable enumerable when value is not string => new Value { ListValue = SerializeList(enumerable) },
-            _ => new Value { StructValue = SerializeObject(value) },
+            WorkflowProjectionValue projectionValue => projectionValue.Clone(),
+            WorkflowProjectionObject projectionObject => new WorkflowProjectionValue { ObjectValue = projectionObject.Clone() },
+            WorkflowProjectionList projectionList => new WorkflowProjectionValue { ListValue = projectionList.Clone() },
+            Value protobufValue => Serialize(DeserializeLegacy(protobufValue)),
+            Struct protobufStruct => Serialize(DeserializeLegacy(new Value { StructValue = protobufStruct.Clone() })),
+            ListValue protobufList => Serialize(DeserializeLegacy(new Value { ListValue = protobufList.Clone() })),
+            string text => new WorkflowProjectionValue { StringValue = text },
+            bool boolean => new WorkflowProjectionValue { BoolValue = boolean },
+            byte number => new WorkflowProjectionValue { Int64Value = number },
+            sbyte number => new WorkflowProjectionValue { Int64Value = number },
+            short number => new WorkflowProjectionValue { Int64Value = number },
+            ushort number => new WorkflowProjectionValue { Uint64Value = number },
+            int number => new WorkflowProjectionValue { Int64Value = number },
+            uint number => new WorkflowProjectionValue { Uint64Value = number },
+            long number => new WorkflowProjectionValue { Int64Value = number },
+            ulong number => new WorkflowProjectionValue { Uint64Value = number },
+            float number => new WorkflowProjectionValue { DoubleValue = number },
+            double number => new WorkflowProjectionValue { DoubleValue = number },
+            decimal number => new WorkflowProjectionValue
+            {
+                DecimalValue = number.ToString("G29", CultureInfo.InvariantCulture),
+            },
+            System.Enum enumValue => new WorkflowProjectionValue { StringValue = enumValue.ToString() },
+            Guid guid => new WorkflowProjectionValue { StringValue = guid.ToString("D") },
+            DateTimeOffset dateTimeOffset => new WorkflowProjectionValue
+            {
+                StringValue = dateTimeOffset.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            },
+            DateTime dateTime => new WorkflowProjectionValue
+            {
+                StringValue = ToUtc(dateTime).ToString("O", CultureInfo.InvariantCulture),
+            },
+            Uri uri => new WorkflowProjectionValue { StringValue = uri.ToString() },
+            IDictionary dictionary => new WorkflowProjectionValue { ObjectValue = SerializeDictionary(dictionary) },
+            IEnumerable enumerable when value is not string => new WorkflowProjectionValue { ListValue = SerializeList(enumerable) },
+            _ => new WorkflowProjectionValue { ObjectValue = SerializeObject(value) },
         };
     }
 
-    private static Struct SerializeDictionary(IDictionary dictionary)
+    private static WorkflowProjectionObject SerializeDictionary(IDictionary dictionary)
     {
-        var result = new Struct();
+        var result = new WorkflowProjectionObject();
         foreach (DictionaryEntry entry in dictionary)
         {
             if (entry.Key == null)
@@ -81,18 +117,18 @@ internal static class WorkflowProjectionTransportValueCodec
         return result;
     }
 
-    private static ListValue SerializeList(IEnumerable enumerable)
+    private static WorkflowProjectionList SerializeList(IEnumerable enumerable)
     {
-        var result = new ListValue();
+        var result = new WorkflowProjectionList();
         foreach (var item in enumerable)
             result.Values.Add(Serialize(item));
 
         return result;
     }
 
-    private static Struct SerializeObject(object value)
+    private static WorkflowProjectionObject SerializeObject(object value)
     {
-        var result = new Struct();
+        var result = new WorkflowProjectionObject();
         foreach (var property in value.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
             if (!property.CanRead || property.GetIndexParameters().Length != 0)
@@ -104,7 +140,7 @@ internal static class WorkflowProjectionTransportValueCodec
         return result;
     }
 
-    private static object NormalizeNumber(double value)
+    private static object NormalizeLegacyNumber(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value) || Math.Truncate(value) != value)
             return value;
@@ -118,12 +154,22 @@ internal static class WorkflowProjectionTransportValueCodec
         return value;
     }
 
+    private static object NormalizeInt64(long value) =>
+        value >= int.MinValue && value <= int.MaxValue
+            ? Convert.ToInt32(value, CultureInfo.InvariantCulture)
+            : value;
+
+    private static object NormalizeUInt64(ulong value) =>
+        value <= uint.MaxValue
+            ? Convert.ToUInt32(value, CultureInfo.InvariantCulture)
+            : value;
+
     private static DateTime ToUtc(DateTime value) =>
         value.Kind == DateTimeKind.Utc
             ? value
             : value.ToUniversalTime();
 
-    private static Value CreateNullValue() =>
+    private static WorkflowProjectionValue CreateNullValue() =>
         new()
         {
             NullValue = NullValue.NullValue,

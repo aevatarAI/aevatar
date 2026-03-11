@@ -79,6 +79,28 @@ message WorkflowExecutionSummarySnapshot {
   map<string, int32> step_type_counts = 5;
 }
 
+message WorkflowProjectionObject {
+  map<string, WorkflowProjectionValue> fields = 1;
+}
+
+message WorkflowProjectionList {
+  repeated WorkflowProjectionValue values = 1;
+}
+
+message WorkflowProjectionValue {
+  oneof kind {
+    google.protobuf.NullValue null_value = 1;
+    string string_value = 2;
+    bool bool_value = 3;
+    int64 int64_value = 4;
+    uint64 uint64_value = 5;
+    double double_value = 6;
+    string decimal_value = 7;
+    WorkflowProjectionObject object_value = 8;
+    WorkflowProjectionList list_value = 9;
+  }
+}
+
 message WorkflowRunSessionEventEnvelope {
   google.protobuf.Int64Value timestamp = 1;
 
@@ -104,7 +126,8 @@ message WorkflowRunStartedEventPayload {
 
 message WorkflowRunFinishedEventPayload {
   string thread_id = 1;
-  google.protobuf.Value result = 2;
+  google.protobuf.Value legacy_result = 2;
+  WorkflowProjectionValue result = 3;
 }
 
 message WorkflowRunErrorEventPayload {
@@ -135,7 +158,8 @@ message WorkflowTextMessageEndEventPayload {
 }
 
 message WorkflowStateSnapshotEventPayload {
-  google.protobuf.Value snapshot = 1;
+  google.protobuf.Value legacy_snapshot = 1;
+  WorkflowProjectionValue snapshot = 2;
 }
 
 message WorkflowToolCallStartEventPayload {
@@ -150,5 +174,6 @@ message WorkflowToolCallEndEventPayload {
 
 message WorkflowCustomEventPayload {
   string name = 1;
-  google.protobuf.Value value = 2;
+  google.protobuf.Value legacy_value = 2;
+  WorkflowProjectionValue value = 3;
 }

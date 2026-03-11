@@ -11,6 +11,7 @@ public sealed class WorkflowExecutionReadModelMapper
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
             LastCommandId = source.CommandId,
+            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
@@ -74,4 +75,18 @@ public sealed class WorkflowExecutionReadModelMapper
             Edges = source.Edges.Select(ToActorGraphEdge).ToList(),
         };
     }
+
+    private static WorkflowRunCompletionStatus MapCompletionStatus(
+        WorkflowExecutionCompletionStatus status) =>
+        status switch
+        {
+            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
+            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
+            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
+            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
+            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
+            _ => WorkflowRunCompletionStatus.Unknown,
+        };
 }

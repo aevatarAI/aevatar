@@ -26,6 +26,7 @@ public sealed class WorkflowApplicationLayerTests
             outputStreamer,
             new FakeWorkflowRunCompletionPolicy(),
             snapshotEmitter,
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.ExecuteAsync(
@@ -65,6 +66,7 @@ public sealed class WorkflowApplicationLayerTests
             outputStreamer,
             completionPolicy,
             snapshotEmitter,
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
         var emittedFrames = new ConcurrentQueue<WorkflowOutputFrame>();
         var acceptedReceipts = new ConcurrentQueue<WorkflowChatRunAcceptedReceipt>();
@@ -114,6 +116,7 @@ public sealed class WorkflowApplicationLayerTests
                 TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
             },
             new FakeWorkflowRunStateSnapshotEmitter(),
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.ExecuteAsync(
@@ -128,7 +131,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task WorkflowRunInteractionService_ShouldNotDestroyActors_WhenTerminalFrameNotObserved()
+    public async Task WorkflowRunInteractionService_ShouldDestroyActors_WhenTerminalFrameMissingButDurableStateIsTerminal()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -143,6 +146,35 @@ public sealed class WorkflowApplicationLayerTests
             new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("progress")] },
             new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
             new FakeWorkflowRunStateSnapshotEmitter(),
+            new FakeDurableCompletionResolver(
+                new WorkflowRunDurableCompletionObservation(
+                    true,
+                    WorkflowProjectionCompletionStatus.Completed)),
+            new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult.Should().Be(new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunInteractionService_ShouldNotDestroyActors_WhenTerminalFrameMissingAndDurableStateIsNonTerminal()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var service = new WorkflowRunInteractionService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            new FakeWorkflowRunOutputStreamer { Frames = [BuildFrame("progress")] },
+            new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeWorkflowRunStateSnapshotEmitter(),
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.ExecuteAsync(
@@ -167,6 +199,7 @@ public sealed class WorkflowApplicationLayerTests
             pipeline,
             new FakeWorkflowRunOutputStreamer(),
             new FakeWorkflowRunCompletionPolicy(),
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
@@ -190,6 +223,7 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDispatchPipeline { Result = Success(target, receipt) },
             outputStreamer,
             new FakeWorkflowRunCompletionPolicy { TerminalFrameType = "done" },
+            new FakeDurableCompletionResolver(),
             new WorkflowDirectFallbackPolicy(new WorkflowRunBehaviorOptions()));
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
@@ -315,6 +349,25 @@ public sealed class WorkflowApplicationLayerTests
             ct.ThrowIfCancellationRequested();
             Calls.Add((receipt, projectionCompletionStatus, projectionCompleted));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeDurableCompletionResolver(
+        WorkflowRunDurableCompletionObservation? observation = null) : IWorkflowRunDurableCompletionResolver
+    {
+        private readonly WorkflowRunDurableCompletionObservation _observation =
+            observation ?? WorkflowRunDurableCompletionObservation.Incomplete;
+
+        public int Calls { get; private set; }
+
+        public Task<WorkflowRunDurableCompletionObservation> ResolveAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromResult(_observation);
         }
     }
 

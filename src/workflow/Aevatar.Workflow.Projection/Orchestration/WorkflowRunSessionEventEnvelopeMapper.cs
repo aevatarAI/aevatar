@@ -114,7 +114,9 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
             {
                 Timestamp = envelope.Timestamp,
                 ThreadId = envelope.RunFinished.ThreadId,
-                Result = WorkflowProjectionTransportValueCodec.Deserialize(envelope.RunFinished.Result),
+                Result = envelope.RunFinished.Result != null
+                    ? WorkflowProjectionTransportValueCodec.Deserialize(envelope.RunFinished.Result)
+                    : WorkflowProjectionTransportValueCodec.DeserializeLegacy(envelope.RunFinished.LegacyResult),
             },
             WorkflowRunSessionEventEnvelope.EventOneofCase.RunError => new WorkflowRunErrorEvent
             {
@@ -152,7 +154,9 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
             WorkflowRunSessionEventEnvelope.EventOneofCase.StateSnapshot => new WorkflowStateSnapshotEvent
             {
                 Timestamp = envelope.Timestamp,
-                Snapshot = WorkflowProjectionTransportValueCodec.Deserialize(envelope.StateSnapshot.Snapshot) ??
+                Snapshot = (envelope.StateSnapshot.Snapshot != null
+                        ? WorkflowProjectionTransportValueCodec.Deserialize(envelope.StateSnapshot.Snapshot)
+                        : WorkflowProjectionTransportValueCodec.DeserializeLegacy(envelope.StateSnapshot.LegacySnapshot)) ??
                     new Dictionary<string, object?>(StringComparer.Ordinal),
             },
             WorkflowRunSessionEventEnvelope.EventOneofCase.ToolCallStart => new WorkflowToolCallStartEvent
@@ -171,7 +175,9 @@ internal static class WorkflowRunSessionEventEnvelopeMapper
             {
                 Timestamp = envelope.Timestamp,
                 Name = envelope.Custom.Name,
-                Value = WorkflowProjectionTransportValueCodec.Deserialize(envelope.Custom.Value),
+                Value = envelope.Custom.Value != null
+                    ? WorkflowProjectionTransportValueCodec.Deserialize(envelope.Custom.Value)
+                    : WorkflowProjectionTransportValueCodec.DeserializeLegacy(envelope.Custom.LegacyValue),
             },
             _ => null,
         };
