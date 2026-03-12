@@ -214,6 +214,49 @@ public class ConnectorConfigTests
         }
     }
 
+    [Fact]
+    public void LoadConnectors_ShouldParseTelegramUserConnectorConfig()
+    {
+        var path = WriteTempJson("""
+            {
+              "connectors": [
+                {
+                  "name": "telegram_user_main",
+                  "type": "telegram_user",
+                  "timeoutMs": 45000,
+                  "telegramUser": {
+                    "apiId": "123456",
+                    "apiHash": "hash-abc",
+                    "phoneNumber": "+8613800000000",
+                    "sessionPath": "telegram-user/main.session",
+                    "allowedOperations": ["/sendMessage", "/getUpdates"]
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().ContainSingle();
+
+            var telegramUser = connectors[0];
+            telegramUser.Name.Should().Be("telegram_user_main");
+            telegramUser.Type.Should().Be("telegram_user");
+            telegramUser.TimeoutMs.Should().Be(45000);
+            telegramUser.TelegramUser.ApiId.Should().Be("123456");
+            telegramUser.TelegramUser.ApiHash.Should().Be("hash-abc");
+            telegramUser.TelegramUser.PhoneNumber.Should().Be("+8613800000000");
+            telegramUser.TelegramUser.SessionPath.Should().Be("telegram-user/main.session");
+            telegramUser.TelegramUser.AllowedOperations.Should().Equal("/sendMessage", "/getUpdates");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempJson(string json)
     {
         var file = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");

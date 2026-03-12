@@ -203,6 +203,13 @@ public class WorkflowExpressionEvaluatorTests
         _eval.Evaluate("${trim(x)}", vars).Should().Be("hello");
     }
 
+    [Fact]
+    public void Json_EscapesUnsafeCharactersForJsonStrings()
+    {
+        var vars = new Dictionary<string, string> { ["x"] = "line1\n\"quoted\"" };
+        _eval.Evaluate("${json(x)}", vars).Should().Be("line1\\n\\\"quoted\\\"");
+    }
+
     // ─── Nested Functions ───
 
     [Fact]

@@ -1,0 +1,248 @@
+name: telegram_openclaw_file_operator
+description: |
+  Human-in-the-loop decision workflow for OpenClaw file execution over Telegram group stream.
+  Aevatar collects small human decisions, organizes them into an execution packet,
+  asks OpenClaw to write files, then waits and aggregates OpenClaw file feedback.
+
+roles: []
+
+steps:
+  - id: bootstrap_telegram_login
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      timeout_ms: "30000"
+      prompt_prefix: "Ensure Telegram user session is ready."
+    on_error:
+      strategy: fallback
+      fallback_step: route_bootstrap_login_error
+    next: collect_round1_brief
+
+  - id: route_bootstrap_login_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_telegram_verification_code
+    type: human_input
+    parameters:
+      prompt: "Input Telegram login verification code."
+      variable: "telegram_verification_code"
+      timeout: "600"
+      on_timeout: "fail"
+    next: retry_telegram_login_with_code
+
+  - id: retry_telegram_login_with_code
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      telegram.verification_code: "${collect_telegram_verification_code}"
+      timeout_ms: "30000"
+      prompt_prefix: "Retry Telegram login with verification code."
+    on_error:
+      strategy: fallback
+      fallback_step: route_retry_login_error
+    next: collect_round1_brief
+
+  - id: route_retry_login_error
+    type: conditional
+    parameters:
+      condition: "SESSION_PASSWORD_NEEDED"
+    branches:
+      true: collect_telegram_2fa_password
+      false: route_retry_phone_code_error
+
+  - id: route_retry_phone_code_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_telegram_2fa_password
+    type: human_input
+    parameters:
+      prompt: "Input Telegram 2FA password."
+      variable: "telegram_2fa_password"
+      timeout: "600"
+      on_timeout: "fail"
+    next: retry_telegram_login_with_2fa
+
+  - id: retry_telegram_login_with_2fa
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      telegram.verification_code: "${collect_telegram_verification_code}"
+      telegram.2fa_password: "${collect_telegram_2fa_password}"
+      timeout_ms: "30000"
+      prompt_prefix: "Retry Telegram login with 2FA password."
+    on_error:
+      strategy: fallback
+      fallback_step: route_retry_2fa_error
+    next: collect_round1_brief
+
+  - id: route_retry_2fa_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_round1_brief
+    type: human_input
+    parameters:
+      prompt: "第一轮（极简演示）：随便输入几个关键词即可（例如：新品/小红书/年轻人）。"
+      variable: "round1_brief"
+      timeout: "900"
+      on_timeout: "fail"
+    next: send_to_openclaw_round1
+
+  - id: send_to_openclaw_round1
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+      telegram.timeout_ms: "15000"
+      timeout_ms: "30000"
+      prompt_prefix: |
+        @${telegram.openclaw_bot_username}
+        我们在做“人类少量决策 + AI执行”的协作演示。
+        人类只给了非常少的关键词，请你先基于这些关键词给出可执行方向，并提出最少的补充问题。
+        不需要严格格式，清晰即可。
+
+        初始需求:
+        ${collect_round1_brief}
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    on_error:
+      strategy: fallback
+      fallback_step: send_step_failed
+    next: wait_openclaw_round1_reply
+
+  - id: wait_openclaw_round1_reply
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      collect_all_replies: "true"
+      settle_polls_after_match: "2"
+      wait_timeout_ms: "180000"
+      poll_timeout_sec: "8"
+      start_from_latest: "true"
+      timeout_ms: "190000"
+      prompt_prefix: "Waiting OpenClaw round-1 clarification reply."
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+    next: collect_round2_decision
+
+  - id: collect_round2_decision
+    type: human_input
+    parameters:
+      prompt: "第二轮（极简演示）：只输入 yes 或 no（建议直接填 yes）。"
+      variable: "round2_decision"
+      timeout: "900"
+      on_timeout: "fail"
+    next: send_to_openclaw_file_write
+
+  - id: send_to_openclaw_file_write
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+      telegram.timeout_ms: "15000"
+      timeout_ms: "30000"
+      prompt_prefix: |
+        @${telegram.openclaw_bot_username}
+        请基于下面两轮信息直接执行内容生产，并尽量写入文件。
+        回复不需要严格格式，但请尽量包含：
+        - 已写入的文件路径（必填）
+        - 可访问地址URL（若有）
+        - 每个文件的用途简述
+        如果无法写文件，请给出可直接落盘的文件树和完整内容。
+
+        Round-1 brief:
+        ${collect_round1_brief}
+
+        Your round-1 feedback:
+        ${wait_openclaw_round1_reply}
+
+        Round-2 human decision (yes/no):
+        ${collect_round2_decision}
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    on_error:
+      strategy: fallback
+      fallback_step: send_step_failed
+    next: wait_openclaw_final_feedback
+
+  - id: wait_openclaw_final_feedback
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      collect_all_replies: "true"
+      settle_polls_after_match: "3"
+      wait_timeout_ms: "240000"
+      poll_timeout_sec: "8"
+      start_from_latest: "true"
+      timeout_ms: "250000"
+      prompt_prefix: "Waiting OpenClaw final file feedback."
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+    next: finalize_feedback
+
+  - id: finalize_feedback
+    type: transform
+    parameters:
+      op: trim
+    next: persist_feedback
+
+  - id: persist_feedback
+    type: assign
+    parameters:
+      target: openclaw_file_feedback
+      value: "$input"
+
+  - id: timeout_fallback
+    type: assign
+    parameters:
+      target: openclaw_timeout
+      value: "$input"
+
+  - id: send_step_failed
+    type: assign
+    parameters:
+      target: openclaw_send_error
+      value: "$input"

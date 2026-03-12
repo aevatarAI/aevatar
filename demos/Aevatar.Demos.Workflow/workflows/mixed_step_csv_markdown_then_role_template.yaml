@@ -1,0 +1,27 @@
+name: mixed_step_csv_markdown_then_role_template
+description: |
+  Mixed pipeline demo (step -> role).
+  Step module demo_csv_markdown converts CSV into markdown table first,
+  then role event module demo_template returns deterministic role response.
+
+roles:
+  - id: template_role
+    name: Template Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by role event module.
+    event_modules: "demo_template"
+    event_routes: |
+      - when: event.type == "ChatRequestEvent"
+        to: demo_template
+
+steps:
+  - id: csv_to_markdown
+    type: demo_csv_markdown
+    parameters:
+      delimiter: ","
+      has_header: "true"
+    next: role_wrap
+
+  - id: role_wrap
+    type: llm_call
+    role: template_role

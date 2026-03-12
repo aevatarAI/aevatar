@@ -30,10 +30,13 @@ public sealed class EmitModule : IEventModule<IWorkflowExecutionContext>
 
         var completed = new StepCompletedEvent
         {
-            StepId = request.StepId, RunId = request.RunId, Success = true, Output = request.Input ?? "",
+            StepId = request.StepId,
+            RunId = request.RunId,
+            Success = true,
+            Output = request.Input ?? string.Empty,
         };
         completed.Annotations["emit.event_type"] = eventType;
         completed.Annotations["emit.payload"] = payload;
-        await ctx.PublishAsync(completed, EventDirection.Both, ct);
+        await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }
 }

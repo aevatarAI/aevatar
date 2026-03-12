@@ -24,11 +24,10 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldReturnNull_WhenActorMissing()
     {
-        var reader = CreateReader(
-            requestReply: new FakeStreamRequestReplyClient
-            {
-                QueryException = new InvalidOperationException("Actor missing not found."),
-            });
+        var reader = CreateReader(requestReply: new FakeStreamRequestReplyClient
+        {
+            QueryActorException = new InvalidOperationException("actor not found"),
+        });
 
         var result = await reader.GetAsync("missing", CancellationToken.None);
 
@@ -40,7 +39,10 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     {
         var runtime = new FakeActorRuntime();
         runtime.StoredActors["actor-1"] = new FakeActor("actor-1", new StubAgent("agent-1"));
-        var requestReply = new FakeStreamRequestReplyClient();
+        var requestReply = new FakeStreamRequestReplyClient
+        {
+            QueryActorException = new TimeoutException("unsupported actor"),
+        };
         var verifier = new FakeAgentTypeVerifier();
         var reader = CreateReader(runtime, requestReply, verifier);
 
@@ -241,16 +243,16 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(StoredActors.ContainsKey(id));
 
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotSupportedException();
-
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
         }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class FakeActor(string id, IAgent agent) : IActor
@@ -334,6 +336,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public TimeSpan CapturedTimeout { get; private set; }
         public string? CapturedTimeoutMessage { get; private set; }
         public EventEnvelope? CapturedEnvelope { get; private set; }
+        public Exception? QueryActorException { get; set; }
 
         public Task<TResponse> QueryAsync<TResponse>(IStreamProvider streams, string replyStreamPrefix, TimeSpan timeout, Func<string, string, Task> dispatchAsync, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
             where TResponse : IMessage, new() =>
@@ -342,6 +345,8 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, IActor actor, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
             where TResponse : IMessage, new()
         {
+            if (QueryActorException != null)
+                throw QueryActorException;
             QueryActorCalls++;
             CapturedActorId = actor.Id;
             CapturedReplyPrefix = replyStreamPrefix;
@@ -366,10 +371,15 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, string actorId, IActorDispatchPort dispatchPort, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
             where TResponse : IMessage, new()
         {
+            ct.ThrowIfCancellationRequested();
+            _ = streams;
+            _ = dispatchPort;
             QueryActorCalls++;
             CapturedActorId = actorId;
             CapturedReplyPrefix = replyStreamPrefix;
             CapturedTimeout = timeout;
+            if (QueryActorException != null)
+                throw QueryActorException;
             if (QueryException != null)
                 return Task.FromException<TResponse>(QueryException);
 

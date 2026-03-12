@@ -28,7 +28,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 "auto",
                 "actor-1",
                 SessionId: "session-1",
-                WorkflowYamls: ["name: inline"]));
+                WorkflowYamls: ["name: inline"],
+                Metadata: new Dictionary<string, string>()));
     }
 
     [Fact]
@@ -50,7 +51,8 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 null,
                 "actor-1",
                 SessionId: null,
-                WorkflowYamls: ["name: inline"]));
+                WorkflowYamls: ["name: inline"],
+                Metadata: new Dictionary<string, string>()));
     }
 
     [Fact]
@@ -96,7 +98,12 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         result.Succeeded.Should().BeTrue();
         result.Request.Should().BeEquivalentTo(
-            new WorkflowChatRunRequest("hello", WorkflowRunBehaviorOptions.AutoWorkflowName, null, null));
+            new WorkflowChatRunRequest(
+                "hello",
+                WorkflowRunBehaviorOptions.AutoWorkflowName,
+                null,
+                null,
+                Metadata: new Dictionary<string, string>()));
     }
 
     [Fact]

@@ -1,0 +1,21 @@
+name: role_event_module_extensions_template
+description: |
+  Role-level module demo using extensions.* fields only.
+  This validates that extensions.event_modules/extensions.event_routes are
+  normalized and applied when top-level fields are omitted.
+
+roles:
+  - id: extensions_role
+    name: Extensions Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_template"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_template
+
+steps:
+  - id: role_reply
+    type: llm_call
+    role: extensions_role

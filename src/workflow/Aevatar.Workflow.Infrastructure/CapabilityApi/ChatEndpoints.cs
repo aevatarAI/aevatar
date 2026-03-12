@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
@@ -10,12 +11,15 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowCapabilityEndpoints
 {
+    private const string WorkflowRuntimeDefaultsSectionName = "WorkflowRuntimeDefaults";
+
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
@@ -71,7 +75,12 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+            var capabilities = TryResolveCapabilities(serviceProvider, logger);
+            var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+                input,
+                capabilities,
+                defaultMetadata);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -131,7 +140,8 @@ public static class WorkflowCapabilityEndpoints
         ChatInput input,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
@@ -145,7 +155,7 @@ public static class WorkflowCapabilityEndpoints
             });
         }
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -307,6 +317,7 @@ public static class WorkflowCapabilityEndpoints
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var signalName = (input.SignalName ?? string.Empty).Trim();
+            var stepId = (input.StepId ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
                 string.IsNullOrWhiteSpace(signalName))
@@ -356,6 +367,7 @@ public static class WorkflowCapabilityEndpoints
                     Payload = Any.Pack(new SignalReceivedEvent
                     {
                         RunId = runId,
+                        StepId = stepId,
                         SignalName = signalName,
                         Payload = input.Payload ?? string.Empty,
                     }),
@@ -378,6 +390,7 @@ public static class WorkflowCapabilityEndpoints
                 actorId,
                 runId,
                 signalName,
+                stepId,
                 commandId = correlationId,
             });
         }
@@ -501,7 +514,16 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, scope, ct);
+            var capabilities = TryResolveCapabilities(http.RequestServices, logger);
+            var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(
+                socket,
+                command,
+                chatRunService,
+                scope,
+                ct,
+                capabilities,
+                defaultMetadata);
         }
         catch (OperationCanceledException)
         {
@@ -528,6 +550,76 @@ public static class WorkflowCapabilityEndpoints
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
         }
+    }
+
+    private static WorkflowCapabilitiesDocument? TryResolveCapabilities(IServiceProvider? serviceProvider, ILogger? logger)
+    {
+        if (serviceProvider == null)
+            return null;
+
+        try
+        {
+            var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
+                               as IWorkflowExecutionQueryApplicationService;
+            return queryService?.GetCapabilities();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to resolve capabilities for workflow authoring prompt augmentation.");
+            return null;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> TryResolveRuntimeDefaultMetadata(
+        IServiceProvider? serviceProvider,
+        ILogger? logger)
+    {
+        if (serviceProvider == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            var configuration = serviceProvider.GetService(typeof(IConfiguration)) as IConfiguration;
+            return ParseRuntimeDefaultMetadata(configuration);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseRuntimeDefaultMetadata(IConfiguration? configuration)
+    {
+        if (configuration == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var section = configuration.GetSection(WorkflowRuntimeDefaultsSectionName);
+        if (!section.Exists())
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (rawKey, rawValue) in section.AsEnumerable(makePathsRelative: true))
+        {
+            var normalizedKey = NormalizeRuntimeDefaultKey(rawKey);
+            var normalizedValue = string.IsNullOrWhiteSpace(rawValue) ? string.Empty : rawValue.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            metadata[normalizedKey] = normalizedValue;
+        }
+
+        return metadata;
+    }
+
+    private static string NormalizeRuntimeDefaultKey(string? rawKey)
+    {
+        if (string.IsNullOrWhiteSpace(rawKey))
+            return string.Empty;
+
+        return rawKey
+            .Trim()
+            .Replace(':', '.');
     }
 
 }

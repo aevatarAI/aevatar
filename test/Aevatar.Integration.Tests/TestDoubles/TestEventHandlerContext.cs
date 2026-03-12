@@ -23,6 +23,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     }
 
     public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+    public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
     public List<ScheduledCallback> Scheduled { get; } = [];
     public List<CanceledCallback> Canceled { get; } = [];
     public Action<IMessage, EventDirection>? OnPublish { get; set; }
@@ -113,7 +114,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = targetActorId;
+        Sent.Add((targetActorId, evt));
         _ = options;
         return PublishAsync(evt, EventDirection.Self, ct);
     }

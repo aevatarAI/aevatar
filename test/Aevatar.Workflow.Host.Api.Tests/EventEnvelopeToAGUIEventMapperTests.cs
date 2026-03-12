@@ -162,6 +162,30 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowSignalBufferedEvent_ProjectsTo_CustomBufferedSignalEvent()
+    {
+        var envelope = Wrap(new WorkflowSignalBufferedEvent
+        {
+            RunId = "run-b",
+            StepId = "wait-b",
+            SignalName = "reply_ready",
+            Payload = "payload",
+            ReceivedAtUnixTimeMs = 123,
+        });
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle();
+        events[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        events[0].Custom.Name.Should().Be("aevatar.workflow.signal.buffered");
+        var payload = events[0].Custom.Payload.Unpack<WorkflowSignalBufferedCustomPayload>();
+        payload.RunId.Should().Be("run-b");
+        payload.StepId.Should().Be("wait-b");
+        payload.SignalName.Should().Be("reply_ready");
+        payload.Payload.Should().Be("payload");
+    }
+
+    [Fact]
     public void UnknownOrNullPayload_ShouldReturnEmpty()
     {
         var unknown = CreateMapper().Map(Wrap(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
@@ -192,6 +216,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new ToolCallRunEventEnvelopeMappingHandler(),
             new WorkflowSuspendedRunEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalRunEventEnvelopeMappingHandler(),
+            new WorkflowSignalBufferedRunEventEnvelopeMappingHandler(),
         ]);
     }
 }

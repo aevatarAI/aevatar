@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddAevatarConfig();
+        services.AddHttpClient();
         services.AddAevatarActorRuntime(configuration);
         RegisterConnectorBuilders(services);
         return services;
@@ -23,5 +24,6 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, TelegramUserConnectorBuilder>());
     }
 }
