@@ -393,6 +393,9 @@ bash tools/ci/workflow_closed_world_guards.sh
 echo "Running workflow run-id guard..."
 bash tools/ci/workflow_runid_guard.sh
 
+echo "Running playground asset drift guard..."
+bash tools/ci/playground_asset_drift_guard.sh
+
 echo "Running script inheritance guard..."
 bash tools/ci/script_inheritance_guard.sh
 

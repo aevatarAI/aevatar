@@ -1,0 +1,26 @@
+name: human_approval_approved_auto_resume
+description: |
+  Human approval demo (auto approved path).
+  Workflow pauses at human_approval, receives auto approved resume, then continues.
+
+roles: []
+
+steps:
+  - id: draft_plan
+    type: assign
+    parameters:
+      value: "Deploy release v1.2.3 to production with canary rollout."
+    next: approve_release
+
+  - id: approve_release
+    type: human_approval
+    parameters:
+      prompt: "Approve deployment plan?"
+      timeout: "120"
+      on_reject: "fail"
+    next: mark_done
+
+  - id: mark_done
+    type: transform
+    parameters:
+      op: "uppercase"

@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -12,7 +15,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Connector invocation module.
 /// Handles step_type == "connector_call" and delegates execution to a named connector.
 /// </summary>
-public sealed class ConnectorCallModule : IEventModule
+public sealed partial class ConnectorCallModule : IEventModule
 {
     private readonly IConnectorRegistry _registry;
 
@@ -25,14 +28,43 @@ public sealed class ConnectorCallModule : IEventModule
     public int Priority => 9;
 
     /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
+    public bool CanHandle(EventEnvelope envelope)
+    {
+        var payload = envelope.Payload;
+        return payload != null &&
+               (payload.Is(StepRequestEvent.Descriptor) ||
+                payload.Is(SecureValueCapturedEvent.Descriptor) ||
+                payload.Is(WorkflowCompletedEvent.Descriptor));
+    }
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
-        if (!string.Equals(request.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)) return;
+        if (envelope.Payload == null)
+            return;
+
+        if (envelope.Payload.Is(SecureValueCapturedEvent.Descriptor))
+        {
+            var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
+            if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
+                SecureValueRuntimeStore.Set(ctx.AgentId, captured.RunId, captured.Variable, captured.Value);
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
+        {
+            SecureValueRuntimeStore.RemoveRun(ctx.AgentId, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            return;
+        }
+
+        var request = envelope.Payload.Unpack<StepRequestEvent>();
+        var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType);
+        var isSecureStep = string.Equals(canonicalStepType, "secure_connector_call", StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(canonicalStepType, "connector_call", StringComparison.OrdinalIgnoreCase) &&
+            !isSecureStep)
+        {
+            return;
+        }
 
         var connectorName = WorkflowParameterValueParser.GetString(
             request.Parameters,
@@ -99,7 +131,7 @@ public sealed class ConnectorCallModule : IEventModule
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
-                    Payload = request.Input,
+                    Payload = ResolvePayload(request, isSecureStep, ctx.AgentId) ?? string.Empty,
                     Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
                 };
 
@@ -217,6 +249,90 @@ public sealed class ConnectorCallModule : IEventModule
         skipped.Metadata["connector.timeout_ms"] = timeoutMs.ToString();
         await ctx.PublishAsync(skipped, EventDirection.Self, ct);
     }
+
+    private string? ResolvePayload(StepRequestEvent request, bool isSecureStep, string? agentId)
+    {
+        var mode = WorkflowParameterValueParser.GetString(
+            request.Parameters,
+            isSecureStep ? "secure_template" : "input",
+            "stdin_mode",
+            "stdin").Trim();
+        if (string.Equals(mode, "input", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "inherit", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return request.Input;
+        }
+
+        if (string.Equals(mode, "secure_variable", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secure_input", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secret_input", StringComparison.OrdinalIgnoreCase))
+        {
+            var variable = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "stdin_secret_variable",
+                "secret_variable",
+                "secure_variable",
+                "variable");
+            return ResolveSecureVariable(agentId, request.RunId, variable);
+        }
+
+        if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secure_template", StringComparison.OrdinalIgnoreCase))
+        {
+            var template = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                request.Input ?? string.Empty,
+                "stdin_template",
+                "payload_template",
+                "stdin_value");
+            return ResolveSecureTemplate(agentId, request.RunId, template);
+        }
+
+        return request.Input;
+    }
+
+    private static string ResolveSecureVariable(string? agentId, string? runId, string variable)
+    {
+        var normalizedVariable = NormalizeSecureVariableName(variable);
+        if (string.IsNullOrWhiteSpace(normalizedVariable))
+            throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
+
+        if (SecureValueRuntimeStore.TryGet(agentId, runId, normalizedVariable, out var value))
+            return value;
+
+        throw new InvalidOperationException(
+            $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
+    }
+
+    private static string ResolveSecureTemplate(string? agentId, string? runId, string template)
+    {
+        if (string.IsNullOrEmpty(template))
+            return string.Empty;
+
+        var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
+        {
+            var variable = match.Groups[1].Value;
+            var value = ResolveSecureVariable(agentId, runId, variable);
+            return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
+        });
+
+        return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
+        {
+            var variable = match.Groups[1].Value;
+            return ResolveSecureVariable(agentId, runId, variable);
+        });
+    }
+
+    private static string NormalizeSecureVariableName(string? variable) =>
+        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
+
+    [GeneratedRegex(@"\[\[secure:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecurePlaceholderPattern();
+
+    [GeneratedRegex(@"\[\[secure_json:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecureJsonPlaceholderPattern();
 
     private static void AppendBaseMetadata(
         StepCompletedEvent evt,

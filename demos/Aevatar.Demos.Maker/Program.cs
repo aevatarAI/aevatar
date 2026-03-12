@@ -130,7 +130,7 @@ else
         Console.WriteLine("  No LLM API key found.");
         Console.WriteLine();
         Console.WriteLine("  Option 1: Use aevatar CLI to configure secrets:");
-        Console.WriteLine("    aevatar config set-secret LLMProviders:Providers:deepseek:ApiKey sk-...");
+        Console.WriteLine("    aevatar config secrets set LLMProviders:Providers:deepseek:ApiKey sk-...");
         Console.WriteLine();
         Console.WriteLine("  Option 2: Set environment variable:");
         Console.WriteLine("    export DEEPSEEK_API_KEY=\"sk-...\"");

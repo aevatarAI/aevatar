@@ -1,0 +1,84 @@
+{
+  "connectors": [
+    {
+      "name": "openclaw_agent_reply_group",
+      "type": "cli",
+      "enabled": true,
+      "timeoutMs": 120000,
+      "retry": 1,
+      "cli": {
+        "command": "bash",
+        "fixedArguments": [
+          "-lc",
+          "exec \"${AEVATAR_OPENCLAW_CONNECTOR_CMD:-aevatar-openclaw-connector}\" agent_reply_group"
+        ],
+        "allowedOperations": [],
+        "allowedInputKeys": [
+          "prompt",
+          "chat_id",
+          "prefix",
+          "agent_id",
+          "timeout_seconds"
+        ],
+        "workingDirectory": "",
+        "environment": {
+          "AEVATAR_OPENCLAW_CONNECTOR_CMD": "/opt/aevatar/bin/aevatar-openclaw-connector",
+          "OPENCLAW_AGENT_ID": "main",
+          "OPENCLAW_AGENT_TIMEOUT_SECONDS": "120",
+          "OPENCLAW_REPLY_PREFIX": "AEVATAR_STREAM_REPLY",
+          "OPENCLAW_TG_CHAT_ID": "REPLACE_WITH_YOUR_TELEGRAM_GROUP_CHAT_ID"
+        }
+      }
+    },
+    {
+      "name": "openclaw_agent_only",
+      "type": "cli",
+      "enabled": true,
+      "timeoutMs": 120000,
+      "retry": 1,
+      "cli": {
+        "command": "bash",
+        "fixedArguments": [
+          "-lc",
+          "exec \"${AEVATAR_OPENCLAW_CONNECTOR_CMD:-aevatar-openclaw-connector}\" agent_only"
+        ],
+        "allowedOperations": [],
+        "allowedInputKeys": [
+          "prompt",
+          "agent_id",
+          "timeout_seconds"
+        ],
+        "workingDirectory": "",
+        "environment": {
+          "AEVATAR_OPENCLAW_CONNECTOR_CMD": "/opt/aevatar/bin/aevatar-openclaw-connector",
+          "OPENCLAW_AGENT_ID": "main",
+          "OPENCLAW_AGENT_TIMEOUT_SECONDS": "120"
+        }
+      }
+    },
+    {
+      "name": "openclaw_telegram_send",
+      "type": "cli",
+      "enabled": true,
+      "timeoutMs": 20000,
+      "retry": 1,
+      "cli": {
+        "command": "bash",
+        "fixedArguments": [
+          "-lc",
+          "exec \"${AEVATAR_OPENCLAW_CONNECTOR_CMD:-aevatar-openclaw-connector}\" message_send"
+        ],
+        "allowedOperations": [],
+        "allowedInputKeys": [
+          "message",
+          "chat_id"
+        ],
+        "workingDirectory": "",
+        "environment": {
+          "AEVATAR_OPENCLAW_CONNECTOR_CMD": "/opt/aevatar/bin/aevatar-openclaw-connector",
+          "OPENCLAW_TG_CHAT_ID": "REPLACE_WITH_YOUR_TELEGRAM_GROUP_CHAT_ID"
+        }
+      }
+    }
+  ]
+}

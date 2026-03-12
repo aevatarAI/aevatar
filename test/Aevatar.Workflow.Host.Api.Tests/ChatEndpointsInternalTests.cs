@@ -11,6 +11,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -259,6 +260,56 @@ public class ChatEndpointsInternalTests
 
         captured.Should().NotBeNull();
         captured!.WorkflowName.Should().Be("auto_review");
+    }
+
+    [Fact]
+    public async Task HandleChat_WhenWorkflowRuntimeDefaultsConfigured_ShouldInjectMetadataAndAllowRequestOverride()
+    {
+        var http = CreateHttpContext();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkflowRuntimeDefaults:telegram:chat_id"] = "-100999",
+                ["WorkflowRuntimeDefaults:telegram:openclaw_bot_username"] = "openclaw_bot",
+            })
+            .Build();
+        http.RequestServices = new ServiceCollection()
+            .AddSingleton<IConfiguration>(configuration)
+            .BuildServiceProvider();
+
+        WorkflowChatRunRequest? captured = null;
+        var service = new FakeChatRunApplicationService
+        {
+            ExecuteHandler = (request, _, _, _) =>
+            {
+                captured = request;
+                return Task.FromResult(ToCoreResult(
+                    new WorkflowChatRunExecutionResult(
+                        WorkflowChatRunStartError.WorkflowNotFound,
+                        null,
+                        null)));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "hello",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["telegram.chat_id"] = "-100request",
+                },
+            },
+            service,
+            CancellationToken.None);
+
+        var normalizedRequest = captured;
+        normalizedRequest.Should().NotBeNull();
+        var capturedRequest = normalizedRequest ?? throw new InvalidOperationException("Expected request capture.");
+        var metadata = capturedRequest.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
+        metadata["telegram.chat_id"].Should().Be("-100request");
+        metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
     }
 
     [Fact]
@@ -1168,6 +1219,9 @@ public class ChatEndpointsInternalTests
         public bool ActorQueryEnabledValue { get; set; }
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; set; } = [];
         public IReadOnlyList<string> Workflows { get; set; } = [];
+        public IReadOnlyList<WorkflowCatalogItem> WorkflowCatalog { get; set; } = [];
+        public Dictionary<string, WorkflowCatalogItemDetail> WorkflowDetailByName { get; set; } = new(StringComparer.Ordinal);
+        public WorkflowCapabilitiesDocument Capabilities { get; set; } = new();
         public Dictionary<string, WorkflowActorSnapshot> SnapshotByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorTimelineItem>> TimelineByActorId { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<WorkflowActorGraphEdge>> RelationsByActorId { get; set; } = new(StringComparer.Ordinal);
@@ -1180,6 +1234,18 @@ public class ChatEndpointsInternalTests
             Task.FromResult(Agents);
 
         public IReadOnlyList<string> ListWorkflows() => Workflows;
+
+        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => WorkflowCatalog;
+
+        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+        {
+            if (string.IsNullOrWhiteSpace(workflowName))
+                return null;
+            WorkflowDetailByName.TryGetValue(workflowName, out var detail);
+            return detail;
+        }
+
+        public WorkflowCapabilitiesDocument GetCapabilities() => Capabilities;
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {

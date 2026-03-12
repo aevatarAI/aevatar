@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -13,8 +14,14 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class EvaluateModule : IEventModule
 {
+    private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
     private readonly Dictionary<string, EvalContext> _pending = [];
     private readonly Dictionary<string, int> _attemptsByRunStep = [];
+
+    public EvaluateModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    {
+        _targetAgentResolver = targetAgentResolver;
+    }
 
     public string Name => "evaluate";
     public int Priority => 5;
@@ -60,24 +67,63 @@ public sealed class EvaluateModule : IEventModule
             var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
             _pending[sessionId] = new EvalContext(request.StepId, runId, request.Input ?? "", threshold, onBelow);
 
-            var targetRole = request.TargetRole;
-            if (!string.IsNullOrEmpty(targetRole))
+            WorkflowStepTargetAgentResolution target;
+            try
             {
-                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
-                ctx.Logger.LogInformation(
-                    "EvaluateModule: step={StepId} → SendTo role={Role} actor={ActorId}",
-                    request.StepId, targetRole, targetActorId);
-                await ctx.SendToAsync(targetActorId, new ChatRequestEvent
-                {
-                    Prompt = prompt, SessionId = sessionId,
-                }, ct);
+                target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
             }
-            else
+            catch (Exception ex)
             {
-                await ctx.PublishAsync(new ChatRequestEvent
+                _pending.Remove(sessionId);
+                _attemptsByRunStep.Remove(stepRunKey);
+                await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    Prompt = prompt, SessionId = sessionId,
+                    StepId = request.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = $"evaluate target resolution failed: {ex.Message}",
                 }, EventDirection.Self, ct);
+                return;
+            }
+
+            try
+            {
+                if (!target.UseSelf)
+                {
+                    ctx.Logger.LogInformation(
+                        "EvaluateModule: step={StepId} → SendTo mode={Mode} actor={ActorId}",
+                        request.StepId, target.Mode, target.ActorId);
+                    var chatRequest = new ChatRequestEvent
+                    {
+                        Prompt = prompt,
+                        SessionId = sessionId,
+                    };
+                    CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+                    await ctx.SendToAsync(target.ActorId, chatRequest, ct);
+                }
+                else
+                {
+                    var chatRequest = new ChatRequestEvent
+                    {
+                        Prompt = prompt,
+                        SessionId = sessionId,
+                    };
+                    CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+                    await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _pending.Remove(sessionId);
+                _attemptsByRunStep.Remove(stepRunKey);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = request.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = $"evaluate dispatch failed: {ex.Message}",
+                }, EventDirection.Self, ct);
+                return;
             }
             return;
         }
@@ -131,6 +177,37 @@ public sealed class EvaluateModule : IEventModule
             if (double.TryParse(word, out var n)) return n;
         }
         return 0;
+    }
+
+    private static void CopyParametersToChatMetadata(
+        MapField<string, string> parameters,
+        MapField<string, string> metadata)
+    {
+        foreach (var (key, value) in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            metadata[key.Trim()] = value.Trim();
+        }
+    }
+
+    private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventHandlerContext ctx)
+    {
+        if (_targetAgentResolver != null)
+            return _targetAgentResolver;
+
+        var resolver = ctx.Services.GetService(typeof(WorkflowStepTargetAgentResolver)) as WorkflowStepTargetAgentResolver;
+        if (resolver != null)
+            return resolver;
+
+        throw new InvalidOperationException(
+            $"{nameof(WorkflowStepTargetAgentResolver)} is not registered in DI and was not provided to {nameof(EvaluateModule)}.");
     }
 
     private sealed record EvalContext(string StepId, string RunId, string OriginalInput, double Threshold, string OnBelow);

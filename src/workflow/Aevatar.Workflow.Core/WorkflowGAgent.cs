@@ -194,11 +194,15 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
 
         await EnsureAgentTreeAsync();
 
-        await PublishAsync(new StartWorkflowEvent
+        var start = new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt,
-        }, EventDirection.Self);
+        };
+        foreach (var (key, value) in BuildStartWorkflowParameters(request.Metadata))
+            start.Parameters[key] = value;
+
+        await PublishAsync(start, EventDirection.Self);
     }
 
     [EventHandler]
@@ -595,4 +599,43 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
             CorrelationId = Guid.NewGuid().ToString("N"),
         };
     }
+
+    private static IReadOnlyDictionary<string, string> BuildStartWorkflowParameters(
+        Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        if (metadata == null || metadata.Count == 0)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            var normalizedKey = NormalizeToken(key);
+            var normalizedValue = NormalizeToken(value);
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            parameters[normalizedKey] = normalizedValue;
+            var alias = TryMapWorkflowMetadataAlias(normalizedKey);
+            if (!string.IsNullOrWhiteSpace(alias))
+                parameters[alias] = normalizedValue;
+        }
+
+        return parameters;
+    }
+
+    private static string TryMapWorkflowMetadataAlias(string metadataKey) =>
+        metadataKey switch
+        {
+            "workflow.session_id" => "session_id",
+            "workflow.channel_id" => "channel_id",
+            "workflow.user_id" => "user_id",
+            "workflow.message_id" => "message_id",
+            "workflow.correlation_id" => "correlation_id",
+            "workflow.idempotency_key" => "idempotency_key",
+            "workflow.callback_url" => "callback_url",
+            _ => string.Empty,
+        };
+
+    private static string NormalizeToken(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }

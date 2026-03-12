@@ -34,6 +34,7 @@ public sealed class EmitModule : IEventModule
         };
         completed.Metadata["emit.event_type"] = eventType;
         completed.Metadata["emit.payload"] = payload;
-        await ctx.PublishAsync(completed, EventDirection.Both, ct);
+        // Emit completion must flow back into workflow_loop to advance to next step.
+        await ctx.PublishAsync(completed, EventDirection.Self, ct);
     }
 }

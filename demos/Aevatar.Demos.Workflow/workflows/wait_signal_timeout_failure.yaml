@@ -1,0 +1,14 @@
+name: wait_signal_timeout_failure
+description: |
+  wait_signal timeout demo.
+  If no matching signal arrives before timeout, workflow fails on this step.
+
+roles: []
+
+steps:
+  - id: wait_for_dba_ack
+    type: wait_signal
+    parameters:
+      signal_name: "dba_ack"
+      prompt: "Waiting for DBA acknowledgment signal."
+      timeout_ms: "5000"

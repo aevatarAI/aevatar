@@ -198,6 +198,31 @@ public sealed class AITextStreamAGUIEventEnvelopeMappingHandler : IAGUIEventEnve
         {
             var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageEndEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            if (string.IsNullOrWhiteSpace(evt.SessionId) && !string.IsNullOrWhiteSpace(evt.Content))
+            {
+                events =
+                [
+                    new Aevatar.Presentation.AGUI.TextMessageStartEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                        Role = "assistant",
+                    },
+                    new Aevatar.Presentation.AGUI.TextMessageContentEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                        Delta = evt.Content,
+                    },
+                    new Aevatar.Presentation.AGUI.TextMessageEndEvent
+                    {
+                        Timestamp = ts,
+                        MessageId = msgId,
+                    },
+                ];
+                return true;
+            }
+
             events =
             [
                 new Aevatar.Presentation.AGUI.TextMessageEndEvent
@@ -432,6 +457,39 @@ public sealed class WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler : IAGUI
                     evt.SignalName,
                     evt.Prompt,
                     evt.TimeoutMs,
+                },
+            },
+        ];
+        return true;
+    }
+}
+
+public sealed class WorkflowSignalBufferedAGUIEventEnvelopeMappingHandler : IAGUIEventEnvelopeMappingHandler
+{
+    public int Order => 47;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<AGUIEvent> events)
+    {
+        if (envelope.Payload?.Is(WorkflowSignalBufferedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<WorkflowSignalBufferedEvent>();
+        events =
+        [
+            new CustomEvent
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Name = "aevatar.workflow.signal.buffered",
+                Value = new
+                {
+                    evt.RunId,
+                    evt.StepId,
+                    evt.SignalName,
+                    evt.Payload,
+                    evt.ReceivedAtUnixTimeMs,
                 },
             },
         ];

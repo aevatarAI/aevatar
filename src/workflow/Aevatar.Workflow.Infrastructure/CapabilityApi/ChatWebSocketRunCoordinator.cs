@@ -1,24 +1,27 @@
 using System.Net.WebSockets;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal static class ChatWebSocketRunCoordinator
 {
-    public static async Task ExecuteAsync(
+public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
         ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
         ApiRequestScope scope,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        WorkflowCapabilitiesDocument? capabilities = null,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
         var correlationId = string.Empty;
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, capabilities, defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

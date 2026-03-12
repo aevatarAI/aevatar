@@ -48,6 +48,7 @@ message SubWorkflowInvocationCompletedEvent
 }
 message WorkflowSuspendedEvent { string run_id = 1; string step_id = 2; string suspension_type = 3; string prompt = 4; int32 timeout_seconds = 5; map<string, string> metadata = 6; }
 message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
 
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
@@ -56,3 +57,11 @@ message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; stri
 message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
 message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
 message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
+message WorkflowSignalBufferedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string payload = 4;
+  int64 received_at_unix_time_ms = 5;
+}

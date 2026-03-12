@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+    <ProjectReference Include="..\..\tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

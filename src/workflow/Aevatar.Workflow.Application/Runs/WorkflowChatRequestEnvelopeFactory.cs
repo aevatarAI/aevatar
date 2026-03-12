@@ -20,6 +20,15 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
         };
+        foreach (var (key, value) in context.Metadata)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+            chatRequest.Metadata[normalizedKey] = normalizedValue;
+        }
+        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
         var envelope = new EventEnvelope
         {

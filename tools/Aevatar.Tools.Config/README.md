@@ -2,6 +2,14 @@
 
 本地 Web 界面配置 Aevatar 用户密钥（LLM API Key 等），读写 `~/.aevatar/secrets.json`。与 Aevatar.Host.Api 使用同一套配置路径，配置完成后直接启动 Api 即可使用。
 
+推荐入口已迁移为：
+
+```bash
+aevatar config ui
+```
+
+`aevatar-config` 仍保留为兼容 shim（会提示迁移）。
+
 ## 安装（可选，作为 dotnet tool）
 
 ```bash
@@ -22,11 +30,16 @@ bash tools/Aevatar.Tools.Config/reinstall-tool.sh
 # 启动并自动打开浏览器
 aevatar-config
 
+# 新入口（推荐）
+aevatar config ui
+
 # 不自动打开浏览器
 aevatar-config --no-browser
+aevatar config ui --no-browser
 
 # 指定端口
 aevatar-config --port 8080
+aevatar config ui --port 8080
 ```
 
 或从源码运行：
@@ -42,7 +55,7 @@ dotnet run --project tools/Aevatar.Tools.Config
 - **Providers**：添加/编辑 LLM Provider（OpenAI、DeepSeek、Anthropic 等），填写 Endpoint、Model、API Key，可测试连接、拉取模型列表。
 - **Default provider**：设置默认 Provider，Api 会优先使用该 Key。
 - **Raw JSON**：直接编辑 `secrets.json` 的嵌套 JSON。
-- **config.json / agents/**：编辑 `~/.aevatar/config.json` 与 `~/.aevatar/agents/` 下的 YAML（如需要）。
+- **config.json / workflows/**：编辑 `~/.aevatar/config.json` 与 `~/.aevatar/workflows/` 下的 YAML（如需要）。
 
 配置写入 `~/.aevatar/secrets.json`（支持明文或加密格式，与 [Aevatar.Configuration](../../src/Aevatar.Configuration/README.md) 一致）。环境变量 `AEVATAR_SECRETS_PATH` 可指定密钥文件路径；`AEVATAR_HOME` 可指定 `~/.aevatar` 根目录。
 

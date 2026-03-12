@@ -131,6 +131,28 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void TextMessageEnd_WithoutSessionIdAndWithContent_ProjectsTo_FullMessageSequence()
+    {
+        var endEnvelope = Wrap(new Aevatar.AI.Abstractions.TextMessageEndEvent
+        {
+            SessionId = "",
+            Content = "send failed fallback message",
+        });
+        endEnvelope.Id = "env-end-no-session";
+
+        var events = CreateMapper().Map(endEnvelope);
+
+        events.Should().HaveCount(3);
+        events[0].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageStartEvent>();
+        events[1].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageContentEvent>();
+        events[2].Should().BeOfType<Aevatar.Presentation.AGUI.TextMessageEndEvent>();
+
+        var content = (Aevatar.Presentation.AGUI.TextMessageContentEvent)events[1];
+        content.MessageId.Should().Be("msg:env-end-no-session");
+        content.Delta.Should().Be("send failed fallback message");
+    }
+
+    [Fact]
     public void TextMessageReasoningEvent_ProjectsTo_CustomReasoningEvent()
     {
         var envelope = Wrap(new TextMessageReasoningEvent
@@ -317,6 +339,29 @@ public class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowSignalBufferedEvent_ProjectsTo_CustomBufferedSignalEvent()
+    {
+        var envelope = Wrap(new WorkflowSignalBufferedEvent
+        {
+            RunId = "run-b",
+            StepId = "wait-b",
+            SignalName = "reply_ready",
+            Payload = "payload",
+            ReceivedAtUnixTimeMs = 123,
+        });
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle().Which.Should().BeOfType<CustomEvent>();
+        var custom = (CustomEvent)events[0];
+        custom.Name.Should().Be("aevatar.workflow.signal.buffered");
+        var value = JsonSerializer.SerializeToElement(custom.Value);
+        value.GetProperty("RunId").GetString().Should().Be("run-b");
+        value.GetProperty("StepId").GetString().Should().Be("wait-b");
+        value.GetProperty("SignalName").GetString().Should().Be("reply_ready");
+    }
+
+    [Fact]
     public void UnknownPayload_ReturnsEmpty()
     {
         // ParentChangedEvent 没有投影规则
@@ -353,6 +398,7 @@ public class EventEnvelopeToAGUIEventMapperTests
             new ToolCallAGUIEventEnvelopeMappingHandler(),
             new WorkflowSuspendedAGUIEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalAGUIEventEnvelopeMappingHandler(),
+            new WorkflowSignalBufferedAGUIEventEnvelopeMappingHandler(),
         ]);
     }
 }

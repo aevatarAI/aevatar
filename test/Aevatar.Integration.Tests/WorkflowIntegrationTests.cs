@@ -450,7 +450,7 @@ public class WorkflowIntegrationTests
     //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {

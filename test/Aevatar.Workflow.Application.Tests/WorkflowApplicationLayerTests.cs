@@ -836,9 +836,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
             ],
         };
         var registry = new WorkflowDefinitionRegistry();
-        var queryService = new WorkflowExecutionQueryApplicationService(
-            registry,
-            projection);
+        var queryService = CreateQueryService(registry, projection);
 
         var agents = await queryService.ListAgentsAsync(CancellationToken.None);
 
@@ -862,7 +860,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
 
         var registry = new WorkflowDefinitionRegistry();
         registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             registry,
             new FakeProjectionService
             {
@@ -899,7 +897,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
                 ["actor-1"] = [relation],
             },
         };
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             new WorkflowDefinitionRegistry(),
             projection);
 
@@ -948,7 +946,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
                 ["actor-1"] = subgraph,
             },
         };
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             new WorkflowDefinitionRegistry(),
             projection);
 
@@ -966,7 +964,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
         {
             EnableActorQueryEndpointsValue = true,
         };
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             new WorkflowDefinitionRegistry(),
             projection);
 
@@ -993,7 +991,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
                 },
             ],
         };
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             new WorkflowDefinitionRegistry(),
             projection);
 
@@ -1013,7 +1011,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
     [Fact]
     public async Task GraphQueries_WhenActorIdBlank_ShouldReturnEmptyOrNull()
     {
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             new WorkflowDefinitionRegistry(),
             new FakeProjectionService
             {
@@ -1037,7 +1035,7 @@ public class WorkflowExecutionQueryApplicationServiceTests
         registry.Register("workflow-a", WorkflowDefinitionRegistry.BuiltInDirectYaml);
         registry.Register("workflow-b", WorkflowDefinitionRegistry.BuiltInDirectYaml);
 
-        var queryService = new WorkflowExecutionQueryApplicationService(
+        var queryService = CreateQueryService(
             registry,
             new FakeProjectionService());
 
@@ -1045,6 +1043,130 @@ public class WorkflowExecutionQueryApplicationServiceTests
 
         workflows.Should().BeEquivalentTo(["workflow-a", "workflow-b"]);
     }
+
+    [Fact]
+    public void ListWorkflowCatalog_WhenCatalogPortRegistered_ShouldDelegateToPort()
+    {
+        var catalogPort = new FakeWorkflowCatalogPort
+        {
+            Catalog =
+            [
+                new WorkflowCatalogItem
+                {
+                    Name = "workflow_install",
+                    Source = "repo",
+                    Group = "starter-workflows",
+                    GroupLabel = "Starter Workflows",
+                    ShowInLibrary = true,
+                },
+            ],
+        };
+
+        var queryService = CreateQueryService(
+            new WorkflowDefinitionRegistry(),
+            new FakeProjectionService(),
+            catalogPort: catalogPort);
+
+        var catalog = queryService.ListWorkflowCatalog();
+
+        catalog.Should().ContainSingle();
+        catalog[0].Name.Should().Be("workflow_install");
+    }
+
+    [Fact]
+    public void GetWorkflowDetail_WhenCatalogPortRegistered_ShouldDelegateToPort()
+    {
+        var catalogPort = new FakeWorkflowCatalogPort
+        {
+            Details = new Dictionary<string, WorkflowCatalogItemDetail>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["workflow_install"] = new()
+                {
+                    Catalog = new WorkflowCatalogItem
+                    {
+                        Name = "workflow_install",
+                        Source = "repo",
+                        Group = "starter-workflows",
+                        GroupLabel = "Starter Workflows",
+                        ShowInLibrary = true,
+                    },
+                    Yaml = "name: workflow_install\nsteps: []",
+                    Definition = new WorkflowCatalogDefinition
+                    {
+                        Name = "workflow_install",
+                    },
+                },
+            },
+        };
+
+        var queryService = CreateQueryService(
+            new WorkflowDefinitionRegistry(),
+            new FakeProjectionService(),
+            catalogPort: catalogPort);
+
+        var detail = queryService.GetWorkflowDetail("workflow_install");
+
+        detail.Should().NotBeNull();
+        detail!.Catalog.Name.Should().Be("workflow_install");
+    }
+
+    [Fact]
+    public void GetCapabilities_WhenCapabilitiesPortRegistered_ShouldDelegateToPort()
+    {
+        var capabilitiesPort = new FakeWorkflowCapabilitiesPort
+        {
+            Document = new WorkflowCapabilitiesDocument
+            {
+                SchemaVersion = "capabilities.v1",
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapability
+                    {
+                        Name = "connector_call",
+                    },
+                ],
+            },
+        };
+
+        var queryService = CreateQueryService(
+            new WorkflowDefinitionRegistry(),
+            new FakeProjectionService(),
+            capabilitiesPort: capabilitiesPort);
+
+        var capabilities = queryService.GetCapabilities();
+
+        capabilities.SchemaVersion.Should().Be("capabilities.v1");
+        capabilities.Primitives.Should().ContainSingle(x => x.Name == "connector_call");
+    }
+
+    [Fact]
+    public void Constructor_WhenCapabilitiesPortMissing_ShouldThrow()
+    {
+        var registry = new WorkflowDefinitionRegistry();
+        var catalogPort = new FakeWorkflowCatalogPort();
+
+        var act = () => new WorkflowExecutionQueryApplicationService(
+            registry,
+            new FakeProjectionService(),
+            catalogPort,
+            null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    private static WorkflowExecutionQueryApplicationService CreateQueryService(
+        IWorkflowDefinitionRegistry registry,
+        IWorkflowExecutionProjectionQueryPort projectionPort,
+        IWorkflowCatalogPort? catalogPort = null,
+        IWorkflowCapabilitiesPort? capabilitiesPort = null)
+    {
+        return new WorkflowExecutionQueryApplicationService(
+            registry,
+            projectionPort,
+            catalogPort ?? new FakeWorkflowCatalogPort(),
+            capabilitiesPort ?? new FakeWorkflowCapabilitiesPort());
+    }
+
 }
 
 public class ActorRuntimeWorkflowExecutionTopologyResolverTests
@@ -1202,6 +1324,24 @@ internal sealed class FakeProjectionService :
     }
 
     private sealed record FakeProjectionLease(string ActorId, string CommandId) : IWorkflowExecutionProjectionLease;
+}
+
+internal sealed class FakeWorkflowCatalogPort : IWorkflowCatalogPort
+{
+    public IReadOnlyList<WorkflowCatalogItem> Catalog { get; set; } = [];
+    public Dictionary<string, WorkflowCatalogItemDetail> Details { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => Catalog;
+
+    public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) =>
+        Details.GetValueOrDefault(workflowName);
+}
+
+internal sealed class FakeWorkflowCapabilitiesPort : IWorkflowCapabilitiesPort
+{
+    public WorkflowCapabilitiesDocument Document { get; set; } = new();
+
+    public WorkflowCapabilitiesDocument GetCapabilities() => Document;
 }
 
 internal sealed class FakeEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>

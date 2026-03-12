@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
@@ -171,6 +172,21 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
+    public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+
+        catalogPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        capabilitiesPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        catalogPort.Should().BeSameAs(capabilitiesPort);
+    }
+
+    [Fact]
     public void EnvelopeFactory_ShouldUseSessionIdFromMetadata()
     {
         var services = new ServiceCollection();
@@ -184,6 +200,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
             });
         var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
 
@@ -196,6 +213,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         envelope.PublisherId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
     }
 
     [Fact]

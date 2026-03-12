@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.Agents;
+using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -14,6 +15,7 @@ using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
@@ -24,6 +26,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -68,6 +71,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IWorkflowDefinitionRegistry>(new WorkflowDefinitionRegistry());
 
         services.AddWorkflowDefinitionFileSource(options =>
         {
@@ -79,8 +83,21 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ServiceType == typeof(WorkflowDefinitionFileLoader) &&
             x.ImplementationType == typeof(WorkflowDefinitionFileLoader));
         services.Should().Contain(x =>
+            x.ServiceType == typeof(FileBackedWorkflowCatalogPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowCatalogPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowCapabilitiesPort));
+        services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+
+        using var provider = services.BuildServiceProvider();
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+        catalogPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
+        capabilitiesPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
+        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
@@ -127,6 +144,121 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         var act = async () => await service.StartAsync(new CancellationToken(canceled: true));
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void FileBackedWorkflowCatalogPort_ShouldReturnCatalogAndDetail()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-catalog-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var yamlPath = Path.Combine(tempDir, "repo_install.yaml");
+            File.WriteAllText(yamlPath, """
+            name: repo_install
+            description: Bootstrap runtime.
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """);
+
+            var options = new WorkflowDefinitionFileSourceOptions();
+            options.WorkflowDirectories.Add(tempDir);
+
+            var registry = new WorkflowDefinitionRegistry();
+            registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+            registry.Register("repo_install", File.ReadAllText(yamlPath));
+
+            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+
+            var catalog = port.ListWorkflowCatalog();
+            catalog.Should().Contain(item => item.Name == "repo_install" && item.Source == "file");
+            catalog.Should().Contain(item => item.Name == "direct" && item.Source == "builtin");
+
+            var detail = port.GetWorkflowDetail("repo_install");
+            detail.Should().NotBeNull();
+            detail!.Catalog.Name.Should().Be("repo_install");
+            detail.Catalog.RequiresLlmProvider.Should().BeFalse();
+            detail.Definition.Description.Should().Be("Bootstrap runtime.");
+            detail.Definition.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+
+            var capabilities = port.GetCapabilities();
+            capabilities.SchemaVersion.Should().Be("capabilities.v1");
+            capabilities.Workflows.Should().Contain(item => item.Name == "repo_install");
+            capabilities.Primitives.Should().Contain(item => item.Name == "assign");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileBackedWorkflowCatalogPort_ShouldReuseFileDiscoveryCacheWithinTtlWindow()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-catalog-cache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var yamlPath = Path.Combine(tempDir, "cached_workflow.yaml");
+            File.WriteAllText(yamlPath, """
+            name: cached_workflow
+            description: Cached workflow.
+            roles: []
+            steps:
+              - id: done
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """);
+
+            var options = new WorkflowDefinitionFileSourceOptions();
+            options.WorkflowDirectories.Add(tempDir);
+            var registry = new WorkflowDefinitionRegistry();
+            registry.Register("cached_workflow", File.ReadAllText(yamlPath));
+            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+
+            var firstCatalog = port.ListWorkflowCatalog();
+            firstCatalog.Should().Contain(item => item.Name == "cached_workflow" && item.Source == "file");
+
+            File.Delete(yamlPath);
+
+            var secondCatalog = port.ListWorkflowCatalog();
+            secondCatalog.Should().Contain(item => item.Name == "cached_workflow" && item.Source == "file");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileBackedWorkflowCatalogPort_WhenYamlParseFails_ShouldLogWarningAndRemainAvailable()
+    {
+        var options = new WorkflowDefinitionFileSourceOptions();
+        var registry = new WorkflowDefinitionRegistry();
+        registry.Register("broken_workflow", "name: broken_workflow\nsteps:\n  - id: broken\n    type: assign\n    parameters:\n      value: [");
+        var logger = new CollectingLogger<FileBackedWorkflowCatalogPort>();
+        var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options), logger);
+
+        var catalog = port.ListWorkflowCatalog();
+        catalog.Should().Contain(item => item.Name == "broken_workflow");
+
+        var detail = port.GetWorkflowDetail("broken_workflow");
+        detail.Should().BeNull();
+
+        logger.Messages.Should().Contain(message =>
+            message.Contains("Failed to parse workflow yaml", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -319,7 +451,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ImplementationType == typeof(WorkflowChatRunApplicationService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService) &&
-            x.ImplementationType == typeof(WorkflowExecutionQueryApplicationService));
+            x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowExecutionReportArtifactSink) &&
             x.ImplementationType == typeof(FileSystemWorkflowExecutionReportArtifactSink));
@@ -488,6 +620,37 @@ public sealed class WorkflowInfrastructureCoverageTests
             var actor = await _runtime.GetAsync(actorId);
             var runtimeType = actor?.Agent.GetType();
             return runtimeType?.AssemblyQualifiedName ?? runtimeType?.FullName;
+        }
+    }
+
+    private sealed class CollectingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull =>
+            NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = logLevel;
+            _ = eventId;
+            Messages.Add(formatter(state, exception));
+        }
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+        public void Dispose()
+        {
         }
     }
 }

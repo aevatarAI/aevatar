@@ -1,6 +1,7 @@
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Workflow.Extensions.AIProjection;
+using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 
@@ -27,6 +28,7 @@ public static class WorkflowCapabilityHostBuilderExtensions
         if (includeScriptCapability)
             builder.AddScriptCapability();
         builder.Services.AddWorkflowAIProjectionExtensions();
+        builder.Services.AddWorkflowBridgeExtensions();
 
         return builder;
     }

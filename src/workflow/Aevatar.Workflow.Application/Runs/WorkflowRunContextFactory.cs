@@ -36,10 +36,13 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
             return new WorkflowRunContextCreateResult(WorkflowChatRunStartError.ProjectionDisabled, null);
 
         var baseContext = _commandContextPolicy.Create(actor.Id);
-        var metadata = new Dictionary<string, string>(baseContext.Metadata, StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(baseContext.Metadata, StringComparer.Ordinal);
+        MergeRequestMetadata(metadata, request.Metadata);
+        if (!metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var sessionId) ||
+            string.IsNullOrWhiteSpace(sessionId))
         {
-            [WorkflowRunCommandMetadataKeys.SessionId] = baseContext.CorrelationId,
-        };
+            metadata[WorkflowRunCommandMetadataKeys.SessionId] = baseContext.CorrelationId;
+        }
         var commandContext = new CommandContext(
             baseContext.TargetId,
             baseContext.CommandId,
@@ -69,5 +72,22 @@ public sealed class WorkflowRunContextFactory : IWorkflowRunContextFactory
                 CommandContext = commandContext,
                 ProjectionLease = projectionLease!,
             });
+    }
+
+    private static void MergeRequestMetadata(
+        IDictionary<string, string> target,
+        IReadOnlyDictionary<string, string>? requestMetadata)
+    {
+        if (requestMetadata == null || requestMetadata.Count == 0)
+            return;
+
+        foreach (var (key, value) in requestMetadata)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+            target[normalizedKey] = normalizedValue;
+        }
     }
 }

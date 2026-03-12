@@ -29,7 +29,15 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 }));
 
         var result = await factory.CreateAsync(
-            new WorkflowChatRunRequest("hello", "direct", "actor-1"),
+            new WorkflowChatRunRequest(
+                "hello",
+                "direct",
+                "actor-1",
+                Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
+                    [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
+                }),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);
@@ -38,6 +46,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.Context.CommandId.Should().Be("cmd-1");
         result.Context.CommandContext.CorrelationId.Should().Be("corr-1");
         result.Context.CommandContext.Metadata[WorkflowRunCommandMetadataKeys.SessionId].Should().Be("corr-1");
+        result.Context.CommandContext.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#ops");
+        result.Context.CommandContext.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
         result.Context.CommandContext.Metadata["source"].Should().Be("tests");
         projectionPort.EnsureCalls.Should().ContainSingle()
             .Which.Should().Be(("actor-1", "direct", "hello", "cmd-1"));
