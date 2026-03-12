@@ -38,7 +38,7 @@
 | 层 | 组件 | 职责 |
 |---|---|---|
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
-| Application | `WorkflowRunInteractionService`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
+| Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具事件 |
 | Projection | `WorkflowExecutionReadModelProjector`、`WorkflowExecutionAGUIEventProjector` | 读模型更新 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
@@ -46,7 +46,7 @@
 关键代码锚点：
 
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:17`
-2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunInteractionService.cs`
+2. `src/Aevatar.CQRS.Core/Interactions/FallbackCommandInteractionService.cs`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:106`
 5. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
@@ -59,10 +59,10 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     C["Client"] --> H["Workflow Capability API\nPOST /api/chat | GET /api/ws/chat | POST /api/workflows/resume | POST /api/workflows/signal"]
-    H --> CMD["ICommandDispatchService / IWorkflowRunInteractionService"]
+    H --> CMD["ICommandDispatchService / ICommandInteractionService"]
     CMD --> RES["WorkflowRunCommandTargetResolver"]
     CMD --> BND["WorkflowRunCommandTargetBinder"]
-    BND --> LIF["IWorkflowExecutionProjectionLifecyclePort"]
+    BND --> LIF["IWorkflowExecutionProjectionPort"]
     LIF --> LEASE["WorkflowExecutionRuntimeLease"]
     LIF --> SUB["AttachLiveSinkAsync(lease, sink)"]
     CMD --> FAC["WorkflowChatRequestEnvelopeFactory"]
@@ -76,8 +76,8 @@ flowchart TB
     MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
     HUB --> FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
     FWD --> CH["EventChannel<WorkflowRunEvent>"]
-    CH --> STR["WorkflowRunOutputStreamer"]
-    STR --> FR["WorkflowOutputFrame"]
+    CH --> STR["DefaultEventOutputStream + IdentityEventFrameMapper"]
+    STR --> FR["WorkflowRunEventEnvelope"]
     FR --> H
     H --> SSE["ChatSseResponseWriter"]
     H --> WS["ChatWebSocketRunCoordinator"]
@@ -134,7 +134,7 @@ sequenceDiagram
     PRJ->>HUB: "Publish WorkflowRunEvent"
     HUB-->>SINK: "Subscribe handler push"
     ENG->>OUT: "StreamAsync(ReadAllAsync)"
-    OUT->>SSE: "Write WorkflowOutputFrame"
+    OUT->>SSE: "Write WorkflowRunEventEnvelope"
     SSE-->>CL: "SSE data frames"
 ```
 
@@ -143,7 +143,7 @@ sequenceDiagram
 链路锚点：
 
 1. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatEndpoints.cs:44`
-2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunInteractionService.cs`
+2. `src/Aevatar.CQRS.Core/Interactions/FallbackCommandInteractionService.cs`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:122`
 5. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:48`
@@ -254,15 +254,15 @@ flowchart LR
 | 标识 | 生成位置 | 语义范围 | 事实源 | 主要消费点 |
 |---|---|---|---|---|
 | `actorId` | `WorkflowRunActorResolver` | Workflow Actor 维度 | Actor Runtime | 投影上下文、查询接口 |
-| `commandId` | `WorkflowCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
-| `correlationId` | `WorkflowCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
+| `commandId` | `DefaultCommandContextPolicy` | 一次 run 命令维度 | Application CommandContext | `workflow-run:{actorId}:{commandId}` 会话流 |
+| `correlationId` | `DefaultCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
 | `sessionId` | `WorkflowChatRunRequest.SessionId` + `WorkflowChatRequestEnvelopeFactory` fallback | 本次 chat 会话维度 | Command payload | `ChatRequestEvent.SessionId` |
 | `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
 | `messageId` | AGUI mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
 
 锚点：
 
-1. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowCommandContextPolicy.cs:20`
+1. `src/Aevatar.CQRS.Core/Commands/DefaultCommandContextPolicy.cs:7`
 2. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunAcceptedReceiptFactory.cs`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs:13`
 4. `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs:8`
@@ -316,7 +316,7 @@ flowchart LR
 
 1. `src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventTypes.cs:3`
 2. `src/workflow/Aevatar.Workflow.Application.Abstractions/Runs/WorkflowRunEventContracts.cs:13`
-3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowOutputFrameMapper.cs:11`
+3. `src/Aevatar.CQRS.Core/Streaming/DefaultEventOutputStream.cs:5`
 4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunEventSessionCodec.cs:17`
 
 ### 8.3 支持矩阵（当前实现）
@@ -370,7 +370,7 @@ flowchart LR
     EVT1 --> PROJ["Unified Projection Pipeline"]
     EVT2 --> PROJ
     EVT3 --> PROJ
-    PROJ --> OUT["WorkflowOutputFrame / Typed WS Frame"]
+    PROJ --> OUT["WorkflowRunEventEnvelope / WS Boundary Frame"]
 ```
 
 建议改造顺序：
@@ -382,7 +382,7 @@ flowchart LR
 
 1. `ChatRuntime.ChatStreamAsync` 已接入 `DeltaToolCall` 聚合与透传。
 2. `RoleGAgent` 已把流式工具调用转为 `ToolCallEvent` 发布到上行事件链路。
-3. `WorkflowRunInteractionService` 已在 run 收敛后统一触发 `WorkflowRunStateSnapshotEmitter` 发出 `STATE_SNAPSHOT` 输出帧。
+3. CQRS generic interaction service 已在 run 收敛后统一触发 `WorkflowRunFinalizeEmitter` 发出 `STATE_SNAPSHOT` 输出帧。
 4. `ChatWebSocketProtocol`/`ChatWebSocketCommandParser` 已支持 text/binary 类型化帧输入输出，且回包帧类型与命令入帧一致。
 5. `ChatWebSocketMessageContracts` 已统一 `command.ack / agui.event / command.error` 出站契约，移除匿名对象拼装分支。
 6. `WorkflowRunEventTypes` 已成为 `Application/Projection` 共享的唯一事件类型常量源，消除跨层硬编码字符串漂移。

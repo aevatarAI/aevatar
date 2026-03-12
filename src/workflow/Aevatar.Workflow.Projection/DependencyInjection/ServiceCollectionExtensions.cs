@@ -64,9 +64,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, WorkflowProjectionReleaseService>();
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
-        services.TryAddSingleton<WorkflowExecutionProjectionLifecycleService>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionLifecyclePort>(sp =>
-            sp.GetRequiredService<WorkflowExecutionProjectionLifecycleService>());
+        services.TryAddSingleton<WorkflowExecutionProjectionPortService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionPortService>());
         services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
         services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());

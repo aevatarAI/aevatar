@@ -98,10 +98,15 @@ public class ScriptRuntimeGAgentReplayContractTests
 
     private static ScriptRuntimeGAgent CreateRuntimeAgent(ScriptDefinitionGAgent definition)
     {
+        var ports = new NullScriptPorts();
         var capabilityComposer = new ScriptRuntimeCapabilityComposer(
             new NullAICapability(),
             new NullAgentRuntimePort(),
-            new NullLifecyclePort());
+            ports,
+            ports,
+            ports,
+            ports,
+            ports);
 
         var orchestrator = new ScriptRuntimeExecutionOrchestrator(
             new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
@@ -275,7 +280,12 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
         public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class NullLifecyclePort : IScriptLifecyclePort
+    private sealed class NullScriptPorts :
+        IScriptEvolutionProposalPort,
+        IScriptDefinitionCommandPort,
+        IScriptRuntimeProvisioningPort,
+        IScriptRuntimeCommandPort,
+        IScriptCatalogCommandPort
     {
         public Task<ScriptPromotionDecision> ProposeAsync(
             ScriptEvolutionProposal proposal,
@@ -312,7 +322,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.FromResult(definitionActorId ?? "definition-1");
         }
 
-        public Task<string> SpawnRuntimeAsync(
+        public Task<string> EnsureRuntimeAsync(
             string definitionActorId,
             string scriptRevision,
             string? runtimeActorId,
@@ -383,15 +393,5 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             return Task.CompletedTask;
         }
 
-        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
-            string? catalogActorId,
-            string scriptId,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
-        }
     }
 }

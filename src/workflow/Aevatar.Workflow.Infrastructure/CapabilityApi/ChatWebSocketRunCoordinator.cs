@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Google.Protobuf.WellKnownTypes;
@@ -10,7 +11,7 @@ internal static class ChatWebSocketRunCoordinator
     public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
-        IWorkflowRunInteractionService chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         ApiRequestScope scope,
         CancellationToken ct = default,
         WorkflowCapabilitiesDocument? capabilities = null,
@@ -44,7 +45,7 @@ internal static class ChatWebSocketRunCoordinator
             onAcceptedAsync: SendAckAndRecordAsync,
             ct);
 
-        if (executionResult.Error != WorkflowChatRunStartError.None)
+        if (!executionResult.Succeeded || executionResult.Receipt == null)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(executionResult.Error);
             var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(executionResult.Error);

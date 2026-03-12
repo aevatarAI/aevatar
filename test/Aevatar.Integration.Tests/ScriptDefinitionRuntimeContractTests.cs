@@ -27,13 +27,12 @@ public class ScriptDefinitionRuntimeContractTests
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "script-contract",
-                    ScriptRevision: "rev-contract-1",
-                    SourceText: """
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "script-contract",
+                "rev-contract-1",
+                """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -76,22 +75,19 @@ public sealed class ContractScript : IScriptPackageRuntime
             });
 }
 """,
-                    SourceHash: "hash-contract-1"),
-                definitionActorId),
+                "hash-contract-1"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-contract-1",
-                    InputPayload: Any.Pack(new Struct
-                    {
-                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-A") },
-                    }),
-                    ScriptRevision: "rev-contract-1",
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                runtimeActorId,
+                "run-contract-1",
+                Any.Pack(new Struct
+                {
+                    Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-A") },
+                }),
+                "rev-contract-1",
+                definitionActorId),
             CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
@@ -119,13 +115,12 @@ public sealed class ContractScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "script-self-contained",
-                    ScriptRevision: "rev-self-contained",
-                    SourceText: """
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "script-self-contained",
+                "rev-self-contained",
+                """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -168,22 +163,19 @@ public sealed class ReplayScript : IScriptPackageRuntime
             });
 }
 """,
-                    SourceHash: "hash-self-contained"),
-                definitionActorId),
+                "hash-self-contained"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-self-contained",
-                    InputPayload: Any.Pack(new Struct
-                    {
-                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
-                    }),
-                    ScriptRevision: "rev-self-contained",
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                runtimeActorId,
+                "run-self-contained",
+                Any.Pack(new Struct
+                {
+                    Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+                }),
+                "rev-self-contained",
+                definitionActorId),
             CancellationToken.None);
 
         var before = (ScriptRuntimeGAgent)runtimeActor.Agent;
@@ -222,13 +214,12 @@ public sealed class ReplayScript : IScriptPackageRuntime
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "script-revision-check",
-                    ScriptRevision: "rev-actual",
-                    SourceText: """
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "script-revision-check",
+                "rev-actual",
+                """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -271,19 +262,16 @@ public sealed class RevisionScript : IScriptPackageRuntime
             });
 }
 """,
-                    SourceHash: "hash-revision"),
-                definitionActorId),
+                "hash-revision"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-revision-check",
-                    InputPayload: Any.Pack(new Struct()),
-                    ScriptRevision: "rev-requested-mismatch",
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                runtimeActorId,
+                "run-revision-check",
+                Any.Pack(new Struct()),
+                "rev-requested-mismatch",
+                definitionActorId),
             CancellationToken.None);
 
         var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;

@@ -38,7 +38,14 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(resolution.Error);
 
         var target = resolution.Target;
-        var context = _contextPolicy.Create(target.TargetId);
+        var seed = command is ICommandContextSeed contextSeed
+            ? contextSeed
+            : null;
+        var context = _contextPolicy.Create(
+            target.TargetId,
+            seed?.Headers,
+            seed?.CommandId,
+            seed?.CorrelationId);
         var binding = await _targetBinder.BindAsync(command, target, context, ct);
         if (!binding.Succeeded)
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(binding.Error);

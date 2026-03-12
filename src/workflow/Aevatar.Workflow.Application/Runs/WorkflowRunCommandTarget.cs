@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -9,9 +10,11 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowRunCommandTarget
     : IActorCommandDispatchTarget,
+      ICommandEventTarget<WorkflowRunEventEnvelope>,
+      ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
-    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
     private bool _createdActorsDestroyed;
 
@@ -19,7 +22,7 @@ internal sealed class WorkflowRunCommandTarget
         IActor actor,
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
-        IWorkflowExecutionProjectionLifecyclePort projectionPort,
+        IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunActorPort actorPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
@@ -96,6 +99,18 @@ internal sealed class WorkflowRunCommandTarget
         LiveSink = null;
         if (firstException != null)
             ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    public Task ReleaseAfterInteractionAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(cleanup);
+
+        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
+        return ReleaseAsync(destroyCreatedActors: destroyCreatedActors, ct: ct);
     }
 
     public async Task ReleaseAsync(

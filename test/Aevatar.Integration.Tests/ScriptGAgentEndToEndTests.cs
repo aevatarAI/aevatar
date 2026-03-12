@@ -34,12 +34,11 @@ public class ScriptGAgentEndToEndTests
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(
             "script-runtime-" + Guid.NewGuid().ToString("N")[..8]);
 
-        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
-        var definitionEnvelope = upsertAdapter.Map(
-            new UpsertScriptDefinitionActorRequest(
-                ScriptId: "script-1",
-                ScriptRevision: "rev-1",
-                SourceText: """
+        var definitionEnvelope = ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+            definitionActor.Id,
+            "script-1",
+            "rev-1",
+            """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -82,8 +81,7 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             });
 }
 """,
-                SourceHash: "hash-1"),
-            definitionActor.Id);
+            "hash-1");
         await definitionActor.HandleEventAsync(definitionEnvelope, CancellationToken.None);
 
         var context = new ScriptProjectionContext
@@ -99,17 +97,15 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             [new ScriptRunDomainEventCommittedReducer()]);
         await projector.InitializeAsync(context, CancellationToken.None);
 
-        var runAdapter = new RunScriptActorRequestAdapter();
-        var runEnvelope = runAdapter.Map(
-            new RunScriptActorRequest(
-                RunId: "run-1",
-                InputPayload: Any.Pack(new Struct
-                {
-                    Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
-                }),
-                ScriptRevision: "rev-1",
-                DefinitionActorId: definitionActor.Id),
-            runtimeActor.Id);
+        var runEnvelope = ScriptingCommandEnvelopeTestKit.CreateRunScript(
+            runtimeActor.Id,
+            "run-1",
+            Any.Pack(new Struct
+            {
+                Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
+            }),
+            "rev-1",
+            definitionActor.Id);
         await runtimeActor.HandleEventAsync(runEnvelope, CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActor.Id, ct: CancellationToken.None);

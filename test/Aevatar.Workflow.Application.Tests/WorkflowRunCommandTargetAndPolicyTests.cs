@@ -27,7 +27,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Fact]
     public async Task ReleaseAsync_ShouldDetachReleaseDisposeAndDestroyCreatedActors()
     {
-        var projectionPort = new FakeProjectionLifecyclePort();
+        var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var target = CreateTarget(projectionPort, actorPort, ["definition-1", "run-1"]);
         target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
@@ -52,7 +52,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Fact]
     public async Task ReleaseAsync_ShouldDisposeSinkAndReleaseLease_WhenOnlyOneSideBound()
     {
-        var projectionPort = new FakeProjectionLifecyclePort();
+        var projectionPort = new FakeProjectionPort();
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
@@ -68,7 +68,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Fact]
     public async Task DetachLiveObservationAsync_ShouldDetachAndDisposeSink_WithoutReleasingLease()
     {
-        var projectionPort = new FakeProjectionLifecyclePort();
+        var projectionPort = new FakeProjectionPort();
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
@@ -85,7 +85,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Fact]
     public async Task CleanupAfterDispatchFailureAsync_ShouldAggregateCleanupFailures()
     {
-        var projectionPort = new FakeProjectionLifecyclePort
+        var projectionPort = new FakeProjectionPort
         {
             DetachException = new InvalidOperationException("detach failed"),
         };
@@ -165,17 +165,17 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     private static WorkflowRunCommandTarget CreateTarget(
-        FakeProjectionLifecyclePort? projectionPort = null,
+        FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
         IReadOnlyList<string>? createdActorIds = null) =>
         new(
             new FakeActor("run-1"),
             "direct",
             createdActorIds ?? [],
-            projectionPort ?? new FakeProjectionLifecyclePort(),
+            projectionPort ?? new FakeProjectionPort(),
             actorPort ?? new FakeWorkflowRunActorPort());
 
-    private sealed class FakeProjectionLifecyclePort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public Exception? DetachException { get; set; }

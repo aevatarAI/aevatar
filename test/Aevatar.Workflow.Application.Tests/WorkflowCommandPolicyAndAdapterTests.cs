@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using Aevatar.CQRS.Core.Commands;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -9,9 +10,9 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowCommandPolicyAndAdapterTests
 {
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldValidateTarget()
+    public void DefaultCommandContextPolicy_Create_ShouldValidateTarget()
     {
-        var policy = new WorkflowCommandContextPolicy();
+        var policy = new DefaultCommandContextPolicy();
 
         Action act = () => policy.Create(" ");
 
@@ -19,9 +20,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldGenerateIdsAndCopyHeaders()
+    public void DefaultCommandContextPolicy_Create_ShouldGenerateIdsAndCopyHeaders()
     {
-        var policy = new WorkflowCommandContextPolicy();
+        var policy = new DefaultCommandContextPolicy();
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["k1"] = "v1",
@@ -39,9 +40,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldRespectProvidedIds()
+    public void DefaultCommandContextPolicy_Create_ShouldRespectProvidedIds()
     {
-        var policy = new WorkflowCommandContextPolicy();
+        var policy = new DefaultCommandContextPolicy();
 
         var context = policy.Create(
             "actor-2",
@@ -75,7 +76,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
-    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
 

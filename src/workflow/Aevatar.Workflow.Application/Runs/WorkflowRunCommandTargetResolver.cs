@@ -8,12 +8,12 @@ internal sealed class WorkflowRunCommandTargetResolver
     : ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
-    private readonly IWorkflowExecutionProjectionLifecyclePort _projectionPort;
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
-        IWorkflowExecutionProjectionLifecyclePort projectionPort,
+        IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunActorPort actorPort)
     {
         _actorResolver = actorResolver;

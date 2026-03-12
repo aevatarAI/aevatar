@@ -151,7 +151,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionLifecycleService`（生命周期端口）与 `WorkflowExecutionProjectionQueryService`（查询端口）
+  - `WorkflowExecutionProjectionPortService`（投影端口）与 `WorkflowExecutionProjectionQueryService`（查询端口）
   - 两者复用 `Aevatar.CQRS.Projection.Core` 的通用基类：`ProjectionLifecyclePortServiceBase<>` / `ProjectionQueryPortServiceBase<>`
   - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
   - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
@@ -164,8 +164,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
   - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `WorkflowRunInteractionService` 负责完整交互路径（dispatch + sink consume + finalize）
-  - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径
+  - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
+  - `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, ...>` 负责 accepted-only 路径
+  - `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` 负责 run control 命令入口
   - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
   - `WorkflowRunCommandTargetBinder` 负责 projection lease/live sink 绑定与清理兜底
   - `WorkflowRunAcceptedReceiptFactory` 负责 `actorId + commandId + correlationId` receipt 生成

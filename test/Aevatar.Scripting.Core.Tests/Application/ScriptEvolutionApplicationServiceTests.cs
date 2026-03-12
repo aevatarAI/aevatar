@@ -10,7 +10,7 @@ public class ScriptEvolutionApplicationServiceTests
     [Fact]
     public async Task ProposeAsync_ShouldNormalizeDefaults_AndForwardToEvolutionPort()
     {
-        var port = new FakeScriptLifecyclePort();
+        var port = new FakeScriptEvolutionProposalPort();
         var service = new ScriptEvolutionApplicationService(port);
 
         var decision = await service.ProposeAsync(
@@ -35,7 +35,7 @@ public class ScriptEvolutionApplicationServiceTests
     [Fact]
     public async Task ProposeAsync_WhenScriptIdMissing_ShouldThrow()
     {
-        var port = new FakeScriptLifecyclePort();
+        var port = new FakeScriptEvolutionProposalPort();
         var service = new ScriptEvolutionApplicationService(port);
 
         var act = () => service.ProposeAsync(
@@ -53,7 +53,7 @@ public class ScriptEvolutionApplicationServiceTests
             .WithMessage("ScriptId is required.");
     }
 
-    private sealed class FakeScriptLifecyclePort : IScriptLifecyclePort
+    private sealed class FakeScriptEvolutionProposalPort : IScriptEvolutionProposalPort
     {
         public ScriptEvolutionProposal? CapturedProposal { get; private set; }
 
@@ -77,51 +77,5 @@ public class ScriptEvolutionApplicationServiceTests
                 ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
         }
 
-        public Task<string> UpsertDefinitionAsync(
-            string scriptId,
-            string scriptRevision,
-            string sourceText,
-            string sourceHash,
-            string? definitionActorId,
-            CancellationToken ct) => throw new NotSupportedException();
-
-        public Task<string> SpawnRuntimeAsync(
-            string definitionActorId,
-            string scriptRevision,
-            string? runtimeActorId,
-            CancellationToken ct) => throw new NotSupportedException();
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Google.Protobuf.WellKnownTypes.Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) => throw new NotSupportedException();
-
-        public Task PromoteCatalogRevisionAsync(
-            string? catalogActorId,
-            string scriptId,
-            string expectedBaseRevision,
-            string revision,
-            string definitionActorId,
-            string sourceHash,
-            string proposalId,
-            CancellationToken ct) => throw new NotSupportedException();
-
-        public Task RollbackCatalogRevisionAsync(
-            string? catalogActorId,
-            string scriptId,
-            string targetRevision,
-            string reason,
-            string proposalId,
-            string expectedCurrentRevision,
-            CancellationToken ct) => throw new NotSupportedException();
-
-        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
-            string? catalogActorId,
-            string scriptId,
-            CancellationToken ct) => throw new NotSupportedException();
     }
 }

@@ -12,7 +12,7 @@ public class RuntimeScriptEvolutionFlowPortTests
     [Fact]
     public async Task ExecuteAsync_WhenPromoteFailsAfterUpsert_ShouldCompensateAndReturnPartialPromotion()
     {
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             PromoteException = new InvalidOperationException("promote-failed"),
             CatalogBefore = new ScriptCatalogEntrySnapshot(
@@ -26,6 +26,8 @@ public class RuntimeScriptEvolutionFlowPortTests
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -53,7 +55,7 @@ public class RuntimeScriptEvolutionFlowPortTests
     [Fact]
     public async Task ExecuteAsync_WhenCompensationRollbackConflicts_ShouldNotRollbackAndReturnConflictFailureReason()
     {
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             PromoteException = new InvalidOperationException("promote-conflict"),
             RollbackException = new InvalidOperationException(
@@ -69,6 +71,8 @@ public class RuntimeScriptEvolutionFlowPortTests
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -94,12 +98,14 @@ public class RuntimeScriptEvolutionFlowPortTests
     [Fact]
     public async Task ExecuteAsync_WhenUpsertFails_ShouldReturnPromotionFailedWithoutRollback()
     {
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             UpsertException = new InvalidOperationException("upsert-failed"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -123,12 +129,14 @@ public class RuntimeScriptEvolutionFlowPortTests
     [Fact]
     public async Task ExecuteAsync_WhenCatalogBaselineQueryFailsWithoutBaseRevision_ShouldFailBeforeUpsert()
     {
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             CatalogQueryException = new InvalidOperationException("catalog-query-failed"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -152,13 +160,15 @@ public class RuntimeScriptEvolutionFlowPortTests
     [Fact]
     public async Task ExecuteAsync_WhenCatalogBaselineQueryFailsWithBaseRevision_ShouldFallbackAndCompensate()
     {
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             CatalogQueryException = new InvalidOperationException("catalog-query-failed"),
             PromoteException = new InvalidOperationException("promote-failed"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new SuccessCompiler(),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -186,12 +196,14 @@ public class RuntimeScriptEvolutionFlowPortTests
     public async Task ExecuteAsync_ShouldDisposeCompiledDefinition_WhenCompilerReturnsAsyncDisposableDefinition()
     {
         var definition = new DisposableNoopDefinition();
-        var lifecycle = new RecordingLifecyclePort
+        var lifecycle = new RecordingPorts
         {
             UpsertException = new InvalidOperationException("upsert-failed"),
         };
         var port = new RuntimeScriptEvolutionFlowPort(
             new DisposableTrackingCompiler(definition),
+            lifecycle,
+            lifecycle,
             lifecycle,
             new StaticAddressResolver());
 
@@ -331,7 +343,10 @@ public class RuntimeScriptEvolutionFlowPortTests
         }
     }
 
-    private sealed class RecordingLifecyclePort : IScriptLifecyclePort
+    private sealed class RecordingPorts :
+        IScriptDefinitionCommandPort,
+        IScriptCatalogCommandPort,
+        IScriptCatalogQueryPort
     {
         public int UpsertCallCount { get; private set; }
         public Exception? UpsertException { get; set; }
@@ -340,13 +355,6 @@ public class RuntimeScriptEvolutionFlowPortTests
         public Exception? CatalogQueryException { get; set; }
         public Exception? RollbackException { get; set; }
         public List<(string CatalogActorId, string ScriptId, string TargetRevision, string ExpectedCurrentRevision)> RollbackCalls { get; } = [];
-
-        public Task<ScriptPromotionDecision> ProposeAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
-        {
-            _ = proposal;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException();
-        }
 
         public Task<string> UpsertDefinitionAsync(
             string scriptId,
@@ -366,38 +374,6 @@ public class RuntimeScriptEvolutionFlowPortTests
             if (UpsertException != null)
                 throw UpsertException;
             return Task.FromResult("definition-rev-2");
-        }
-
-        public Task<string> SpawnRuntimeAsync(
-            string definitionActorId,
-            string scriptRevision,
-            string? runtimeActorId,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = scriptRevision;
-            _ = runtimeActorId;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException();
-        }
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct)
-        {
-            _ = runtimeActorId;
-            _ = runId;
-            _ = inputPayload;
-            _ = scriptRevision;
-            _ = definitionActorId;
-            _ = requestedEventType;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException();
         }
 
         public Task PromoteCatalogRevisionAsync(

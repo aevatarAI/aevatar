@@ -12,8 +12,6 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly TimeSpan _queryTimeout;
     private readonly bool _useEventDrivenDefinitionQuery;
-    private readonly QueryScriptDefinitionSnapshotRequestAdapter _queryAdapter = new();
-
     public RuntimeScriptDefinitionSnapshotPort(
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
@@ -44,7 +42,11 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
             actor,
             ScriptingQueryRouteConventions.DefinitionReplyStreamPrefix,
             _queryTimeout,
-            (requestId, replyStreamId) => _queryAdapter.Map(definitionActorId, requestId, replyStreamId, requestedRevision),
+            (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateDefinitionSnapshotQuery(
+                definitionActorId,
+                requestId,
+                replyStreamId,
+                requestedRevision),
             static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
             ScriptingQueryRouteConventions.BuildDefinitionSnapshotTimeoutMessage,
             ct);

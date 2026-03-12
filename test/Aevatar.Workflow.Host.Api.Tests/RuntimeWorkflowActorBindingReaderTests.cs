@@ -24,10 +24,11 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldReturnNull_WhenActorMissing()
     {
-        var reader = CreateReader(requestReply: new FakeStreamRequestReplyClient
-        {
-            QueryActorException = new InvalidOperationException("actor not found"),
-        });
+        var reader = CreateReader(
+            requestReply: new FakeStreamRequestReplyClient
+            {
+                ActorQueryException = new InvalidOperationException("actor not found"),
+            });
 
         var result = await reader.GetAsync("missing", CancellationToken.None);
 
@@ -37,14 +38,11 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldReturnUnsupportedBinding_WhenActorIsNotWorkflowCapable()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1", new StubAgent("agent-1"));
         var requestReply = new FakeStreamRequestReplyClient
         {
-            QueryActorException = new TimeoutException("unsupported actor"),
+            Response = null,
         };
-        var verifier = new FakeAgentTypeVerifier();
-        var reader = CreateReader(runtime, requestReply, verifier);
+        var reader = CreateReader(requestReply, new FakeAgentTypeVerifier());
 
         var result = await reader.GetAsync("actor-1", CancellationToken.None);
 
@@ -53,19 +51,14 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         result.ActorId.Should().Be("actor-1");
         result.WorkflowName.Should().BeEmpty();
         result.WorkflowYaml.Should().BeEmpty();
-        verifier.Calls.Should().ContainInOrder(
-            "actor-1:WorkflowGAgent",
-            "actor-1:WorkflowRunGAgent");
         requestReply.QueryActorCalls.Should().Be(1);
         requestReply.CapturedActorId.Should().Be("actor-1");
-        requestReply.CapturedTimeout.Should().Be(TimeSpan.FromSeconds(5));
+        requestReply.CapturedTimeout.Should().Be(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
-    public async Task GetAsync_ShouldUseDefaultTimeout_WhenVerifierMissesButActorReplies()
+    public async Task GetAsync_ShouldUseProbeTimeout_WhenVerifierMissesButActorReplies()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["proxy-actor"] = new FakeActor("proxy-actor", new StubAgent("proxy"));
         var requestReply = new FakeStreamRequestReplyClient
         {
             Response = new WorkflowActorBindingRespondedEvent
@@ -77,21 +70,19 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
                 WorkflowYaml = "name: direct\nroles: []\nsteps: []\n",
             },
         };
-        var reader = CreateReader(runtime, requestReply, new FakeAgentTypeVerifier());
+        var reader = CreateReader(requestReply, new FakeAgentTypeVerifier());
 
         var result = await reader.GetAsync("proxy-actor", CancellationToken.None);
 
         result.Should().NotBeNull();
         result!.ActorKind.Should().Be(WorkflowActorKind.Definition);
         result.ActorId.Should().Be("proxy-actor");
-        requestReply.CapturedTimeout.Should().Be(TimeSpan.FromSeconds(5));
+        requestReply.CapturedTimeout.Should().Be(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
     public async Task GetAsync_ShouldQueryAndNormalizeRunBinding_WhenVerifierMatches()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-1"] = new FakeActor("actor-1", new StubAgent("agent-1"));
         var requestReply = new FakeStreamRequestReplyClient
         {
             Response = new WorkflowActorBindingRespondedEvent
@@ -117,7 +108,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
                 ["actor-1:WorkflowRunGAgent"] = true,
             },
         };
-        var reader = CreateReader(runtime, requestReply, verifier);
+        var reader = CreateReader(requestReply, verifier);
 
         var result = await reader.GetAsync("actor-1", CancellationToken.None);
 
@@ -141,8 +132,6 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldNormalizeUnknownActorKind_AsUnsupported()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-2"] = new FakeActor("actor-2", new StubAgent("agent-2"));
         var requestReply = new FakeStreamRequestReplyClient
         {
             Response = new WorkflowActorBindingRespondedEvent
@@ -159,7 +148,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
                 ["actor-2:WorkflowGAgent"] = true,
             },
         };
-        var reader = CreateReader(runtime, requestReply, verifier);
+        var reader = CreateReader(requestReply, verifier);
 
         var result = await reader.GetAsync("actor-2", CancellationToken.None);
 
@@ -171,8 +160,6 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldShortCircuitVerifierAndMapDefinitionBinding()
     {
-        var runtime = new FakeActorRuntime();
-        runtime.StoredActors["actor-3"] = new FakeActor("actor-3", new StubAgent("agent-3"));
         var requestReply = new FakeStreamRequestReplyClient
         {
             Response = new WorkflowActorBindingRespondedEvent
@@ -191,7 +178,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
                 ["actor-3:WorkflowRunGAgent"] = false,
             },
         };
-        var reader = CreateReader(runtime, requestReply, verifier);
+        var reader = CreateReader(requestReply, verifier);
 
         var result = await reader.GetAsync("actor-3", CancellationToken.None);
 
@@ -214,61 +201,25 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
     }
 
     private static RuntimeWorkflowActorBindingReader CreateReader(
-        FakeActorRuntime? runtime = null,
         FakeStreamRequestReplyClient? requestReply = null,
         FakeAgentTypeVerifier? verifier = null)
     {
-        runtime ??= new FakeActorRuntime();
         requestReply ??= new FakeStreamRequestReplyClient();
         verifier ??= new FakeAgentTypeVerifier();
         return new RuntimeWorkflowActorBindingReader(
-            new RuntimeWorkflowQueryClient(new FakeStreamProvider(), requestReply, runtime),
+            new RuntimeWorkflowQueryClient(new FakeStreamProvider(), requestReply, new FakeActorDispatchPort()),
             verifier);
     }
 
-    private sealed class FakeActorRuntime : IActorRuntime, IActorDispatchPort
+    private sealed class FakeActorDispatchPort : IActorDispatchPort
     {
-        public Dictionary<string, IActor> StoredActors { get; } = new(StringComparer.Ordinal);
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            throw new NotSupportedException();
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(StoredActors.TryGetValue(id, out var actor) ? actor : null);
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(StoredActors.ContainsKey(id));
-
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            _ = actorId;
+            _ = envelope;
             ct.ThrowIfCancellationRequested();
-            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
-            await actor.HandleEventAsync(envelope, ct);
+            return Task.CompletedTask;
         }
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotSupportedException();
-    }
-
-    private sealed class FakeActor(string id, IAgent agent) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = agent;
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
     private sealed class StubAgent(string id) : IAgent
@@ -326,60 +277,96 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class FakeActor(string id, IAgent agent) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = agent;
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
     private sealed class FakeStreamRequestReplyClient : IStreamRequestReplyClient
     {
         public int QueryActorCalls { get; private set; }
-        public WorkflowActorBindingRespondedEvent? Response { get; set; }
+        public WorkflowActorBindingRespondedEvent? Response { get; set; } = new()
+        {
+            RequestId = "req-1",
+            ActorKind = "run",
+        };
         public Exception? QueryException { get; set; }
+        public Exception? ActorQueryException { get; set; }
         public string? CapturedActorId { get; private set; }
         public string? CapturedReplyPrefix { get; private set; }
         public TimeSpan CapturedTimeout { get; private set; }
         public string? CapturedTimeoutMessage { get; private set; }
         public EventEnvelope? CapturedEnvelope { get; private set; }
-        public Exception? QueryActorException { get; set; }
 
-        public Task<TResponse> QueryAsync<TResponse>(IStreamProvider streams, string replyStreamPrefix, TimeSpan timeout, Func<string, string, Task> dispatchAsync, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
+        public Task<TResponse> QueryAsync<TResponse>(
+            IStreamProvider streams,
+            string replyStreamPrefix,
+            TimeSpan timeout,
+            Func<string, string, Task> dispatchAsync,
+            Func<TResponse, string, bool> isMatch,
+            Func<string, string> timeoutMessageFactory,
+            CancellationToken ct = default)
             where TResponse : IMessage, new() =>
             throw new NotSupportedException();
 
-        public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, IActor actor, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
+        public Task<TResponse> QueryActorAsync<TResponse>(
+            IStreamProvider streams,
+            IActor actor,
+            string replyStreamPrefix,
+            TimeSpan timeout,
+            Func<string, string, EventEnvelope> envelopeFactory,
+            Func<TResponse, string, bool> isMatch,
+            Func<string, string> timeoutMessageFactory,
+            CancellationToken ct = default)
             where TResponse : IMessage, new()
         {
-            if (QueryActorException != null)
-                throw QueryActorException;
-            QueryActorCalls++;
-            CapturedActorId = actor.Id;
-            CapturedReplyPrefix = replyStreamPrefix;
-            CapturedTimeout = timeout;
-            if (QueryException != null)
-                return Task.FromException<TResponse>(QueryException);
-
-            if (Response == null)
-            {
-                var requestId = "req-timeout";
-                CapturedEnvelope = envelopeFactory(requestId, "reply-stream");
-                CapturedTimeoutMessage = timeoutMessageFactory(requestId);
-                return Task.FromException<TResponse>(new TimeoutException(CapturedTimeoutMessage));
-            }
-
-            CapturedEnvelope = envelopeFactory(Response.RequestId, "reply-stream");
-            CapturedTimeoutMessage = timeoutMessageFactory(Response.RequestId);
-            isMatch((TResponse)(IMessage)Response, Response.RequestId).Should().BeTrue();
-            return Task.FromResult((TResponse)(IMessage)Response);
+            _ = streams;
+            return QueryActorAsync<TResponse>(
+                streams,
+                actor.Id,
+                new FakeActorDispatchPort(),
+                replyStreamPrefix,
+                timeout,
+                envelopeFactory,
+                isMatch,
+                timeoutMessageFactory,
+                ct);
         }
 
-        public Task<TResponse> QueryActorAsync<TResponse>(IStreamProvider streams, string actorId, IActorDispatchPort dispatchPort, string replyStreamPrefix, TimeSpan timeout, Func<string, string, EventEnvelope> envelopeFactory, Func<TResponse, string, bool> isMatch, Func<string, string> timeoutMessageFactory, CancellationToken ct = default)
+        public Task<TResponse> QueryActorAsync<TResponse>(
+            IStreamProvider streams,
+            string actorId,
+            IActorDispatchPort dispatchPort,
+            string replyStreamPrefix,
+            TimeSpan timeout,
+            Func<string, string, EventEnvelope> envelopeFactory,
+            Func<TResponse, string, bool> isMatch,
+            Func<string, string> timeoutMessageFactory,
+            CancellationToken ct = default)
             where TResponse : IMessage, new()
         {
             ct.ThrowIfCancellationRequested();
             _ = streams;
             _ = dispatchPort;
+
             QueryActorCalls++;
             CapturedActorId = actorId;
             CapturedReplyPrefix = replyStreamPrefix;
             CapturedTimeout = timeout;
-            if (QueryActorException != null)
-                throw QueryActorException;
+
+            if (ActorQueryException != null)
+                throw ActorQueryException;
             if (QueryException != null)
                 return Task.FromException<TResponse>(QueryException);
 

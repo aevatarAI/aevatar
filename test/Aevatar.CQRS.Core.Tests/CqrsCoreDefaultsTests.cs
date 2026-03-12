@@ -104,6 +104,42 @@ public class CommandDispatchPipelineTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldHonorCommandContextSeed_WhenProvidedByCommand()
+    {
+        var target = new FakeCommandTarget("actor-1");
+        var seeded = new SeededCommand(
+            "hello",
+            "cmd-seeded",
+            "corr-seeded",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["tenant"] = "t-1",
+            });
+        var binder = new SeededCommandBinder();
+        var envelopeFactory = new SeededCommandEnvelopeFactory(new EventEnvelope { Id = "evt-1" });
+        var receiptFactory = new SeededCommandReceiptFactory("receipt-1");
+        var pipeline = new DefaultCommandDispatchPipeline<SeededCommand, FakeCommandTarget, string, FakeError>(
+            new SeededCommandResolver(target),
+            new DefaultCommandContextPolicy(),
+            binder,
+            envelopeFactory,
+            new RecordingTargetDispatcher(),
+            receiptFactory);
+
+        var result = await pipeline.DispatchAsync(seeded);
+
+        result.Succeeded.Should().BeTrue();
+        binder.Calls.Should().ContainSingle();
+        binder.Calls[0].Context.CommandId.Should().Be("cmd-seeded");
+        binder.Calls[0].Context.CorrelationId.Should().Be("corr-seeded");
+        binder.Calls[0].Context.Headers.Should().ContainKey("tenant").WhoseValue.Should().Be("t-1");
+        envelopeFactory.Calls.Should().ContainSingle();
+        envelopeFactory.Calls[0].Context.CommandId.Should().Be("cmd-seeded");
+        receiptFactory.Calls.Should().ContainSingle();
+        receiptFactory.Calls[0].Context.CorrelationId.Should().Be("corr-seeded");
+    }
+
+    [Fact]
     public async Task DispatchService_ShouldMapSuccessfulPipelineExecutionToReceipt()
     {
         var target = new FakeCommandTarget("actor-1");
@@ -337,6 +373,63 @@ internal sealed class RecordingReceiptFactory : ICommandReceiptFactory<FakeComma
     {
         Calls.Add((target, context));
         return _receipt;
+    }
+}
+
+internal sealed record SeededCommand(
+    string Payload,
+    string? CommandId,
+    string? CorrelationId,
+    IReadOnlyDictionary<string, string>? Headers) : ICommandContextSeed;
+
+internal sealed class SeededCommandResolver(FakeCommandTarget target)
+    : ICommandTargetResolver<SeededCommand, FakeCommandTarget, FakeError>
+{
+    public Task<CommandTargetResolution<FakeCommandTarget, FakeError>> ResolveAsync(
+        SeededCommand command,
+        CancellationToken ct = default)
+    {
+        _ = command;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(CommandTargetResolution<FakeCommandTarget, FakeError>.Success(target));
+    }
+}
+
+internal sealed class SeededCommandBinder : ICommandTargetBinder<SeededCommand, FakeCommandTarget, FakeError>
+{
+    public List<(SeededCommand Command, FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
+
+    public Task<CommandTargetBindingResult<FakeError>> BindAsync(
+        SeededCommand command,
+        FakeCommandTarget target,
+        CommandContext context,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Add((command, target, context));
+        return Task.FromResult(CommandTargetBindingResult<FakeError>.Success());
+    }
+}
+
+internal sealed class SeededCommandEnvelopeFactory(EventEnvelope envelope) : ICommandEnvelopeFactory<SeededCommand>
+{
+    public List<(SeededCommand Command, CommandContext Context)> Calls { get; } = [];
+
+    public EventEnvelope CreateEnvelope(SeededCommand command, CommandContext context)
+    {
+        Calls.Add((command, context));
+        return envelope;
+    }
+}
+
+internal sealed class SeededCommandReceiptFactory(string receipt) : ICommandReceiptFactory<FakeCommandTarget, string>
+{
+    public List<(FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
+
+    public string Create(FakeCommandTarget target, CommandContext context)
+    {
+        Calls.Add((target, context));
+        return receipt;
     }
 }
 

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Configuration;
 using Aevatar.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -254,7 +255,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         services.AddWorkflowCapability(configuration);
 
-        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunInteractionService));
+        services.Should().Contain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
         services.Should().Contain(x =>

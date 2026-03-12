@@ -417,6 +417,9 @@ bash tools/ci/playground_asset_drift_guard.sh
 echo "Running script inheritance guard..."
 bash tools/ci/script_inheritance_guard.sh
 
+echo "Running scripting interaction boundary guard..."
+bash tools/ci/scripting_interaction_boundary_guard.sh
+
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
   exit 1
@@ -553,8 +556,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionLifecycleService.cs; then
-  echo "WorkflowExecutionProjectionLifecycleService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPortService.cs; then
+  echo "WorkflowExecutionProjectionPortService must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -563,7 +566,7 @@ if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Or
   exit 1
 fi
 
-lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionLifecyclePort.cs"
+lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
 query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
 
 if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then

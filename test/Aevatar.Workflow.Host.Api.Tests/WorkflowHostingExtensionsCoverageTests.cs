@@ -3,10 +3,11 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Hosting;
-using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -44,7 +45,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             options.DefaultProvider = "openai";
         }, includeScriptCapability: true);
 
-        builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunInteractionService)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
