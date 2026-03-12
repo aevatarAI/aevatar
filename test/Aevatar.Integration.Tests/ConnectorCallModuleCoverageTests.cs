@@ -151,7 +151,9 @@ public sealed class ConnectorCallModuleCoverageTests
         var connector = new EchoConnector("secure");
         registry.Register(connector);
         var module = new ConnectorCallModule(registry);
-        var ctx = CreateContext();
+        var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
+        var services = new ServiceCollection().BuildServiceProvider();
+        var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
             Envelope(new SecureValueCapturedEvent
@@ -161,8 +163,10 @@ public sealed class ConnectorCallModuleCoverageTests
                 Variable = "api_key",
                 Value = "sk-secure",
             }),
-            ctx,
+            seedCtx,
             CancellationToken.None);
+
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         var request = new StepRequestEvent
         {
@@ -196,7 +200,9 @@ public sealed class ConnectorCallModuleCoverageTests
         var connector = new EchoConnector("secure-json");
         registry.Register(connector);
         var module = new ConnectorCallModule(registry);
-        var ctx = CreateContext();
+        var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
+        var services = new ServiceCollection().BuildServiceProvider();
+        var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
             Envelope(new SecureValueCapturedEvent
@@ -206,8 +212,10 @@ public sealed class ConnectorCallModuleCoverageTests
                 Variable = "api_key",
                 Value = "sk-\"line\ntwo",
             }),
-            ctx,
+            seedCtx,
             CancellationToken.None);
+
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         var request = new StepRequestEvent
         {

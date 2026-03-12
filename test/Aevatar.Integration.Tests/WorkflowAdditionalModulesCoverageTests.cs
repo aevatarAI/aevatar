@@ -977,8 +977,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     [Fact]
     public async Task SecureInputModule_ShouldCaptureMaskedValueAndPublishSecureEvent()
     {
+        var services = new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider();
+        var agent = new TestWorkflowRunAgent("workflow-secure-module-test-agent", "run-secure");
         var module = new SecureInputModule();
-        var ctx = CreateContext();
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -1001,7 +1003,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         suspended.Metadata["variable"].Should().Be("api_key");
         ctx.Published.Clear();
 
-        await module.HandleAsync(
+        var persistedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
+        persistedState.Pending.Should().ContainKey("run-secure::secure-1");
+
+        var resumedModule = new SecureInputModule();
+        var resumedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+        await resumedModule.HandleAsync(
             Envelope(new WorkflowResumedEvent
             {
                 RunId = "run-secure",
@@ -1009,18 +1016,33 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 Approved = true,
                 UserInput = "top-secret-value",
             }),
-            ctx,
+            resumedCtx,
             CancellationToken.None);
 
-        var captured = ctx.Published.Select(x => x.evt).OfType<SecureValueCapturedEvent>().Single();
+        var captured = resumedCtx.Published.Select(x => x.evt).OfType<SecureValueCapturedEvent>().Single();
         captured.Variable.Should().Be("api_key");
         captured.Value.Should().BeEmpty();
 
-        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        var completed = resumedCtx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("[secure input captured]");
         completed.Annotations["secure.input"].Should().Be("true");
         completed.Annotations["secure.variable"].Should().Be("api_key");
+
+        var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
+        resumedState.Pending.Should().BeEmpty();
+        resumedState.Captured.Should().ContainKey("run-secure::api_key");
+        resumedState.Captured["run-secure::api_key"].Value.Should().Be("top-secret-value");
+
+        await resumedModule.HandleAsync(
+            Envelope(new WorkflowCompletedEvent
+            {
+                RunId = "run-secure",
+            }),
+            resumedCtx,
+            CancellationToken.None);
+
+        agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
     }
 
     [Fact]

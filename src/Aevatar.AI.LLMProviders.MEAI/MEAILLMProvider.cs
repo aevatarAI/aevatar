@@ -68,7 +68,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         var options = BuildOptions(request);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
-        var emittedOutputChunk = false;
+        var emittedStreamChunk = false;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
@@ -81,20 +81,21 @@ public sealed class MEAILLMProvider : ILLMProvider
                     {
                         case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
                             emittedTextFromContents = true;
-                            emittedOutputChunk = true;
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaContent = textContent.Text,
                             };
                             break;
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaReasoningContent = reasoningContent.Text,
                             };
                             break;
                         case FunctionCallContent functionCall:
-                            emittedOutputChunk = true;
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaToolCall = ConvertFunctionCallDelta(functionCall),
@@ -106,7 +107,7 @@ public sealed class MEAILLMProvider : ILLMProvider
 
             if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
             {
-                emittedOutputChunk = true;
+                emittedStreamChunk = true;
                 yield return new LLMStreamChunk
                 {
                     DeltaContent = update.Text,
@@ -114,12 +115,12 @@ public sealed class MEAILLMProvider : ILLMProvider
             }
         }
 
-        // Some models/providers may produce a streaming sequence without user-visible text/tool chunks.
-        // In that case, do a single non-streaming fallback call to avoid returning an empty assistant output.
-        if (!emittedOutputChunk)
+        // Some providers may terminate a streaming call without emitting any chunk at all.
+        // Only in that case do a single non-streaming fallback call.
+        if (!emittedStreamChunk)
         {
             _logger.LogWarning(
-                "MEAI ChatStreamAsync emitted no content/tool chunks for provider={Provider}; fallback to non-streaming response.",
+                "MEAI ChatStreamAsync emitted no chunks for provider={Provider}; fallback to non-streaming response.",
                 Name);
 
             var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
@@ -239,7 +240,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             if (!string.Equals(part.Type, "image", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (TryCreateImageDataContent(part, out var dataContent))
+            if (TryCreateImageDataContent(part, out var dataContent) && dataContent != null)
                 message.Contents.Add(dataContent);
         }
     }

@@ -47,13 +47,19 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         {
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
-                SecureValueRuntimeStore.Set(ctx.AgentId, captured.RunId, captured.Variable, captured.Value);
+            {
+                var state = SecureInputStateAccess.Load(ctx);
+                SecureInputStateAccess.SetCapturedValue(state, captured.RunId, captured.Variable, captured.Value);
+                await SecureInputStateAccess.SaveAsync(state, ctx, ct);
+            }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            SecureValueRuntimeStore.RemoveRun(ctx.AgentId, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            var state = SecureInputStateAccess.Load(ctx);
+            SecureInputStateAccess.RemoveRun(state, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            await SecureInputStateAccess.SaveAsync(state, ctx, ct);
             return;
         }
 
@@ -116,6 +122,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var attempts = Math.Max(1, retry + 1);
         ConnectorResponse? response = null;
         Exception? lastError = null;
+        var secureInputState = isSecureStep ? SecureInputStateAccess.Load(ctx) : null;
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
@@ -133,7 +140,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
-                    Payload = ResolvePayload(request, isSecureStep, ctx.AgentId) ?? string.Empty,
+                    Payload = ResolvePayload(request, isSecureStep, secureInputState) ?? string.Empty,
                     Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
                 };
 
@@ -252,7 +259,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         await ctx.PublishAsync(skipped, EventDirection.Self, ct);
     }
 
-    private string? ResolvePayload(StepRequestEvent request, bool isSecureStep, string? agentId)
+    private string? ResolvePayload(
+        StepRequestEvent request,
+        bool isSecureStep,
+        SecureInputModuleState? secureInputState)
     {
         var mode = WorkflowParameterValueParser.GetString(
             request.Parameters,
@@ -277,7 +287,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "secret_variable",
                 "secure_variable",
                 "variable");
-            return ResolveSecureVariable(agentId, request.RunId, variable);
+            return ResolveSecureVariable(secureInputState, request.RunId, variable);
         }
 
         if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
@@ -289,26 +299,35 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "stdin_template",
                 "payload_template",
                 "stdin_value");
-            return ResolveSecureTemplate(agentId, request.RunId, template);
+            return ResolveSecureTemplate(secureInputState, request.RunId, template);
         }
 
         return request.Input;
     }
 
-    private static string ResolveSecureVariable(string? agentId, string? runId, string variable)
+    private static string ResolveSecureVariable(
+        SecureInputModuleState? secureInputState,
+        string? runId,
+        string variable)
     {
         var normalizedVariable = NormalizeSecureVariableName(variable);
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (SecureValueRuntimeStore.TryGet(agentId, runId, normalizedVariable, out var value))
+        if (secureInputState != null &&
+            SecureInputStateAccess.TryGetCapturedValue(secureInputState, runId, normalizedVariable, out var value))
+        {
             return value;
+        }
 
         throw new InvalidOperationException(
             $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
     }
 
-    private static string ResolveSecureTemplate(string? agentId, string? runId, string template)
+    private static string ResolveSecureTemplate(
+        SecureInputModuleState? secureInputState,
+        string? runId,
+        string template)
     {
         if (string.IsNullOrEmpty(template))
             return string.Empty;
@@ -316,14 +335,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
         {
             var variable = match.Groups[1].Value;
-            var value = ResolveSecureVariable(agentId, runId, variable);
+            var value = ResolveSecureVariable(secureInputState, runId, variable);
             return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
         });
 
         return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
         {
             var variable = match.Groups[1].Value;
-            return ResolveSecureVariable(agentId, runId, variable);
+            return ResolveSecureVariable(secureInputState, runId, variable);
         });
     }
 

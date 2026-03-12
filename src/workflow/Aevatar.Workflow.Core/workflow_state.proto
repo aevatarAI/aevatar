@@ -181,6 +181,30 @@ message HumanInputModuleState
   map<string, PendingHumanInputState> pending = 1;
 }
 
+message PendingSecureInputState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string on_timeout = 4;
+  bool allow_empty = 5;
+  string variable_name = 6;
+  string masked_output = 7;
+}
+
+message CapturedSecureInputState
+{
+  string run_id = 1;
+  string variable_name = 2;
+  string value = 3;
+}
+
+message SecureInputModuleState
+{
+  map<string, PendingSecureInputState> pending = 1;
+  map<string, CapturedSecureInputState> captured = 2;
+}
+
 message PendingApprovalState
 {
   string step_id = 1;

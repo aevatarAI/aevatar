@@ -9,12 +9,10 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Secure human input module. Suspends the workflow, captures a secret value,
 /// and only emits a redacted completion output while keeping the raw value in
-/// actor-local runtime store without placing it on event payload fields.
+/// actor-owned workflow execution state without placing it on event payload fields.
 /// </summary>
 public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
-
     private const string DefaultMaskedOutput = "[secure input captured]";
 
     public string Name => "secure_input";
@@ -37,7 +35,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         if (payload.Is(WorkflowCompletedEvent.Descriptor))
         {
             var workflowCompleted = payload.Unpack<WorkflowCompletedEvent>();
-            SecureValueRuntimeStore.RemoveRun(ctx.AgentId, workflowCompleted.RunId);
+            var state = SecureInputStateAccess.Load(ctx);
+            SecureInputStateAccess.RemoveRun(state, workflowCompleted.RunId);
+            await SecureInputStateAccess.SaveAsync(state, ctx, ct);
             return;
         }
 
@@ -60,8 +60,27 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 1800);
+            var requestAllowEmpty = bool.TryParse(
+                WorkflowParameterValueParser.GetString(
+                    request.Parameters,
+                    "false",
+                    "allow_empty",
+                    "allowEmpty"),
+                out var parsedAllowEmpty) && parsedAllowEmpty;
+            var requestMaskedOutput = ResolveMaskedOutput(request.Parameters);
 
-            _pending[(runId, request.StepId)] = request;
+            var state = SecureInputStateAccess.Load(ctx);
+            state.Pending[SecureInputStateAccess.BuildPendingKey(runId, request.StepId)] = new PendingSecureInputState
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Input = request.Input ?? string.Empty,
+                OnTimeout = request.Parameters.GetValueOrDefault("on_timeout", "fail"),
+                AllowEmpty = requestAllowEmpty,
+                VariableName = variable,
+                MaskedOutput = requestMaskedOutput,
+            };
+            await SecureInputStateAccess.SaveAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "SecureInput: run={RunId} step={StepId} suspended, variable={Variable}, timeout={Timeout}s",
@@ -82,35 +101,28 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             suspended.Metadata["variable"] = variable;
             suspended.Metadata["secure"] = "true";
             suspended.Metadata["input_mode"] = "password";
-            suspended.Metadata["redacted_output"] = ResolveMaskedOutput(request.Parameters);
+            suspended.Metadata["redacted_output"] = requestMaskedOutput;
 
             await ctx.PublishAsync(suspended, EventDirection.Both, ct);
             return;
         }
 
         var resumed = payload.Unpack<WorkflowResumedEvent>();
-        if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+        var stateForResume = SecureInputStateAccess.Load(ctx);
+        if (!TryResolvePending(stateForResume, resumed, out var pendingKey, out var pending))
             return;
 
-        _pending.Remove(pendingKey);
-
         var userInput = resumed.UserInput ?? string.Empty;
-        var onTimeout = pending.Parameters.GetValueOrDefault("on_timeout", "fail");
-        var allowEmpty = bool.TryParse(
-            WorkflowParameterValueParser.GetString(
-                pending.Parameters,
-                "false",
-                "allow_empty",
-                "allowEmpty"),
-            out var parsedAllowEmpty) && parsedAllowEmpty;
-        var variableName = WorkflowParameterValueParser.GetString(
-            pending.Parameters,
-            "secure_input",
-            "variable");
-        var maskedOutput = ResolveMaskedOutput(pending.Parameters);
+        var onTimeout = pending.OnTimeout;
+        var allowEmpty = pending.AllowEmpty;
+        var variableName = string.IsNullOrWhiteSpace(pending.VariableName) ? "secure_input" : pending.VariableName;
+        var maskedOutput = string.IsNullOrWhiteSpace(pending.MaskedOutput) ? DefaultMaskedOutput : pending.MaskedOutput;
 
         if (string.IsNullOrEmpty(userInput) && !resumed.Approved)
         {
+            stateForResume.Pending.Remove(pendingKey);
+            await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
+
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} timed out or cancelled",
                 pending.RunId,
@@ -129,6 +141,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
 
         if (string.IsNullOrEmpty(userInput) && !allowEmpty)
         {
+            stateForResume.Pending.Remove(pendingKey);
+            await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
+
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} rejected empty secure value",
                 pending.RunId,
@@ -150,7 +165,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             pending.StepId,
             userInput.Length);
 
-        SecureValueRuntimeStore.Set(ctx.AgentId, pending.RunId, variableName, userInput);
+        stateForResume.Pending.Remove(pendingKey);
+        SecureInputStateAccess.SetCapturedValue(stateForResume, pending.RunId, variableName, userInput);
+        await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
 
         await ctx.PublishAsync(new SecureValueCapturedEvent
         {
@@ -183,22 +200,23 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             "display_value");
 
     private bool TryResolvePending(
+        SecureInputModuleState state,
         WorkflowResumedEvent resumed,
-        out (string RunId, string StepId) pendingKey,
-        out StepRequestEvent pending)
+        out string pendingKey,
+        out PendingSecureInputState pending)
     {
         if (!string.IsNullOrWhiteSpace(resumed.RunId))
         {
-            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
-            return _pending.TryGetValue(pendingKey, out pending!);
+            pendingKey = SecureInputStateAccess.BuildPendingKey(resumed.RunId, resumed.StepId);
+            return state.Pending.TryGetValue(pendingKey, out pending!);
         }
 
         var matchCount = 0;
-        pendingKey = default;
-        pending = default!;
-        foreach (var entry in _pending)
+        pendingKey = string.Empty;
+        pending = new PendingSecureInputState();
+        foreach (var entry in state.Pending)
         {
-            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
+            if (!entry.Value.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
                 continue;
 
             matchCount++;
