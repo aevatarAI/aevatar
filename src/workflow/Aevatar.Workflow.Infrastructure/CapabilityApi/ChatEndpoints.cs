@@ -263,24 +263,27 @@ public static class WorkflowCapabilityEndpoints
                 ? Guid.NewGuid().ToString("N")
                 : commandId;
 
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Any.Pack(resumed),
+                Route = new EnvelopeRoute
+                {
+                    PublisherActorId = "api.workflow.resume",
+                    Direction = EventDirection.Self,
+                    TargetActorId = actor.Id,
+                },
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = correlationId,
+                },
+            };
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = correlationId;
+
             await dispatchPort.DispatchAsync(
                 actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(resumed),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "api.workflow.resume",
-                        Direction = EventDirection.Self,
-                        TargetActorId = actor.Id,
-                    },
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = correlationId,
-                    },
-                },
+                envelope,
                 ct);
 
             return Results.Ok(new
@@ -358,30 +361,33 @@ public static class WorkflowCapabilityEndpoints
                 ? Guid.NewGuid().ToString("N")
                 : commandId;
 
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Any.Pack(new SignalReceivedEvent
+                {
+                    RunId = runId,
+                    StepId = stepId,
+                    SignalName = signalName,
+                    Payload = input.Payload ?? string.Empty,
+                }),
+                Route = new EnvelopeRoute
+                {
+                    PublisherActorId = "api.workflow.signal",
+                    Direction = EventDirection.Self,
+                    TargetActorId = actor.Id,
+                },
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = correlationId,
+                },
+            };
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = correlationId;
+
             await dispatchPort.DispatchAsync(
                 actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(new SignalReceivedEvent
-                    {
-                        RunId = runId,
-                        StepId = stepId,
-                        SignalName = signalName,
-                        Payload = input.Payload ?? string.Empty,
-                    }),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "api.workflow.signal",
-                        Direction = EventDirection.Self,
-                        TargetActorId = actor.Id,
-                    },
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = correlationId,
-                    },
-                },
+                envelope,
                 ct);
 
             return Results.Ok(new

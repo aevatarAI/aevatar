@@ -53,7 +53,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             var stepId = request.StepId?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(stepId))
             {
-                await PublishFailedCompletionAsync(request.StepId, runId, "reflect step requires non-empty step_id", ctx, ct);
+                await PublishFailedCompletionAsync(stepId, runId, "reflect step requires non-empty step_id", ctx, ct);
                 return;
             }
 

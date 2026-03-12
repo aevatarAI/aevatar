@@ -203,6 +203,52 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "llm_call",
+                RunId = "run-llm-invalid",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.StepId.Should().BeEmpty();
+        failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "reflect",
+                RunId = "run-reflect-invalid",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.StepId.Should().BeEmpty();
+        failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
     public async Task DynamicWorkflowModule_ShouldIgnoreUnsupportedPayload_AndValidateYamlBlocks()
     {
         var module = new DynamicWorkflowModule();

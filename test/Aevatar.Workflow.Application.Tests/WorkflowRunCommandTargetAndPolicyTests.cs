@@ -66,6 +66,23 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
+    public async Task DetachLiveObservationAsync_ShouldDetachAndDisposeSink_WithoutReleasingLease()
+    {
+        var projectionPort = new FakeProjectionLifecyclePort();
+        var target = CreateTarget(projectionPort);
+        var lease = new FakeProjectionLease("run-1", "cmd-1");
+        var sink = new FakeEventSink();
+        target.BindLiveObservation(lease, sink);
+
+        await target.DetachLiveObservationAsync(CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:run-1");
+        sink.DisposeCalls.Should().Be(1);
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeSameAs(lease);
+    }
+
+    [Fact]
     public async Task CleanupAfterDispatchFailureAsync_ShouldAggregateCleanupFailures()
     {
         var projectionPort = new FakeProjectionLifecyclePort

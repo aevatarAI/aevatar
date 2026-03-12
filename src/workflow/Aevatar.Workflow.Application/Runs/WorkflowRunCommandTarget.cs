@@ -56,6 +56,48 @@ internal sealed class WorkflowRunCommandTarget
     public Task RollbackCreatedActorsAsync(CancellationToken ct = default) =>
         DestroyCreatedActorsAsync(ct);
 
+    public async Task DetachLiveObservationAsync(CancellationToken ct = default)
+    {
+        var sink = LiveSink;
+        if (sink == null)
+            return;
+
+        Exception? firstException = null;
+        if (ProjectionLease != null)
+        {
+            try
+            {
+                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
+        try
+        {
+            sink.Complete();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        try
+        {
+            await sink.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        LiveSink = null;
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,
         bool destroyCreatedActors = false,

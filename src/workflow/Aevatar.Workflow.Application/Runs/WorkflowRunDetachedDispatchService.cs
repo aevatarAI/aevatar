@@ -8,24 +8,20 @@ namespace Aevatar.Workflow.Application.Runs;
 internal sealed class WorkflowRunDetachedDispatchService
     : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
 {
+    private static readonly TimeSpan DurableCompletionPollInterval = TimeSpan.FromSeconds(1);
+
     private readonly ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> _dispatchPipeline;
-    private readonly IWorkflowRunOutputStreamer _outputStreamer;
-    private readonly IWorkflowRunCompletionPolicy _completionPolicy;
     private readonly IWorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
     private readonly ILogger<WorkflowRunDetachedDispatchService> _logger;
 
     public WorkflowRunDetachedDispatchService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> dispatchPipeline,
-        IWorkflowRunOutputStreamer outputStreamer,
-        IWorkflowRunCompletionPolicy completionPolicy,
         IWorkflowRunDurableCompletionResolver durableCompletionResolver,
         WorkflowDirectFallbackPolicy fallbackPolicy,
         ILogger<WorkflowRunDetachedDispatchService>? logger = null)
     {
         _dispatchPipeline = dispatchPipeline;
-        _outputStreamer = outputStreamer;
-        _completionPolicy = completionPolicy;
         _durableCompletionResolver = durableCompletionResolver;
         _fallbackPolicy = fallbackPolicy;
         _logger = logger ?? NullLogger<WorkflowRunDetachedDispatchService>.Instance;
@@ -69,38 +65,26 @@ internal sealed class WorkflowRunDetachedDispatchService
         _ = Task.Run(
             async () =>
             {
-                var projectionCompleted = false;
+                var destroyCreatedActors = false;
                 try
                 {
-                    await _outputStreamer.StreamAsync(
-                        target.RequireLiveSink(),
-                        (frame, token) =>
-                        {
-                            if (!projectionCompleted && _completionPolicy.TryResolve(frame, out _))
-                                projectionCompleted = true;
-
-                            _ = token;
-                            return ValueTask.CompletedTask;
-                        },
+                    await target.DetachLiveObservationAsync(CancellationToken.None);
+                    destroyCreatedActors = await WaitForDurableCompletionAsync(
+                        receipt.ActorId,
                         CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Detached workflow run monitoring failed. actorId={ActorId}, commandId={CommandId}", receipt.ActorId, receipt.CommandId);
+                    _logger.LogWarning(
+                        ex,
+                        "Detached workflow run monitoring failed. actorId={ActorId}, commandId={CommandId}",
+                        receipt.ActorId,
+                        receipt.CommandId);
                 }
                 finally
                 {
                     try
                     {
-                        var destroyCreatedActors = projectionCompleted;
-                        if (!destroyCreatedActors)
-                        {
-                            var durableCompletion = await _durableCompletionResolver.ResolveAsync(
-                                receipt.ActorId,
-                                CancellationToken.None);
-                            destroyCreatedActors = durableCompletion.HasTerminalStatus;
-                        }
-
                         await target.ReleaseAsync(
                             destroyCreatedActors: destroyCreatedActors,
                             ct: CancellationToken.None);
@@ -112,5 +96,20 @@ internal sealed class WorkflowRunDetachedDispatchService
                 }
             },
             CancellationToken.None);
+    }
+
+    private async Task<bool> WaitForDurableCompletionAsync(
+        string actorId,
+        CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(DurableCompletionPollInterval);
+        while (true)
+        {
+            var durableCompletion = await _durableCompletionResolver.ResolveAsync(actorId, ct);
+            if (durableCompletion.HasTerminalStatus)
+                return true;
+
+            await timer.WaitForNextTickAsync(ct);
+        }
     }
 }

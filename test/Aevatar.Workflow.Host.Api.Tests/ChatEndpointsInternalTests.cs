@@ -76,6 +76,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "approve-1",
                 Approved = true,
                 UserInput = "looks good",
+                CommandId = "resume-cmd-1",
             },
             runtime,
             runtime,
@@ -89,6 +90,8 @@ public sealed class ChatEndpointsInternalTests
         resumed.StepId.Should().Be("approve-1");
         resumed.Approved.Should().BeTrue();
         resumed.UserInput.Should().Be("looks good");
+        runtime.DispatchCalls[0].Envelope.Propagation!.CorrelationId.Should().Be("resume-cmd-1");
+        runtime.DispatchCalls[0].Envelope.Runtime!.Deduplication!.OperationId.Should().Be("resume-cmd-1");
     }
 
     [Fact]
@@ -149,6 +152,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "wait-approval",
                 SignalName = "approval",
                 Payload = "approved",
+                CommandId = "signal-cmd-1",
             },
             runtime,
             runtime,
@@ -162,6 +166,8 @@ public sealed class ChatEndpointsInternalTests
         signal.StepId.Should().Be("wait-approval");
         signal.SignalName.Should().Be("approval");
         signal.Payload.Should().Be("approved");
+        runtime.DispatchCalls[0].Envelope.Propagation!.CorrelationId.Should().Be("signal-cmd-1");
+        runtime.DispatchCalls[0].Envelope.Runtime!.Deduplication!.OperationId.Should().Be("signal-cmd-1");
     }
 
     [Fact]

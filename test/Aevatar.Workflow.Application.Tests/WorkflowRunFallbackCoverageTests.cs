@@ -7,6 +7,7 @@ using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 using ProtobufAny = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
+using System.Runtime.CompilerServices;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -202,7 +203,8 @@ public sealed class WorkflowRunFallbackCoverageTests
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
+        var sink = new FakeEventSink();
+        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId, sink);
         var pipeline = new SequencedDispatchPipeline();
         pipeline.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
         pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
@@ -213,25 +215,11 @@ public sealed class WorkflowRunFallbackCoverageTests
                 Envelope = new EventEnvelope { Id = "evt-1" },
                 Receipt = receipt,
             }));
-        var outputStreamer = new FakeWorkflowRunOutputStreamer
-        {
-            Events =
-            [
-                new WorkflowRunEventEnvelope
-                {
-                    RunFinished = new WorkflowRunFinishedEventPayload
-                    {
-                        ThreadId = receipt.ActorId,
-                        Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
-                    },
-                },
-            ],
-        };
+        var durableCompletionResolver = new FakeWorkflowRunDurableCompletionResolver();
+        durableCompletionResolver.EnqueueResult(new WorkflowRunDurableCompletionObservation(true, WorkflowProjectionCompletionStatus.Completed));
         var service = new WorkflowRunDetachedDispatchService(
             pipeline,
-            outputStreamer,
-            new FakeWorkflowRunCompletionPolicy(),
-            new FakeWorkflowRunDurableCompletionResolver(),
+            durableCompletionResolver,
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -244,26 +232,19 @@ public sealed class WorkflowRunFallbackCoverageTests
         pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
         await actorPort.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
+        projectionPort.Events.Should().Equal("detach:actor-1", "release:actor-1");
+        sink.DisposeCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task WorkflowRunDetachedDispatchService_ShouldKeepActorsAlive_WhenProjectionReportsCustomFailureOnly()
+    public async Task WorkflowRunDetachedDispatchService_ShouldDetachLiveObservation_BeforeDurableCompletionCleanup()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "auto", "cmd-1", "corr-1");
-        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
+        var sink = new FakeEventSink();
+        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId, sink);
         var pipeline = new SequencedDispatchPipeline();
-        var outputStreamer = new FakeWorkflowRunOutputStreamer
-        {
-            Events =
-            [
-                new WorkflowRunEventEnvelope
-                {
-                    Custom = new WorkflowCustomEventPayload { Name = "aevatar.projection.sink.failure" },
-                },
-            ],
-        };
         pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
             new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
             {
@@ -272,11 +253,11 @@ public sealed class WorkflowRunFallbackCoverageTests
                 Envelope = new EventEnvelope { Id = "evt-1" },
                 Receipt = receipt,
             }));
+        var durableCompletionResolver = new FakeWorkflowRunDurableCompletionResolver();
+        var terminalResult = durableCompletionResolver.EnqueuePendingResult();
         var service = new WorkflowRunDetachedDispatchService(
             pipeline,
-            outputStreamer,
-            new WorkflowRunCompletionPolicy(),
-            new FakeWorkflowRunDurableCompletionResolver(),
+            durableCompletionResolver,
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -285,8 +266,18 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        await outputStreamer.StreamCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await projectionPort.Detached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await durableCompletionResolver.Invoked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().NotBeNull();
         actorPort.DestroyCalls.Should().BeEmpty();
+        projectionPort.Events.Should().Equal("detach:actor-1");
+        sink.DisposeCalls.Should().Be(1);
+
+        terminalResult.TrySetResult(new WorkflowRunDurableCompletionObservation(true, WorkflowProjectionCompletionStatus.Completed));
+
+        await actorPort.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.Events.Should().Equal("detach:actor-1", "release:actor-1");
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
@@ -294,7 +285,8 @@ public sealed class WorkflowRunFallbackCoverageTests
         FakeWorkflowRunActorPort actorPort,
         string actorId,
         string workflowName,
-        string commandId) 
+        string commandId,
+        IEventSink<WorkflowRunEventEnvelope>? sink = null)
     {
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
@@ -302,7 +294,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             actorPort);
-        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
+        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), sink ?? new FakeEventSink());
         return target;
     }
 
@@ -389,19 +381,40 @@ public sealed class WorkflowRunFallbackCoverageTests
 
     private sealed class FakeWorkflowRunDurableCompletionResolver : IWorkflowRunDurableCompletionResolver
     {
+        private readonly Queue<Func<CancellationToken, Task<WorkflowRunDurableCompletionObservation>>> _responses = new();
+
+        public TaskCompletionSource<bool> Invoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void EnqueueResult(WorkflowRunDurableCompletionObservation observation) =>
+            _responses.Enqueue(_ => Task.FromResult(observation));
+
+        public TaskCompletionSource<WorkflowRunDurableCompletionObservation> EnqueuePendingResult()
+        {
+            var pending = new TaskCompletionSource<WorkflowRunDurableCompletionObservation>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _responses.Enqueue(ct => pending.Task.WaitAsync(ct));
+            return pending;
+        }
+
         public Task<WorkflowRunDurableCompletionObservation> ResolveAsync(
             string actorId,
             CancellationToken ct = default)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(WorkflowRunDurableCompletionObservation.Incomplete);
+            Invoked.TrySetResult(true);
+            if (_responses.Count == 0)
+                return Task.FromResult(WorkflowRunDurableCompletionObservation.Incomplete);
+
+            return _responses.Dequeue()(ct);
         }
     }
 
     private sealed class FakeProjectionPort : IWorkflowExecutionProjectionLifecyclePort
     {
         public bool ProjectionEnabled => true;
+        public TaskCompletionSource<bool> Detached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<string> Events { get; } = [];
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -420,13 +433,24 @@ public sealed class WorkflowRunFallbackCoverageTests
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            Events.Add($"detach:{lease.ActorId}");
+            Detached.TrySetResult(true);
+            return Task.CompletedTask;
+        }
 
         public Task ReleaseActorProjectionAsync(
             IWorkflowExecutionProjectionLease lease,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Events.Add($"release:{lease.ActorId}");
+            Released.TrySetResult(true);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
@@ -463,6 +487,31 @@ public sealed class WorkflowRunFallbackCoverageTests
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
+    }
+
+    private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>
+    {
+        public int DisposeCalls { get; private set; }
+
+        public void Push(WorkflowRunEventEnvelope evt) => throw new NotSupportedException();
+
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public void Complete()
+        {
+        }
+
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class FakeActor(string id) : IActor

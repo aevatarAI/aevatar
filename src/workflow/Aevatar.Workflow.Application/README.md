@@ -44,6 +44,7 @@
 
 - `WorkflowRunInteractionService` 走完整交互路径：驱动 dispatch pipeline、接收 accepted receipt、消费 sink 并持续输出 `WorkflowOutputFrame`
 - `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：只返回 `Accepted + commandId + actorId`
+- accepted-only 返回后会立刻 `detach + dispose live sink`，只保留 projection lease，并通过 durable completion 轮询在终态后统一 `release + actor cleanup`
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunStateSnapshotEmitter` 统一在收尾阶段补发
 

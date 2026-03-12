@@ -77,7 +77,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         var stepId = request.StepId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(stepId))
         {
-            await PublishFailedCompletionAsync(request.StepId, WorkflowRunIdNormalizer.Normalize(request.RunId), "llm_call step requires non-empty step_id", ctx.AgentId, ctx, ct);
+            await PublishFailedCompletionAsync(stepId, WorkflowRunIdNormalizer.Normalize(request.RunId), "llm_call step requires non-empty step_id", ctx.AgentId, ctx, ct);
             return;
         }
 
