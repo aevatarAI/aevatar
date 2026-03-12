@@ -1,0 +1,16 @@
+# Repository-wide code metrics thresholds.
+CA1501: 5
+
+CA1502(Method): 34
+
+CA1505(Type): 10
+CA1505(Method): 10
+CA1505(Field): 10
+CA1505(Property): 10
+CA1505(Event): 10
+
+CA1506(Type): 100
+CA1506(Method): 47
+CA1506(Field): 40
+CA1506(Property): 40
+CA1506(Event): 40
