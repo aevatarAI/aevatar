@@ -397,6 +397,41 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.Destroyed.Should().Equal("run-fail", "definition-fail");
     }
 
+    [Fact]
+    public async Task CreateRunAsync_WhenDefinitionCreateRaces_ShouldReuseWinnerAndContinue()
+    {
+        var runtime = new RecordingActorRuntime();
+        var racedDefinition = new RecordingActor("definition-race", new WorkflowGAgent());
+        runtime.CreateExceptionFactory = (agentType, requestedId) =>
+        {
+            if (agentType == typeof(WorkflowGAgent) &&
+                string.Equals(requestedId, "definition-race", StringComparison.Ordinal))
+            {
+                runtime.StoredActors["definition-race"] = racedDefinition;
+                return new InvalidOperationException("Actor definition-race already exists");
+            }
+
+            return null;
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-race", new StubAgent("run-race")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-race",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be("definition-race");
+        result.CreatedActorIds.Should().Equal("run-race");
+        runtime.CreateRequests.Should().Contain((typeof(WorkflowGAgent), "definition-race"));
+        runtime.CreateRequests.Should().Contain((typeof(WorkflowRunGAgent), (string?)null));
+        racedDefinition.LastHandledEnvelope.Should().NotBeNull();
+        racedDefinition.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null) =>
@@ -414,6 +449,7 @@ public sealed class WorkflowRunActorPortBranchTests
 
         public List<(string ParentId, string ChildId)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
+        public Func<Type, string?, Exception?>? CreateExceptionFactory { get; set; }
         public Func<string, EventEnvelope, Exception?>? DispatchExceptionFactory { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
@@ -424,6 +460,10 @@ public sealed class WorkflowRunActorPortBranchTests
         {
             ct.ThrowIfCancellationRequested();
             CreateRequests.Add((agentType, id));
+            var createException = CreateExceptionFactory?.Invoke(agentType, id);
+            if (createException != null)
+                throw createException;
+
             if (ActorsToCreate.Count > 0)
             {
                 var createdActor = ActorsToCreate.Dequeue();

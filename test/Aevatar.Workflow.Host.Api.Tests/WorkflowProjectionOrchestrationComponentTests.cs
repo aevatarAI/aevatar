@@ -562,9 +562,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         handledBackpressure.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents[0].evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
-        var backpressureError = runEventHub.PublishedEvents[0].evt.RunError;
-        backpressureError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
+        runEventHub.PublishedEvents[0].evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        runEventHub.PublishedEvents[0].evt.Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
 
         runEventHub.PublishedEvents.Clear();
         var handledCompleted = await policy.TryHandleAsync(
@@ -576,7 +577,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         handledCompleted.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(2);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents[0].evt.RunError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
 
         var handledUnknown = await policy.TryHandleAsync(
             lease,

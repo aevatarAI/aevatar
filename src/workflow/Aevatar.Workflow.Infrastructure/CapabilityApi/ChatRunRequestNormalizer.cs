@@ -73,13 +73,10 @@ internal static class ChatRunRequestNormalizer
                     Metadata: normalizedMetadata));
         }
 
-        var defaultWorkflowName = string.IsNullOrWhiteSpace(normalizedAgentId)
-            ? WorkflowRunBehaviorOptions.AutoWorkflowName
-            : null;
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: normalizedPrompt,
-                WorkflowName: defaultWorkflowName,
+                WorkflowName: null,
                 ActorId: normalizedAgentId,
                 SessionId: NormalizeSessionId(input.SessionId),
                 WorkflowYamls: null,

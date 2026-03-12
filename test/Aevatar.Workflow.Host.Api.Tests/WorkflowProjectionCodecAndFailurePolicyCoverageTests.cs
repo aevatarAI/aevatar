@@ -134,7 +134,7 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
 public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 {
     [Fact]
-    public async Task TryHandleAsync_WhenInvalidOperation_ShouldNotifyCurrentSink_CompleteIt_AndPublishRunError()
+    public async Task TryHandleAsync_WhenInvalidOperation_ShouldNotifyCurrentSink_CompleteIt_AndPublishCustomFailure()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -153,13 +153,15 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
         sink.PushedEvents.Should().ContainSingle();
-        sink.PushedEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
+        sink.PushedEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
         sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents.Single().evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
-        var runError = runEventHub.PublishedEvents.Single().evt.RunError;
-        runError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
-        runError.Message.Should().Contain("eventType=STEP_STARTED");
+        runEventHub.PublishedEvents.Single().evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        runEventHub.PublishedEvents.Single().evt.Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        var payload = runEventHub.PublishedEvents.Single().evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>();
+        payload.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        payload.EventType.Should().Be(WorkflowRunEventTypes.StepStarted);
+        payload.Reason.Should().Contain("sink write failed");
     }
 
     [Fact]
@@ -182,13 +184,15 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
         sink.PushedEvents.Should().ContainSingle();
-        sink.PushedEvents[0].RunError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
+        sink.PushedEvents[0].Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
         sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenSinkCompleted_ShouldPublishRunErrorAndCompleteCurrentSink()
+    public async Task TryHandleAsync_WhenSinkCompleted_ShouldPublishCustomFailureAndCompleteCurrentSink()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -207,14 +211,16 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
         sink.PushedEvents.Should().ContainSingle();
-        sink.PushedEvents[0].RunError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
         sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents[0].evt.RunError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenRunErrorPublishFails_ShouldSwallowAndReturnTrue()
+    public async Task TryHandleAsync_WhenCustomFailurePublishFails_ShouldSwallowAndReturnTrue()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub

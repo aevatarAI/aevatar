@@ -150,6 +150,53 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunInteractionService_ShouldKeepActorsAlive_WhenProjectionReportsCustomFailureOnly()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "auto", "cmd-1", "corr-1");
+        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
+        var pipeline = new SequencedDispatchPipeline();
+        pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+            new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
+            {
+                Target = target,
+                Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = receipt,
+            }));
+
+        var service = new WorkflowRunInteractionService(
+            pipeline,
+            new FakeWorkflowRunOutputStreamer
+            {
+                Events =
+                [
+                    new WorkflowRunEventEnvelope
+                    {
+                        Custom = new WorkflowCustomEventPayload { Name = "aevatar.projection.sink.failure" },
+                    },
+                ],
+            },
+            new WorkflowRunCompletionPolicy(),
+            new FakeWorkflowRunStateSnapshotEmitter(),
+            new FakeWorkflowRunDurableCompletionResolver(),
+            new WorkflowDirectFallbackPolicy(),
+            logger: null);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult.Should().NotBeNull();
+        result.FinalizeResult!.ProjectionCompleted.Should().BeFalse();
+        result.FinalizeResult.ProjectionCompletionStatus.Should().Be(WorkflowProjectionCompletionStatus.Unknown);
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowRunDetachedDispatchService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
     {
         var projectionPort = new FakeProjectionPort();
@@ -199,6 +246,49 @@ public sealed class WorkflowRunFallbackCoverageTests
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
+    [Fact]
+    public async Task WorkflowRunDetachedDispatchService_ShouldKeepActorsAlive_WhenProjectionReportsCustomFailureOnly()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "auto", "cmd-1", "corr-1");
+        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
+        var pipeline = new SequencedDispatchPipeline();
+        var outputStreamer = new FakeWorkflowRunOutputStreamer
+        {
+            Events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Custom = new WorkflowCustomEventPayload { Name = "aevatar.projection.sink.failure" },
+                },
+            ],
+        };
+        pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+            new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
+            {
+                Target = target,
+                Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = receipt,
+            }));
+        var service = new WorkflowRunDetachedDispatchService(
+            pipeline,
+            outputStreamer,
+            new WorkflowRunCompletionPolicy(),
+            new FakeWorkflowRunDurableCompletionResolver(),
+            new WorkflowDirectFallbackPolicy(),
+            logger: null);
+
+        var result = await service.DispatchAsync(
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        await outputStreamer.StreamCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
     private static WorkflowRunCommandTarget CreateBoundTarget(
         FakeProjectionPort projectionPort,
         FakeWorkflowRunActorPort actorPort,
@@ -244,6 +334,7 @@ public sealed class WorkflowRunFallbackCoverageTests
     private sealed class FakeWorkflowRunOutputStreamer : IWorkflowRunOutputStreamer
     {
         public IReadOnlyList<WorkflowRunEventEnvelope> Events { get; set; } = [];
+        public TaskCompletionSource<bool> StreamCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task StreamAsync(
             IEventSink<WorkflowRunEventEnvelope> sink,
@@ -251,8 +342,18 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken ct = default)
         {
             _ = sink;
-            foreach (var evt in Events)
-                await emitAsync(evt, ct);
+            try
+            {
+                foreach (var evt in Events)
+                    await emitAsync(evt, ct);
+
+                StreamCompleted.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                StreamCompleted.TrySetException(ex);
+                throw;
+            }
         }
 
         public WorkflowRunEventEnvelope Map(WorkflowRunEventEnvelope evt) => evt;

@@ -290,7 +290,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkBackpressure_ShouldPublishRunErrorAndDetachFailingSink()
+    public async Task AttachLiveSinkAsync_WhenSinkBackpressure_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -313,8 +313,9 @@ public class WorkflowExecutionProjectionServiceTests
         await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError
-                && evt.RunError.Code == "RUN_SINK_BACKPRESSURE",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_BACKPRESSURE",
             TimeSpan.FromSeconds(2));
 
         await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
@@ -328,18 +329,19 @@ public class WorkflowExecutionProjectionServiceTests
             TimeSpan.FromSeconds(2));
         failingSink.PushAsyncCallCount.Should().Be(2);
 
-        var errorEvent = recordingSink.SnapshotEvents()
-            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
-            .Select(x => x.RunError)
-            .Single(x => x.Code == "RUN_SINK_BACKPRESSURE");
-        errorEvent.Message.Should().Contain("eventType=RUN_STARTED");
+        var failureEvent = recordingSink.SnapshotEvents()
+            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom)
+            .Select(x => x.Custom)
+            .Single(x => x.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        failureEvent.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().EventType
+            .Should().Be(WorkflowRunEventTypes.RunStarted);
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkThrowsInvalidOperation_ShouldPublishRunErrorAndDetachFailingSink()
+    public async Task AttachLiveSinkAsync_WhenSinkThrowsInvalidOperation_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -362,8 +364,9 @@ public class WorkflowExecutionProjectionServiceTests
         await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError
-                && evt.RunError.Code == "RUN_SINK_WRITE_FAILED",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_WRITE_FAILED",
             TimeSpan.FromSeconds(2));
 
         await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
@@ -382,7 +385,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldPublishRunErrorAndDetachFailingSink()
+    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -406,8 +409,9 @@ public class WorkflowExecutionProjectionServiceTests
         await completedSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError
-                && evt.RunError.Code == "RUN_SINK_WRITE_FAILED",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_WRITE_FAILED",
             TimeSpan.FromSeconds(2));
 
         await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
@@ -418,7 +422,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         completedSink.PushAsyncCallCount.Should().Be(2);
         recordingSink.SnapshotEvents()
-            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
+            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom)
             .Should().ContainSingle();
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);

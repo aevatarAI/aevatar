@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -10,6 +11,7 @@ public sealed class WorkflowProjectionSinkFailurePolicy
 {
     public const string SinkBackpressureErrorCode = "RUN_SINK_BACKPRESSURE";
     public const string SinkWriteErrorCode = "RUN_SINK_WRITE_FAILED";
+    internal const string ProjectionSinkFailureEventName = "aevatar.projection.sink.failure";
 
     private readonly IProjectionSessionEventHub<WorkflowRunEventEnvelope> _runEventStreamHub;
     private readonly IProjectionClock _clock;
@@ -80,19 +82,24 @@ public sealed class WorkflowProjectionSinkFailurePolicy
         WorkflowRunEventEnvelope sourceEvent)
     {
         var evtType = WorkflowRunEventTypes.GetEventType(sourceEvent);
-        var runError = new WorkflowRunEventEnvelope
+        var sinkFailure = new WorkflowRunEventEnvelope
         {
             Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
-            RunError = new WorkflowRunErrorEventPayload
+            Custom = new WorkflowCustomEventPayload
             {
-                Code = code,
-                Message = $"Live sink delivery failed. eventType={evtType}, reason={message}",
+                Name = ProjectionSinkFailureEventName,
+                Payload = Any.Pack(new WorkflowProjectionSinkFailureCustomPayload
+                {
+                    Code = code,
+                    EventType = evtType,
+                    Reason = message ?? string.Empty,
+                }),
             },
         };
 
         try
         {
-            await sink.PushAsync(runError, CancellationToken.None);
+            await sink.PushAsync(sinkFailure, CancellationToken.None);
         }
         catch
         {
@@ -107,7 +114,7 @@ public sealed class WorkflowProjectionSinkFailurePolicy
             await _runEventStreamHub.PublishAsync(
                 runtimeLease.ActorId,
                 runtimeLease.CommandId,
-                runError,
+                sinkFailure,
                 CancellationToken.None);
         }
         catch

@@ -181,7 +181,20 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         string? preferredActorId,
         CancellationToken ct)
     {
-        var definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
+        IActor definitionActor;
+        try
+        {
+            definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
+        }
+        catch (InvalidOperationException) when (!string.IsNullOrWhiteSpace(preferredActorId))
+        {
+            var racedActor = await TryResolveRacedDefinitionActorAsync(definition, preferredActorId!, ct);
+            if (racedActor != null)
+                return new DefinitionActorResolutionResult(racedActor.Id, CreatedNow: false);
+
+            throw;
+        }
+
         try
         {
             await BindWorkflowDefinitionAsync(
@@ -197,6 +210,33 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             await TryDestroyActorsAsync([definitionActor.Id]);
             throw;
         }
+    }
+
+    private async Task<IActor?> TryResolveRacedDefinitionActorAsync(
+        WorkflowDefinitionBinding definition,
+        string preferredActorId,
+        CancellationToken ct)
+    {
+        var existingActor = await _runtime.GetAsync(preferredActorId);
+        if (existingActor == null)
+            return null;
+
+        var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
+        if (binding == null || binding.ActorKind != WorkflowActorKind.Definition)
+            return null;
+
+        EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
+        {
+            await BindWorkflowDefinitionAsync(
+                existingActor,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                ct);
+        }
+
+        return existingActor;
     }
 
     private async Task TryDestroyActorsAsync(IReadOnlyList<string> actorIds)

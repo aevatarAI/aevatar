@@ -189,3 +189,15 @@ message WorkflowSignalBufferedCustomPayload {
   string payload = 4;
   int64 received_at_unix_time_ms = 5;
 }
+
+message WorkflowProjectionDispatchFailureCustomPayload {
+  string event_id = 1;
+  string payload_type = 2;
+  string reason = 3;
+}
+
+message WorkflowProjectionSinkFailureCustomPayload {
+  string code = 1;
+  string event_type = 2;
+  string reason = 3;
+}

@@ -87,7 +87,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldDefaultToAuto_WhenCreatingNewRun()
+    public void ChatRunRequestNormalizer_ShouldLeaveWorkflowUnset_WhenCreatingNewRun()
     {
         var input = new ChatInput
         {
@@ -100,7 +100,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         result.Request.Should().BeEquivalentTo(
             new WorkflowChatRunRequest(
                 "hello",
-                WorkflowRunBehaviorOptions.AutoWorkflowName,
+                null,
                 null,
                 null,
                 Metadata: new Dictionary<string, string>()));
