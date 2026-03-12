@@ -105,7 +105,6 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 `Aevatar.Foundation.Runtime`（通用层）包含：
 
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
-- `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
 - `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
 - `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
@@ -136,16 +135,22 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 `Routing` 现在由两部分组成：
 
-- 路由执行：`EventRouter`
-- 层级持久化：`IRouterHierarchyStore` + `InMemoryRouterStore`
+- 拓扑状态：`LocalActor` / `RuntimeActorGrainState` 自身持有 parent/children
+- 消息传播：stream-level forwarding + runtime ingress demux
 
-`EventRouter.RouteAsync(...)` 的核心行为：
+当前拓扑事实已经直接收口到 runtime actor 自身：
 
-1. 检查 `EventEnvelope.Runtime.VisitedActorIds`，如果当前 Actor 已在访问链中则直接跳过（环路保护）
-2. 当前 Actor 先处理事件
-3. 将当前 Actor 追加到 `VisitedActorIds` 后，仅对 `PublicationRoute.topology` 按 `TopologyAudience` 转发到父/子节点；`DirectRoute` 与 `PublicationRoute.observer` 不经过 `EventRouter`
+1. Local runtime：`LocalActor` 内存态持有 `parent/children`
+2. Orleans runtime：`RuntimeActorGrainState` 持久态持有 `ParentId/Children`
+3. `LinkAsync/UnlinkAsync` 同时更新拓扑状态和 stream relay binding
 
-这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播 envelope 消息，层级快照则交给 Store 管理。
+实际消息行为已经收敛为：
+
+1. `DirectRoute` 由 runtime 直接投递到目标 actor inbox
+2. `PublicationRoute.topology` 由 stream forwarding / relay binding 负责传播
+3. `PublicationRoute.observer` 只给 projection / live sink / observer，可见但不进业务 actor inbox
+
+也就是说，拓扑状态和 fan-out 已不再通过单独 `EventRouter` 对象承载；真正的 fan-out 仍由 stream forwarding / relay binding 执行。
 
 ## CQRS 与 Projection 落点
 

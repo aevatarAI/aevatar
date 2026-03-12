@@ -6,7 +6,6 @@ using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Propagation;
-using Aevatar.Foundation.Runtime.Routing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -16,19 +15,22 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventPublisher
 {
     private readonly string _actorId;
-    private readonly EventRouter _router;
+    private readonly Func<string?> _getParentId;
+    private readonly Func<int> _getChildrenCount;
     private readonly IStreamProvider _streams;
     private readonly IStream _selfStream;
     private readonly IEnvelopePropagationPolicy _envelopePropagationPolicy;
 
     public LocalActorPublisher(
         string actorId,
-        EventRouter router,
+        Func<string?> getParentId,
+        Func<int> getChildrenCount,
         IStreamProvider streams,
         IEnvelopePropagationPolicy? envelopePropagationPolicy = null)
     {
         _actorId = actorId;
-        _router = router;
+        _getParentId = getParentId;
+        _getChildrenCount = getChildrenCount;
         _streams = streams;
         _selfStream = streams.GetStream(actorId);
         _envelopePropagationPolicy = envelopePropagationPolicy
@@ -68,14 +70,20 @@ public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventP
                 await _selfStream.ProduceAsync(envelope, ct);
                 break;
             case TopologyAudience.Parent:
-                if (_router.ParentId != null)
-                    await _streams.GetStream(_router.ParentId).ProduceAsync(envelope, ct);
+            {
+                var parentId = _getParentId();
+                if (parentId != null)
+                    await _streams.GetStream(parentId).ProduceAsync(envelope, ct);
                 break;
+            }
             case TopologyAudience.ParentAndChildren:
+            {
                 await _selfStream.ProduceAsync(envelope, ct);
-                if (_router.ParentId != null)
-                    await _streams.GetStream(_router.ParentId).ProduceAsync(envelope, ct);
+                var currentParentId = _getParentId();
+                if (currentParentId != null)
+                    await _streams.GetStream(currentParentId).ProduceAsync(envelope, ct);
                 break;
+            }
         }
     }
 
@@ -132,9 +140,9 @@ public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventP
         audience switch
         {
             TopologyAudience.Self => 1,
-            TopologyAudience.Children => _router.ChildrenIds.Count,
-            TopologyAudience.Parent => _router.ParentId != null ? 1 : 0,
-            TopologyAudience.ParentAndChildren => _router.ChildrenIds.Count + (_router.ParentId != null ? 1 : 0),
+            TopologyAudience.Children => _getChildrenCount(),
+            TopologyAudience.Parent => _getParentId() != null ? 1 : 0,
+            TopologyAudience.ParentAndChildren => _getChildrenCount() + (_getParentId() != null ? 1 : 0),
             _ => 0,
         };
 

@@ -12,7 +12,6 @@ using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
-using Aevatar.Foundation.Runtime.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,19 +56,22 @@ public sealed class LocalActorRuntime : IActorRuntime
     {
         var actorId = id ?? AgentId.New(agentType);
         var agent = CreateAgentInstance(agentType);
-        var router = new EventRouter(actorId);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
         var deduplicator = _services.GetService<IEventDeduplicator>();
-        var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
         var actor = new LocalActor(
             agent,
             actorId,
-            router,
             _streams,
             logger,
             _deactivationHookDispatcher,
             deduplicator);
+        var publisher = new LocalActorPublisher(
+            actorId,
+            () => actor.ParentId,
+            () => actor.ChildrenCount,
+            _streams,
+            propagationPolicy);
 
         InjectDependencies(agent, publisher, actorId, logger);
 

@@ -97,7 +97,7 @@
 
 重构后：
 
-1. `EventRouter` 只处理 `BroadcastRoute`
+1. Local / Orleans runtime 的 topology publication 路径只处理 `BroadcastRoute`
 2. runtime direct delivery 只处理 `DirectRoute`
 3. projection / observer / live sink 只处理 `ObserveRoute`
 
@@ -170,7 +170,7 @@ enum BroadcastDirection {
 规则：
 
 1. broadcast 继续支持 `Down / Up / Both / Self`
-2. `EventRouter` 只处理 `BroadcastRoute`
+2. Local / Orleans runtime 的 topology publication 路径只处理 `BroadcastRoute`
 3. workflow / actor 自推进仍然可以继续用 `Self`
 
 ### 6.3 Direct
@@ -211,7 +211,7 @@ committed domain event observation 只构造 `ObserveRoute`
 
 重构后的 runtime 分工固定为：
 
-1. `EventRouter`
+1. Local / Orleans runtime topology publication path
    - 只处理 `BroadcastRoute`
 2. `RuntimeActorGrain`
    - 消费 `BroadcastRoute` 与 `DirectRoute`
@@ -298,14 +298,14 @@ committed domain event observation 只构造 `ObserveRoute`
 
 ### 任务
 
-1. `EventRouter` 只处理 `BroadcastRoute`
+1. Local / Orleans runtime topology publication path 只处理 `BroadcastRoute`
 2. `RuntimeActorGrain` 对 `DirectRoute` 直接投 inbox
 3. `RuntimeActorGrain` 对 `ObserveRoute` 明确忽略
 4. 清理 Local / Orleans runtime 中依赖 `EventDirection.Observe` 的分支
 
 ### 涉及位置
 
-1. `src/Aevatar.Foundation.Runtime/Routing/EventRouter.cs`
+1. `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs`
 2. `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs`
 3. `src/Aevatar.Foundation.Runtime.Implementations.Local/*`
 4. `src/Aevatar.Foundation.Runtime.Implementations.Orleans/*`

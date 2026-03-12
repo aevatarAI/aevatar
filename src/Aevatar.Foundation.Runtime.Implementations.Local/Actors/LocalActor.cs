@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Deduplication;
@@ -11,17 +10,17 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 public sealed class LocalActor : IActor
 {
     private readonly SemaphoreSlim _mailbox = new(1, 1);
-    private readonly EventRouter _router;
+    private readonly HashSet<string> _childrenIds = [];
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly IEventDeduplicator? _deduplicator;
     private IAsyncDisposable? _selfSubscription;
+    private string? _parentId;
 
     public LocalActor(
         IAgent agent,
         string id,
-        EventRouter router,
         IStreamProvider streams,
         ILogger logger,
         IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
@@ -29,7 +28,6 @@ public sealed class LocalActor : IActor
     {
         Agent = agent;
         Id = id;
-        _router = router;
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
@@ -38,7 +36,8 @@ public sealed class LocalActor : IActor
 
     public string Id { get; }
     public IAgent Agent { get; }
-    internal EventRouter Router => _router;
+    internal string? ParentId => _parentId;
+    internal int ChildrenCount => _childrenIds.Count;
 
     public async Task ActivateAsync(CancellationToken ct = default)
     {
@@ -72,7 +71,7 @@ public sealed class LocalActor : IActor
             if (direction == TopologyAudience.Parent ||
                 (direction == TopologyAudience.ParentAndChildren &&
                  !string.IsNullOrWhiteSpace(publisherActorId) &&
-                 _router.ChildrenIds.Contains(publisherActorId)))
+                 _childrenIds.Contains(publisherActorId)))
             {
                 await EnqueueAsync(envelope);
                 return;
@@ -104,25 +103,25 @@ public sealed class LocalActor : IActor
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
         EnqueueAsync(envelope, propagateFailure: true);
 
-    public Task<string?> GetParentIdAsync() => Task.FromResult(_router.ParentId);
+    public Task<string?> GetParentIdAsync() => Task.FromResult(_parentId);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-        Task.FromResult<IReadOnlyList<string>>(_router.ChildrenIds.ToList());
+        Task.FromResult<IReadOnlyList<string>>([.. _childrenIds]);
 
     // Hierarchy operations (called by LocalActorRuntime)
 
-    internal void AddChild(string childId) => _router.AddChild(childId);
-    internal void RemoveChild(string childId) => _router.RemoveChild(childId);
+    internal void AddChild(string childId) => _childrenIds.Add(childId);
+    internal void RemoveChild(string childId) => _childrenIds.Remove(childId);
 
     internal Task SubscribeToParentAsync(string parentId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        _router.SetParent(parentId);
+        _parentId = parentId;
         return Task.CompletedTask;
     }
 
     internal Task UnsubscribeFromParentAsync()
     {
-        _router.ClearParent();
+        _parentId = null;
         return Task.CompletedTask;
     }
 

@@ -329,7 +329,6 @@
    - `ProjectionScriptEvolutionDecisionReadPort`：`100%`
 2. `test/Aevatar.Foundation.Core.Tests/TestResults/9bcd56a4-d819-4323-9733-1fea7b67b572/coverage.cobertura.xml`
    - `Aevatar.Foundation.Core` package line-rate：`78.45%`
-   - `EventRouter`：`100%`
    - `GAgentBase<TState>`：`90.38%`
 3. `test/Aevatar.Foundation.Runtime.Hosting.Tests/TestResults/9e6cbf41-8982-4cb2-86ad-c38e3c75c71a/coverage.cobertura.xml`
    - `OrleansGrainEventPublisher`：`100%`

@@ -4,8 +4,8 @@
 
 - `LocalActorRuntime`：Actor 创建/销毁/按需物化（local activation index 驱动）。
 - `LocalActorDispatchPort`：向目标 Actor mailbox 定向投递 `EventEnvelope`。
-- `LocalActor`：单 Actor mailbox 串行执行与订阅管理。
-- `LocalActorPublisher`：按 `EnvelopeRoute` 的 `broadcast/direct/observe` 变体做本地路由与转发。
+- `LocalActor`：单 Actor mailbox 串行执行、订阅管理与 parent/children 拓扑状态承载。
+- `LocalActorPublisher`：按 `EnvelopeRoute` 的 `direct/publication(topology|observer)` 变体做本地发布。
 - `LocalActorTypeProbe`：本地运行时类型探测。
 - `AddAevatarRuntime(...)`：一键装配本地运行时 + 内存流 + 默认持久化与事件溯源组件。
 

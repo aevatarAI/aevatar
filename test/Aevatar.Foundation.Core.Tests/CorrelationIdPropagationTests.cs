@@ -55,7 +55,7 @@ public class CorrelationIdPropagationTests
     public async Task LocalActorPublisher_SendTo_PropagatesTraceFieldsIntoEnvelope()
     {
         var streams = new InMemoryStreamProvider();
-        var publisher = new LocalActorPublisher("source-actor", new EventRouter("source-actor"), streams);
+        var publisher = new LocalActorPublisher("source-actor", () => null, () => 0, streams);
         var received = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var _ = await streams.GetStream("target-actor").SubscribeAsync<EventEnvelope>(envelope =>
@@ -87,7 +87,7 @@ public class CorrelationIdPropagationTests
     public async Task LocalActorPublisher_PublishCommittedStateEventAsync_PropagatesTraceFieldsIntoObserverPublication()
     {
         var streams = new InMemoryStreamProvider();
-        var publisher = new LocalActorPublisher("source-actor", new EventRouter("source-actor"), streams);
+        var publisher = new LocalActorPublisher("source-actor", () => null, () => 0, streams);
         var received = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var _ = await streams.GetStream("source-actor").SubscribeAsync<EventEnvelope>(envelope =>
