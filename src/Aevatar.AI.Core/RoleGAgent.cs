@@ -205,9 +205,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
-        IReadOnlyDictionary<string, string>? metadata = request.RequestMetadata.Count == 0
+        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count == 0
             ? null
-            : new Dictionary<string, string>(request.RequestMetadata, StringComparer.Ordinal);
+            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
 
         await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, metadata, streamCt))
         {

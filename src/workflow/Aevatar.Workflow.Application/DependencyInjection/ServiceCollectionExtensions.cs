@@ -34,9 +34,9 @@ public static class ServiceCollectionExtensions
             if (options.RegisterBuiltInDirectWorkflow)
                 registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
             if (options.RegisterBuiltInAutoWorkflow)
-                registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+                registry.Register("auto", WorkflowDefinitionRegistry.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                registry.Register("auto_review", WorkflowDefinitionRegistry.BuiltInAutoReviewYaml);
+                registry.Register("auto_review", WorkflowDefinitionRegistry.CreateBuiltInAutoReviewYaml());
 
             return registry;
         });
@@ -66,6 +66,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.AddSingleton<IWorkflowRunInteractionService, WorkflowRunInteractionService>();
         services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunDetachedDispatchService>();
+        services.TryAddSingleton<RegistryBackedWorkflowCatalogPort>();
+        services.TryAddSingleton<IWorkflowCatalogPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
+        services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         return services;
     }

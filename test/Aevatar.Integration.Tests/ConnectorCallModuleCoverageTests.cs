@@ -144,6 +144,89 @@ public sealed class ConnectorCallModuleCoverageTests
         completed.Annotations.Should().ContainKey("connector.error");
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenSecureConnectorCallUsesTemplateDefault_ShouldResolveCapturedSecret()
+    {
+        var registry = new InMemoryConnectorRegistry();
+        var connector = new EchoConnector("secure");
+        registry.Register(connector);
+        var module = new ConnectorCallModule(registry);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new SecureValueCapturedEvent
+            {
+                RunId = "run-secure",
+                StepId = "capture-secret",
+                Variable = "api_key",
+                Value = "sk-secure",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = new StepRequestEvent
+        {
+            StepId = "s-secure",
+            RunId = "run-secure",
+            StepType = "secure_connector_call",
+            Input = """{"providerName":"demo"}""",
+            Parameters =
+            {
+                ["connector"] = "secure",
+                ["stdin_template"] = """{"providerName":"demo","apiKey":"[[secure:api_key]]"}""",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        connector.LastRequest.Should().NotBeNull();
+        connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-secure"}""");
+
+        var completed = ctx.Published.Last().evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("ok");
+        completed.Output.Should().NotContain("sk-secure");
+        completed.Annotations.Values.Should().NotContain(value => value.Contains("sk-secure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenSecureJsonPlaceholderUsed_ShouldEscapeSecretForJsonString()
+    {
+        var registry = new InMemoryConnectorRegistry();
+        var connector = new EchoConnector("secure-json");
+        registry.Register(connector);
+        var module = new ConnectorCallModule(registry);
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new SecureValueCapturedEvent
+            {
+                RunId = "run-secure-json",
+                StepId = "capture-secret",
+                Variable = "api_key",
+                Value = "sk-\"line\ntwo",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = new StepRequestEvent
+        {
+            StepId = "s-secure-json",
+            RunId = "run-secure-json",
+            StepType = "secure_connector_call",
+            Parameters =
+            {
+                ["connector"] = "secure-json",
+                ["stdin_template"] = """{"providerName":"demo","apiKey":"[[secure_json:api_key]]"}""",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        connector.LastRequest.Should().NotBeNull();
+        connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
+    }
+
     private static TestEventHandlerContext CreateContext()
     {
         return new TestEventHandlerContext(
@@ -212,4 +295,20 @@ public sealed class ConnectorCallModuleCoverageTests
         }
     }
 
+    private sealed class EchoConnector(string name) : IConnector
+    {
+        public string Name { get; } = name;
+        public string Type => "test";
+        public ConnectorRequest? LastRequest { get; private set; }
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = "ok",
+            });
+        }
+    }
 }

@@ -11,7 +11,10 @@ namespace Aevatar.Bootstrap.Connectors;
 /// </summary>
 public sealed class HttpConnector : IConnector
 {
-    private readonly HttpClient _client;
+    private static readonly HttpClient SharedHttpClient = new();
+    private readonly HttpClient? _client;
+    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly string _httpClientName;
     private readonly Uri _baseUri;
     private readonly HashSet<string> _allowedMethods;
     private readonly HashSet<string> _allowedPaths;
@@ -27,6 +30,8 @@ public sealed class HttpConnector : IConnector
         IEnumerable<string>? allowedInputKeys = null,
         IDictionary<string, string>? defaultHeaders = null,
         int timeoutMs = 30_000,
+        IHttpClientFactory? httpClientFactory = null,
+        string? httpClientName = null,
         HttpClient? client = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -44,7 +49,9 @@ public sealed class HttpConnector : IConnector
         _defaultHeaders = defaultHeaders?.ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase)
                           ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _defaultTimeoutMs = Math.Clamp(timeoutMs, 100, 300_000);
-        _client = client ?? new HttpClient();
+        _client = client;
+        _httpClientFactory = httpClientFactory;
+        _httpClientName = string.IsNullOrWhiteSpace(httpClientName) ? Name : httpClientName.Trim();
     }
 
     /// <inheritdoc />
@@ -88,7 +95,7 @@ public sealed class HttpConnector : IConnector
             };
         }
 
-        var targetUri = new Uri(_baseUri, normalizedPath);
+        var targetUri = BuildTargetUri(_baseUri, normalizedPath);
         if (!string.Equals(targetUri.Scheme, _baseUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(targetUri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase) ||
             targetUri.Port != _baseUri.Port)
@@ -141,7 +148,7 @@ public sealed class HttpConnector : IConnector
             if (!msg.Headers.Accept.Any())
                 msg.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            using var response = await _client.SendAsync(msg, timeoutCts.Token);
+            using var response = await ResolveClient().SendAsync(msg, timeoutCts.Token);
             var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
             sw.Stop();
 
@@ -149,7 +156,7 @@ public sealed class HttpConnector : IConnector
             {
                 Success = response.IsSuccessStatusCode,
                 Output = body,
-                Error = response.IsSuccessStatusCode ? "" : $"{(int)response.StatusCode} {response.ReasonPhrase}",
+                Error = response.IsSuccessStatusCode ? "" : BuildHttpErrorMessage(response, body),
                 Metadata = new Dictionary<string, string>
                 {
                     ["connector.http.status_code"] = ((int)response.StatusCode).ToString(),
@@ -198,6 +205,73 @@ public sealed class HttpConnector : IConnector
         var p = path.Trim();
         if (!p.StartsWith('/')) p = "/" + p;
         return p;
+    }
+
+    private static Uri BuildTargetUri(Uri baseUri, string normalizedPath)
+    {
+        if (string.IsNullOrWhiteSpace(baseUri.AbsolutePath) ||
+            string.Equals(baseUri.AbsolutePath, "/", StringComparison.Ordinal))
+        {
+            return new Uri(baseUri, normalizedPath);
+        }
+
+        var combinedPath = baseUri.AbsolutePath.TrimEnd('/') + normalizedPath;
+        var builder = new UriBuilder(baseUri)
+        {
+            Path = combinedPath,
+        };
+        return builder.Uri;
+    }
+
+    private static string BuildHttpErrorMessage(HttpResponseMessage response, string body)
+    {
+        var baseMessage = $"{(int)response.StatusCode} {response.ReasonPhrase}".Trim();
+        var detail = TryExtractErrorDetail(body);
+        if (string.IsNullOrWhiteSpace(detail))
+            return baseMessage;
+
+        return $"{baseMessage}: {detail}";
+    }
+
+    private static string TryExtractErrorDetail(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return string.Empty;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.RootElement.TryGetProperty("description", out var description) &&
+                    description.ValueKind == JsonValueKind.String)
+                {
+                    return description.GetString()?.Trim() ?? string.Empty;
+                }
+
+                if (doc.RootElement.TryGetProperty("error", out var error) &&
+                    error.ValueKind == JsonValueKind.String)
+                {
+                    return error.GetString()?.Trim() ?? string.Empty;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore parsing failures and fallback to raw body preview.
+        }
+
+        var trimmed = body.Trim();
+        return trimmed.Length <= 200 ? trimmed : $"{trimmed[..200]}...";
+    }
+
+    private HttpClient ResolveClient()
+    {
+        if (_httpClientFactory != null)
+            return _httpClientFactory.CreateClient(_httpClientName);
+        if (_client != null)
+            return _client;
+        return SharedHttpClient;
     }
 
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)

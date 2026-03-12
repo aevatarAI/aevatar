@@ -1,0 +1,64 @@
+name: role_event_module_multi_role_chain
+description: |
+  Multi-role event module routing showcase.
+  Three roles load the same event_modules set:
+  demo_template, demo_csv_markdown, demo_json_pick.
+  Each role routes ChatRequestEvent to a different module via event_routes.
+
+roles:
+  - id: template_role
+    name: Template Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+    event_routes: |
+      - when: event.type == "ChatRequestEvent"
+        to: demo_template
+
+  - id: csv_role
+    name: CSV Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+    event_routes: |
+      - when: event.type == "ChatRequestEvent"
+        to: demo_csv_markdown
+
+  - id: json_role
+    name: JSON Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+    event_routes: |
+      - when: event.type == "ChatRequestEvent"
+        to: demo_json_pick
+
+steps:
+  - id: first_template_reply
+    type: llm_call
+    role: template_role
+    next: seed_csv
+
+  - id: seed_csv
+    type: assign
+    parameters:
+      value: |
+        service,error_rate,latency_ms
+        gateway,1.2,230
+        checkout,0.7,160
+    next: second_csv_reply
+
+  - id: second_csv_reply
+    type: llm_call
+    role: csv_role
+    next: seed_json
+
+  - id: seed_json
+    type: assign
+    parameters:
+      value: '{"incident":{"id":"INC-2026-018","owner":{"team":"platform","user":"dora"}},"severity":"high"}'
+    next: final_json_reply
+
+  - id: final_json_reply
+    type: llm_call
+    role: json_role

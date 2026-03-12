@@ -80,6 +80,66 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldPreserveBasePathPrefix_WhenOperationStartsWithSlash()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "telegram-http",
+            "https://api.telegram.org/botTOKEN",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/sendMessage"],
+            allowedInputKeys: ["chat_id", "text"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/sendMessage",
+            Payload = "{\"chat_id\":\"1\",\"text\":\"hi\"}",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri.Should().NotBeNull();
+        handler.LastRequest.RequestUri!.AbsoluteUri.Should().Be("https://api.telegram.org/botTOKEN/sendMessage");
+    }
+
+    [Fact]
+    public async Task HttpConnector_ShouldAppendResponseDescriptionToErrorMessage()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent(
+                    "{\"ok\":false,\"description\":\"Not Found: invalid bot token\"}",
+                    Encoding.UTF8,
+                    "application/json"),
+                ReasonPhrase = "Not Found",
+            });
+        var connector = new HttpConnector(
+            "telegram-http-error",
+            "https://api.telegram.org/botTOKEN",
+            allowedMethods: ["POST"],
+            allowedPaths: ["/sendMessage"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/sendMessage",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("404 Not Found");
+        response.Error.Should().Contain("invalid bot token");
+    }
+
+    [Fact]
     public async Task CliConnector_ShouldRejectPolicyAndExecuteCommand()
     {
         var connector = new CliConnector(
@@ -394,6 +454,7 @@ public class ConnectorAndHostingCoverageTests
     {
         var cliBuilder = new CliConnectorBuilder();
         var httpBuilder = new HttpConnectorBuilder();
+        var telegramUserBuilder = new TelegramUserConnectorBuilder();
 
         var missingCli = new ConnectorConfigEntry
         {
@@ -444,6 +505,71 @@ public class ConnectorAndHostingCoverageTests
         httpConnector.Should().NotBeNull();
         httpConnector!.Type.Should().Be("http");
         httpConnector.Name.Should().Be("http-valid");
+
+        var missingTelegramUser = new ConnectorConfigEntry
+        {
+            Name = "telegram-user-missing",
+            Type = "telegram_user",
+            TelegramUser = new TelegramUserConnectorConfig
+            {
+                ApiId = "",
+                ApiHash = "",
+            },
+        };
+        telegramUserBuilder.TryBuild(missingTelegramUser, NullLogger.Instance, out var missingTelegramUserConnector).Should().BeFalse();
+        missingTelegramUserConnector.Should().BeNull();
+
+        var validTelegramUser = new ConnectorConfigEntry
+        {
+            Name = "telegram-user-valid",
+            Type = "telegram_user",
+            TimeoutMs = 12000,
+            TelegramUser = new TelegramUserConnectorConfig
+            {
+                ApiId = "123456",
+                ApiHash = "hash",
+                PhoneNumber = "+8613800000000",
+                SessionPath = "telegram-user/test.session",
+            },
+        };
+        telegramUserBuilder.TryBuild(validTelegramUser, NullLogger.Instance, out var telegramUserConnector).Should().BeTrue();
+        telegramUserConnector.Should().NotBeNull();
+        telegramUserConnector!.Type.Should().Be("telegram_user");
+        telegramUserConnector.Name.Should().Be("telegram-user-valid");
+    }
+
+    [Fact]
+    public async Task HttpConnectorBuilder_WithHttpClientFactory_ShouldUseNamedClient()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory);
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "telegram-main",
+            Type = "http",
+            Http = new HttpConnectorConfig { BaseUrl = "https://example.com" },
+        };
+
+        var built = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+        built.Should().BeTrue();
+        connector.Should().NotBeNull();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/sendMessage",
+            Payload = "{\"text\":\"hello\"}",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeTrue();
+        factory.RequestedNames.Should().ContainSingle()
+            .Which.Should().Be("aevatar.connector.http.telegram-main");
     }
 
     private sealed class StubHttpMessageHandler : HttpMessageHandler
@@ -515,6 +641,17 @@ public class ConnectorAndHostingCoverageTests
         }
 
         public IReadOnlyList<string> ListNames() => _connectors.Keys.OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
+
+    private sealed class RecordingHttpClientFactory(Func<string, HttpClient> clientFactory) : IHttpClientFactory
+    {
+        public List<string> RequestedNames { get; } = [];
+
+        public HttpClient CreateClient(string name)
+        {
+            RequestedNames.Add(name);
+            return clientFactory(name);
+        }
     }
 
 }
