@@ -8,12 +8,12 @@ using Google.Protobuf;
 namespace Aevatar.Foundation.Abstractions;
 
 /// <summary>
-/// Event publishing contract for actor inbox delivery.
-/// Publish/send always enqueue a message for the target actor; they do not imply inline execution.
+/// Event publishing contract for actor delivery and observer-only committed-event publication.
+/// Publish/send never imply inline execution; `EventDirection.Observe` writes an observer-visible envelope that actor inbox handlers ignore.
 /// </summary>
 public interface IEventPublisher
 {
-    /// <summary>Publishes an event using the specified direction (Up/Down/Both/Self).</summary>
+    /// <summary>Publishes an event using the specified route (Up/Down/Both/Self/Observe).</summary>
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
     Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,

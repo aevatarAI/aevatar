@@ -9,8 +9,6 @@ public sealed record ScriptDefinitionSnapshot(
 
 public interface IScriptDefinitionSnapshotPort
 {
-    bool UseEventDrivenDefinitionQuery { get; }
-
     Task<ScriptDefinitionSnapshot> GetRequiredAsync(
         string definitionActorId,
         string requestedRevision,

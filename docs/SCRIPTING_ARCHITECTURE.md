@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v10`
+- 文档版本：`v11`
 - 更新时间：`2026-03-12`
 - 适用范围：`src/Aevatar.Scripting.*` 与 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests` / `test/Aevatar.Integration.Slow.Tests` 的 Scripting 相关测试
 - 非范围：`Aevatar.Foundation.*` 的内部运行时实现细节；本文只说明 Scripting 如何消费公共 Foundation 能力
@@ -110,7 +110,6 @@ Proto 契约定义在：`src/Aevatar.Scripting.Abstractions/script_host_messages
 
 1. `QueryScriptDefinitionSnapshotRequestedEvent` / `ScriptDefinitionSnapshotRespondedEvent`
 2. `QueryScriptCatalogEntryRequestedEvent` / `ScriptCatalogEntryRespondedEvent`
-3. `QueryScriptEvolutionDecisionRequestedEvent` / `ScriptEvolutionDecisionRespondedEvent`
 
 Application 查询适配器：
 
@@ -122,6 +121,7 @@ Infrastructure 查询/命令端口：
 1. `RuntimeScriptDefinitionSnapshotPort`
 2. `IScriptEvolutionProposalPort + RuntimeScriptEvolutionInteractionService`
    - `RuntimeScriptEvolutionInteractionService` 内部统一委托 `ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>`
+   - durable completion 通过 `IScriptEvolutionDecisionReadPort` 读取 `ScriptEvolutionReadModel`
 3. `IScriptDefinitionCommandPort + RuntimeScriptDefinitionCommandService`
 4. `IScriptRuntimeProvisioningPort + RuntimeScriptProvisioningService`
 5. `IScriptRuntimeCommandPort + RuntimeScriptCommandService`
@@ -130,10 +130,11 @@ Infrastructure 查询/命令端口：
 
 Core 响应处理要点：
 
-1. Definition/Catalog/EvolutionManager 的 Query Handler 都在 Actor 内直接读取自身状态并返回响应事件。
-2. Evolution durable completion fallback 已切回 session actor：`QueryScriptEvolutionDecisionRequestedEvent` / `ScriptEvolutionDecisionRespondedEvent` 由 `ScriptEvolutionSessionGAgent` 直接返回权威终态。
-3. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
-4. Evolution 终态回推统一走 `Projection -> ProjectionSessionEventHub`，`ScriptEvolutionSessionGAgent` 不再直接向固定 stream 推送终态事件。
+1. Definition/Catalog 的 Query Handler 都在 Actor 内直接读取自身状态并返回响应事件。
+2. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
+3. Evolution 终态 live path 统一走 `ScriptEvolutionSessionCompletedEventProjector -> ProjectionSessionEventHub`。
+4. `PersistDomainEventsAsync(...)` 在 commit 成功后统一把领域事件以 `EventDirection.Observe` 写入 actor 可观察流；actor inbox 忽略该路由，但 projection / live sink 可见。
+5. Evolution durable completion 不再 query session actor，而是读取和 live path 同源的 `ScriptEvolutionReadModel`。
 
 ## 6. 运行与演化两条主链
 
@@ -143,9 +144,9 @@ Core 响应处理要点：
 
 关键实现：
 
-1. Orleans Runtime 下，`ScriptRuntimeGAgent` 先发 `QueryScriptDefinitionSnapshotRequestedEvent`，收到响应后再执行脚本。
+1. `ScriptRuntimeGAgent` 总是先发 `QueryScriptDefinitionSnapshotRequestedEvent`，收到响应后再执行脚本。
 2. 待处理 definition query 先写入 `ScriptRuntimeState.pending_definition_queries`，activation 时重建 timeout lease 并重发 query，保证 response/timeout 都能继续收敛。
-3. 是否启用“Actor 内异步恢复执行”由 `Scripting:Runtime:UseEventDrivenDefinitionQuery` 显式配置；未配置时按 Runtime 类型判定（Orleans=`true`，Local=`false`）。
+3. Local / Orleans 共用同一条 definition query 主链，不再按 runtime 类型或布尔开关分叉。
 
 ### 6.2 演化链（Evolution）
 
@@ -157,6 +158,8 @@ Core 响应处理要点：
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
 3. 两条入口都先命中 `ScriptEvolutionSessionGAgent`。
 4. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionInteractionService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
+   durable fallback 现在读取 projection/read side，而不是 query session actor。
+5. `ScriptEvolutionReadModelProjector` 已并入 `ScriptEvolutionSessionProjectionContext` 主链，不再依赖一条未激活的独立 evolution projection context。
 
 两条入口在 Session 执行主链与 Catalog 事实层合流，Manager 只做索引镜像，保证策略、验证、发布、回滚语义一致。
 
@@ -185,6 +188,7 @@ sequenceDiagram
     participant SES as "ScriptEvolutionSessionGAgent"
     participant MGR as "ScriptEvolutionManagerGAgent"
     participant CAT as "ScriptCatalogGAgent"
+    participant PROJ as "ScriptEvolutionReadModel"
 
     RT->>DEF: "QueryScriptDefinitionSnapshotRequestedEvent"
     DEF-->>RT: "ScriptDefinitionSnapshotRespondedEvent"
@@ -195,7 +199,7 @@ sequenceDiagram
     SES->>CAT: "PromoteScriptRevisionRequestedEvent"
     CAT-->>SES: "ScriptCatalogRevisionPromotedEvent"
     SES->>MGR: "Mirror index events"
-    SES-->>RT: "ScriptEvolutionDecisionRespondedEvent"
+    SES-->>PROJ: "ScriptEvolutionSessionCompletedEvent / reducers"
 ```
 
 ## 8. 测试覆盖
@@ -223,18 +227,41 @@ sequenceDiagram
 本轮局部验证（2026-03-12）：
 
 1. `dotnet build aevatar.slnx --nologo`：通过。
-2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptEvolutionSessionGAgentTests|FullyQualifiedName~ScriptEvolutionManagerGAgentTests|FullyQualifiedName~ScriptEvolutionExecutionServicesTests|FullyQualifiedName~RuntimeScriptInfrastructurePortsTests"`：`58/58` 通过。
-3. `dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptExternalEvolutionE2ETests.ExternalEvolutionFlow_ShouldPromoteRevisionThroughUnifiedManagerChain"`：`1/1` 通过。
-4. `AEVATAR_TEST_ORLEANS_3NODE=1 dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos"`：`1/1` 通过。
-5. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptCapabilityHostExtensionsTests"`：`3/3` 通过。
-6. `bash tools/ci/architecture_guards.sh`：通过。
-7. `bash tools/ci/test_stability_guards.sh`：通过。
+2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --collect:"XPlat Code Coverage"`：`164/164` 通过。
+3. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptCapabilityHostExtensionsTests"`：`3/3` 通过。
+4. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter "FullyQualifiedName~ClaimScriptDocumentDrivenFlexibilityTests"`：`5/5` 通过。
+5. `dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptExternalEvolutionE2ETests.ExternalEvolutionFlow_ShouldPromoteRevisionThroughUnifiedManagerChain"`：`1/1` 通过。
+6. `AEVATAR_TEST_ORLEANS_3NODE=1 dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos"`：`1/1` 通过。
+7. `bash tools/ci/distributed_mixed_version_smoke.sh`：通过。
+8. `bash tools/ci/architecture_guards.sh`：通过。
+9. `bash tools/ci/test_stability_guards.sh`：通过。
+10. `dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj --nologo --collect:"XPlat Code Coverage"`：`145/145` 通过。
+11. `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo --collect:"XPlat Code Coverage" --filter "FullyQualifiedName~OrleansGrainEventPublisherTests|FullyQualifiedName~RuntimePersistenceAndRoutingCoverageTests"`：`14/14` 通过。
+12. `dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo --collect:"XPlat Code Coverage" --filter "FullyQualifiedName~OrleansRuntimeActorStateStoreIntegrationTests"`：`2/2` 通过。
+
+覆盖率摘录：
+
+1. `test/Aevatar.Scripting.Core.Tests/TestResults/22d70bbf-5cd8-4259-97eb-a40287b3e19a/coverage.cobertura.xml`
+   - `Aevatar.Scripting.Core` package line-rate：`87.19%`
+   - `ScriptEvolutionSessionGAgent`：`96.46%`
+   - `ScriptRuntimeGAgent`：`93.57%`
+   - `ScriptEvolutionDurableCompletionResolver`：`100%`
+   - `ProjectionScriptEvolutionDecisionReadPort`：`100%`
+2. `test/Aevatar.Foundation.Core.Tests/TestResults/9bcd56a4-d819-4323-9733-1fea7b67b572/coverage.cobertura.xml`
+   - `Aevatar.Foundation.Core` package line-rate：`78.45%`
+   - `EventRouter`：`100%`
+   - `GAgentBase<TState>`：`90.38%`
+   - `PersistDomainEventsAsync` state path：`94.11%`
+3. `test/Aevatar.Foundation.Runtime.Hosting.Tests/TestResults/9e6cbf41-8982-4cb2-86ad-c38e3c75c71a/coverage.cobertura.xml`
+   - `OrleansGrainEventPublisher`：`100%`
+4. `test/Aevatar.Foundation.Runtime.Hosting.Tests/TestResults/ffd5a882-e32a-4c99-8723-1b9c0ff26986/coverage.cobertura.xml`
+   - `RuntimeActorGrain`：`62.66%`
+   - `HandleEnvelopeAsyncCore`：`55%`
 
 ## 9. 已知架构债务
 
-1. `Scripting:Runtime:UseEventDrivenDefinitionQuery` 目前仍是单一布尔开关 + 运行时类型回退策略；后续可继续细化为按环境与运行时能力的多策略提供器。
-2. Evolution Query 协议仍保留在契约层用于超时兜底查询；主链路终态回推统一走 `ScriptEvolutionSessionCompletedEventProjector -> ProjectionSessionEventHub(script-evolution:{sessionActorId}:{proposalId})`。
-3. 超时常量已抽象为 `IScriptingPortTimeouts`，后续可按环境提供分层实现（如 dev/staging/prod 配置差异）。
+1. `ScriptingQueryTimeoutOptions` / `ScriptingInteractionTimeoutOptions` 当前仍是默认值对象；如果后续需要环境级差异，可再引入显式 host 绑定策略。
+2. durable completion 读取 `ScriptEvolutionReadModel` 仍依赖 read-store provider；未配置 read store 时，主链只能依赖 live projection observation。
 
 ## 10. 结论
 

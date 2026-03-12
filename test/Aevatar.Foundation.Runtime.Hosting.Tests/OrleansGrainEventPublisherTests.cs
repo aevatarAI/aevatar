@@ -25,6 +25,20 @@ public class OrleansGrainEventPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_WhenDirectionIsObserve_ShouldEnqueueObserverEnvelopeWithoutRoutingTargets()
+    {
+        var streams = new RecordingStreamProvider();
+        var publisher = CreatePublisher(actorId: "actor-observe", streams: streams);
+
+        await publisher.PublishAsync(new StringValue { Value = "committed" }, EventDirection.Observe, CancellationToken.None);
+
+        var delivered = streams.GetProduced("actor-observe").Should().ContainSingle().Subject;
+        delivered.Payload!.Unpack<StringValue>().Value.Should().Be("committed");
+        delivered.Route!.Direction.Should().Be(EventDirection.Observe);
+        delivered.Runtime!.RouteTargetCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PublishAsync_WhenSourceContainsPublisherChain_ShouldAppendCurrentPublisher()
     {
         var streams = new RecordingStreamProvider();

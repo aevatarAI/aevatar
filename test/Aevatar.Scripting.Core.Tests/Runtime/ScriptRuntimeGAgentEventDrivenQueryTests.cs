@@ -430,34 +430,6 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
     }
 
     [Fact]
-    public async Task DirectSnapshotFailure_ShouldPersistFailureWithoutDriftingActiveRevision()
-    {
-        var orchestrator = new RecordingOrchestrator();
-        var publisher = new RecordingEventPublisher();
-        var agent = new ScriptRuntimeGAgent(orchestrator, new FailingSnapshotPort())
-        {
-            EventPublisher = publisher,
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-            Services = BuildServices(new RecordingCallbackScheduler()),
-        };
-
-        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
-        {
-            RunId = "run-fail-1",
-            InputPayload = Any.Pack(new Struct()),
-            ScriptRevision = "rev-requested",
-            DefinitionActorId = "definition-fail-1",
-            RequestedEventType = "chat.requested",
-        });
-
-        orchestrator.Requests.Should().BeEmpty();
-        agent.State.LastRunId.Should().Be("run-fail-1");
-        agent.State.Revision.Should().BeEmpty();
-        agent.State.DefinitionActorId.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task EventDrivenQuery_ShouldPersistFailure_WhenQueryDispatchFails()
     {
         var orchestrator = new RecordingOrchestrator();
@@ -602,7 +574,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         RecordingCallbackScheduler scheduler,
         InMemoryEventStore? eventStore = null)
     {
-        return new ScriptRuntimeGAgent(orchestrator, new EventDrivenSnapshotPort())
+        return new ScriptRuntimeGAgent(orchestrator)
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
@@ -706,38 +678,6 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             ],
             expectedVersion: 0,
             CancellationToken.None);
-    }
-
-    private sealed class EventDrivenSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => true;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException("Event-driven query path should not call snapshot port directly.");
-        }
-    }
-
-    private sealed class FailingSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => false;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("snapshot-load-failed");
-        }
     }
 
     private sealed class RecordingOrchestrator : IScriptRuntimeExecutionOrchestrator

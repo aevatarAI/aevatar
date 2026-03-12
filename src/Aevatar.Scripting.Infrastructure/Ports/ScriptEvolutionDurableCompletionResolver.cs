@@ -7,12 +7,12 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class ScriptEvolutionDurableCompletionResolver
     : ICommandDurableCompletionResolver<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion>
 {
-    private readonly IScriptEvolutionDecisionFallbackPort _decisionFallbackPort;
+    private readonly IScriptEvolutionDecisionReadPort _decisionReadPort;
 
     public ScriptEvolutionDurableCompletionResolver(
-        IScriptEvolutionDecisionFallbackPort decisionFallbackPort)
+        IScriptEvolutionDecisionReadPort decisionReadPort)
     {
-        _decisionFallbackPort = decisionFallbackPort ?? throw new ArgumentNullException(nameof(decisionFallbackPort));
+        _decisionReadPort = decisionReadPort ?? throw new ArgumentNullException(nameof(decisionReadPort));
     }
 
     public async Task<CommandDurableCompletionObservation<ScriptEvolutionInteractionCompletion>> ResolveAsync(
@@ -21,10 +21,7 @@ public sealed class ScriptEvolutionDurableCompletionResolver
     {
         ArgumentNullException.ThrowIfNull(receipt);
 
-        var decision = await _decisionFallbackPort.TryResolveAsync(
-            receipt.SessionActorId,
-            receipt.ProposalId,
-            ct);
+        var decision = await _decisionReadPort.TryGetAsync(receipt.ProposalId, ct);
         if (decision == null)
         {
             throw new TimeoutException(

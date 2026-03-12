@@ -68,5 +68,6 @@ public class EventEnvelopeTests
         ((int)EventDirection.Up).ShouldBe(2);
         ((int)EventDirection.Both).ShouldBe(3);
         ((int)EventDirection.Self).ShouldBe(4);
+        ((int)EventDirection.Observe).ShouldBe(5);
     }
 }

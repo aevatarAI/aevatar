@@ -53,9 +53,13 @@ public sealed class EventRouter
         var publishers = GetPublishers(envelope);
         if (publishers.Contains(ActorId)) return;
         var updated = AddPublisher(envelope, ActorId);
+        var direction = updated.Route?.Direction ?? EventDirection.Unspecified;
+        if (direction is EventDirection.Unspecified or EventDirection.Observe)
+            return;
+
         await handleSelf(updated);
 
-        switch (updated.Route?.Direction ?? EventDirection.Unspecified)
+        switch (direction)
         {
             case EventDirection.Self: break;
             case EventDirection.Up:

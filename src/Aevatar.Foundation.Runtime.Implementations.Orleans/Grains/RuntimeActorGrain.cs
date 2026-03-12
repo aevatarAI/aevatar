@@ -162,6 +162,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     return;
                 }
                 break;
+            case EventDirection.Observe:
+                return;
             default:
                 return;
         }

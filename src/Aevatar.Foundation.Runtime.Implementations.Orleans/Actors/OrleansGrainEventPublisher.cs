@@ -57,6 +57,9 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             case EventDirection.Self:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
+            case EventDirection.Observe:
+                await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+                break;
             case EventDirection.Down:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
@@ -119,6 +122,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         direction switch
         {
             EventDirection.Self => 1,
+            EventDirection.Observe => 0,
             EventDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
             // Down/Both fan-out count is stream-subscriber dependent and unknown at publish time.
             _ => null,

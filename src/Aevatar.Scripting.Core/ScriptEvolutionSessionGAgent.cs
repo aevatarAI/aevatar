@@ -183,59 +183,6 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         });
     }
 
-    [EventHandler]
-    public async Task HandleQueryScriptEvolutionDecisionRequested(QueryScriptEvolutionDecisionRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return;
-
-        if (string.IsNullOrWhiteSpace(evt.ProposalId))
-        {
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                FailureReason = "ProposalId is required.",
-            });
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(State.ProposalId) ||
-            !string.Equals(State.ProposalId, evt.ProposalId, StringComparison.Ordinal) ||
-            !State.Completed)
-        {
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                ProposalId = evt.ProposalId,
-                FailureReason = $"Proposal `{evt.ProposalId}` not completed.",
-            });
-            return;
-        }
-
-        await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptEvolutionDecisionRespondedEvent
-        {
-            RequestId = evt.RequestId,
-            Found = true,
-            Accepted = State.Accepted,
-            ProposalId = State.ProposalId ?? string.Empty,
-            ScriptId = State.ScriptId ?? string.Empty,
-            BaseRevision = State.BaseRevision ?? string.Empty,
-            CandidateRevision = State.CandidateRevision ?? string.Empty,
-            Status = State.Status ?? string.Empty,
-            FailureReason = State.FailureReason ?? string.Empty,
-            DefinitionActorId = string.IsNullOrWhiteSpace(State.DefinitionActorId)
-                ? _addressResolver.GetDefinitionActorId(State.ScriptId ?? string.Empty)
-                : State.DefinitionActorId,
-            CatalogActorId = string.IsNullOrWhiteSpace(State.CatalogActorId)
-                ? _addressResolver.GetCatalogActorId()
-                : State.CatalogActorId,
-            Diagnostics = { State.Diagnostics },
-        });
-    }
-
     protected override ScriptEvolutionSessionState TransitionState(
         ScriptEvolutionSessionState current,
         IMessage evt) =>
@@ -458,14 +405,6 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         {
             // Manager mirror is an index side-effect; proposal execution ownership remains on the session actor.
         }
-    }
-
-    private Task SendQueryResponseAsync(
-        string replyStreamId,
-        ScriptEvolutionDecisionRespondedEvent response,
-        CancellationToken ct = default)
-    {
-        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
     }
 
     private static ScriptEvolutionProposal NormalizeProposal(StartScriptEvolutionSessionRequestedEvent evt)

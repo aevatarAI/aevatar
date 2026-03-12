@@ -10,7 +10,7 @@ public sealed class ScriptEvolutionRejectedEventReducer
 {
     protected override bool ReduceTyped(
         ScriptEvolutionReadModel readModel,
-        ScriptEvolutionProjectionContext context,
+        ScriptEvolutionSessionProjectionContext context,
         EventEnvelope envelope,
         ScriptEvolutionRejectedEvent evt,
         DateTimeOffset now)

@@ -10,7 +10,7 @@ public sealed class ScriptEvolutionRolledBackEventReducer
 {
     protected override bool ReduceTyped(
         ScriptEvolutionReadModel readModel,
-        ScriptEvolutionProjectionContext context,
+        ScriptEvolutionSessionProjectionContext context,
         EventEnvelope envelope,
         ScriptEvolutionRolledBackEvent evt,
         DateTimeOffset now)

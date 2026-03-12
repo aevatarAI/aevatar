@@ -38,6 +38,7 @@
 
 ## Command / Envelope / Dispatch 抽象（强制）
 - 统一包络不等于统一语义：`Envelope` 只是 Actor System 的统一消息包络，可承载 `command/reply/internal signal/domain event/query`；是否可持久化、可投影、可对外观察必须由消息契约显式定义，禁止因“都走 Envelope”而混淆语义。
+- 已提交领域事件必须可观察：write-side 一旦完成 committed domain event，必须把该事实送入统一 observation/projection 主链；禁止只落 event store / actor state 而不进入可观察流，再由上层用 query fallback 猜测完成态。
 - 命令骨架必须内聚：标准命令生命周期应收敛为 `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`；业务模块只负责目标解析、载荷映射和结果映射，禁止各能力入口各自拼装一套流程。
 - 传输载体必须可替换：直接远程调用、`IActorDispatchPort`、stream/broker 都只是消息传输机制；上层依赖投递契约，不依赖具体载体，确保链路可从直投切换为异步传输而不污染应用语义。
 - 投递语义必须 runtime-neutral：`publish/send` 统一表示“进入目标 actor inbox 等待处理”，不得因目标是 `self` 或底层 runtime 差异而退化为 inline dispatch；需要立即执行时必须走独立 `dispatch` 契约，禁止在基类、业务层或中间适配层绕过标准 publisher 直接操作 `stream/provider/grain` 等底层传输对象。
@@ -50,6 +51,7 @@
 - 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据；业务事实必须来自 actor-owned contract 或 read model。
 - 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
 - 读写边界不能混合：写侧端口只负责 lifecycle / command；读取必须走窄 query contract 或 projection，禁止在 Application / Infrastructure 直接读取 write-model 内部状态。
+- projection 只消费 committed 事实：projection/read model 必须基于 committed domain event 或其同源 durable feed 构建；禁止订阅入站 command、self continuation 或 actor 运行时偶然结构去推测业务完成态。
 - 默认路径必须先定义资源语义：任何“缺失即创建”的默认策略，都必须同时定义稳定归属、复用规则和清理责任；禁止生成不可达、不可复用、不可回收的隐式资源。
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。

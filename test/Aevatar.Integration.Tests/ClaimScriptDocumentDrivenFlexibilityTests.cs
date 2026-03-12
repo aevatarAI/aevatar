@@ -2,6 +2,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
@@ -113,11 +114,14 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             CancellationToken.None);
 
         var runtimeWithoutDependencies = new ScriptRuntimeGAgent(
-            new NeverCalledRuntimeExecutionOrchestrator(),
-            new ThrowingSnapshotPort())
+            new NeverCalledRuntimeExecutionOrchestrator())
         {
+            EventPublisher = new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(new InMemoryEventStore()),
+            Services = new ServiceCollection()
+                .AddSingleton<IActorRuntimeCallbackScheduler>(new NoOpCallbackScheduler())
+                .BuildServiceProvider(),
         };
         await runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
         {
@@ -128,6 +132,15 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             }),
             ScriptRevision = orchestrator.Revision,
             DefinitionActorId = "missing-definition-actor",
+        });
+        await runtimeWithoutDependencies.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = ((RecordingEventPublisher)runtimeWithoutDependencies.EventPublisher).Sent
+                .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
+                .Single()
+                .RequestId,
+            Found = false,
+            FailureReason = "Definition snapshot not found: missing-definition-actor",
         });
         runtimeWithoutDependencies.State.LastRunId.Should().Be("run-snapshot-check");
         runtimeWithoutDependencies.State.LastEventId.Should().Be("run-snapshot-check");
@@ -167,7 +180,21 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
                 definitionActorId),
             CancellationToken.None);
 
-        var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
+        var runtimeAgent = (ScriptRuntimeGAgent)runtimeActor.Agent;
+        var pendingRequestId = runtimeAgent.State.PendingDefinitionQueries.Keys.Should().ContainSingle().Subject;
+        var definitionState = ((ScriptDefinitionGAgent)definitionActor.Agent).State;
+        await runtimeAgent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
+        {
+            RequestId = pendingRequestId,
+            Found = true,
+            ScriptId = definitionState.ScriptId ?? string.Empty,
+            Revision = definitionState.Revision ?? string.Empty,
+            SourceText = definitionState.SourceText ?? string.Empty,
+            ReadModelSchemaVersion = definitionState.ReadModelSchemaVersion ?? string.Empty,
+            ReadModelSchemaHash = definitionState.ReadModelSchemaHash ?? string.Empty,
+        });
+
+        var runtimeState = runtimeAgent.State;
         var supportsCustomRuntimeState =
             runtimeState.StatePayloads.TryGetValue("state", out var statePayload) &&
             statePayload != null &&
@@ -245,22 +272,6 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             },
         });
     }
-
-    private sealed class ThrowingSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => false;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException($"Definition snapshot not found: {definitionActorId}");
-        }
-    }
-
     private sealed class NeverCalledRuntimeExecutionOrchestrator : IScriptRuntimeExecutionOrchestrator
     {
         public Task<IReadOnlyList<Google.Protobuf.IMessage>> ExecuteRunAsync(
@@ -270,6 +281,84 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             _ = request;
             ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException("Runtime execution should not be called when definition snapshot lookup fails.");
+        }
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<Google.Protobuf.IMessage> Sent { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            EventDirection direction = EventDirection.Down,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : Google.Protobuf.IMessage
+        {
+            _ = evt;
+            _ = direction;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : Google.Protobuf.IMessage
+        {
+            _ = targetActorId;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Sent.Add(evt);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: 1,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: 1,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
     }
 }

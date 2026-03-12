@@ -66,6 +66,9 @@ public sealed class LocalActorPublisher : IEventPublisher
             case EventDirection.Self:
                 await _selfStream.ProduceAsync(envelope, ct);
                 break;
+            case EventDirection.Observe:
+                await _selfStream.ProduceAsync(envelope, ct);
+                break;
             case EventDirection.Down:
                 await _selfStream.ProduceAsync(envelope, ct);
                 break;
@@ -115,6 +118,7 @@ public sealed class LocalActorPublisher : IEventPublisher
         direction switch
         {
             EventDirection.Self => 1,
+            EventDirection.Observe => 0,
             EventDirection.Down => _router.ChildrenIds.Count,
             EventDirection.Up => _router.ParentId != null ? 1 : 0,
             EventDirection.Both => _router.ChildrenIds.Count + (_router.ParentId != null ? 1 : 0),
