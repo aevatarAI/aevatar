@@ -31,11 +31,27 @@ public sealed class WorkflowProjectionSinkFailurePolicy
         EventSinkBackpressureException exception,
         CancellationToken ct)
     {
-        _ = sink;
         _ = ct;
         await PublishSinkFailureAsync(
             runtimeLease,
+            sink,
             SinkBackpressureErrorCode,
+            exception.Message,
+            sourceEvent);
+    }
+
+    protected override async ValueTask OnCompletedAsync(
+        WorkflowExecutionRuntimeLease runtimeLease,
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        WorkflowRunEventEnvelope sourceEvent,
+        EventSinkCompletedException exception,
+        CancellationToken ct)
+    {
+        _ = ct;
+        await PublishSinkFailureAsync(
+            runtimeLease,
+            sink,
+            SinkWriteErrorCode,
             exception.Message,
             sourceEvent);
     }
@@ -47,10 +63,10 @@ public sealed class WorkflowProjectionSinkFailurePolicy
         InvalidOperationException exception,
         CancellationToken ct)
     {
-        _ = sink;
         _ = ct;
         await PublishSinkFailureAsync(
             runtimeLease,
+            sink,
             SinkWriteErrorCode,
             exception.Message,
             sourceEvent);
@@ -58,13 +74,11 @@ public sealed class WorkflowProjectionSinkFailurePolicy
 
     private async Task PublishSinkFailureAsync(
         WorkflowExecutionRuntimeLease runtimeLease,
+        IEventSink<WorkflowRunEventEnvelope> sink,
         string code,
         string message,
         WorkflowRunEventEnvelope sourceEvent)
     {
-        if (string.IsNullOrWhiteSpace(runtimeLease.ActorId) || string.IsNullOrWhiteSpace(runtimeLease.CommandId))
-            return;
-
         var evtType = WorkflowRunEventTypes.GetEventType(sourceEvent);
         var runError = new WorkflowRunEventEnvelope
         {
@@ -75,6 +89,18 @@ public sealed class WorkflowProjectionSinkFailurePolicy
                 Message = $"Live sink delivery failed. eventType={evtType}, reason={message}",
             },
         };
+
+        try
+        {
+            await sink.PushAsync(runError, CancellationToken.None);
+        }
+        catch
+        {
+            // The failing current sink may already be unwritable; releasing it still completes the stream.
+        }
+
+        if (string.IsNullOrWhiteSpace(runtimeLease.ActorId) || string.IsNullOrWhiteSpace(runtimeLease.CommandId))
+            return;
 
         try
         {

@@ -27,6 +27,7 @@ public sealed class WorkflowProjectionReleaseService
         WorkflowExecutionProjectionContext context,
         CancellationToken ct)
     {
+        await runtimeLease.StopOwnershipHeartbeatAsync();
         await _readModelUpdater.MarkStoppedAsync(context.RootActorId, ct);
         await _ownershipCoordinator.ReleaseAsync(context.RootActorId, runtimeLease.CommandId, ct);
     }

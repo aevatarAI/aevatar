@@ -28,7 +28,7 @@ public sealed class WorkflowDirectFallbackPolicy
         if (request.WorkflowYamls is { Count: > 0 })
             return false;
 
-        var workflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
+        var workflowName = ResolveEffectiveWorkflowName(request);
         if (string.IsNullOrWhiteSpace(workflowName))
             return false;
 
@@ -48,10 +48,28 @@ public sealed class WorkflowDirectFallbackPolicy
         return _behaviorOptions.DirectFallbackExceptionWhitelist.Contains(exceptionType);
     }
 
+    private string ResolveEffectiveWorkflowName(WorkflowChatRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var requestedWorkflowName = WorkflowRunNameNormalizer.NormalizeWorkflowName(request.WorkflowName);
+        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
+            return requestedWorkflowName;
+
+        if (_behaviorOptions.UseAutoAsDefaultWhenWorkflowUnspecified)
+            return WorkflowRunBehaviorOptions.AutoWorkflowName;
+
+        var configuredDefault = WorkflowRunNameNormalizer.NormalizeWorkflowName(_behaviorOptions.DefaultWorkflowName);
+        return string.IsNullOrWhiteSpace(configuredDefault)
+            ? WorkflowRunBehaviorOptions.DirectWorkflowName
+            : configuredDefault;
+    }
+
     public WorkflowChatRunRequest ToFallbackRequest(WorkflowChatRunRequest request) =>
         request with
         {
             WorkflowName = WorkflowRunBehaviorOptions.DirectWorkflowName,
+            ActorId = null,
             WorkflowYamls = null,
         };
 }

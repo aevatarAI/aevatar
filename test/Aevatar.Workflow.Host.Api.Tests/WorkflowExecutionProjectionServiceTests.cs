@@ -317,7 +317,8 @@ public class WorkflowExecutionProjectionServiceTests
                 && evt.RunError.Code == "RUN_SINK_BACKPRESSURE",
             TimeSpan.FromSeconds(2));
 
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
         await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
 
@@ -325,7 +326,7 @@ public class WorkflowExecutionProjectionServiceTests
             evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepStarted
                 && evt.StepStarted.StepName == "step-2",
             TimeSpan.FromSeconds(2));
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
         var errorEvent = recordingSink.SnapshotEvents()
             .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
@@ -365,7 +366,8 @@ public class WorkflowExecutionProjectionServiceTests
                 && evt.RunError.Code == "RUN_SINK_WRITE_FAILED",
             TimeSpan.FromSeconds(2));
 
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
         await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
 
@@ -373,14 +375,14 @@ public class WorkflowExecutionProjectionServiceTests
             evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepStarted
                 && evt.StepStarted.StepName == "step-2",
             TimeSpan.FromSeconds(2));
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldDetachWithoutPublishingRunError()
+    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldPublishRunErrorAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -401,7 +403,12 @@ public class WorkflowExecutionProjectionServiceTests
         await service.AttachLiveSinkAsync(lease!, recordingSink);
 
         await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
-        await completedSink.WaitForCallCountAsync(1, TimeSpan.FromSeconds(2));
+        await completedSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
+
+        await recordingSink.WaitForEventAsync(
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError
+                && evt.RunError.Code == "RUN_SINK_WRITE_FAILED",
+            TimeSpan.FromSeconds(2));
 
         await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
         await recordingSink.WaitForEventAsync(
@@ -409,10 +416,10 @@ public class WorkflowExecutionProjectionServiceTests
                 && evt.StepStarted.StepName == "step-2",
             TimeSpan.FromSeconds(2));
 
-        completedSink.PushAsyncCallCount.Should().Be(1);
+        completedSink.PushAsyncCallCount.Should().Be(2);
         recordingSink.SnapshotEvents()
             .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
-            .Should().BeEmpty();
+            .Should().ContainSingle();
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);

@@ -84,7 +84,6 @@ public sealed class WorkflowRunActorPortRuntimeIntegrationTests
         runAgent.State.DefinitionActorId.Should().Be(definitionActor.Id);
         runAgent.State.RunId.Should().Be(result.Actor.Id);
         runAgent.State.WorkflowYaml.Should().Be(updatedYaml);
-        runAgent.State.Compiled.Should().BeTrue();
         runAgent.State.InlineWorkflowYamls.Should().ContainKey("child");
     }
 

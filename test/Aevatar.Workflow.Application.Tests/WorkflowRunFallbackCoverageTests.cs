@@ -72,8 +72,30 @@ public sealed class WorkflowRunFallbackCoverageTests
         fallback.WorkflowName.Should().Be(WorkflowRunBehaviorOptions.DirectWorkflowName);
         fallback.WorkflowYamls.Should().BeNull();
         fallback.Prompt.Should().Be(request.Prompt);
-        fallback.ActorId.Should().Be(request.ActorId);
+        fallback.ActorId.Should().BeNull();
         fallback.SessionId.Should().Be(request.SessionId);
+    }
+
+    [Fact]
+    public void WorkflowDirectFallbackPolicy_ShouldUseEffectiveWorkflow_WhenRequestOmitsWorkflowName()
+    {
+        var options = new WorkflowRunBehaviorOptions
+        {
+            EnableDirectFallback = true,
+            UseAutoAsDefaultWhenWorkflowUnspecified = true,
+        };
+        options.DirectFallbackWorkflowWhitelist.Clear();
+        options.DirectFallbackWorkflowWhitelist.Add(WorkflowRunBehaviorOptions.AutoWorkflowName);
+        options.DirectFallbackExceptionWhitelist.Clear();
+        options.DirectFallbackExceptionWhitelist.Add(typeof(WorkflowDirectFallbackTriggerException));
+
+        var policy = new WorkflowDirectFallbackPolicy(options);
+
+        var shouldFallback = policy.ShouldFallback(
+            new WorkflowChatRunRequest("hello", WorkflowName: null, ActorId: "actor-1"),
+            new WorkflowDirectFallbackTriggerException("fallback"));
+
+        shouldFallback.Should().BeTrue();
     }
 
     [Fact]
@@ -117,12 +139,13 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "auto", null),
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
+        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -166,11 +189,12 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.DispatchAsync(
-            new WorkflowChatRunRequest("hello", "auto", null),
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
+        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
         await actorPort.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }

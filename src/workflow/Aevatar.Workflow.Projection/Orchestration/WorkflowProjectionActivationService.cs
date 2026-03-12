@@ -9,6 +9,7 @@ public sealed class WorkflowProjectionActivationService
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
+    private readonly ProjectionOwnershipCoordinatorOptions _ownershipOptions;
     private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
 
     public WorkflowProjectionActivationService(
@@ -16,12 +17,14 @@ public sealed class WorkflowProjectionActivationService
         IProjectionClock clock,
         IWorkflowExecutionProjectionContextFactory contextFactory,
         IProjectionOwnershipCoordinator ownershipCoordinator,
-        IWorkflowProjectionReadModelUpdater readModelUpdater)
+        IWorkflowProjectionReadModelUpdater readModelUpdater,
+        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null)
         : base(lifecycle)
     {
         _clock = clock;
         _contextFactory = contextFactory;
         _ownershipCoordinator = ownershipCoordinator;
+        _ownershipOptions = ownershipOptions ?? new ProjectionOwnershipCoordinatorOptions();
         _readModelUpdater = readModelUpdater;
     }
 
@@ -66,7 +69,7 @@ public sealed class WorkflowProjectionActivationService
     }
 
     protected override WorkflowExecutionRuntimeLease CreateRuntimeLease(WorkflowExecutionProjectionContext context) =>
-        new(context);
+        new(context, _ownershipCoordinator, _ownershipOptions);
 
     protected override async Task CleanupOnStartFailureAsync(
         string rootEntityId,

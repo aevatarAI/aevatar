@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -63,6 +64,43 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("start failed");
         ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-fail", "cmd-fail"));
         ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-fail", "cmd-fail"));
+    }
+
+    [Fact]
+    public async Task ActivationAndReleaseServices_ShouldRenewOwnershipLease_AndStopHeartbeatBeforeRelease()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownership = new TrackingOwnershipCoordinator();
+        var ownershipOptions = new ProjectionOwnershipCoordinatorOptions
+        {
+            LeaseTtlMs = ProjectionOwnershipCoordinatorOptions.MinimumLeaseTtlMs,
+        };
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            ownership,
+            readModelUpdater,
+            ownershipOptions);
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            readModelUpdater,
+            ownership);
+
+        var lease = await activationService.EnsureAsync(
+            "actor-heartbeat",
+            "direct",
+            "hello",
+            "cmd-heartbeat",
+            CancellationToken.None);
+        await ownership.WaitForAcquireCountAsync(2, TimeSpan.FromSeconds(3));
+
+        await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
+
+        ownership.Acquired.Count.Should().BeGreaterThanOrEqualTo(2);
+        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-heartbeat", "cmd-heartbeat"));
+        ownership.Operations[^1].Should().Be(("release", "actor-heartbeat", "cmd-heartbeat"));
     }
 
     [Fact]
@@ -537,7 +575,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         handledCompleted.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(2);
-        runEventHub.PublishedEvents.Should().BeEmpty();
+        runEventHub.PublishedEvents.Should().ContainSingle();
+        runEventHub.PublishedEvents[0].evt.RunError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
 
         var handledUnknown = await policy.TryHandleAsync(
             lease,
@@ -659,21 +698,84 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
     private sealed class TrackingOwnershipCoordinator : IProjectionOwnershipCoordinator
     {
-        public List<(string ScopeId, string SessionId)> Acquired { get; } = [];
-        public List<(string ScopeId, string SessionId)> Released { get; } = [];
+        private readonly object _gate = new();
+        private readonly List<(string ScopeId, string SessionId)> _acquired = [];
+        private readonly List<(string ScopeId, string SessionId)> _released = [];
+        private readonly List<(string Kind, string ScopeId, string SessionId)> _operations = [];
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _acquireCountWaiters = [];
+
+        public IReadOnlyList<(string ScopeId, string SessionId)> Acquired
+        {
+            get
+            {
+                lock (_gate)
+                    return _acquired.ToArray();
+            }
+        }
+
+        public IReadOnlyList<(string ScopeId, string SessionId)> Released
+        {
+            get
+            {
+                lock (_gate)
+                    return _released.ToArray();
+            }
+        }
+
+        public IReadOnlyList<(string Kind, string ScopeId, string SessionId)> Operations
+        {
+            get
+            {
+                lock (_gate)
+                    return _operations.ToArray();
+            }
+        }
 
         public Task AcquireAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Acquired.Add((scopeId, sessionId));
+            lock (_gate)
+            {
+                _acquired.Add((scopeId, sessionId));
+                _operations.Add(("acquire", scopeId, sessionId));
+                for (var i = _acquireCountWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _acquireCountWaiters[i];
+                    if (_acquired.Count < waiter.Count)
+                        continue;
+
+                    _acquireCountWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
             return Task.CompletedTask;
         }
 
         public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Released.Add((scopeId, sessionId));
+            lock (_gate)
+            {
+                _released.Add((scopeId, sessionId));
+                _operations.Add(("release", scopeId, sessionId));
+            }
             return Task.CompletedTask;
+        }
+
+        public Task WaitForAcquireCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (_acquired.Count >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _acquireCountWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
         }
     }
 
