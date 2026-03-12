@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────
 // EventRouter - event router for hierarchy and propagation logic.
-// Routes events to Self / Up / Down / Both based on EventDirection.
+// Routes events to Self / Up / Down / Both based on BroadcastDirection.
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Routing;
@@ -50,27 +51,30 @@ public sealed class EventRouter
         Func<EventEnvelope, Task> handleSelf,
         Func<string, EventEnvelope, Task> sendToActor)
     {
+        if (!envelope.Route.IsBroadcast())
+            return;
+
         var publishers = GetPublishers(envelope);
         if (publishers.Contains(ActorId)) return;
         var updated = AddPublisher(envelope, ActorId);
-        var direction = updated.Route?.Direction ?? EventDirection.Unspecified;
-        if (direction is EventDirection.Unspecified or EventDirection.Observe)
+        var direction = updated.Route.GetBroadcastDirection();
+        if (direction == BroadcastDirection.Unspecified)
             return;
 
         await handleSelf(updated);
 
         switch (direction)
         {
-            case EventDirection.Self: break;
-            case EventDirection.Up:
+            case BroadcastDirection.Self: break;
+            case BroadcastDirection.Up:
                 if (_parentId != null && !publishers.Contains(_parentId))
                     await sendToActor(_parentId, updated);
                 break;
-            case EventDirection.Down:
+            case BroadcastDirection.Down:
                 foreach (var c in _childrenIds)
                     if (!publishers.Contains(c)) await sendToActor(c, updated);
                 break;
-            case EventDirection.Both:
+            case BroadcastDirection.Both:
                 if (_parentId != null && !publishers.Contains(_parentId))
                     await sendToActor(_parentId, updated);
                 foreach (var c in _childrenIds)

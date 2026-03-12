@@ -21,7 +21,6 @@ public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalization
     {
         var completed = TextNormalizationProtocolSample.BuildCompleted(evt);
         await PersistDomainEventAsync(completed, CancellationToken.None);
-        await PublishAsync(completed, EventDirection.Self, CancellationToken.None);
     }
 
     [EventHandler]
@@ -149,7 +148,6 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
             Current = current,
         };
         await PersistDomainEventAsync(completed, CancellationToken.None);
-        await PublishAsync(completed, EventDirection.Self, CancellationToken.None);
     }
 
     [EventHandler]
@@ -204,11 +202,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "workflow-protocol",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast("workflow-protocol", BroadcastDirection.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -223,10 +217,14 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private const string ReadModelPayloadKey = "text_normalization.current";
 
     private readonly IActorRuntime _runtime;
+    private readonly IStreamProvider _streams;
 
-    public TextNormalizationScriptingProtocolGAgent(IActorRuntime runtime)
+    public TextNormalizationScriptingProtocolGAgent(
+        IActorRuntime runtime,
+        IStreamProvider streams)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
     }
 
     [EventHandler]
@@ -244,18 +242,22 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
                 TextNormalizationProtocolSample.ScriptSource,
                 "text-normalization-protocol-hash"),
             CancellationToken.None);
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                runtimeActor.Id,
-                runId,
-                Any.Pack(evt),
-                ScriptRevision,
-                definitionActor.Id,
-                TextNormalizationRequested.Descriptor.FullName),
+        var committedObservation = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            _streams,
+            runtimeActor.Id,
+            runId,
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActor.Id,
+                    runId,
+                    Any.Pack(evt),
+                    ScriptRevision,
+                    definitionActor.Id,
+                    TextNormalizationRequested.Descriptor.FullName),
+                CancellationToken.None),
             CancellationToken.None);
 
-        var runtimeAgent = (ScriptRuntimeGAgent)runtimeActor.Agent;
-        if (!runtimeAgent.State.ReadModelPayloads.TryGetValue(ReadModelPayloadKey, out var packedReadModel))
+        if (!committedObservation.Event.ReadModelPayloads.TryGetValue(ReadModelPayloadKey, out var packedReadModel))
         {
             throw new InvalidOperationException("Scripting protocol sample did not persist read model payload.");
         }
@@ -266,7 +268,6 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
             Current = packedReadModel.Unpack<TextNormalizationReadModel>(),
         };
         await PersistDomainEventAsync(completed, CancellationToken.None);
-        await PublishAsync(completed, EventDirection.Self, CancellationToken.None);
     }
 
     [EventHandler]

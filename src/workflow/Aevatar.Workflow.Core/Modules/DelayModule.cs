@@ -48,7 +48,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = "delay step requires non-empty run_id and step_id",
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
                 return;
             }
 
@@ -79,7 +79,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = true,
                     Output = request.Input ?? string.Empty,
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
                 return;
             }
 
@@ -137,7 +137,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
             RunId = runIdFired,
             Success = true,
             Output = pending.Input,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
 
         stateForCallback.Pending.Remove(BuildPendingKey(firedKey));
         await SaveStateAsync(stateForCallback, ctx, ct);

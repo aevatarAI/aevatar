@@ -15,7 +15,7 @@ public class StreamForwardingRulesTests
         binding.SourceStreamId.Should().Be("parent");
         binding.TargetStreamId.Should().Be("child");
         binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
-        binding.DirectionFilter.SetEquals([EventDirection.Down, EventDirection.Both]).Should().BeTrue();
+        binding.DirectionFilter.SetEquals([BroadcastDirection.Down, BroadcastDirection.Both]).Should().BeTrue();
     }
 
     [Fact]
@@ -23,10 +23,7 @@ public class StreamForwardingRulesTests
     {
         var envelope = new EventEnvelope
         {
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Up,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Up),
         };
         var binding = StreamForwardingRules.CreateHierarchyBinding("source", "target");
 
@@ -39,10 +36,7 @@ public class StreamForwardingRulesTests
         var envelope = new EventEnvelope
         {
             Payload = Any.Pack(new StringValue { Value = "x" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
         var binding = StreamForwardingRules.CreateHierarchyBinding("source", "target");
         binding.EventTypeFilter.Add(envelope.Payload!.TypeUrl);
@@ -69,10 +63,7 @@ public class StreamForwardingRulesTests
         var envelope = new EventEnvelope
         {
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
 
         var forwarded = StreamForwardingRules.BuildForwardedEnvelope(
@@ -95,10 +86,7 @@ public class StreamForwardingRulesTests
         var envelope = new EventEnvelope
         {
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
         var binding = StreamForwardingRules.CreateHierarchyBinding("root", "child");
 
@@ -118,10 +106,7 @@ public class StreamForwardingRulesTests
     {
         var envelope = new EventEnvelope
         {
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Both,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Both),
             Runtime = new EnvelopeRuntime
             {
                 Forwarding = new EnvelopeForwardingContext
@@ -140,10 +125,7 @@ public class StreamForwardingRulesTests
     {
         var envelope = new EventEnvelope
         {
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             Runtime = new EnvelopeRuntime
             {
                 Forwarding = new EnvelopeForwardingContext

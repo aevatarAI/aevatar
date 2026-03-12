@@ -77,10 +77,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Payload = Any.Pack(new StringValue { Value = "auto-retry" }),
-                    Route = new EnvelopeRoute
-                    {
-                        Direction = EventDirection.Down,
-                    },
+                    Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
                 };
 
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -187,10 +184,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Payload = Any.Pack(new StringValue { Value = "mixed-version-retry" }),
-                    Route = new EnvelopeRoute
-                    {
-                        Direction = EventDirection.Down,
-                    },
+                    Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
                 };
 
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -292,10 +286,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "inject-me" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -358,10 +349,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "retry-exhausted" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
             await transport.PublishAsync(actorEventNamespace, actorId, failingEnvelope.ToByteArray(), CancellationToken.None);
             await logProbe.WaitForInjectedFailureAsync(TimeSpan.FromSeconds(20));
@@ -372,10 +360,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new Int32Value { Value = 7 }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
             await transport.PublishAsync(actorEventNamespace, actorId, succeedingEnvelope.ToByteArray(), CancellationToken.None);
 
@@ -425,10 +410,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "ping" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
@@ -484,10 +466,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "fail-twice-then-ok" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
 
@@ -546,10 +525,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "always-fail" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
             await transport.PublishAsync(actorEventNamespace, actorId, failingEnvelope.ToByteArray(), CancellationToken.None);
             await Task.Delay(500);
@@ -558,10 +534,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "ok" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
             await transport.PublishAsync(actorEventNamespace, actorId, succeedingEnvelope.ToByteArray(), CancellationToken.None);
 
@@ -620,10 +593,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "fail-once-then-ok" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, originalEnvelope.ToByteArray(), CancellationToken.None);

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -143,29 +144,39 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return;
 
         var selfActorId = this.GetPrimaryKeyString();
-        switch (envelope.Route?.Direction ?? EventDirection.Unspecified)
-        {
-            case EventDirection.Self:
-            case EventDirection.Up:
-                break;
-            case EventDirection.Down:
-            case EventDirection.Both:
-                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                {
-                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                        return;
-                    break;
-                }
+        var route = envelope.Route;
+        if (route.IsObserve())
+            return;
 
-                if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
-                {
+        if (route.IsDirect())
+        {
+            if (!string.Equals(route.GetTargetActorId(), selfActorId, StringComparison.Ordinal))
+                return;
+        }
+        else
+        {
+            switch (route.GetBroadcastDirection())
+            {
+                case BroadcastDirection.Self:
+                case BroadcastDirection.Up:
+                    break;
+                case BroadcastDirection.Down:
+                case BroadcastDirection.Both:
+                    if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                    {
+                        if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                            return;
+                        break;
+                    }
+
+                    if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                    break;
+                default:
                     return;
-                }
-                break;
-            case EventDirection.Observe:
-                return;
-            default:
-                return;
+            }
         }
 
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);

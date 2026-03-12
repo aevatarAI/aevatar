@@ -86,12 +86,7 @@ public class FoundationAbstractionsProtoCoverageTests
             Id = "envelope-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new StringValue { Value = "message" }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "actor-1",
-                Direction = EventDirection.Both,
-                TargetActorId = "actor-2",
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("actor-1", "actor-2"),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = "corr-1",

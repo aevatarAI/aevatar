@@ -327,11 +327,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
             Runtime = callback == null
                 ? null
                 : new EnvelopeRuntime
@@ -377,7 +373,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, BroadcastDirection Direction)> Published { get; } = [];
 
         public List<RecordedCallback> Scheduled { get; } = [];
 
@@ -417,7 +413,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage

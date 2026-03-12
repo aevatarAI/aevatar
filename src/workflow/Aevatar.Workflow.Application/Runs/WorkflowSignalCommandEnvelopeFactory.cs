@@ -23,12 +23,7 @@ internal sealed class WorkflowSignalCommandEnvelopeFactory : ICommandEnvelopeFac
                 SignalName = command.SignalName,
                 Payload = command.Payload ?? string.Empty,
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "api.workflow.signal",
-                Direction = EventDirection.Self,
-                TargetActorId = context.TargetId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("api.workflow.signal", context.TargetId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = context.CorrelationId,

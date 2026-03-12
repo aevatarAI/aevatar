@@ -89,7 +89,7 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage =>

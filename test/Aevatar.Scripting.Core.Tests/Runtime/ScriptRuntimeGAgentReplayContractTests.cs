@@ -294,7 +294,7 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -320,6 +320,20 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedAsync<TEvent>(
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = evt;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

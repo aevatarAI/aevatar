@@ -52,7 +52,7 @@ public sealed class DemoJsonPickModule
                 RunId = request.RunId,
                 Success = true,
                 Output = output,
-            }, EventDirection.Self, ct);
+            }, BroadcastDirection.Self, ct);
         }
         catch (Exception ex)
         {
@@ -79,7 +79,7 @@ public sealed class DemoJsonPickModule
             Content = outputText,
         };
 
-        await ctx.PublishAsync(response, EventDirection.Up, ct);
+        await ctx.PublishAsync(response, BroadcastDirection.Up, ct);
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);
@@ -140,6 +140,6 @@ public sealed class DemoJsonPickModule
             RunId = request.RunId,
             Success = false,
             Error = error,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
     }
 }

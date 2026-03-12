@@ -25,10 +25,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-1",
             Payload = Any.Pack(new StringValue { Value = "direct" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
         await stream.ProduceAsync(envelope);
         await stream.ProduceAsync(new StringValue { Value = "wrapped" });
@@ -87,10 +84,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-2",
             Payload = Any.Pack(new StringValue { Value = "ok" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
         await transport.PushAsync(new MassTransitEnvelopeRecord
         {
@@ -103,10 +97,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-3",
             Payload = Any.Pack(new Int32Value { Value = 7 }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
         await transport.PushAsync(new MassTransitEnvelopeRecord
         {

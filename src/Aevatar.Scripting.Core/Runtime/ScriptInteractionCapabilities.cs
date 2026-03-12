@@ -27,7 +27,7 @@ public sealed class ScriptInteractionCapabilities : IScriptInteractionCapabiliti
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
         _aiCapability.AskAsync(_runId, _correlationId, prompt ?? string.Empty, ct);
 
-    public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct) =>
+    public Task PublishAsync(IMessage eventPayload, BroadcastDirection direction, CancellationToken ct) =>
         _messageContext.PublishAsync(eventPayload, direction, ct);
 
     public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>

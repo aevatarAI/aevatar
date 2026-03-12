@@ -402,7 +402,7 @@ public class ScriptCatalogGAgentTests
 
         public Task PublishAsync<T>(
             T evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -428,6 +428,20 @@ public class ScriptCatalogGAgentTests
             _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedAsync<T>(
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            _ = evt;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

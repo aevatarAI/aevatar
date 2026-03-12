@@ -40,7 +40,7 @@ Aevatar.Foundation.Abstractions/
 - `IActor`：Agent 包装容器，父子关系与消息分发入口
 - `IActorRuntime`：Actor 创建、销毁、查询、链接
 - `IActorDispatchPort`：向目标 Actor 定向投递 `EventEnvelope`
-- `IEventPublisher`：按方向发布或点对点发送事件
+- `IEventPublisher`：按 `BroadcastRoute / DirectRoute / ObserveRoute` 语义发布、点对点发送或观察 committed 事件
 - `IEnvelopePropagationPolicy` / `ICorrelationLinkPolicy`：基于 Raw `EventEnvelope` 的关联字段传播策略
 - `IEventContext`：模块上下文的共性根接口
 - `IEventModule<TContext>`：可插拔事件处理模块（含优先级）
@@ -51,7 +51,8 @@ Aevatar.Foundation.Abstractions/
 
 `agent_messages.proto` 定义 Foundation 公共消息，包括：
 
-- `EventDirection`
+- `BroadcastDirection`
+- `EnvelopeRoute`（`oneof { broadcast | direct | observe }`）
 - `EventEnvelope`
 - `StateEvent`
 - 层级变更事件（`ParentChangedEvent`、`ChildAddedEvent`、`ChildRemovedEvent`）

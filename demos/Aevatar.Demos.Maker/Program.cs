@@ -245,11 +245,7 @@ await actor.HandleEventAsync(new EventEnvelope
         WorkflowYaml = workflowYaml,
         WorkflowName = workflowName,
     }),
-    Route = new EnvelopeRoute
-    {
-        PublisherActorId = "maker.demo",
-        Direction = EventDirection.Self,
-    },
+    Route = EnvelopeRouteSemantics.CreateBroadcast("maker.demo", BroadcastDirection.Self),
     Propagation = new EnvelopePropagation
     {
         CorrelationId = Guid.NewGuid().ToString("N"),
@@ -343,11 +339,7 @@ var envelope = new EventEnvelope
     Id = Guid.NewGuid().ToString("N"),
     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
     Payload = Any.Pack(chatEvt),
-    Route = new EnvelopeRoute
-    {
-        PublisherActorId = "maker-cli",
-        Direction = EventDirection.Self,
-    },
+    Route = EnvelopeRouteSemantics.CreateBroadcast("maker-cli", BroadcastDirection.Self),
 };
 
 await actor.HandleEventAsync(envelope);

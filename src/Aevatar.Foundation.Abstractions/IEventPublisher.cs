@@ -8,14 +8,14 @@ using Google.Protobuf;
 namespace Aevatar.Foundation.Abstractions;
 
 /// <summary>
-/// Event publishing contract for actor delivery and observer-only committed-event publication.
-/// Publish/send never imply inline execution; `EventDirection.Observe` writes an observer-visible envelope that actor inbox handlers ignore.
+/// Event publishing contract for actor delivery and committed-event observation.
+/// Publish/send never imply inline execution; `PublishAsync` produces a broadcast route, `SendToAsync` produces a direct route.
 /// </summary>
 public interface IEventPublisher
 {
-    /// <summary>Publishes an event using the specified route (Up/Down/Both/Self/Observe).</summary>
+    /// <summary>Publishes an event using the specified broadcast route.</summary>
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
-    Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
+    Task PublishAsync<TEvent>(TEvent evt, BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
 
@@ -24,4 +24,11 @@ public interface IEventPublisher
     Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
+
+    /// <summary>Publishes a committed event for observation-only consumers.</summary>
+    /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
+    Task PublishCommittedAsync<TEvent>(TEvent evt,
+        CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
+        throw new NotSupportedException($"{GetType().Name} does not support observation publishing.");
 }

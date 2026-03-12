@@ -11,15 +11,14 @@ option csharp_namespace = "Aevatar.Foundation.Abstractions";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
-// Event propagation direction.
+// Broadcast propagation direction.
 
-enum EventDirection {
-  EVENT_DIRECTION_UNSPECIFIED = 0;
-  EVENT_DIRECTION_DOWN        = 1;   // Parent -> children
-  EVENT_DIRECTION_UP          = 2;   // Child -> parent stream -> siblings
-  EVENT_DIRECTION_BOTH        = 3;   // Both directions
-  EVENT_DIRECTION_SELF        = 4;   // Local only
-  EVENT_DIRECTION_OBSERVE     = 5;   // Observer/projection stream only; never handled as actor inbox input
+enum BroadcastDirection {
+  BROADCAST_DIRECTION_UNSPECIFIED = 0;
+  BROADCAST_DIRECTION_DOWN        = 1;   // Parent -> children
+  BROADCAST_DIRECTION_UP          = 2;   // Child -> parent stream -> siblings
+  BROADCAST_DIRECTION_BOTH        = 3;   // Both directions
+  BROADCAST_DIRECTION_SELF        = 4;   // Local only
 }
 
 // Event envelope: 8 semantic fields (reduced from 16).
@@ -34,9 +33,24 @@ message EventEnvelope {
 }
 
 message EnvelopeRoute {
-  string         publisher_actor_id = 1;
-  EventDirection direction          = 2;
-  string         target_actor_id    = 3;
+  string publisher_actor_id = 1;
+
+  oneof route {
+    BroadcastRoute broadcast = 2;
+    DirectRoute    direct    = 3;
+    ObserveRoute   observe   = 4;
+  }
+}
+
+message BroadcastRoute {
+  BroadcastDirection direction = 1;
+}
+
+message DirectRoute {
+  string target_actor_id = 1;
+}
+
+message ObserveRoute {
 }
 
 message TraceContext {

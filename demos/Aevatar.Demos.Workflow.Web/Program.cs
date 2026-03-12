@@ -425,11 +425,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             WorkflowYaml = yaml,
             WorkflowName = name,
         }),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "web.demo",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateBroadcast("web.demo", BroadcastDirection.Self),
         Propagation = new EnvelopePropagation
         {
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -459,11 +455,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(resumed),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "web.demo.auto-human",
-                        Direction = EventDirection.Self,
-                    },
+                    Route = EnvelopeRouteSemantics.CreateBroadcast("web.demo.auto-human", BroadcastDirection.Self),
                     Propagation = new EnvelopePropagation
                     {
                         CorrelationId = Guid.NewGuid().ToString("N"),
@@ -615,11 +607,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(new ChatRequestEvent { Prompt = actualInput, SessionId = $"web-{name}" }),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "web.demo",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateBroadcast("web.demo", BroadcastDirection.Self),
     });
 
     try

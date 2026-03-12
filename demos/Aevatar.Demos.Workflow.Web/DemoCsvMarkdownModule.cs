@@ -41,7 +41,7 @@ public sealed class DemoCsvMarkdownModule
             RunId = request.RunId,
             Success = true,
             Output = ConvertCsvToMarkdown(input, delimiter, hasHeader),
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -63,7 +63,7 @@ public sealed class DemoCsvMarkdownModule
             Content = $"[demo_csv_markdown role module]\n{table}",
         };
 
-        await ctx.PublishAsync(response, EventDirection.Up, ct);
+        await ctx.PublishAsync(response, BroadcastDirection.Up, ct);
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);

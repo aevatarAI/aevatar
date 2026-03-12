@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Propagation;
@@ -27,7 +28,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
 
     public async Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null)
@@ -38,11 +39,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = _actorId,
-                Direction = direction,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(_actorId, direction),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -54,23 +51,20 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
 
         switch (direction)
         {
-            case EventDirection.Self:
+            case BroadcastDirection.Self:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
-            case EventDirection.Observe:
+            case BroadcastDirection.Down:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
-            case EventDirection.Down:
-                await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
-                break;
-            case EventDirection.Up:
+            case BroadcastDirection.Up:
             {
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
                     await DispatchAsync(parentId, envelope, ct);
                 break;
             }
-            case EventDirection.Both:
+            case BroadcastDirection.Both:
             {
                 var tasks = new List<Task>
                 {
@@ -98,12 +92,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = _actorId,
-                Direction = EventDirection.Self,
-                TargetActorId = targetActorId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(_actorId, targetActorId),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -118,12 +107,35 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         return DispatchAsync(targetActorId, envelope, ct);
     }
 
-    private long? EstimateRouteTargetCount(EventDirection direction) =>
+    public Task PublishCommittedAsync<TEvent>(
+        TEvent evt,
+        CancellationToken ct = default,
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateObserve(_actorId),
+        };
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _propagationPolicy,
+            _actorId,
+            routeTargetCount: 0,
+            options);
+        return _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+    }
+
+    private long? EstimateRouteTargetCount(BroadcastDirection direction) =>
         direction switch
         {
-            EventDirection.Self => 1,
-            EventDirection.Observe => 0,
-            EventDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
+            BroadcastDirection.Self => 1,
+            BroadcastDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
             // Down/Both fan-out count is stream-subscriber dependent and unknown at publish time.
             _ => null,
         };

@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -36,6 +37,7 @@ public class ClaimComplexBusinessScenarioTests
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "claim-complex-definition";
         const string scriptId = "claim-complex-script";
@@ -68,16 +70,21 @@ public class ClaimComplexBusinessScenarioTests
             var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
             var aiCountBefore = aiCapability.Calls.Count;
 
-            await runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActorId,
-                    runId,
-                    BuildClaimPayload(
-                        claimCase.CaseId,
-                        claimCase.RiskScore,
-                        claimCase.CompliancePassed),
-                    revision,
-                    definitionActorId),
+            var committedObservation = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                streams,
+                runtimeActorId,
+                runId,
+                () => runtimeActor.HandleEventAsync(
+                    ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                        runtimeActorId,
+                        runId,
+                        BuildClaimPayload(
+                            claimCase.CaseId,
+                            claimCase.RiskScore,
+                            claimCase.CompliancePassed),
+                        revision,
+                        definitionActorId),
+                    CancellationToken.None),
                 CancellationToken.None);
 
             var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
@@ -113,10 +120,9 @@ public class ClaimComplexBusinessScenarioTests
             }
 
             var persistedEvents = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
-            var committed = persistedEvents
-                .Last(x => x.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) == true)
-                .EventData!
-                .Unpack<ScriptRunDomainEventCommitted>();
+            persistedEvents.Should().Contain(x =>
+                x.EventData != null &&
+                x.EventData.Is(ScriptRunDomainEventCommitted.Descriptor));
 
             var projectionContext = new ScriptProjectionContext
             {
@@ -132,21 +138,7 @@ public class ClaimComplexBusinessScenarioTests
             await projector.InitializeAsync(projectionContext, CancellationToken.None);
             await projector.ProjectAsync(
                 projectionContext,
-                new EventEnvelope
-                {
-                    Id = "evt-" + runId,
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(committed),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = runtimeActorId,
-                        Direction = EventDirection.Self,
-                    },
-                    Propagation = new EnvelopePropagation
-                    {
-                        CorrelationId = runId,
-                    },
-                },
+                committedObservation.Envelope,
                 CancellationToken.None);
             var readModel = await dispatcher.GetAsync(runtimeActorId, CancellationToken.None);
             readModel.Should().NotBeNull();

@@ -89,7 +89,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Self),
+            CreateEnvelope(BroadcastDirection.Self),
             _ =>
             {
                 handledCount++;
@@ -104,7 +104,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         sent.Should().BeEmpty();
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Up),
+            CreateEnvelope(BroadcastDirection.Up),
             _ =>
             {
                 handledCount++;
@@ -117,7 +117,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             });
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Down),
+            CreateEnvelope(BroadcastDirection.Down),
             _ =>
             {
                 handledCount++;
@@ -130,7 +130,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             });
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both),
+            CreateEnvelope(BroadcastDirection.Both),
             _ =>
             {
                 handledCount++;
@@ -147,7 +147,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var child2CountBeforeSkip = sent.Count(x => x == "child-2");
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both, publishers: "parent,child-1"),
+            CreateEnvelope(BroadcastDirection.Both, publishers: "parent,child-1"),
             _ =>
             {
                 handledCount++;
@@ -184,7 +184,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both, publishers: "actor-a"),
+            CreateEnvelope(BroadcastDirection.Both, publishers: "actor-a"),
             _ =>
             {
                 handled = true;
@@ -200,16 +200,13 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         sent.Should().BeEmpty();
     }
 
-    private static EventEnvelope CreateEnvelope(EventDirection direction, string? publishers = null)
+    private static EventEnvelope CreateEnvelope(BroadcastDirection direction, string? publishers = null)
     {
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = new EnvelopeRoute
-            {
-                Direction = direction,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, direction),
         };
 
         if (!string.IsNullOrWhiteSpace(publishers))

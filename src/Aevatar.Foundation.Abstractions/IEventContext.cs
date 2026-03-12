@@ -15,7 +15,7 @@ public interface IEventContext
 
     Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage;

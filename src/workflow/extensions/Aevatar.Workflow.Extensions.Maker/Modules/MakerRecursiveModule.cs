@@ -186,7 +186,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
                 childRequest.Parameters[key] = value;
             childRequest.Parameters["depth"] = (node.Depth + 1).ToString();
 
-            await ctx.PublishAsync(childRequest, EventDirection.Self, ct);
+            await ctx.PublishAsync(childRequest, BroadcastDirection.Self, ct);
         }
 
         ctx.Logger.LogInformation(
@@ -248,7 +248,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         completed.Annotations["maker.stage"] = stage;
         completed.Annotations["maker.child_count"] = node.ChildStepIds.Count.ToString();
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
         CleanupNode(node.Key);
     }
 
@@ -260,7 +260,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             RunId = node.RunId,
             Success = false,
             Error = error,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
 
         CleanupNode(node.Key);
     }
@@ -331,7 +331,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         req.Parameters["vote_param_max_response_length"] = node.MaxResponseLength.ToString();
 
         _internalStages[new StepRunKey(node.RunId, internalStepId)] = new InternalStageRef(node.Key, stage);
-        await ctx.PublishAsync(req, EventDirection.Self, ct);
+        await ctx.PublishAsync(req, BroadcastDirection.Self, ct);
     }
 
     private static bool IsRecursiveStep(string stepType) =>

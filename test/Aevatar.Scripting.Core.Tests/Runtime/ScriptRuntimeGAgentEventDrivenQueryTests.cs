@@ -382,12 +382,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                 RequestId = query.RequestId,
                 RunId = "run-no-metadata",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = agent.Id,
-                TargetActorId = agent.Id,
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(agent.Id, agent.Id),
         });
 
         agent.State.LastRunId.Should().BeEmpty();
@@ -611,12 +606,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                     RequestId = requestId,
                     RunId = runId,
                 }),
-                Route = new EnvelopeRoute
-                {
-                    PublisherActorId = actorId,
-                    TargetActorId = actorId,
-                    Direction = EventDirection.Self,
-                },
+                Route = EnvelopeRouteSemantics.CreateDirect(actorId, actorId),
             });
     }
 
@@ -713,7 +703,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -741,6 +731,20 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             if (SendToException != null)
                 throw SendToException;
             Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedAsync<TEvent>(
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = evt;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

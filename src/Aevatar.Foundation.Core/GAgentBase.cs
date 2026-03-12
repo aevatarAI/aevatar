@@ -221,7 +221,7 @@ public abstract class GAgentBase : IAgent
 
     /// <summary>Publishes an event with direction.</summary>
     protected Task PublishAsync<TEvent>(TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
         EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope, options);
@@ -339,8 +339,9 @@ public abstract class GAgentBase : IAgent
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, BroadcastDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
         public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishCommittedAsync<T>(T e, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

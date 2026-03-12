@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -29,7 +30,7 @@ internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
     {
         if (_meta.IsAllEventHandler) return true;
         if (!_meta.AllowSelfHandling && envelope.Route?.PublisherActorId == _agent.Id) return false;
-        if (_meta.OnlySelfHandling && envelope.Route?.Direction != EventDirection.Self) return false;
+        if (_meta.OnlySelfHandling && envelope.Route.GetBroadcastDirection() != BroadcastDirection.Self) return false;
         if (envelope.Payload == null) return false;
         return envelope.Payload.TypeUrl == GetTypeUrl(_meta.ParameterType);
     }

@@ -24,9 +24,9 @@ public class ScriptingActorRequestEnvelopeFactoryTests
 
         envelope.Payload.Should().NotBeNull();
         envelope.Payload!.TypeUrl.Should().Contain(nameof(UpsertScriptDefinitionRequestedEvent));
-        envelope.Route!.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.IsDirect().Should().BeTrue();
         envelope.Route.PublisherActorId.Should().Be("scripting.application");
-        envelope.Route.TargetActorId.Should().Be("definition-actor-1");
+        envelope.Route.GetTargetActorId().Should().Be("definition-actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("rev-1");
 
         var payload = envelope.Payload.Unpack<UpsertScriptDefinitionRequestedEvent>();
@@ -55,9 +55,9 @@ public class ScriptingActorRequestEnvelopeFactoryTests
 
         envelope.Payload.Should().NotBeNull();
         envelope.Payload!.TypeUrl.Should().Contain(nameof(RunScriptRequestedEvent));
-        envelope.Route!.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.IsDirect().Should().BeTrue();
         envelope.Route.PublisherActorId.Should().Be("scripting.application");
-        envelope.Route.TargetActorId.Should().Be("runtime-actor-1");
+        envelope.Route.GetTargetActorId().Should().Be("runtime-actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("run-1");
 
         var payload = envelope.Payload.Unpack<RunScriptRequestedEvent>();

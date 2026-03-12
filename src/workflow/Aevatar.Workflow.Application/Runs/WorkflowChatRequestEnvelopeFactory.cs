@@ -25,12 +25,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "api",
-                Direction = EventDirection.Self,
-                TargetActorId = context.TargetId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("api", context.TargetId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = context.CorrelationId,

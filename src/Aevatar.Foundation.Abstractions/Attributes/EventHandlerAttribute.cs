@@ -23,7 +23,7 @@ public sealed class EventHandlerAttribute : Attribute
     public bool AllowSelfHandling { get; set; }
 
     /// <summary>
-    /// Only handle events published by itself (EventDirection.Self). Default is false.
+    /// Only handle events published by itself (BroadcastDirection.Self). Default is false.
     /// </summary>
     public bool OnlySelfHandling { get; set; }
 }

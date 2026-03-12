@@ -137,7 +137,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var binding = bindings.Should().ContainSingle(x =>
             x.TargetStreamId == child.Id &&
             x.ForwardingMode == StreamForwardingMode.HandleThenForward).Subject;
-        binding.DirectionFilter.SetEquals([EventDirection.Down, EventDirection.Both]).Should().BeTrue();
+        binding.DirectionFilter.SetEquals([BroadcastDirection.Down, BroadcastDirection.Both]).Should().BeTrue();
 
         await _runtime.UnlinkAsync(child.Id);
 
@@ -154,7 +154,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
         await ((GAgentBase)child.Agent).EventPublisher.PublishAsync(
             new PingEvent { Message = "child-both" },
-            EventDirection.Both,
+            BroadcastDirection.Both,
             CancellationToken.None);
 
         var parentCollector = (CollectorAgent)parent.Agent;
@@ -179,15 +179,15 @@ public class LocalActorRuntimeTests : IAsyncLifetime
                 ForwardingMode = StreamForwardingMode.TransitOnly,
                 DirectionFilter =
                 [
-                    EventDirection.Down,
-                    EventDirection.Both,
+                    BroadcastDirection.Down,
+                    BroadcastDirection.Both,
                 ],
             },
             CancellationToken.None);
 
         await ((GAgentBase)root.Agent).EventPublisher.PublishAsync(
             new PingEvent { Message = "transit" },
-            EventDirection.Down,
+            BroadcastDirection.Down,
             CancellationToken.None);
 
         var middleCollector = (CollectorAgent)middle.Agent;

@@ -18,7 +18,7 @@ public sealed class ScriptExecutionMessageContext
 
     public Task PublishAsync(
         IMessage eventPayload,
-        EventDirection direction,
+        BroadcastDirection direction,
         CancellationToken ct) =>
         _publisher.PublishAsync(eventPayload, direction, ct, _inboundEnvelope);
 

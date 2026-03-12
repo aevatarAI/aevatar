@@ -42,7 +42,7 @@ public sealed class ConditionalModule : IEventModule<IWorkflowExecutionContext>
             Success = true, Output = input,
             BranchKey = branchKey,
         };
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
     }
 
     private static bool TryParseBoolean(string value, out bool result)

@@ -130,7 +130,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
             return Task.FromResult(string.Empty);
         }
 
-        public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
+        public Task PublishAsync(IMessage eventPayload, BroadcastDirection direction, CancellationToken ct)
         {
             _ = eventPayload;
             _ = direction;
@@ -285,7 +285,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
     {
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -294,6 +294,14 @@ public class ScriptRuntimeExecutionOrchestratorTests
 
         public Task SendToAsync<TEvent>(
             string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task PublishCommittedAsync<TEvent>(
             TEvent evt,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,

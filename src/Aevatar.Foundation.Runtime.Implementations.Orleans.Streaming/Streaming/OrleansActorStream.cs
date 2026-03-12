@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Google.Protobuf.Reflection;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -43,10 +44,7 @@ internal sealed class OrleansActorStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
         };
 
         await PublishToStreamAsync(_streamId, envelope);
@@ -152,7 +150,7 @@ internal sealed class OrleansActorStream : IStream
             SourceStreamId = _streamId,
             TargetStreamId = binding.TargetStreamId,
             ForwardingMode = binding.ForwardingMode,
-            DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+            DirectionFilter = new HashSet<BroadcastDirection>(binding.DirectionFilter),
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,

@@ -36,7 +36,7 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
-            }, EventDirection.Self, ct);
+            }, BroadcastDirection.Self, ct);
             return;
         }
 
@@ -50,7 +50,7 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             };
             completed.Annotations["guard.skipped"] = "true";
             completed.Annotations["guard.reason"] = reason;
-            await ctx.PublishAsync(completed, EventDirection.Self, ct);
+            await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
         }
         else if (onFail == "branch" && request.Parameters.TryGetValue("branch_target", out var target))
         {
@@ -63,14 +63,14 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
                 NextStepId = target,
             };
             completed.Annotations["guard.reason"] = reason;
-            await ctx.PublishAsync(completed, EventDirection.Self, ct);
+            await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
         }
         else
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId, RunId = request.RunId, Success = false, Error = $"guard check '{check}' failed: {reason}",
-            }, EventDirection.Self, ct);
+            }, BroadcastDirection.Self, ct);
         }
     }
 

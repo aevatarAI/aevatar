@@ -767,7 +767,7 @@ public sealed class SubWorkflowOrchestratorTests
 
     private sealed record PublishedMessage(
         IMessage Message,
-        EventDirection Direction);
+        BroadcastDirection Direction);
 
     private sealed record SentMessage(
         string TargetActorId,

@@ -69,10 +69,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "observe-only" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Observe,
-                },
+                Route = EnvelopeRouteSemantics.CreateObserve(string.Empty),
             }.ToByteArray());
 
             (await grain.GetDescriptionAsync()).Should().Be("handled-count:0");
@@ -81,10 +78,7 @@ public sealed class OrleansRuntimeActorStateStoreIntegrationTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Payload = Any.Pack(new StringValue { Value = "downstream" }),
-                Route = new EnvelopeRoute
-                {
-                    Direction = EventDirection.Down,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
             }.ToByteArray());
 
             (await grain.GetDescriptionAsync()).Should().Be("handled-count:1");

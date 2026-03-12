@@ -1039,7 +1039,7 @@ public sealed class InteractionUpsertOrchestrator : IScriptPackageRuntime
             {
                 Value = "interaction.publish.signal",
             },
-            EventDirection.Down,
+            BroadcastDirection.Down,
             ct);
         await context.Capabilities.UnlinkAgentAsync(publishedDefinitionActorId, ct);
 

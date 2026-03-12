@@ -49,7 +49,7 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     public ILogger Logger { get; }
 
     /// <summary>Publishes an event to stream routing.</summary>
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
+    public Task PublishAsync<TEvent>(TEvent evt, BroadcastDirection direction = BroadcastDirection.Down,
         CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
         _publisher.PublishAsync(evt, direction, ct, InboundEnvelope, options);
 

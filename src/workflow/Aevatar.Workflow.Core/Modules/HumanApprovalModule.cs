@@ -73,7 +73,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-            }, EventDirection.Both, ct);
+            }, BroadcastDirection.Both, ct);
             return;
         }
 
@@ -101,7 +101,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     Output = string.IsNullOrEmpty(resumed.UserInput) ? pending.Input : resumed.UserInput,
                     BranchKey = "true",
                 };
-                await ctx.PublishAsync(approved, EventDirection.Self, ct);
+                await ctx.PublishAsync(approved, BroadcastDirection.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -126,7 +126,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     Error = onReject == "fail" ? "Human approval rejected" : "",
                     BranchKey = "false",
                 };
-                await ctx.PublishAsync(rejected, EventDirection.Self, ct);
+                await ctx.PublishAsync(rejected, BroadcastDirection.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }

@@ -67,7 +67,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     StepId = evt.StepId,
                     RunId = runId,
                     Success = true, Output = "",
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
                 return;
             }
 
@@ -101,7 +101,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                         subReq.Parameters[key["sub_param_".Length..]] = value;
                 }
 
-                await ctx.PublishAsync(subReq, EventDirection.Self, ct);
+                await ctx.PublishAsync(subReq, BroadcastDirection.Self, ct);
             }
         }
         else
@@ -138,7 +138,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent,
                     RunId = runId,
                     Success = allSuccess, Output = merged,
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
             }
             else
             {

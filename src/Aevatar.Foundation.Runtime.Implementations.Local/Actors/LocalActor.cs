@@ -2,6 +2,7 @@ using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
@@ -45,11 +46,22 @@ public sealed class LocalActor : IActor
         var selfStream = _streams.GetStream(Id);
         _selfSubscription = await selfStream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
-            var direction = envelope.Route?.Direction ?? EventDirection.Unspecified;
-            var publisherActorId = envelope.Route?.PublisherActorId;
+            var route = envelope.Route;
+            var direction = route.GetBroadcastDirection();
+            var publisherActorId = route?.PublisherActorId;
+
+            if (route.IsObserve())
+                return;
+
+            if (route.IsDirect())
+            {
+                if (string.Equals(route.GetTargetActorId(), Id, StringComparison.Ordinal))
+                    await EnqueueAsync(envelope);
+                return;
+            }
 
             // Handle Self events directly.
-            if (direction == EventDirection.Self)
+            if (direction == BroadcastDirection.Self)
             {
                 await EnqueueAsync(envelope);
                 return;
@@ -57,8 +69,8 @@ public sealed class LocalActor : IActor
 
             // Handle Up events from children (they produce to parent's stream).
             // Child events may use Both (self + parent), so treat direct-child Both as upward.
-            if (direction == EventDirection.Up ||
-                (direction == EventDirection.Both &&
+            if (direction == BroadcastDirection.Up ||
+                (direction == BroadcastDirection.Both &&
                  !string.IsNullOrWhiteSpace(publisherActorId) &&
                  _router.ChildrenIds.Contains(publisherActorId)))
             {
@@ -66,7 +78,7 @@ public sealed class LocalActor : IActor
                 return;
             }
 
-            if (direction is EventDirection.Down or EventDirection.Both &&
+            if (direction is BroadcastDirection.Down or BroadcastDirection.Both &&
                 StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id))
             {
                 if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))

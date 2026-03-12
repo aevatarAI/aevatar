@@ -290,7 +290,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -317,6 +317,19 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(evt);
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedAsync<TEvent>(
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : Google.Protobuf.IMessage
+        {
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

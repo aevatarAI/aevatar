@@ -127,7 +127,7 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
             return Task.FromResult(aiResult);
         }
 
-        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.EventDirection direction, CancellationToken ct) =>
+        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.BroadcastDirection direction, CancellationToken ct) =>
             Task.CompletedTask;
 
         public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>

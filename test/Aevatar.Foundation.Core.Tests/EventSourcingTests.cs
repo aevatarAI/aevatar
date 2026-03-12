@@ -479,7 +479,7 @@ public class StateEventApplierIntegrationTests
     }
 
     [Fact]
-    public async Task PersistDomainEventAsync_ShouldPublishCommittedEvents_AsObserve()
+    public async Task PersistDomainEventAsync_ShouldPublishCommittedEvents_AsObservation()
     {
         var store = new InMemoryEventStore();
         var publisher = new RecordingEventPublisher();
@@ -505,10 +505,9 @@ public class StateEventApplierIntegrationTests
         await agent.HandleEventAsync(inbound);
 
         agent.State.Count.ShouldBe(4);
-        publisher.Published.ShouldHaveSingleItem();
-        publisher.Published[0].Direction.ShouldBe(EventDirection.Observe);
-        publisher.Published[0].Event.ShouldBeOfType<IncrementEvent>().Amount.ShouldBe(4);
-        publisher.Published[0].SourceEnvelope.ShouldBeSameAs(inbound);
+        publisher.Observed.ShouldHaveSingleItem();
+        publisher.Observed[0].Event.ShouldBeOfType<IncrementEvent>().Amount.ShouldBe(4);
+        publisher.Observed[0].SourceEnvelope.ShouldBeSameAs(inbound);
     }
 
     private sealed class ApplierBackedCounterAgent : TestGAgentBase<CounterState>
@@ -546,11 +545,12 @@ public class StateEventApplierIntegrationTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<(IMessage Event, EventDirection Direction, EventEnvelope? SourceEnvelope)> Published { get; } = [];
+        public List<(IMessage Event, BroadcastDirection Direction, EventEnvelope? SourceEnvelope)> Published { get; } = [];
+        public List<(IMessage Event, EventEnvelope? SourceEnvelope)> Observed { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -575,6 +575,19 @@ public class StateEventApplierIntegrationTests
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedAsync<TEvent>(
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Observed.Add((evt, sourceEnvelope));
             return Task.CompletedTask;
         }
     }

@@ -267,11 +267,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = WorkflowRunActorPortPublisherId,
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(WorkflowRunActorPortPublisherId, BroadcastDirection.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -289,11 +285,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls)),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = WorkflowRunActorPortPublisherId,
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(WorkflowRunActorPortPublisherId, BroadcastDirection.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

@@ -37,6 +37,6 @@ public sealed class CheckpointModule : IEventModule<IWorkflowExecutionContext>
             StepId = request.StepId,
             RunId = request.RunId,
             Success = true, Output = request.Input,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
     }
 }

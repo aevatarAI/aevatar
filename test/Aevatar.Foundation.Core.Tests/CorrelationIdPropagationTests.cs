@@ -86,7 +86,7 @@ public class CorrelationIdPropagationTests
     {
         [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
         public Task HandlePing(PingEvent evt) =>
-            PublishAsync(new PongEvent { Reply = evt.Message }, EventDirection.Down);
+            PublishAsync(new PongEvent { Reply = evt.Message }, BroadcastDirection.Down);
     }
 
     private sealed class SendFromHandlerAgent : TestGAgentBase<CounterState>
@@ -103,7 +103,7 @@ public class CorrelationIdPropagationTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)

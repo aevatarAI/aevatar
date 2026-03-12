@@ -65,7 +65,7 @@ public class ScriptEvolutionSessionGAgentTests
             nameof(ScriptEvolutionValidatedEvent),
             nameof(ScriptEvolutionPromotedEvent));
         publisher.Published.Should().ContainSingle(x =>
-            x.Direction == EventDirection.Self &&
+            x.Direction == BroadcastDirection.Self &&
             x.Payload.GetType() == typeof(ScriptEvolutionExecutionRequestedEvent) &&
             ((ScriptEvolutionExecutionRequestedEvent)x.Payload).ProposalId == "proposal-1");
     }
@@ -190,11 +190,7 @@ public class ScriptEvolutionSessionGAgentTests
             {
                 ProposalId = "proposal-non-self",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "other-actor",
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast("other-actor", BroadcastDirection.Down),
         });
 
         agent.State.Completed.Should().BeFalse();
@@ -584,7 +580,7 @@ public class ScriptEvolutionSessionGAgentTests
 
         var executeRequest = publisher.Published
             .LastOrDefault(x =>
-                x.Direction == EventDirection.Self &&
+                x.Direction == BroadcastDirection.Self &&
                 x.Payload is ScriptEvolutionExecutionRequestedEvent);
 
         if (executeRequest?.Payload is ScriptEvolutionExecutionRequestedEvent executionRequested)
@@ -594,11 +590,7 @@ public class ScriptEvolutionSessionGAgentTests
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                 Payload = Any.Pack(executionRequested),
-                Route = new EnvelopeRoute
-                {
-                    PublisherActorId = agent.Id,
-                    Direction = EventDirection.Self,
-                },
+                Route = EnvelopeRouteSemantics.CreateBroadcast(agent.Id, BroadcastDirection.Self),
             });
         }
     }
@@ -611,7 +603,7 @@ public class ScriptEvolutionSessionGAgentTests
 
         public Task PublishAsync<T>(
             T evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -640,9 +632,23 @@ public class ScriptEvolutionSessionGAgentTests
             Sent.Add(new PublishedMessage(null, evt, targetActorId));
             return Task.CompletedTask;
         }
+
+        public Task PublishCommittedAsync<T>(
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            _ = evt;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
-    private sealed record PublishedMessage(EventDirection? Direction, IMessage Payload, string? TargetActorId = null);
+    private sealed record PublishedMessage(BroadcastDirection? Direction, IMessage Payload, string? TargetActorId = null);
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {

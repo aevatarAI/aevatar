@@ -9,19 +9,14 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class RuntimeCallbackEnvelopeFactoryTests
 {
     [Fact]
-    public void CreateFiredEnvelope_ShouldPreserveOriginalEnvelopeSemantics()
+    public void CreateFiredEnvelope_ShouldPublishSelfContinuationWithoutOverwritingPublisher()
     {
         var triggerEnvelope = new EventEnvelope
         {
             Id = "origin-envelope",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
             Payload = Any.Pack(new StringValue { Value = "retry" }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "child-actor",
-                TargetActorId = "workflow-parent",
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("child-actor", "workflow-parent"),
             Propagation = new EnvelopePropagation
             {
                 Baggage =
@@ -41,8 +36,9 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
         fired.Id.Should().NotBe("origin-envelope");
         fired.Timestamp.Should().NotBeNull();
         fired.Route!.PublisherActorId.Should().Be("child-actor");
-        fired.Route.TargetActorId.Should().Be("workflow-parent");
-        fired.Route.Direction.Should().Be(EventDirection.Self);
+        fired.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
+        fired.Route.IsBroadcast().Should().BeTrue();
+        fired.Route.GetTargetActorId().Should().BeEmpty();
         fired.Propagation!.Baggage["custom.trace_id"].Should().Be("trace-1");
         fired.Runtime!.Callback!.CallbackId.Should().Be("retry-callback");
         fired.Runtime.Callback.Generation.Should().Be(3);
@@ -51,19 +47,14 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
     }
 
     [Fact]
-    public void CreateScheduledEnvelope_ShouldPreservePublisher_WhenConfiguredForEnvelopeRedelivery()
+    public void CreateScheduledEnvelope_ShouldPreserveDirectRoute_WhenConfiguredForEnvelopeRedelivery()
     {
         var triggerEnvelope = new EventEnvelope
         {
             Id = "retry-envelope",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
             Payload = Any.Pack(new StringValue { Value = "retry" }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "child-actor",
-                TargetActorId = "workflow-parent",
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("child-actor", "workflow-parent"),
         };
 
         var redelivered = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
@@ -75,8 +66,8 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
 
         redelivered.Route!.PublisherActorId.Should().Be("child-actor");
-        redelivered.Route.Direction.Should().Be(EventDirection.Down);
-        redelivered.Route.TargetActorId.Should().Be("workflow-parent");
+        redelivered.Route.IsDirect().Should().BeTrue();
+        redelivered.Route.GetTargetActorId().Should().Be("workflow-parent");
         redelivered.Id.Should().Be("retry-envelope");
         redelivered.Runtime?.Callback.Should().BeNull();
     }

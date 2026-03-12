@@ -19,12 +19,7 @@ internal static class SelfEventEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = actorId,
-                Direction = EventDirection.Self,
-                TargetActorId = actorId,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(actorId, BroadcastDirection.Self),
         };
 
         if (inboundEnvelope?.Propagation != null)

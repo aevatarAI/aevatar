@@ -146,11 +146,7 @@ public class ClaimReadModelProjectorTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "claim-runtime",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateBroadcast("claim-runtime", BroadcastDirection.Self),
     };
 
     private sealed class InMemoryScriptProjectionStoreDispatcher

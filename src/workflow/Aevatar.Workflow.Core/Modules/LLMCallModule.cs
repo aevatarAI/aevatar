@@ -173,7 +173,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             Success = true,
             Output = evt.Content ?? string.Empty,
             WorkerId = publisherActorId,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
         await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
 
@@ -210,7 +210,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             Success = true,
             Output = evt.Content ?? string.Empty,
             WorkerId = ctx.AgentId,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
         await RemovePendingAsync(sessionId, pending.StepId, ctx, ct);
     }
 
@@ -314,7 +314,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Error = error,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
             },
-            EventDirection.Self,
+            BroadcastDirection.Self,
             ct);
 
     private static string BuildWatchdogCallbackId(string sessionId) =>
@@ -424,7 +424,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         ctx.Logger.LogInformation(
             "LLMCallModule: step={StepId} → Self (no role) timeout={Timeout}ms prompt=({Len} chars) {Preview}",
             stepId, timeoutMs, prompt.Length, promptPreview);
-        await ctx.PublishAsync(chatEvt, EventDirection.Self, ct, dispatchOptions);
+        await ctx.PublishAsync(chatEvt, BroadcastDirection.Self, ct, dispatchOptions);
     }
 
     private static PendingLlmCallState GetRequiredPending(string sessionId, IWorkflowExecutionContext ctx)

@@ -25,12 +25,7 @@ public static class ScriptingActorRequestEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = resolvedPublisherId,
-                Direction = EventDirection.Self,
-                TargetActorId = targetActorId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(resolvedPublisherId, targetActorId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = correlationId ?? string.Empty,

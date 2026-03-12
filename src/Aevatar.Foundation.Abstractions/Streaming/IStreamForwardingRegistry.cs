@@ -20,10 +20,10 @@ public sealed class StreamForwardingBinding
 
     public StreamForwardingMode ForwardingMode { get; set; } = StreamForwardingMode.HandleThenForward;
 
-    public HashSet<EventDirection> DirectionFilter { get; set; } =
+    public HashSet<BroadcastDirection> DirectionFilter { get; set; } =
     [
-        EventDirection.Down,
-        EventDirection.Both,
+        BroadcastDirection.Down,
+        BroadcastDirection.Both,
     ];
 
     public HashSet<string> EventTypeFilter { get; set; } = new(StringComparer.Ordinal);

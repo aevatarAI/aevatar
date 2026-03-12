@@ -138,7 +138,7 @@ public sealed class CapabilityScript : IScriptPackageRuntime
         ScriptExecutionContext context,
         CancellationToken ct)
     {
-        await context.Capabilities!.PublishAsync(new StringValue { Value = "PublishedEvent" }, EventDirection.Up, ct);
+        await context.Capabilities!.PublishAsync(new StringValue { Value = "PublishedEvent" }, BroadcastDirection.Up, ct);
         await context.Capabilities.SendToAsync("target-1", new StringValue { Value = "SentEvent" }, ct);
         return new ScriptHandlerResult(new IMessage[] { new StringValue { Value = requestedEvent.EventType } });
     }
@@ -182,13 +182,13 @@ public sealed class CapabilityScript : IScriptPackageRuntime
             CancellationToken.None);
 
         result.DomainEvents.Should().ContainSingle();
-        capabilities.Published.Should().ContainSingle(x => x.Direction == EventDirection.Up && x.EventName == "PublishedEvent");
+        capabilities.Published.Should().ContainSingle(x => x.Direction == BroadcastDirection.Up && x.EventName == "PublishedEvent");
         capabilities.Sent.Should().ContainSingle(x => x.TargetActorId == "target-1" && x.EventName == "SentEvent");
     }
 
     private sealed class RecordingCapabilities : IScriptRuntimeCapabilities
     {
-        public List<(EventDirection Direction, string EventName)> Published { get; } = [];
+        public List<(BroadcastDirection Direction, string EventName)> Published { get; } = [];
         public List<(string TargetActorId, string EventName)> Sent { get; } = [];
 
         public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult("ok");
@@ -263,7 +263,7 @@ public sealed class CapabilityScript : IScriptPackageRuntime
             CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
+        public Task PublishAsync(IMessage eventPayload, BroadcastDirection direction, CancellationToken ct)
         {
             var eventName = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
             Published.Add((direction, eventName));

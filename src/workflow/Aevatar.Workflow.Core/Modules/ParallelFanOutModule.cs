@@ -77,7 +77,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     RunId = runId,
                     Success = false,
                     Error = "parallel requires parameters.workers (CSV/JSON list) or target_role",
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
                 return;
             }
 
@@ -116,7 +116,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     RunId = runId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
-                }, EventDirection.Self, ct);
+                }, BroadcastDirection.Self, ct);
             }
         }
         else
@@ -151,7 +151,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 final.Annotations["parallel.vote_step_id"] = evt.StepId;
                 final.Annotations["parallel.workers_success"] = workersSuccess.ToString();
 
-                await ctx.PublishAsync(final, EventDirection.Self, ct);
+                await ctx.PublishAsync(final, BroadcastDirection.Self, ct);
                 return;
             }
 
@@ -191,7 +191,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         "ParallelFanOut: step={StepId} dispatch vote step={VoteStepId} type={VoteType}",
                         parent, voteStepId, parentState.VoteConfig.StepType);
 
-                    await ctx.PublishAsync(voteReq, EventDirection.Self, ct);
+                    await ctx.PublishAsync(voteReq, BroadcastDirection.Self, ct);
                 }
                 else
                 {
@@ -205,7 +205,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         Output = merged,
                     };
                     completed.Annotations["parallel.used_vote"] = "false";
-                    await ctx.PublishAsync(completed, EventDirection.Self, ct);
+                    await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
                 }
             }
             else

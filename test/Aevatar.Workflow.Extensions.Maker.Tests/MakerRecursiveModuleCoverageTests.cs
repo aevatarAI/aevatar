@@ -190,11 +190,7 @@ public class MakerRecursiveModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test-publisher",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast("test-publisher", BroadcastDirection.Self),
         };
     }
 
@@ -208,7 +204,7 @@ public class MakerRecursiveModuleCoverageTests
             InboundEnvelope = new EventEnvelope();
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, BroadcastDirection direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId { get; }
         public string RunId => AgentId;
@@ -247,7 +243,7 @@ public class MakerRecursiveModuleCoverageTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            BroadcastDirection direction = BroadcastDirection.Down,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
@@ -263,7 +259,7 @@ public class MakerRecursiveModuleCoverageTests
         {
             _ = targetActorId;
             _ = options;
-            return PublishAsync(evt, EventDirection.Self, ct);
+            return PublishAsync(evt, BroadcastDirection.Self, ct);
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(

@@ -24,12 +24,7 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
                 Approved = command.Approved,
                 UserInput = command.UserInput ?? string.Empty,
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "api.workflow.resume",
-                Direction = EventDirection.Self,
-                TargetActorId = context.TargetId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("api.workflow.resume", context.TargetId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = context.CorrelationId,

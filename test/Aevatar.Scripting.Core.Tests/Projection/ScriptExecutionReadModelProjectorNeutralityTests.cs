@@ -119,11 +119,7 @@ public class ScriptExecutionReadModelProjectorNeutralityTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "script-runtime",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateBroadcast("script-runtime", BroadcastDirection.Self),
     };
 
     private sealed class InMemoryScriptProjectionStoreDispatcher

@@ -55,7 +55,7 @@ public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionConte
                 RunId = request.RunId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
-            }, EventDirection.Self, ct);
+            }, BroadcastDirection.Self, ct);
             return;
         }
 
@@ -75,7 +75,7 @@ public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionConte
                 RunId = request.RunId,
                 Success = false,
                 Error = $"Invalid workflow YAML: {errorMessage}",
-            }, EventDirection.Self, ct);
+            }, BroadcastDirection.Self, ct);
             return;
         }
 
@@ -87,7 +87,7 @@ public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionConte
         {
             WorkflowYaml = yaml,
             Input = originalInput,
-        }, EventDirection.Self, ct);
+        }, BroadcastDirection.Self, ct);
     }
 
     internal static string? ExtractYaml(string input)

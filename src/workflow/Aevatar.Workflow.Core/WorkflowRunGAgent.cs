@@ -193,7 +193,7 @@ public sealed class WorkflowRunGAgent
             {
                 Content = "Workflow run is not definition-bound or compiled.",
                 SessionId = request.SessionId,
-            }, EventDirection.Up);
+            }, BroadcastDirection.Up);
             return;
         }
 
@@ -215,7 +215,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt,
             RunId = runId,
-        }, EventDirection.Self);
+        }, BroadcastDirection.Self);
     }
 
     [EventHandler]
@@ -225,7 +225,7 @@ public sealed class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(yaml))
         {
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: empty workflow YAML, ignoring.");
-            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, EventDirection.Up);
+            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, BroadcastDirection.Up);
             return;
         }
 
@@ -236,7 +236,7 @@ public sealed class WorkflowRunGAgent
                 ? "Dynamic workflow YAML compilation failed."
                 : $"Dynamic workflow YAML compilation failed: {replaceResult.CompilationError}";
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: YAML compilation failed. Error={Error}", replaceResult.CompilationError);
-            await PublishAsync(new ChatResponseEvent { Content = reason }, EventDirection.Up);
+            await PublishAsync(new ChatResponseEvent { Content = reason }, BroadcastDirection.Up);
             return;
         }
 
@@ -258,7 +258,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Input ?? string.Empty,
             RunId = runId,
-        }, EventDirection.Self);
+        }, BroadcastDirection.Self);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -323,7 +323,7 @@ public sealed class WorkflowRunGAgent
         await PublishAsync(new TextMessageEndEvent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
-        }, EventDirection.Up);
+        }, BroadcastDirection.Up);
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -837,11 +837,7 @@ public sealed class WorkflowRunGAgent
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(initialize),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = Id,
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateBroadcast(Id, BroadcastDirection.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

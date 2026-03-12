@@ -302,7 +302,7 @@
 5. `ScriptEvolutionDurableCompletionResolver` 已改为依赖 `IScriptEvolutionDecisionReadPort`，其默认实现 `ProjectionScriptEvolutionDecisionReadPort` 直接读取 `ScriptEvolutionReadModel`。
 6. `ScriptingQueryEnvelopeFactory` / `ScriptingQueryChannels` 只保留 definition / catalog query 语义。
 7. `ScriptEvolutionReadModelProjector` 已并入 `ScriptEvolutionSessionProjectionContext` 主链，并补齐 `IProjectionClock` / in-memory read store 默认注册。
-8. Foundation 事件溯源提交后会统一把 committed domain event 以 `EventDirection.Observe` 写入 actor 可观察流，projection / live sink 由此不再依赖 actor query fallback 猜测终态。
+8. Foundation 事件溯源提交后会统一把 committed domain event 以 `ObserveRoute` 写入 actor 可观察流，projection / live sink 由此不再依赖 actor query fallback 猜测终态。
 
 ### 验证结果
 

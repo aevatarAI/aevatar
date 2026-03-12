@@ -35,7 +35,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         evt.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
         evt.OccurredAtUtc.Should().NotBeNull();
         envelope.Propagation!.CorrelationId.Should().Be("session-1");
-        envelope.Route!.Direction.Should().Be(EventDirection.Self);
+        envelope.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
     }
 
     [Fact]

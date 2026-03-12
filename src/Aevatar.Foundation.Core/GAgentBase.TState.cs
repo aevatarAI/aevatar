@@ -170,9 +170,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     {
         for (var i = 0; i < domainEvents.Count; i++)
         {
-            await EventPublisher.PublishAsync(
+            await EventPublisher.PublishCommittedAsync(
                 domainEvents[i],
-                EventDirection.Observe,
                 ct,
                 ActiveInboundEnvelope);
         }

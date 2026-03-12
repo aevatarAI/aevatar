@@ -11,7 +11,7 @@ public interface IScriptInteractionCapabilities
 
     Task PublishAsync(
         IMessage eventPayload,
-        EventDirection direction,
+        BroadcastDirection direction,
         CancellationToken ct);
 
     Task SendToAsync(
