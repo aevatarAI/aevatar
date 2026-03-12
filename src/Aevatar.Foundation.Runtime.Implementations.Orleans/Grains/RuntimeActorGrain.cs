@@ -145,7 +145,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         var selfActorId = this.GetPrimaryKeyString();
         var route = envelope.Route;
-        if (route.IsObserve())
+        if (route.IsObserverPublication())
             return;
 
         if (route.IsDirect())
@@ -155,13 +155,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
         else
         {
-            switch (route.GetBroadcastDirection())
+            switch (route.GetTopologyAudience())
             {
-                case BroadcastDirection.Self:
-                case BroadcastDirection.Up:
+                case TopologyAudience.Self:
+                case TopologyAudience.Parent:
                     break;
-                case BroadcastDirection.Down:
-                case BroadcastDirection.Both:
+                case TopologyAudience.Children:
+                case TopologyAudience.ParentAndChildren:
                     if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
                     {
                         if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
@@ -341,11 +341,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var agentLogger = loggerFactory?.CreateLogger(agent.GetType().Name) ?? NullLogger.Instance;
 
         gAgent.SetId(actorId);
-        gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
+        var publisher = new Actors.OrleansGrainEventPublisher(
             actorId,
             () => _state.State.ParentId,
             _propagationPolicy,
             _streams);
+        gAgent.EventPublisher = publisher;
+        gAgent.CommittedStateEventPublisher = publisher;
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         if (gAgent is IEventSourcingFactoryBinding statefulBinding)
@@ -368,6 +370,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private Task OnSelfStreamEventAsync(EventEnvelope envelope, StreamSequenceToken? token = null)
     {
         _ = token;
+        if (envelope.Route.IsObserverPublication())
+            return Task.CompletedTask;
+
         return HandleEnvelopeAsync(envelope.ToByteArray());
     }
 

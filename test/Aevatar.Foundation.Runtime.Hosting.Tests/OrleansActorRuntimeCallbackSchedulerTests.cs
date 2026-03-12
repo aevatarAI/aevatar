@@ -134,8 +134,8 @@ public sealed class OrleansActorRuntimeCallbackSchedulerTests
             });
 
         fired.Route!.PublisherActorId.Should().Be("child-run");
-        fired.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
-        fired.Route.IsBroadcast().Should().BeTrue();
+        fired.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        fired.Route.IsTopologyPublication().Should().BeTrue();
         fired.Route.GetTargetActorId().Should().BeEmpty();
     }
 

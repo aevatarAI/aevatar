@@ -57,7 +57,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                 };
                 hit.Annotations["cache.hit"] = "true";
                 hit.Annotations["cache.key"] = ShortenKey(cacheKey);
-                await ctx.PublishAsync(hit, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(hit, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -97,7 +97,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 Input = request.Input ?? "",
                 TargetRole = childRole ?? "",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -132,7 +132,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                 };
                 completed.Annotations["cache.hit"] = "false";
                 completed.Annotations["cache.key"] = ShortenKey(cacheKey);
-                await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
             }
         }
     }

@@ -43,7 +43,7 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = parentRunId,
                 Success = false,
                 Error = "workflow_call missing step_id",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -56,7 +56,7 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = parentRunId,
                 Success = false,
                 Error = "workflow_call missing workflow parameter",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -70,7 +70,7 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = parentRunId,
                 Success = false,
                 Error = $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}, got '{invalidLifecycle}'",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -85,6 +85,6 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             RequestedByActorId = ctx.AgentId,
         };
 
-        await ctx.PublishAsync(invocation, BroadcastDirection.Self, ct);
+        await ctx.PublishAsync(invocation, TopologyAudience.Self, ct);
     }
 }

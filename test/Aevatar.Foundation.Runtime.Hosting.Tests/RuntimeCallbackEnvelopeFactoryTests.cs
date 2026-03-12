@@ -36,8 +36,8 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
         fired.Id.Should().NotBe("origin-envelope");
         fired.Timestamp.Should().NotBeNull();
         fired.Route!.PublisherActorId.Should().Be("child-actor");
-        fired.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
-        fired.Route.IsBroadcast().Should().BeTrue();
+        fired.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        fired.Route.IsTopologyPublication().Should().BeTrue();
         fired.Route.GetTargetActorId().Should().BeEmpty();
         fired.Propagation!.Baggage["custom.trace_id"].Should().Be("trace-1");
         fired.Runtime!.Callback!.CallbackId.Should().Be("retry-callback");

@@ -51,7 +51,7 @@ Aevatar.Foundation.Abstractions/
 
 `agent_messages.proto` 定义 Foundation 公共消息，包括：
 
-- `BroadcastDirection`
+- `TopologyAudience`
 - `EnvelopeRoute`（`oneof { broadcast | direct | observe }`）
 - `EventEnvelope`
 - `StateEvent`

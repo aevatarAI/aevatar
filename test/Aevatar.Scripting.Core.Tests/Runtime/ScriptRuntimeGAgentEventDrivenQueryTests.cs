@@ -703,7 +703,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -734,14 +734,15 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<TEvent>(
-            TEvent evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage
         {
             _ = evt;
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();

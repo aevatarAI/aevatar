@@ -34,7 +34,7 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
         {
             Id = "evt-a",
             Payload = Any.Pack(new StringValue { Value = "envelope" }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
         await adapter.QueueMessageBatchAsync(
             streamId,

@@ -106,7 +106,7 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
         completed.Annotations["maker_vote.runner_up_votes"] = runnerUpVotes.ToString();
         completed.Annotations["maker_vote.used_majority_fallback"] = useMajorityFallback.ToString();
 
-        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
@@ -130,6 +130,6 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
                 completed.Annotations[key] = value;
         }
 
-        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

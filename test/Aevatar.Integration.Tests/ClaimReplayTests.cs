@@ -341,7 +341,7 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
                 Id = x.EventId,
                 Timestamp = x.Timestamp,
                 Payload = x.EventData,
-                Route = EnvelopeRouteSemantics.CreateObserve(runtimeActorId),
+                Route = EnvelopeRouteSemantics.CreateObserverPublication(runtimeActorId),
                 Propagation = new EnvelopePropagation
                 {
                     CorrelationId = "run-readmodel",

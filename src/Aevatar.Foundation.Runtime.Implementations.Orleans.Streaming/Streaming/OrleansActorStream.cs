@@ -44,7 +44,7 @@ internal sealed class OrleansActorStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Down),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
         await PublishToStreamAsync(_streamId, envelope);
@@ -150,7 +150,7 @@ internal sealed class OrleansActorStream : IStream
             SourceStreamId = _streamId,
             TargetStreamId = binding.TargetStreamId,
             ForwardingMode = binding.ForwardingMode,
-            DirectionFilter = new HashSet<BroadcastDirection>(binding.DirectionFilter),
+            DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,

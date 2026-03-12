@@ -13,7 +13,7 @@ public class FileEventStoreTests
         try
         {
             var store1 = new FileEventStore(new FileEventStoreOptions { RootDirectory = root });
-            var appendedVersion = await store1.AppendAsync("agent-1",
+            var commitResult = await store1.AppendAsync("agent-1",
             [
                 new StateEvent
                 {
@@ -34,7 +34,8 @@ public class FileEventStoreTests
             ],
             expectedVersion: 0);
 
-            appendedVersion.ShouldBe(2);
+            commitResult.LatestVersion.ShouldBe(2);
+            commitResult.CommittedEvents.Count.ShouldBe(2);
 
             var store2 = new FileEventStore(new FileEventStoreOptions { RootDirectory = root });
             var events = await store2.GetEventsAsync("agent-1");

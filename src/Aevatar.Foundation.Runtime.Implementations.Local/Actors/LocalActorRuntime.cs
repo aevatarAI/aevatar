@@ -242,11 +242,16 @@ public sealed class LocalActorRuntime : IActorRuntime
         return null;
     }
 
-    private void InjectDependencies(IAgent agent, IEventPublisher publisher, string actorId, ILogger logger)
+    private void InjectDependencies(
+        IAgent agent,
+        LocalActorPublisher publisher,
+        string actorId,
+        ILogger logger)
     {
         if (agent is not GAgentBase gab) return;
         gab.SetId(actorId);
         gab.EventPublisher = publisher;
+        gab.CommittedStateEventPublisher = publisher;
         gab.Logger = logger;
         gab.Services = _services;
         if (gab is IEventSourcingFactoryBinding statefulBinding)

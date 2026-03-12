@@ -83,12 +83,12 @@ public sealed class AevatarActivitySourceTests
         var envelope = new EventEnvelope
         {
             Id = "evt-2",
-            Route = EnvelopeRouteSemantics.CreateBroadcast("publisher-1", BroadcastDirection.Both),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-1", TopologyAudience.ParentAndChildren),
         };
 
         using var activity = AevatarActivitySource.StartHandleEvent("agent-1", envelope);
         activity.Should().NotBeNull();
-        activity!.GetTagItem("aevatar.event.direction").Should().Be(BroadcastDirection.Both.ToString());
+        activity!.GetTagItem("aevatar.event.direction").Should().Be(TopologyAudience.ParentAndChildren.ToString());
         activity.GetTagItem("aevatar.event.publisher").Should().Be("publisher-1");
     }
 

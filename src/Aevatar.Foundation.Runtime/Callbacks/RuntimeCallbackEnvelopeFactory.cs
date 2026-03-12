@@ -28,7 +28,7 @@ public static class RuntimeCallbackEnvelopeFactory
         var publisherActorId = string.IsNullOrWhiteSpace(envelope.Route?.PublisherActorId)
             ? actorId
             : envelope.Route.PublisherActorId;
-        envelope.Route = EnvelopeRouteSemantics.CreateBroadcast(publisherActorId, BroadcastDirection.Self);
+        envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherActorId, TopologyAudience.Self);
 
         var callback = envelope.EnsureRuntime().EnsureCallback();
         callback.CallbackId = callbackId;

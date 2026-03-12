@@ -28,7 +28,7 @@ public sealed class OrleansActorRuntimeForwardingTests
         var bindings = await registry.ListBySourceAsync("parent", CancellationToken.None);
         var binding = bindings.Should().ContainSingle(x => x.TargetStreamId == "child").Subject;
         binding.ForwardingMode.Should().Be(StreamForwardingMode.HandleThenForward);
-        binding.DirectionFilter.SetEquals([BroadcastDirection.Down, BroadcastDirection.Both]).Should().BeTrue();
+        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
     }
 
     [Fact]

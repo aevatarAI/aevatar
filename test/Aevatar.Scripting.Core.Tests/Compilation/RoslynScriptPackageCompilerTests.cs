@@ -363,7 +363,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
         var aiResult = await context.Capabilities!.AskAIAsync("risk-assessment", ct);
         if (string.Equals(aiResult, "manual-review", StringComparison.Ordinal))
         {
-            await context.Capabilities.PublishAsync(new StringValue { Value = "PublishedEvent" }, BroadcastDirection.Up, ct);
+            await context.Capabilities.PublishAsync(new StringValue { Value = "PublishedEvent" }, TopologyAudience.Parent, ct);
             await context.Capabilities.SendToAsync("target-1", new StringValue { Value = "SentEvent" }, ct);
 
             var reviewActorId = await context.Capabilities.CreateAgentAsync("Fake.ManualReviewAgent, Fake", "manual-" + context.RunId, ct);
@@ -451,7 +451,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
         decision.ReadModelPayloads!.Should().ContainKey("view");
         decision.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("manual-review");
         capabilities.AskPrompts.Should().ContainSingle(x => x == "risk-assessment");
-        capabilities.Published.Should().ContainSingle(x => x.Direction == BroadcastDirection.Up && x.EventName == "PublishedEvent");
+        capabilities.Published.Should().ContainSingle(x => x.Direction == TopologyAudience.Parent && x.EventName == "PublishedEvent");
         capabilities.Sent.Should().ContainSingle(x => x.TargetActorId == "target-1" && x.EventName == "SentEvent");
         capabilities.CreatedAgents.Should().ContainSingle(x => x.actorId == "manual-run-capability-1");
         capabilities.Sent.Should().Contain(x => x.TargetActorId == "manual-run-capability-1" && x.EventName == "ClaimManualReviewRequestedEvent");
@@ -460,7 +460,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
     private sealed class RecordingScriptRuntimeCapabilities(string aiResult) : IScriptRuntimeCapabilities
     {
         public List<string> AskPrompts { get; } = [];
-        public List<(BroadcastDirection Direction, string EventName)> Published { get; } = [];
+        public List<(TopologyAudience Direction, string EventName)> Published { get; } = [];
         public List<(string TargetActorId, string EventName)> Sent { get; } = [];
         public List<(string typeName, string? actorId)> CreatedAgents { get; } = [];
         public Task<string> AskAIAsync(string prompt, CancellationToken ct)
@@ -470,7 +470,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
             return Task.FromResult(aiResult);
         }
 
-        public Task PublishAsync(IMessage eventPayload, BroadcastDirection direction, CancellationToken ct)
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             var eventName = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;

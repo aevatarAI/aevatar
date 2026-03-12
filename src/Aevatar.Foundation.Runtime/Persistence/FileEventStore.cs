@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -43,7 +44,7 @@ public sealed class FileEventStore : IEventStore
         _logger = logger ?? NullLogger<FileEventStore>.Instance;
     }
 
-    public async Task<long> AppendAsync(
+    public async Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,
@@ -55,7 +56,13 @@ public sealed class FileEventStore : IEventStore
 
         var pendingEvents = events.Select(CloneEvent).ToList();
         if (pendingEvents.Count == 0)
-            return await GetVersionAsync(agentId, ct);
+        {
+            return new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = await GetVersionAsync(agentId, ct),
+            };
+        }
 
         var gate = _agentLocks.GetOrAdd(agentId, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
@@ -80,7 +87,12 @@ public sealed class FileEventStore : IEventStore
                 agentId,
                 pendingEvents.Count,
                 latestVersion);
-            return latestVersion;
+            return new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = latestVersion,
+                CommittedEvents = { pendingEvents.Select(CloneEvent) },
+            };
         }
         finally
         {

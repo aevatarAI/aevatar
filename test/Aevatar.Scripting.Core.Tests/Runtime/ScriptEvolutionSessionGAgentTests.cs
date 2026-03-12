@@ -65,7 +65,7 @@ public class ScriptEvolutionSessionGAgentTests
             nameof(ScriptEvolutionValidatedEvent),
             nameof(ScriptEvolutionPromotedEvent));
         publisher.Published.Should().ContainSingle(x =>
-            x.Direction == BroadcastDirection.Self &&
+            x.Direction == TopologyAudience.Self &&
             x.Payload.GetType() == typeof(ScriptEvolutionExecutionRequestedEvent) &&
             ((ScriptEvolutionExecutionRequestedEvent)x.Payload).ProposalId == "proposal-1");
     }
@@ -190,7 +190,7 @@ public class ScriptEvolutionSessionGAgentTests
             {
                 ProposalId = "proposal-non-self",
             }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("other-actor", BroadcastDirection.Down),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("other-actor", TopologyAudience.Children),
         });
 
         agent.State.Completed.Should().BeFalse();
@@ -580,7 +580,7 @@ public class ScriptEvolutionSessionGAgentTests
 
         var executeRequest = publisher.Published
             .LastOrDefault(x =>
-                x.Direction == BroadcastDirection.Self &&
+                x.Direction == TopologyAudience.Self &&
                 x.Payload is ScriptEvolutionExecutionRequestedEvent);
 
         if (executeRequest?.Payload is ScriptEvolutionExecutionRequestedEvent executionRequested)
@@ -590,7 +590,7 @@ public class ScriptEvolutionSessionGAgentTests
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                 Payload = Any.Pack(executionRequested),
-                Route = EnvelopeRouteSemantics.CreateBroadcast(agent.Id, BroadcastDirection.Self),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(agent.Id, TopologyAudience.Self),
             });
         }
     }
@@ -603,7 +603,7 @@ public class ScriptEvolutionSessionGAgentTests
 
         public Task PublishAsync<T>(
             T evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -633,14 +633,15 @@ public class ScriptEvolutionSessionGAgentTests
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<T>(
-            T evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where T : IMessage
         {
             _ = evt;
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();
@@ -648,7 +649,7 @@ public class ScriptEvolutionSessionGAgentTests
         }
     }
 
-    private sealed record PublishedMessage(BroadcastDirection? Direction, IMessage Payload, string? TargetActorId = null);
+    private sealed record PublishedMessage(TopologyAudience? Direction, IMessage Payload, string? TargetActorId = null);
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {

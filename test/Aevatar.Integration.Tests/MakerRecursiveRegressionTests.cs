@@ -107,7 +107,7 @@ public class MakerRecursiveRegressionTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_regression",
             }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -125,7 +125,7 @@ public class MakerRecursiveRegressionTests
                 WorkflowName = "maker_regression",
                 RunId = "maker-regression-run",
             }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -154,7 +154,7 @@ public class MakerRecursiveRegressionTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));

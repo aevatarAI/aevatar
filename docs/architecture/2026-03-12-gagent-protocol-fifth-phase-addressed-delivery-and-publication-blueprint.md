@@ -175,7 +175,7 @@
 2. `IEventPublisher` 当前同时暴露：
    - `PublishAsync(...)`
    - `SendToAsync(...)`
-   - `PublishCommittedAsync(...)`
+   - framework-internal `ICommittedStateEventPublisher.PublishAsync(...)`
    - 证据：`src/Aevatar.Foundation.Abstractions/IEventPublisher.cs`
 
 3. 当前 `PublishAsync(...)` 在实现上表达的是拓扑广播。
@@ -200,7 +200,7 @@
    - 证据：`src/Aevatar.Foundation.Abstractions/Persistence/IEventStore.cs`
    - 证据：`src/Aevatar.Foundation.Core/EventSourcing/EventSourcingBehavior.cs`
 
-9. `GAgentBase<TState>` 当前在 commit 成功后直接调用 `EventPublisher.PublishCommittedAsync(...)`。
+9. `GAgentBase<TState>` 当前在 commit 成功后通过 framework-internal `ICommittedStateEventPublisher.PublishAsync(...)` 发出 committed publication。
    - 证据：`src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
 
 10. `RuntimeActorGrain` 当前仍需要在 ingress 后手工忽略 observe。
@@ -269,7 +269,7 @@ route 模型应从消息分发语义命名。
 `Link = Infrastructure Subscription Binding`
 `fan-out = Broker/Data Plane Responsibility`
 
-### 8.4 `PublishCommittedAsync(...)` 仍然挂错地方
+### 8.4 committed publication 不应挂在业务公共 publisher 上
 
 即使名字已经比 `ObserveAsync` 更准确，它仍然挂在业务 actor 公共能力面上。  
 这让 framework 内部 “commit 后发 observer publication” 继续伪装成“业务 actor 的普通 outbound 能力”。
@@ -571,7 +571,7 @@ flowchart LR
 
 - 目标：
   - 保留 `PublishAsync(topology)` 与 `SendToAsync(direct)`
-  - 删除业务 actor 公共面的 `PublishCommittedAsync(...)`
+  - 将 committed publication 限制为 framework-internal `ICommittedStateEventPublisher`
 - 产物：
   - 面向业务 actor 的 outbound 接口
   - `GAgentBase` / publisher 实现
@@ -768,7 +768,7 @@ flowchart LR
 - [ ] `broadcast/direct/observe -> direct/publication`
 - [ ] `ObserveRoute -> PublicationRoute`
 - [ ] `BroadcastDirection -> TopologyAudience`
-- [ ] 保留 `PublishAsync(topology)`，删除业务公共面的 `PublishCommittedAsync(...)`
+- [ ] 保留 `PublishAsync(topology)`，并把 commit 后输出限制为 framework-internal `ICommittedStateEventPublisher`
 - [ ] 新增 `IPublicationPublisher`
 - [ ] 新增 `EventStoreCommitResult`
 - [ ] 新增 `CommittedStateEventPublished`
@@ -789,7 +789,7 @@ flowchart LR
   - projection 编排 actor 化主链
 - 部分完成：
   - `StateEvent` 已经独立为持久化事实
-  - `PublishCommittedAsync(...)` 已把 commit 后发布从普通 publish 中显式区分出来
+  - framework-internal `ICommittedStateEventPublisher.PublishAsync(...)` 已把 commit 后发布从普通 publish 中显式区分出来
   - `Link -> relay binding` 已经靠近 topology subscription 语义
 - 未完成：
   - route 层级改为 `direct/publication`

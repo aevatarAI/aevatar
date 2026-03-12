@@ -3,11 +3,12 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
-internal sealed class OrleansGrainEventPublisher : IEventPublisher
+internal sealed class OrleansGrainEventPublisher : IEventPublisher, ICommittedStateEventPublisher
 {
     private readonly string _actorId;
     private readonly Func<string?> _getParentId;
@@ -28,7 +29,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
 
     public async Task PublishAsync<TEvent>(
         TEvent evt,
-        BroadcastDirection direction = BroadcastDirection.Down,
+        TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null)
@@ -39,32 +40,32 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(_actorId, direction),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, audience),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
             sourceEnvelope,
             _propagationPolicy,
             _actorId,
-            EstimateRouteTargetCount(direction),
+            EstimateRouteTargetCount(audience),
             options);
 
-        switch (direction)
+        switch (audience)
         {
-            case BroadcastDirection.Self:
+            case TopologyAudience.Self:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
-            case BroadcastDirection.Down:
+            case TopologyAudience.Children:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
-            case BroadcastDirection.Up:
+            case TopologyAudience.Parent:
             {
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
                     await DispatchAsync(parentId, envelope, ct);
                 break;
             }
-            case BroadcastDirection.Both:
+            case TopologyAudience.ParentAndChildren:
             {
                 var tasks = new List<Task>
                 {
@@ -107,19 +108,19 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         return DispatchAsync(targetActorId, envelope, ct);
     }
 
-    public Task PublishCommittedAsync<TEvent>(
-        TEvent evt,
-        CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null,
-        EventEnvelopePublishOptions? options = null)
-        where TEvent : IMessage
+    Task ICommittedStateEventPublisher.PublishAsync(
+        CommittedStateEventPublished evt,
+        ObserverAudience audience,
+        CancellationToken ct,
+        EventEnvelope? sourceEnvelope,
+        EventEnvelopePublishOptions? options)
     {
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateObserve(_actorId),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(_actorId, audience),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -131,11 +132,11 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
         return _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
     }
 
-    private long? EstimateRouteTargetCount(BroadcastDirection direction) =>
-        direction switch
+    private long? EstimateRouteTargetCount(TopologyAudience audience) =>
+        audience switch
         {
-            BroadcastDirection.Self => 1,
-            BroadcastDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
+            TopologyAudience.Self => 1,
+            TopologyAudience.Parent => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
             // Down/Both fan-out count is stream-subscriber dependent and unknown at publish time.
             _ => null,
         };

@@ -84,7 +84,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
     };
 
     private sealed class CapturingContext : IEventHandlerContext
@@ -100,9 +100,9 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         public IServiceProvider Services { get; } = new NullServiceProvider();
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, BroadcastDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
-        public Task PublishAsync<TEvent>(TEvent evt, BroadcastDirection direction = BroadcastDirection.Down, CancellationToken ct = default,
+        public Task PublishAsync<TEvent>(TEvent evt, TopologyAudience direction = TopologyAudience.Children, CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {

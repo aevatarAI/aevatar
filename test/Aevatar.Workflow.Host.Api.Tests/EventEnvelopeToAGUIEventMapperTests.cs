@@ -16,7 +16,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Down),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Children),
         Propagation = new EnvelopePropagation
         {
             CorrelationId = "cmd-1",
@@ -164,7 +164,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",
-            Route = EnvelopeRouteSemantics.CreateBroadcast("x", BroadcastDirection.Down),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("x", TopologyAudience.Children),
         });
 
         unknown.Should().BeEmpty();

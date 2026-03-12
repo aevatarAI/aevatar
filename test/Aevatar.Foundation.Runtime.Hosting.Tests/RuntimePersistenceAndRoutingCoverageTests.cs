@@ -36,7 +36,9 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             new StateEvent { EventId = "e2", Version = 2, EventType = "test", AgentId = "actor-1" },
         ];
 
-        (await store.AppendAsync("actor-1", events, expectedVersion: 0)).Should().Be(2);
+        var commitResult = await store.AppendAsync("actor-1", events, expectedVersion: 0);
+        commitResult.LatestVersion.Should().Be(2);
+        commitResult.CommittedEvents.Select(x => x.Version).Should().Equal(1, 2);
         (await store.GetVersionAsync("actor-1")).Should().Be(2);
         (await store.GetVersionAsync("missing")).Should().Be(0);
 
@@ -89,7 +91,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Self),
+            CreateEnvelope(TopologyAudience.Self),
             _ =>
             {
                 handledCount++;
@@ -104,7 +106,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         sent.Should().BeEmpty();
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Up),
+            CreateEnvelope(TopologyAudience.Parent),
             _ =>
             {
                 handledCount++;
@@ -117,7 +119,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             });
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Down),
+            CreateEnvelope(TopologyAudience.Children),
             _ =>
             {
                 handledCount++;
@@ -130,7 +132,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             });
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Both),
+            CreateEnvelope(TopologyAudience.ParentAndChildren),
             _ =>
             {
                 handledCount++;
@@ -147,7 +149,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var child2CountBeforeSkip = sent.Count(x => x == "child-2");
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Both, publishers: "parent,child-1"),
+            CreateEnvelope(TopologyAudience.ParentAndChildren, publishers: "parent,child-1"),
             _ =>
             {
                 handledCount++;
@@ -184,7 +186,7 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            CreateEnvelope(BroadcastDirection.Both, publishers: "actor-a"),
+            CreateEnvelope(TopologyAudience.ParentAndChildren, publishers: "actor-a"),
             _ =>
             {
                 handled = true;
@@ -200,13 +202,13 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         sent.Should().BeEmpty();
     }
 
-    private static EventEnvelope CreateEnvelope(BroadcastDirection direction, string? publishers = null)
+    private static EventEnvelope CreateEnvelope(TopologyAudience direction, string? publishers = null)
     {
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, direction),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, direction),
         };
 
         if (!string.IsNullOrWhiteSpace(publishers))

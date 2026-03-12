@@ -201,7 +201,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
-  │     └── 发布 StartWorkflowEvent (BroadcastDirection.Self)
+  │     └── 发布 StartWorkflowEvent (TopologyAudience.Self)
   │
   ├── WorkflowExecutionKernel 收到 StartWorkflowEvent
   │     └── 取第一个步骤，发布 StepRequestEvent

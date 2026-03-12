@@ -101,7 +101,7 @@ public class ScriptExecutionReadModelProjectorTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("script-host", BroadcastDirection.Self),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("script-host", TopologyAudience.Self),
     };
 
     private sealed class InMemoryScriptProjectionStoreDispatcher

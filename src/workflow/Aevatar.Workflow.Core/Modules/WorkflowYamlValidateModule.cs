@@ -35,7 +35,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
                 RunId = request.RunId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -48,7 +48,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
                 RunId = request.RunId,
                 Success = false,
                 Error = $"Invalid workflow YAML: {string.Join("; ", errors)}",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -58,6 +58,6 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
             RunId = request.RunId,
             Success = true,
             Output = $"```yaml\n{yaml}\n```",
-        }, BroadcastDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

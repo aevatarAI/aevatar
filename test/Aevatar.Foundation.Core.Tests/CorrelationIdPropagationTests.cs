@@ -1,4 +1,5 @@
 using Shouldly;
+using Aevatar.Foundation.Core.EventSourcing;
 
 namespace Aevatar.Foundation.Core.Tests;
 
@@ -82,11 +83,50 @@ public class CorrelationIdPropagationTests
         outgoing.Propagation.Baggage["command.id"].ShouldBe("cmd-should-not-flow");
     }
 
+    [Fact]
+    public async Task LocalActorPublisher_PublishCommittedStateEventAsync_PropagatesTraceFieldsIntoObserverPublication()
+    {
+        var streams = new InMemoryStreamProvider();
+        var publisher = new LocalActorPublisher("source-actor", new EventRouter("source-actor"), streams);
+        var received = new TaskCompletionSource<EventEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var _ = await streams.GetStream("source-actor").SubscribeAsync<EventEnvelope>(envelope =>
+        {
+            received.TrySetResult(envelope);
+            return Task.CompletedTask;
+        });
+
+        var sourceEnvelope = TestHelper.Envelope(new PingEvent { Message = "source" });
+        sourceEnvelope.Id = "inbound-event-4";
+        sourceEnvelope.EnsurePropagation().CorrelationId = "corr-envelope-2";
+        sourceEnvelope.Propagation.Baggage["tenant"] = "fabrikam";
+
+        await ((ICommittedStateEventPublisher)publisher).PublishAsync(
+            new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(new PongEvent { Reply = "committed" }),
+                },
+            },
+            sourceEnvelope: sourceEnvelope);
+
+        var outgoing = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        outgoing.Route.IsObserverPublication().ShouldBeTrue();
+        outgoing.Runtime!.RouteTargetCount.ShouldBe(0);
+        outgoing.Propagation.CorrelationId.ShouldBe("corr-envelope-2");
+        outgoing.Propagation.CausationEventId.ShouldBe("inbound-event-4");
+        outgoing.Propagation.Baggage["tenant"].ShouldBe("fabrikam");
+
+        var published = outgoing.Payload!.Unpack<CommittedStateEventPublished>();
+        published.StateEvent.EventData.Unpack<PongEvent>().Reply.ShouldBe("committed");
+    }
+
     private sealed class PublishFromHandlerAgent : TestGAgentBase<CounterState>
     {
         [Aevatar.Foundation.Abstractions.Attributes.EventHandler]
         public Task HandlePing(PingEvent evt) =>
-            PublishAsync(new PongEvent { Reply = evt.Message }, BroadcastDirection.Down);
+            PublishAsync(new PongEvent { Reply = evt.Message }, TopologyAudience.Children);
     }
 
     private sealed class SendFromHandlerAgent : TestGAgentBase<CounterState>
@@ -103,7 +143,7 @@ public class CorrelationIdPropagationTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)

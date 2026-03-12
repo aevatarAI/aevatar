@@ -122,7 +122,7 @@ flowchart LR
 | Agent | `IAgent` / `IAgent<TState>` | 业务逻辑单元，处理事件、维护状态 |
 | Actor | `IActor` | Agent 的运行容器，提供串行处理保证与父子层级关系 |
 | Runtime | `IActorRuntime` | 构建在 stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 |
-| Stream | `IStream` / `IStreamProvider` | `EventEnvelope` 的传播通道，支持 `BroadcastRoute / DirectRoute / ObserveRoute` |
+| Stream | `IStream` / `IStreamProvider` | `EventEnvelope` 的传播通道，支持 `DirectRoute / PublicationRoute(topology|observer)` |
 | EventEnvelope | `EventEnvelope` (Proto) | 统一运行时消息包络，包含 payload、route、correlation 等元数据 |
 | EventModule | `IEventModule` | 可插拔事件处理器，`CanHandle` 过滤 + `HandleAsync` 执行，按 `Priority` 排序 |
 

@@ -80,7 +80,7 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 VariableName = variable,
             };
 
-            await ctx.PublishAsync(suspended, BroadcastDirection.Both, ct);
+            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -108,7 +108,7 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                     Success = onTimeout != "fail",
                     Output = pending.Input,
                     Error = onTimeout == "fail" ? "Human input timed out" : "",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
                 return;
@@ -126,7 +126,7 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
                 RunId = pending.RunId,
                 Success = true,
                 Output = userInput ?? "",
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             state.Pending.Remove(pendingKey);
             await SaveStateAsync(state, ctx, ct);
         }

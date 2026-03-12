@@ -193,7 +193,7 @@ public sealed class WorkflowRunGAgent
             {
                 Content = "Workflow run is not definition-bound or compiled.",
                 SessionId = request.SessionId,
-            }, BroadcastDirection.Up);
+            }, TopologyAudience.Parent);
             return;
         }
 
@@ -215,7 +215,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt,
             RunId = runId,
-        }, BroadcastDirection.Self);
+        }, TopologyAudience.Self);
     }
 
     [EventHandler]
@@ -225,7 +225,7 @@ public sealed class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(yaml))
         {
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: empty workflow YAML, ignoring.");
-            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, BroadcastDirection.Up);
+            await PublishAsync(new ChatResponseEvent { Content = "Dynamic workflow YAML is empty." }, TopologyAudience.Parent);
             return;
         }
 
@@ -236,7 +236,7 @@ public sealed class WorkflowRunGAgent
                 ? "Dynamic workflow YAML compilation failed."
                 : $"Dynamic workflow YAML compilation failed: {replaceResult.CompilationError}";
             Logger.LogWarning("ReplaceWorkflowDefinitionAndExecute: YAML compilation failed. Error={Error}", replaceResult.CompilationError);
-            await PublishAsync(new ChatResponseEvent { Content = reason }, BroadcastDirection.Up);
+            await PublishAsync(new ChatResponseEvent { Content = reason }, TopologyAudience.Parent);
             return;
         }
 
@@ -258,7 +258,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Input ?? string.Empty,
             RunId = runId,
-        }, BroadcastDirection.Self);
+        }, TopologyAudience.Self);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -323,7 +323,7 @@ public sealed class WorkflowRunGAgent
         await PublishAsync(new TextMessageEndEvent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
-        }, BroadcastDirection.Up);
+        }, TopologyAudience.Parent);
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -837,7 +837,7 @@ public sealed class WorkflowRunGAgent
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(initialize),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(Id, BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

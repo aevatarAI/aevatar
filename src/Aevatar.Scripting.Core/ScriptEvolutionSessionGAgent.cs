@@ -93,7 +93,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             {
                 ProposalId = proposal.ProposalId,
             },
-            BroadcastDirection.Self,
+            TopologyAudience.Self,
             CancellationToken.None);
     }
 

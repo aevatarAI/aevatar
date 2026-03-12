@@ -47,10 +47,10 @@ public sealed class LocalActor : IActor
         _selfSubscription = await selfStream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
             var route = envelope.Route;
-            var direction = route.GetBroadcastDirection();
+            var direction = route.GetTopologyAudience();
             var publisherActorId = route?.PublisherActorId;
 
-            if (route.IsObserve())
+            if (route.IsObserverPublication())
                 return;
 
             if (route.IsDirect())
@@ -61,7 +61,7 @@ public sealed class LocalActor : IActor
             }
 
             // Handle Self events directly.
-            if (direction == BroadcastDirection.Self)
+            if (direction == TopologyAudience.Self)
             {
                 await EnqueueAsync(envelope);
                 return;
@@ -69,8 +69,8 @@ public sealed class LocalActor : IActor
 
             // Handle Up events from children (they produce to parent's stream).
             // Child events may use Both (self + parent), so treat direct-child Both as upward.
-            if (direction == BroadcastDirection.Up ||
-                (direction == BroadcastDirection.Both &&
+            if (direction == TopologyAudience.Parent ||
+                (direction == TopologyAudience.ParentAndChildren &&
                  !string.IsNullOrWhiteSpace(publisherActorId) &&
                  _router.ChildrenIds.Contains(publisherActorId)))
             {
@@ -78,7 +78,7 @@ public sealed class LocalActor : IActor
                 return;
             }
 
-            if (direction is BroadcastDirection.Down or BroadcastDirection.Both &&
+            if (direction is TopologyAudience.Children or TopologyAudience.ParentAndChildren &&
                 StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id))
             {
                 if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))

@@ -49,7 +49,7 @@ public sealed class InMemoryStreamCoverageTests
             Id = "evt-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new PingEvent { Message = "payload" }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Self),
         };
 
         await stream.ProduceAsync(envelope);

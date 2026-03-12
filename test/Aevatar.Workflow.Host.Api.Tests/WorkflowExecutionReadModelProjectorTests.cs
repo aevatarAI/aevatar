@@ -65,7 +65,7 @@ public class WorkflowExecutionReadModelProjectorTests
         Id = id ?? Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime()),
         Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateBroadcast(publisherId, BroadcastDirection.Down),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
     };
 
     [Fact]

@@ -202,7 +202,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("workflow-protocol", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("workflow-protocol", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

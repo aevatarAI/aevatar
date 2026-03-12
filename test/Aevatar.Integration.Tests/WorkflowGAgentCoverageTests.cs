@@ -320,7 +320,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "done-via-envelope",
             },
             agent.Id,
-            BroadcastDirection.Self));
+            TopologyAudience.Self));
 
         agent.State.Status.Should().Be("completed");
         agent.State.FinalOutput.Should().Be("done-via-envelope");
@@ -344,7 +344,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "ok",
             },
             "external-child",
-            BroadcastDirection.Both));
+            TopologyAudience.ParentAndChildren));
 
         agent.State.Status.Should().BeEmpty();
         publisher.Published.Should().BeEmpty();
@@ -504,7 +504,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "child-done",
             },
             pending.ChildActorId,
-            BroadcastDirection.Both));
+            TopologyAudience.ParentAndChildren));
 
         agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
         agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
@@ -703,14 +703,14 @@ public class WorkflowGAgentCoverageTests
         return services.BuildServiceProvider();
     }
 
-    private static EventEnvelope Envelope(IMessage message, string publisherId, BroadcastDirection direction)
+    private static EventEnvelope Envelope(IMessage message, string publisherId, TopologyAudience direction)
     {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(publisherId, direction),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -773,12 +773,12 @@ public class WorkflowGAgentCoverageTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<(IMessage evt, BroadcastDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -801,20 +801,21 @@ public class WorkflowGAgentCoverageTests
             Sent.Add((targetActorId, evt));
             _ = sourceEnvelope;
             _ = options;
-            Published.Add((evt, BroadcastDirection.Self));
+            Published.Add((evt, TopologyAudience.Self));
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<TEvent>(
-            TEvent evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage
         {
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
-            Published.Add((evt, BroadcastDirection.Self));
+            Published.Add((evt, TopologyAudience.Self));
             return Task.CompletedTask;
         }
     }

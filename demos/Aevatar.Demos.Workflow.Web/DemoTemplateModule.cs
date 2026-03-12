@@ -54,7 +54,7 @@ public sealed class DemoTemplateModule
             RunId = request.RunId,
             Success = true,
             Output = output,
-        }, BroadcastDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
@@ -77,7 +77,7 @@ public sealed class DemoTemplateModule
             Content = outputText,
         };
 
-        await ctx.PublishAsync(response, BroadcastDirection.Up, ct);
+        await ctx.PublishAsync(response, TopologyAudience.Parent, ct);
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);

@@ -2,13 +2,16 @@ namespace Aevatar.Foundation.Abstractions;
 
 public static class EnvelopeRouteSemantics
 {
-    public static EnvelopeRoute CreateBroadcast(string publisherActorId, BroadcastDirection direction) =>
+    public static EnvelopeRoute CreateTopologyPublication(string publisherActorId, TopologyAudience audience) =>
         new()
         {
             PublisherActorId = publisherActorId ?? string.Empty,
-            Broadcast = new BroadcastRoute
+            Publication = new PublicationRoute
             {
-                Direction = direction,
+                Topology = new TopologyPublication
+                {
+                    Audience = audience,
+                },
             },
         };
 
@@ -22,38 +25,62 @@ public static class EnvelopeRouteSemantics
             },
         };
 
-    public static EnvelopeRoute CreateObserve(string publisherActorId) =>
+    public static EnvelopeRoute CreateObserverPublication(
+        string publisherActorId,
+        ObserverAudience audience = ObserverAudience.CommittedFacts) =>
         new()
         {
             PublisherActorId = publisherActorId ?? string.Empty,
-            Observe = new ObserveRoute(),
+            Publication = new PublicationRoute
+            {
+                Observer = new ObserverPublication
+                {
+                    Audience = audience,
+                },
+            },
         };
 
-    public static BroadcastDirection GetBroadcastDirection(this EnvelopeRoute? route) =>
-        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Broadcast
-            ? route.Broadcast.Direction
-            : BroadcastDirection.Unspecified;
+    public static TopologyAudience GetTopologyAudience(this EnvelopeRoute? route) =>
+        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Publication &&
+        route.Publication?.AudienceCase == PublicationRoute.AudienceOneofCase.Topology
+            ? route.Publication.Topology.Audience
+            : TopologyAudience.Unspecified;
+
+    public static ObserverAudience GetObserverAudience(this EnvelopeRoute? route) =>
+        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Publication &&
+        route.Publication?.AudienceCase == PublicationRoute.AudienceOneofCase.Observer
+            ? route.Publication.Observer.Audience
+            : ObserverAudience.Unspecified;
 
     public static string GetTargetActorId(this EnvelopeRoute? route) =>
         route?.RouteCase == EnvelopeRoute.RouteOneofCase.Direct
             ? route.Direct.TargetActorId ?? string.Empty
             : string.Empty;
 
-    public static bool IsBroadcast(this EnvelopeRoute? route) =>
-        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Broadcast;
+    public static bool IsPublication(this EnvelopeRoute? route) =>
+        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Publication;
+
+    public static bool IsTopologyPublication(this EnvelopeRoute? route) =>
+        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Publication &&
+        route.Publication?.AudienceCase == PublicationRoute.AudienceOneofCase.Topology;
 
     public static bool IsDirect(this EnvelopeRoute? route) =>
         route?.RouteCase == EnvelopeRoute.RouteOneofCase.Direct;
 
-    public static bool IsObserve(this EnvelopeRoute? route) =>
-        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Observe;
+    public static bool IsObserverPublication(this EnvelopeRoute? route) =>
+        route?.RouteCase == EnvelopeRoute.RouteOneofCase.Publication &&
+        route.Publication?.AudienceCase == PublicationRoute.AudienceOneofCase.Observer;
 
     public static string Describe(this EnvelopeRoute? route) =>
         route?.RouteCase switch
         {
-            EnvelopeRoute.RouteOneofCase.Broadcast => route.Broadcast.Direction.ToString(),
             EnvelopeRoute.RouteOneofCase.Direct => nameof(DirectRoute),
-            EnvelopeRoute.RouteOneofCase.Observe => nameof(ObserveRoute),
-            _ => BroadcastDirection.Unspecified.ToString(),
+            EnvelopeRoute.RouteOneofCase.Publication => route.Publication?.AudienceCase switch
+            {
+                PublicationRoute.AudienceOneofCase.Topology => route.Publication.Topology.Audience.ToString(),
+                PublicationRoute.AudienceOneofCase.Observer => route.Publication.Observer.Audience.ToString(),
+                _ => nameof(PublicationRoute),
+            },
+            _ => TopologyAudience.Unspecified.ToString(),
         };
 }

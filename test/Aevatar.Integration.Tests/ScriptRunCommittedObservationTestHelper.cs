@@ -24,13 +24,17 @@ internal static class ScriptRunCommittedObservationTestHelper
             .GetStream(actorId)
             .SubscribeAsync<EventEnvelope>(envelope =>
             {
-                if (!envelope.Route.IsObserve())
+                if (!envelope.Route.IsObserverPublication())
                     return Task.CompletedTask;
 
-                if (envelope.Payload?.Is(ScriptRunDomainEventCommitted.Descriptor) != true)
+                if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
                     return Task.CompletedTask;
 
-                var committed = envelope.Payload.Unpack<ScriptRunDomainEventCommitted>();
+                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+                if (published.StateEvent?.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) != true)
+                    return Task.CompletedTask;
+
+                var committed = published.StateEvent.EventData.Unpack<ScriptRunDomainEventCommitted>();
                 if (string.Equals(committed.RunId, runId, StringComparison.Ordinal))
                 {
                     observed.TrySetResult(new ScriptRunCommittedObservation(

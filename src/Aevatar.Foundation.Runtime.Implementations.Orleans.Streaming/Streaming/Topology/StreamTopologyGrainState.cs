@@ -28,7 +28,7 @@ public sealed class StreamForwardingBindingEntry
     public StreamForwardingMode ForwardingMode { get; set; } = StreamForwardingMode.HandleThenForward;
 
     [Id(3)]
-    public List<BroadcastDirection> DirectionFilter { get; set; } = [];
+    public List<TopologyAudience> DirectionFilter { get; set; } = [];
 
     [Id(4)]
     public List<string> EventTypeFilter { get; set; } = [];

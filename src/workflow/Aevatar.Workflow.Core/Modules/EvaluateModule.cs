@@ -87,7 +87,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                     await ctx.PublishAsync(new ChatRequestEvent
                     {
                         Prompt = prompt, SessionId = sessionId,
-                    }, BroadcastDirection.Self, ct);
+                    }, TopologyAudience.Self, ct);
                 }
             }
             catch
@@ -142,7 +142,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         if (!passed && !string.IsNullOrEmpty(evalCtx.OnBelow))
             completed.BranchKey = evalCtx.OnBelow;
 
-        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static double ParseScore(string text)

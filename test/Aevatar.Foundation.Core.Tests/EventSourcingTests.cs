@@ -496,6 +496,7 @@ public class StateEventApplierIntegrationTests
         {
             Services = services,
             EventPublisher = publisher,
+            CommittedStateEventPublisher = publisher,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
         };
         agent.SetId("observe-agent");
@@ -506,7 +507,10 @@ public class StateEventApplierIntegrationTests
 
         agent.State.Count.ShouldBe(4);
         publisher.Observed.ShouldHaveSingleItem();
-        publisher.Observed[0].Event.ShouldBeOfType<IncrementEvent>().Amount.ShouldBe(4);
+        var published = publisher.Observed[0].Event.ShouldBeOfType<CommittedStateEventPublished>();
+        published.StateEvent.ShouldNotBeNull();
+        published.StateEvent.AgentId.ShouldBe("observe-agent");
+        published.StateEvent.EventData.Unpack<IncrementEvent>().Amount.ShouldBe(4);
         publisher.Observed[0].SourceEnvelope.ShouldBeSameAs(inbound);
     }
 
@@ -543,14 +547,14 @@ public class StateEventApplierIntegrationTests
             };
     }
 
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
     {
-        public List<(IMessage Event, BroadcastDirection Direction, EventEnvelope? SourceEnvelope)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction, EventEnvelope? SourceEnvelope)> Published { get; } = [];
         public List<(IMessage Event, EventEnvelope? SourceEnvelope)> Observed { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -578,13 +582,14 @@ public class StateEventApplierIntegrationTests
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<TEvent>(
-            TEvent evt,
+        public Task PublishAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage
         {
+            _ = audience;
             _ = options;
             ct.ThrowIfCancellationRequested();
             Observed.Add((evt, sourceEnvelope));

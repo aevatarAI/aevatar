@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -17,7 +18,7 @@ public class OrleansGrainEventPublisherTests
         var streams = new RecordingStreamProvider();
         var publisher = CreatePublisher(actorId: "actor-self", streams: streams);
 
-        await publisher.PublishAsync(new StringValue { Value = "hello" }, BroadcastDirection.Self, CancellationToken.None);
+        await publisher.PublishAsync(new StringValue { Value = "hello" }, TopologyAudience.Self, CancellationToken.None);
 
         var delivered = streams.GetProduced("actor-self").Should().ContainSingle().Subject;
         delivered.Payload!.Unpack<StringValue>().Value.Should().Be("hello");
@@ -25,16 +26,26 @@ public class OrleansGrainEventPublisherTests
     }
 
     [Fact]
-    public async Task PublishCommittedAsync_ShouldEnqueueObserverEnvelopeWithoutRoutingTargets()
+    public async Task PublishCommittedStateEventAsync_ShouldEnqueueObserverEnvelopeWithoutRoutingTargets()
     {
         var streams = new RecordingStreamProvider();
         var publisher = CreatePublisher(actorId: "actor-observe", streams: streams);
 
-        await publisher.PublishCommittedAsync(new StringValue { Value = "committed" }, CancellationToken.None);
+        await ((ICommittedStateEventPublisher)publisher).PublishAsync(
+            new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventData = Any.Pack(new StringValue { Value = "committed" }),
+                },
+            },
+            ObserverAudience.CommittedFacts,
+            CancellationToken.None);
 
         var delivered = streams.GetProduced("actor-observe").Should().ContainSingle().Subject;
-        delivered.Payload!.Unpack<StringValue>().Value.Should().Be("committed");
-        delivered.Route!.IsObserve().Should().BeTrue();
+        delivered.Payload!.Unpack<CommittedStateEventPublished>()
+            .StateEvent.EventData.Unpack<StringValue>().Value.Should().Be("committed");
+        delivered.Route!.IsObserverPublication().Should().BeTrue();
         delivered.Runtime!.RouteTargetCount.Should().Be(0);
     }
 
@@ -52,7 +63,7 @@ public class OrleansGrainEventPublisherTests
 
         await publisher.PublishAsync(
             new StringValue { Value = "reply" },
-            BroadcastDirection.Up,
+            TopologyAudience.Parent,
             CancellationToken.None,
             inbound);
 
@@ -119,15 +130,15 @@ public class OrleansGrainEventPublisherTests
                 ForwardingMode = StreamForwardingMode.HandleThenForward,
                 DirectionFilter =
                 [
-                    BroadcastDirection.Down,
-                    BroadcastDirection.Both,
+                    TopologyAudience.Children,
+                    TopologyAudience.ParentAndChildren,
                 ],
             },
             CancellationToken.None);
 
         var publisher = CreatePublisher(actorId: "root", streams: streams);
 
-        await publisher.PublishAsync(new StringValue { Value = "task" }, BroadcastDirection.Down, CancellationToken.None);
+        await publisher.PublishAsync(new StringValue { Value = "task" }, TopologyAudience.Children, CancellationToken.None);
 
         var childAEnvelope = streams.GetProduced("child-a").Should().ContainSingle().Subject;
         childAEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("task");
@@ -150,8 +161,8 @@ public class OrleansGrainEventPublisherTests
                 ForwardingMode = StreamForwardingMode.TransitOnly,
                 DirectionFilter =
                 [
-                    BroadcastDirection.Down,
-                    BroadcastDirection.Both,
+                    TopologyAudience.Children,
+                    TopologyAudience.ParentAndChildren,
                 ],
             },
             CancellationToken.None);
@@ -163,15 +174,15 @@ public class OrleansGrainEventPublisherTests
                 ForwardingMode = StreamForwardingMode.HandleThenForward,
                 DirectionFilter =
                 [
-                    BroadcastDirection.Down,
-                    BroadcastDirection.Both,
+                    TopologyAudience.Children,
+                    TopologyAudience.ParentAndChildren,
                 ],
             },
             CancellationToken.None);
 
         var publisher = CreatePublisher(actorId: "root", streams: streams);
 
-        await publisher.PublishAsync(new StringValue { Value = "transit" }, BroadcastDirection.Down, CancellationToken.None);
+        await publisher.PublishAsync(new StringValue { Value = "transit" }, TopologyAudience.Children, CancellationToken.None);
 
         streams.GetProduced("middle").Should().BeEmpty();
         var leafEnvelope = streams.GetProduced("leaf").Should().ContainSingle().Subject;
@@ -191,7 +202,7 @@ public class OrleansGrainEventPublisherTests
 
         var publisher = CreatePublisher(actorId: "root", streams: streams);
 
-        await publisher.PublishAsync(new StringValue { Value = "cycle" }, BroadcastDirection.Down, CancellationToken.None);
+        await publisher.PublishAsync(new StringValue { Value = "cycle" }, TopologyAudience.Children, CancellationToken.None);
 
         var middleEnvelope = streams.GetProduced("middle").Should().ContainSingle().Subject;
         streams.GetProduced("root").Should().ContainSingle();
@@ -290,7 +301,7 @@ public class OrleansGrainEventPublisherTests
                 SourceStreamId = StreamId,
                 TargetStreamId = binding.TargetStreamId,
                 ForwardingMode = binding.ForwardingMode,
-                DirectionFilter = new HashSet<BroadcastDirection>(binding.DirectionFilter),
+                DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
                 EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
                 Version = binding.Version,
                 LeaseId = binding.LeaseId,

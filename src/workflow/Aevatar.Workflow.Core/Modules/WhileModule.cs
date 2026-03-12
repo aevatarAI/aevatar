@@ -100,7 +100,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
                     Success = false,
                     Error = completed.Error,
                     Output = completed.Output,
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -141,7 +141,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
                 parentCompleted.Annotations["while.iterations"] = nextIteration.ToString();
                 parentCompleted.Annotations["while.max_iterations"] = state.MaxIterations.ToString();
                 parentCompleted.Annotations["while.condition"] = state.ConditionExpression;
-                await ctx.PublishAsync(parentCompleted, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(parentCompleted, TopologyAudience.Self, ct);
             }
         }
     }
@@ -183,7 +183,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
         foreach (var (key, value) in state.SubParameters)
             request.Parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
-        await ctx.PublishAsync(request, BroadcastDirection.Down, ct);
+        await ctx.PublishAsync(request, TopologyAudience.Children, ct);
     }
 
     private static Dictionary<string, string> BuildIterationVariables(string input, int iteration, int maxIterations) =>

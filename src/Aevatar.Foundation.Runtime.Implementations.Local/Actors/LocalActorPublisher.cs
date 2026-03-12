@@ -3,6 +3,7 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Runtime.Propagation;
 using Aevatar.Foundation.Runtime.Routing;
@@ -11,8 +12,8 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
-/// <summary>IEventPublisher that routes events to streams using BroadcastDirection.</summary>
-public sealed class LocalActorPublisher : IEventPublisher
+/// <summary>Local runtime publisher for topology delivery, direct delivery, and committed-state observation.</summary>
+public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventPublisher
 {
     private readonly string _actorId;
     private readonly EventRouter _router;
@@ -36,19 +37,19 @@ public sealed class LocalActorPublisher : IEventPublisher
 
     public async Task PublishAsync<TEvent>(
         TEvent evt,
-        BroadcastDirection direction = BroadcastDirection.Down,
+        TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        var routeTargetCount = GetRouteTargetCount(direction);
+        var routeTargetCount = GetRouteTargetCount(audience);
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(_actorId, direction),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, audience),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -58,19 +59,19 @@ public sealed class LocalActorPublisher : IEventPublisher
             routeTargetCount,
             options);
 
-        switch (direction)
+        switch (audience)
         {
-            case BroadcastDirection.Self:
+            case TopologyAudience.Self:
                 await _selfStream.ProduceAsync(envelope, ct);
                 break;
-            case BroadcastDirection.Down:
+            case TopologyAudience.Children:
                 await _selfStream.ProduceAsync(envelope, ct);
                 break;
-            case BroadcastDirection.Up:
+            case TopologyAudience.Parent:
                 if (_router.ParentId != null)
                     await _streams.GetStream(_router.ParentId).ProduceAsync(envelope, ct);
                 break;
-            case BroadcastDirection.Both:
+            case TopologyAudience.ParentAndChildren:
                 await _selfStream.ProduceAsync(envelope, ct);
                 if (_router.ParentId != null)
                     await _streams.GetStream(_router.ParentId).ProduceAsync(envelope, ct);
@@ -103,19 +104,19 @@ public sealed class LocalActorPublisher : IEventPublisher
         await _streams.GetStream(targetActorId).ProduceAsync(envelope, ct);
     }
 
-    public async Task PublishCommittedAsync<TEvent>(
-        TEvent evt,
-        CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null,
-        EventEnvelopePublishOptions? options = null)
-        where TEvent : IMessage
+    async Task ICommittedStateEventPublisher.PublishAsync(
+        CommittedStateEventPublished evt,
+        ObserverAudience audience,
+        CancellationToken ct,
+        EventEnvelope? sourceEnvelope,
+        EventEnvelopePublishOptions? options)
     {
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateObserve(_actorId),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(_actorId, audience),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -127,13 +128,13 @@ public sealed class LocalActorPublisher : IEventPublisher
         await _selfStream.ProduceAsync(envelope, ct);
     }
 
-    private long GetRouteTargetCount(BroadcastDirection direction) =>
-        direction switch
+    private long GetRouteTargetCount(TopologyAudience audience) =>
+        audience switch
         {
-            BroadcastDirection.Self => 1,
-            BroadcastDirection.Down => _router.ChildrenIds.Count,
-            BroadcastDirection.Up => _router.ParentId != null ? 1 : 0,
-            BroadcastDirection.Both => _router.ChildrenIds.Count + (_router.ParentId != null ? 1 : 0),
+            TopologyAudience.Self => 1,
+            TopologyAudience.Children => _router.ChildrenIds.Count,
+            TopologyAudience.Parent => _router.ParentId != null ? 1 : 0,
+            TopologyAudience.ParentAndChildren => _router.ChildrenIds.Count + (_router.ParentId != null ? 1 : 0),
             _ => 0,
         };
 

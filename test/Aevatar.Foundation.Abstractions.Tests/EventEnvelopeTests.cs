@@ -55,13 +55,13 @@ public class EventEnvelopeTests
     }
 
     [Fact]
-    public void BroadcastDirection_HasExpectedValues()
+    public void TopologyAudience_HasExpectedValues()
     {
         // Ensure Proto-generated enum values are consistent with design
-        ((int)BroadcastDirection.Unspecified).ShouldBe(0);
-        ((int)BroadcastDirection.Down).ShouldBe(1);
-        ((int)BroadcastDirection.Up).ShouldBe(2);
-        ((int)BroadcastDirection.Both).ShouldBe(3);
-        ((int)BroadcastDirection.Self).ShouldBe(4);
+        ((int)TopologyAudience.Unspecified).ShouldBe(0);
+        ((int)TopologyAudience.Self).ShouldBe(1);
+        ((int)TopologyAudience.Parent).ShouldBe(2);
+        ((int)TopologyAudience.Children).ShouldBe(3);
+        ((int)TopologyAudience.ParentAndChildren).ShouldBe(4);
     }
 }

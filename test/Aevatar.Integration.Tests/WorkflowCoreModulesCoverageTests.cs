@@ -32,7 +32,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         ctx.Published.Should().ContainSingle();
-        ctx.Published[0].direction.Should().Be(BroadcastDirection.Self);
+        ctx.Published[0].direction.Should().Be(TopologyAudience.Self);
         var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("step-1");
         completed.Success.Should().BeFalse();
@@ -276,7 +276,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         secondDispatch.StepId.Should().Be("while-1_iter_1");
         secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
-        deltaEvents[0].direction.Should().Be(BroadcastDirection.Down);
+        deltaEvents[0].direction.Should().Be(TopologyAudience.Children);
 
         var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("while-1");
@@ -850,7 +850,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
         chat.TimeoutMs.Should().Be(1800000);
-        ctx.Published.Last().direction.Should().Be(BroadcastDirection.Self);
+        ctx.Published.Last().direction.Should().Be(TopologyAudience.Self);
     }
 
     [Fact]
@@ -1209,7 +1209,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(publisherId ?? "test-publisher", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
     }
 

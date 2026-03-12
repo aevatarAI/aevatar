@@ -44,7 +44,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = request.StepId, RunId = runId, Success = true, Output = "",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -94,7 +94,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Input = items[i],
                     TargetRole = mapRole ?? "",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
@@ -113,7 +113,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     StepId = reduceParent, RunId = runId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
                 };
                 completed.Annotations["map_reduce.phase"] = "reduce";
-                await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -140,7 +140,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
                     Error = allSuccess ? "" : "one or more map steps failed",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -161,7 +161,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 Input = reduceInput,
                 TargetRole = parentState.ReduceRole,
-            }, BroadcastDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
         }
     }
 

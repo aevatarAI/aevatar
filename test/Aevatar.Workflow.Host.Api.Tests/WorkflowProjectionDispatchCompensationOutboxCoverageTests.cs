@@ -47,7 +47,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         var envelope = actor.HandledEnvelopes.Single();
         envelope.Propagation!.CorrelationId.Should().Be("record-1");
         envelope.Route!.PublisherActorId.Should().Be("projection.compensation.outbox");
-        envelope.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
+        envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
         envelope.Payload.Unpack<ProjectionCompensationEnqueuedEvent>().RecordId.Should().Be("record-1");
     }
 

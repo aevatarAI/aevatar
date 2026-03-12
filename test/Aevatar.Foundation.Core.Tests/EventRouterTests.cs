@@ -8,11 +8,11 @@ namespace Aevatar.Foundation.Core.Tests;
 
 public class EventRouterTests
 {
-    private static EventEnvelope MakeEnvelope(BroadcastDirection direction) => new()
+    private static EventEnvelope MakeEnvelope(TopologyAudience direction) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("origin", direction),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("origin", direction),
     };
 
     [Fact]
@@ -25,7 +25,7 @@ public class EventRouterTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Self),
+            MakeEnvelope(TopologyAudience.Self),
             _ => { handled = true; return Task.CompletedTask; },
             (id, _) => { sent.Add(id); return Task.CompletedTask; });
 
@@ -43,7 +43,7 @@ public class EventRouterTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Down),
+            MakeEnvelope(TopologyAudience.Children),
             _ => Task.CompletedTask,
             (id, _) => { sent.Add(id); return Task.CompletedTask; });
 
@@ -60,7 +60,7 @@ public class EventRouterTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Up),
+            MakeEnvelope(TopologyAudience.Parent),
             _ => Task.CompletedTask,
             (id, _) => { sent.Add(id); return Task.CompletedTask; });
 
@@ -77,7 +77,7 @@ public class EventRouterTests
         var sent = new List<string>();
 
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Both),
+            MakeEnvelope(TopologyAudience.ParentAndChildren),
             _ => Task.CompletedTask,
             (id, _) => { sent.Add(id); return Task.CompletedTask; });
 
@@ -92,7 +92,7 @@ public class EventRouterTests
         router.SetParent("actor-b");
 
         // Simulate that actor-a has already processed this event
-        var envelope = MakeEnvelope(BroadcastDirection.Up);
+        var envelope = MakeEnvelope(TopologyAudience.Parent);
         envelope.EnsureRuntime().VisitedActorIds.Add("actor-a");
 
         var handled = false;
@@ -119,7 +119,7 @@ public class EventRouterTests
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Route = EnvelopeRouteSemantics.CreateObserve("origin"),
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("origin"),
             },
             _ => { handled = true; return Task.CompletedTask; },
             (id, _) => { sent.Add(id); return Task.CompletedTask; });

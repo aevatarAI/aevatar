@@ -47,7 +47,7 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = "race requires parameters.workers (CSV/JSON list) or target_role",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -72,7 +72,7 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Input = request.Input,
                     TargetRole = role ?? "",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
@@ -100,7 +100,7 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent, RunId = runId, Success = true, Output = evt.Output, WorkerId = evt.WorkerId,
                 };
                 completed.Annotations["race.winner"] = evt.StepId;
-                await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
                 if (state.Received >= state.Total)
                 {
@@ -120,7 +120,7 @@ public sealed class RaceModule : IEventModule<IWorkflowExecutionContext>
                     await ctx.PublishAsync(new StepCompletedEvent
                     {
                         StepId = parent, RunId = runId, Success = false, Error = "all race branches failed",
-                    }, BroadcastDirection.Self, ct);
+                    }, TopologyAudience.Self, ct);
                 }
                 return;
             }

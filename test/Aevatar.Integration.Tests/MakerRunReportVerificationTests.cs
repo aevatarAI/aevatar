@@ -93,7 +93,7 @@ public class MakerRunReportVerificationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_report_verification",
             }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -111,7 +111,7 @@ public class MakerRunReportVerificationTests
                 WorkflowName = "maker_report_verification",
                 RunId = "maker-report-run",
             }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -136,7 +136,7 @@ public class MakerRunReportVerificationTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-verification" }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));

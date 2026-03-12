@@ -50,7 +50,7 @@ public sealed class InMemoryStreamingCoverageTests
             Id = "evt-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(string.Empty, BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Self),
         };
 
         await stream.ProduceAsync(envelope);
@@ -239,7 +239,7 @@ public sealed class InMemoryStreamingCoverageTests
             SourceStreamId = "another-source",
             TargetStreamId = "target-stream",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [BroadcastDirection.Up],
+            DirectionFilter = [TopologyAudience.Parent],
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "a" },
             Version = 12,
             LeaseId = "lease-1",
@@ -250,7 +250,7 @@ public sealed class InMemoryStreamingCoverageTests
         saved!.SourceStreamId.Should().Be("source-stream");
         saved.TargetStreamId.Should().Be("target-stream");
         saved.ForwardingMode.Should().Be(StreamForwardingMode.TransitOnly);
-        saved.DirectionFilter.Should().BeEquivalentTo([BroadcastDirection.Up]);
+        saved.DirectionFilter.Should().BeEquivalentTo([TopologyAudience.Parent]);
         saved.EventTypeFilter.Should().BeEquivalentTo(["a"]);
         saved.Version.Should().Be(12);
         saved.LeaseId.Should().Be("lease-1");
@@ -339,7 +339,7 @@ public sealed class InMemoryStreamingCoverageTests
         {
             TargetStreamId = "target",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [BroadcastDirection.Down, BroadcastDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
 
         await source.ProduceAsync(new StringValue { Value = "relay" });

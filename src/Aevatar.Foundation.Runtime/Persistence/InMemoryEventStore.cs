@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Collections.Concurrent;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 
 namespace Aevatar.Foundation.Runtime.Persistence;
@@ -27,7 +28,7 @@ public sealed class InMemoryEventStore : IEventStore
     /// <param name="expectedVersion">Expected current version; throws when mismatch.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Latest version after append.</returns>
-    public Task<long> AppendAsync(string agentId, IEnumerable<StateEvent> events, long expectedVersion, CancellationToken ct = default)
+    public Task<EventStoreCommitResult> AppendAsync(string agentId, IEnumerable<StateEvent> events, long expectedVersion, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         lock (_lock)
@@ -40,7 +41,12 @@ public sealed class InMemoryEventStore : IEventStore
             stream.Events.AddRange(eventList.Select(static x => x.Clone()));
             if (eventList.Count > 0)
                 stream.CurrentVersion = eventList[^1].Version;
-            return Task.FromResult(stream.CurrentVersion);
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = stream.CurrentVersion,
+                CommittedEvents = { eventList.Select(static x => x.Clone()) },
+            });
         }
     }
 

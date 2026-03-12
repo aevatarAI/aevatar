@@ -22,10 +22,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         InboundEnvelope = new EventEnvelope();
     }
 
-    public List<(IMessage evt, BroadcastDirection direction)> Published { get; } = [];
+    public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
     public List<ScheduledCallback> Scheduled { get; } = [];
     public List<CanceledCallback> Canceled { get; } = [];
-    public Action<IMessage, BroadcastDirection>? OnPublish { get; set; }
+    public Action<IMessage, TopologyAudience>? OnPublish { get; set; }
 
     public EventEnvelope InboundEnvelope { get; }
     public string AgentId => Agent.Id;
@@ -95,7 +95,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        BroadcastDirection direction = BroadcastDirection.Down,
+        TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
@@ -115,7 +115,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     {
         _ = targetActorId;
         _ = options;
-        return PublishAsync(evt, BroadcastDirection.Self, ct);
+        return PublishAsync(evt, TopologyAudience.Self, ct);
     }
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
@@ -159,7 +159,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(callback.Event),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(publisherId ?? AgentId, BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? AgentId, TopologyAudience.Self),
         };
 
         if (callback.Options?.Propagation != null)

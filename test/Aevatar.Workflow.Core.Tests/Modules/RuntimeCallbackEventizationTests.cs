@@ -1176,7 +1176,7 @@ public class RuntimeCallbackEventizationTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateBroadcast("test", BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Runtime = callback == null
                 ? null
                 : new EnvelopeRuntime
@@ -1224,7 +1224,7 @@ public class RuntimeCallbackEventizationTests
 
         public string RunId => ((IWorkflowExecutionStateHost)Agent).RunId;
 
-        public List<(IMessage Event, BroadcastDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
         public List<OutboundDispatch> Outbound { get; } = [];
 
@@ -1236,7 +1236,7 @@ public class RuntimeCallbackEventizationTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
@@ -1248,12 +1248,12 @@ public class RuntimeCallbackEventizationTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            return RecordOutboundAsync(evt, BroadcastDirection.Self, targetActorId, options, ct);
+            return RecordOutboundAsync(evt, TopologyAudience.Self, targetActorId, options, ct);
         }
 
         private Task RecordOutboundAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction,
+            TopologyAudience direction,
             string? targetActorId,
             EventEnvelopePublishOptions? options,
             CancellationToken ct)
@@ -1417,7 +1417,7 @@ public class RuntimeCallbackEventizationTests
 
     private sealed record OutboundDispatch(
         IMessage Event,
-        BroadcastDirection Direction,
+        TopologyAudience Direction,
         string? TargetActorId,
         EventEnvelopePublishOptions? Options);
 }

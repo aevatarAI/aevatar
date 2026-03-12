@@ -318,7 +318,7 @@ foreach (var workflowName in workflowsToRun)
             WorkflowYaml = yaml,
             WorkflowName = workflowName,
         }),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("primitives.demo", BroadcastDirection.Self),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("primitives.demo", TopologyAudience.Self),
         Propagation = new EnvelopePropagation
         {
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -388,7 +388,7 @@ foreach (var workflowName in workflowsToRun)
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = $"demo-{workflowName}" }),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("primitives.demo", BroadcastDirection.Self),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("primitives.demo", TopologyAudience.Self),
     });
 
     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));

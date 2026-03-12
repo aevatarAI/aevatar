@@ -290,7 +290,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -320,13 +320,15 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<TEvent>(
-            TEvent evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : Google.Protobuf.IMessage
         {
+            _ = evt;
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();

@@ -78,7 +78,7 @@ public sealed class InMemoryStreamForwardingRegistry : IStreamForwardingRegistry
             SourceStreamId = binding.SourceStreamId,
             TargetStreamId = binding.TargetStreamId,
             ForwardingMode = binding.ForwardingMode,
-            DirectionFilter = new HashSet<BroadcastDirection>(binding.DirectionFilter),
+            DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,

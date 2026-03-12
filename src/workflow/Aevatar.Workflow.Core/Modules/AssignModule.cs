@@ -48,6 +48,6 @@ public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
             completed.AssignedValue = resolvedValue;
         }
 
-        await ctx.PublishAsync(completed, BroadcastDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

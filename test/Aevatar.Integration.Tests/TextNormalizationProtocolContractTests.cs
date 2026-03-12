@@ -38,13 +38,17 @@ public sealed class TextNormalizationProtocolContractTests
             .GetStream(harness.ActorId)
             .SubscribeAsync<EventEnvelope>(envelope =>
             {
-                if (!envelope.Route.IsObserve() ||
-                    envelope.Payload?.Is(TextNormalizationCompleted.Descriptor) != true)
+                if (!envelope.Route.IsObserverPublication() ||
+                    envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
                 {
                     return Task.CompletedTask;
                 }
 
-                var completed = envelope.Payload.Unpack<TextNormalizationCompleted>();
+                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+                if (published.StateEvent?.EventData?.Is(TextNormalizationCompleted.Descriptor) != true)
+                    return Task.CompletedTask;
+
+                var completed = published.StateEvent.EventData.Unpack<TextNormalizationCompleted>();
                 projectedReadModels[harness.ActorId] = completed.Current?.Clone() ?? new TextNormalizationReadModel();
                 completions.Writer.TryWrite(completed);
                 return Task.CompletedTask;
@@ -179,7 +183,7 @@ public sealed class TextNormalizationProtocolContractTests
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                 Payload = Any.Pack(payload),
-                Route = EnvelopeRouteSemantics.CreateBroadcast("contract-test", BroadcastDirection.Self),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication("contract-test", TopologyAudience.Self),
                 Propagation = new EnvelopePropagation
                 {
                     CorrelationId = Guid.NewGuid().ToString("N"),

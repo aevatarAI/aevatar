@@ -67,7 +67,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     StepId = evt.StepId,
                     RunId = runId,
                     Success = true, Output = "",
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -101,7 +101,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                         subReq.Parameters[key["sub_param_".Length..]] = value;
                 }
 
-                await ctx.PublishAsync(subReq, BroadcastDirection.Self, ct);
+                await ctx.PublishAsync(subReq, TopologyAudience.Self, ct);
             }
         }
         else
@@ -138,7 +138,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent,
                     RunId = runId,
                     Success = allSuccess, Output = merged,
-                }, BroadcastDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
             else
             {

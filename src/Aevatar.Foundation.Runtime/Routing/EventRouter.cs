@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // EventRouter - event router for hierarchy and propagation logic.
-// Routes events to Self / Up / Down / Both based on BroadcastDirection.
+// Routes events to Self / Up / Down / Both based on TopologyAudience.
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
@@ -51,30 +51,30 @@ public sealed class EventRouter
         Func<EventEnvelope, Task> handleSelf,
         Func<string, EventEnvelope, Task> sendToActor)
     {
-        if (!envelope.Route.IsBroadcast())
+        if (!envelope.Route.IsTopologyPublication())
             return;
 
         var publishers = GetPublishers(envelope);
         if (publishers.Contains(ActorId)) return;
         var updated = AddPublisher(envelope, ActorId);
-        var direction = updated.Route.GetBroadcastDirection();
-        if (direction == BroadcastDirection.Unspecified)
+        var direction = updated.Route.GetTopologyAudience();
+        if (direction == TopologyAudience.Unspecified)
             return;
 
         await handleSelf(updated);
 
         switch (direction)
         {
-            case BroadcastDirection.Self: break;
-            case BroadcastDirection.Up:
+            case TopologyAudience.Self: break;
+            case TopologyAudience.Parent:
                 if (_parentId != null && !publishers.Contains(_parentId))
                     await sendToActor(_parentId, updated);
                 break;
-            case BroadcastDirection.Down:
+            case TopologyAudience.Children:
                 foreach (var c in _childrenIds)
                     if (!publishers.Contains(c)) await sendToActor(c, updated);
                 break;
-            case BroadcastDirection.Both:
+            case TopologyAudience.ParentAndChildren:
                 if (_parentId != null && !publishers.Contains(_parentId))
                     await sendToActor(_parentId, updated);
                 foreach (var c in _childrenIds)

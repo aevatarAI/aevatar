@@ -35,7 +35,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         evt.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
         evt.OccurredAtUtc.Should().NotBeNull();
         envelope.Propagation!.CorrelationId.Should().Be("session-1");
-        envelope.Route.GetBroadcastDirection().Should().Be(BroadcastDirection.Self);
+        envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
     }
 
     [Fact]
@@ -789,7 +789,7 @@ internal sealed class TestInMemoryEventStore : IEventStore
     private readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
     private readonly object _sync = new();
 
-    public Task<long> AppendAsync(
+    public Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,
@@ -816,7 +816,12 @@ internal sealed class TestInMemoryEventStore : IEventStore
             stream.AddRange(appended.Select(x => x.Clone()));
             var latest = appended.Count == 0 ? currentVersion : appended[^1].Version;
             _versions[agentId] = latest;
-            return Task.FromResult(latest);
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = latest,
+                CommittedEvents = { appended.Select(x => x.Clone()) },
+            });
         }
     }
 

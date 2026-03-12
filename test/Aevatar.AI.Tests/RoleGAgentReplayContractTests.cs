@@ -348,7 +348,7 @@ public class RoleGAgentReplayContractTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -371,16 +371,19 @@ public class RoleGAgentReplayContractTests
             where TEvent : IMessage
         {
             _ = targetActorId;
-            return PublishAsync(evt, BroadcastDirection.Self, ct, sourceEnvelope, options);
+            return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
 
-        public Task PublishCommittedAsync<TEvent>(
-            TEvent evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            PublishAsync(evt, BroadcastDirection.Self, ct, sourceEnvelope, options);
+        {
+            _ = audience;
+            return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+        }
     }
 
     private sealed class CountingLlmProviderFactory(string response) : ILLMProviderFactory, ILLMProvider

@@ -31,7 +31,7 @@ internal sealed class SubWorkflowOrchestrator
     private readonly Func<ILogger> _loggerAccessor;
     private readonly Func<IMessage, CancellationToken, Task> _persistDomainEventAsync;
     private readonly Func<IReadOnlyList<IMessage>, CancellationToken, Task> _persistDomainEventsAsync;
-    private readonly Func<IMessage, BroadcastDirection, CancellationToken, Task> _publishAsync;
+    private readonly Func<IMessage, TopologyAudience, CancellationToken, Task> _publishAsync;
     private readonly Func<string, IMessage, Task> _sendToAsync;
 
     public SubWorkflowOrchestrator(
@@ -43,7 +43,7 @@ internal sealed class SubWorkflowOrchestrator
         Func<ILogger> loggerAccessor,
         Func<IMessage, CancellationToken, Task> persistDomainEventAsync,
         Func<IReadOnlyList<IMessage>, CancellationToken, Task> persistDomainEventsAsync,
-        Func<IMessage, BroadcastDirection, CancellationToken, Task> publishAsync,
+        Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
         Func<string, IMessage, Task> sendToAsync)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -210,7 +210,7 @@ internal sealed class SubWorkflowOrchestrator
         parentCompleted.Annotations[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
         parentCompleted.Annotations[WorkflowCallChildRunIdMetadataKey] = childRunId;
 
-        await _publishAsync(parentCompleted, BroadcastDirection.Self, ct);
+        await _publishAsync(parentCompleted, TopologyAudience.Self, ct);
         await TryFinalizeNonSingletonChildAsync(pending, ct);
         return true;
     }
@@ -445,7 +445,7 @@ internal sealed class SubWorkflowOrchestrator
             RunId = parentRunId ?? string.Empty,
             Success = false,
             Error = error ?? "workflow_call invocation failed",
-        }, BroadcastDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private async Task TryFinalizeNonSingletonChildAsync(
@@ -538,7 +538,7 @@ internal sealed class SubWorkflowOrchestrator
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(bindDefinition),
-            Route = EnvelopeRouteSemantics.CreateBroadcast(_ownerActorIdAccessor(), BroadcastDirection.Self),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_ownerActorIdAccessor(), TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

@@ -421,7 +421,7 @@ public sealed class SimpleQueryRuntimeScript : IScriptPackageRuntime
 
         public Task PublishAsync<T>(
             T evt,
-            BroadcastDirection direction = BroadcastDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -450,14 +450,15 @@ public sealed class SimpleQueryRuntimeScript : IScriptPackageRuntime
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedAsync<T>(
-            T evt,
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where T : IMessage
         {
             _ = evt;
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();

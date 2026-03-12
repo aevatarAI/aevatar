@@ -13,11 +13,11 @@ namespace Aevatar.Foundation.Core.Tests.Bdd;
 [Trait("Feature", "EventRouting")]
 public class EventRoutingBddTests
 {
-    private static EventEnvelope MakeEnvelope(BroadcastDirection direction) => new()
+    private static EventEnvelope MakeEnvelope(TopologyAudience direction) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Route = EnvelopeRouteSemantics.CreateBroadcast("origin", direction),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("origin", direction),
     };
 
     [Fact(DisplayName = "Given a parent Actor with two child Actors, when event direction is Down, event should be sent to all children")]
@@ -32,7 +32,7 @@ public class EventRoutingBddTests
 
         // When
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Down),
+            MakeEnvelope(TopologyAudience.Children),
             _ => Task.CompletedTask,
             (id, _) => { received.Add(id); return Task.CompletedTask; });
 
@@ -53,7 +53,7 @@ public class EventRoutingBddTests
 
         // When
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Up),
+            MakeEnvelope(TopologyAudience.Parent),
             _ => Task.CompletedTask,
             (id, _) => { received.Add(id); return Task.CompletedTask; });
 
@@ -74,7 +74,7 @@ public class EventRoutingBddTests
 
         // When
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Self),
+            MakeEnvelope(TopologyAudience.Self),
             _ => { selfHandled = true; return Task.CompletedTask; },
             (id, _) => { forwarded.Add(id); return Task.CompletedTask; });
 
@@ -88,7 +88,7 @@ public class EventRoutingBddTests
     {
         // Given
         var router = new EventRouter("actor-a");
-        var envelope = MakeEnvelope(BroadcastDirection.Down);
+        var envelope = MakeEnvelope(TopologyAudience.Children);
         envelope.EnsureRuntime().VisitedActorIds.Add("actor-a"); // Already processed
 
         var handled = false;
@@ -116,7 +116,7 @@ public class EventRoutingBddTests
 
         // When
         await router.RouteAsync(
-            MakeEnvelope(BroadcastDirection.Both),
+            MakeEnvelope(TopologyAudience.ParentAndChildren),
             _ => Task.CompletedTask,
             (id, _) => { received.Add(id); return Task.CompletedTask; });
 
