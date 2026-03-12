@@ -199,20 +199,65 @@ PY
     return 1
   fi
 
-  chat_status="$(curl \
-    --max-time 40 \
-    -sS \
-    -o "${probe_log_file}" \
-    -w "%{http_code}" \
-    -H "Content-Type: application/json" \
-    -X POST \
-    "http://127.0.0.1:${old_node_port}/api/chat" \
-    -d "{\"prompt\":\"mixed-version-event-probe\",\"workflow\":\"${workflow_name}\"}" || true)"
+  chat_status="$(
+    OLD_NODE_PORT="${old_node_port}" \
+    WORKFLOW_NAME="${workflow_name}" \
+    PROBE_LOG_FILE="${probe_log_file}" \
+    python3 - <<'PY'
+import json
+import os
+import socket
+import urllib.error
+import urllib.request
+
+port = os.environ["OLD_NODE_PORT"]
+workflow_name = os.environ["WORKFLOW_NAME"]
+probe_log_file = os.environ["PROBE_LOG_FILE"]
+payload = json.dumps(
+    {
+        "prompt": "mixed-version-event-probe",
+        "workflow": workflow_name,
+    }
+).encode("utf-8")
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/api/chat",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+
+def write_log(content: str) -> None:
+    with open(probe_log_file, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+try:
+    with urllib.request.urlopen(request, timeout=40) as response:
+        with open(probe_log_file, "w", encoding="utf-8") as handle:
+            while True:
+                line = response.readline()
+                if not line:
+                    break
+
+                text = line.decode("utf-8", errors="replace")
+                handle.write(text)
+                handle.flush()
+
+                if text.startswith("data:"):
+                    break
+
+        print(response.status)
+except urllib.error.HTTPError as error:
+    write_log(error.read().decode("utf-8", errors="replace"))
+    print(error.code)
+except (urllib.error.URLError, TimeoutError, socket.timeout):
+    write_log("")
+    print("000")
+PY
+  )"
 
   echo "Event-path probe HTTP status: ${chat_status}"
-  sleep 2
 
-  if [[ "${chat_status}" != "200" && "${chat_status}" != "000" ]]; then
+  if [[ "${chat_status}" != "200" ]]; then
     echo "Event-path probe returned unexpected status: ${chat_status}"
     return 1
   fi
@@ -221,6 +266,18 @@ PY
     echo "Event-path probe did not reach old-node /api/chat endpoint."
     return 1
   fi
+
+  if ! grep -q '^data:' "${probe_log_file}"; then
+    echo "Event-path probe did not receive an SSE data frame."
+    return 1
+  fi
+
+  if ! grep -q '"name": "aevatar.run.context"' "${probe_log_file}"; then
+    echo "Event-path probe did not receive the expected run-context SSE frame."
+    return 1
+  fi
+
+  echo "Observed initial SSE run-context frame from old node."
 
   if [[ -n "${MIXED_FAIL_EVENT_TYPE_URLS}" ]]; then
     local observed_failure=0
@@ -245,10 +302,6 @@ PY
       return 1
     fi
     echo "Observed runtime retry scheduling in old-node logs."
-  fi
-
-  if [[ "${chat_status}" == "000" ]]; then
-    echo "Event-path probe timed out without response body; endpoint hit was confirmed via server log."
   fi
 
   return 0

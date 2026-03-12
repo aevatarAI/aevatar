@@ -15,13 +15,13 @@ public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
         IScriptingActorAddressResolver addressResolver,
-        IScriptingPortTimeouts timeouts)
+        ScriptingQueryTimeoutOptions timeoutOptions)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _catalogQueryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
-            .GetCatalogEntryQueryTimeout();
+        _catalogQueryTimeout = (timeoutOptions ?? throw new ArgumentNullException(nameof(timeoutOptions)))
+            .ResolveCatalogEntryQueryTimeout();
     }
 
     public async Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(

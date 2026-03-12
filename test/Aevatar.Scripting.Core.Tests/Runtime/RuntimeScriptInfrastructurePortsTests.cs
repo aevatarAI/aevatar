@@ -252,113 +252,6 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task DefinitionSnapshotPort_ShouldExposeEventDrivenModeFromOptions()
-    {
-        var runtime = new TestActorRuntime();
-        var streams = new InMemoryStreamProvider();
-        var queryClient = new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient());
-        var port = new RuntimeScriptDefinitionSnapshotPort(
-            new RuntimeScriptActorAccessor(runtime),
-            queryClient,
-            new FixedQueryModes(useEventDrivenDefinitionQuery: true),
-            new FixedTimeouts());
-
-        port.UseEventDrivenDefinitionQuery.Should().BeTrue();
-        await Task.CompletedTask;
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenManagerActorMissing()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, _ => throw new InvalidOperationException("should-not-handle"));
-
-        var decision = await port.TryResolveAsync("manager-missing", "proposal-1", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenQueryTimesOut()
-    {
-        var runtime = new TestActorRuntime();
-        var streams = new InMemoryStreamProvider();
-        runtime.RegisterActor(new TestActor("manager-1", (envelope, ct) =>
-        {
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }));
-        var port = new RuntimeScriptEvolutionDecisionFallbackPort(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-timeout", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenDecisionNotFound()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, request =>
-            new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = false,
-                ProposalId = request.ProposalId,
-            });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-not-found", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldMapDecision_WhenFound()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, request =>
-            new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = true,
-                Accepted = true,
-                ProposalId = request.ProposalId,
-                ScriptId = "script-1",
-                BaseRevision = "rev-1",
-                CandidateRevision = "rev-2",
-                Status = "promoted",
-                FailureReason = string.Empty,
-                DefinitionActorId = "definition-1",
-                CatalogActorId = "catalog-1",
-                Diagnostics = { "compile-ok" },
-            });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-hit", CancellationToken.None);
-
-        decision.Should().NotBeNull();
-        decision!.Accepted.Should().BeTrue();
-        decision.ProposalId.Should().Be("proposal-hit");
-        decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldThrow_WhenArgumentsMissing()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, _ => throw new InvalidOperationException("should-not-handle"));
-
-        var missingManager = () => port.TryResolveAsync(string.Empty, "proposal-1", CancellationToken.None);
-        var missingProposal = () => port.TryResolveAsync("manager-1", string.Empty, CancellationToken.None);
-
-        await missingManager.Should().ThrowAsync<ArgumentException>();
-        await missingProposal.Should().ThrowAsync<ArgumentException>();
-    }
-
-    [Fact]
     public async Task CatalogCommandService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
     {
         PromoteScriptRevisionRequestedEvent? captured = null;
@@ -489,7 +382,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task EvolutionInteractionService_ShouldReturnDecision_WhenSessionCompletes()
     {
         var projectionPort = new TestProjectionPort();
-        var fallbackPort = new TestFallbackPort();
+        var decisionReadPort = new TestDecisionReadPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
         {
             projectionPort.Publish("script-evolution-session:proposal-1", new ScriptEvolutionSessionCompletedEvent
@@ -508,7 +401,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 Diagnostics = { "compile-ok" },
             });
         });
-        var service = CreateEvolutionInteractionService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -526,14 +419,14 @@ public class RuntimeScriptInfrastructurePortsTests
         decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
-        fallbackPort.Calls.Should().BeEmpty();
+        decisionReadPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
     public async Task EvolutionInteractionService_ShouldGenerateProposalId_WhenRequestProposalIdMissing()
     {
         var projectionPort = new TestProjectionPort();
-        var fallbackPort = new TestFallbackPort();
+        var decisionReadPort = new TestDecisionReadPort();
         StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
         {
@@ -545,7 +438,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 Status = "promoted",
             });
         });
-        var service = CreateEvolutionInteractionService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -567,7 +460,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task EvolutionInteractionService_ShouldUseFallbackDecision_WhenSessionTimesOut()
     {
         var projectionPort = new TestProjectionPort();
-        var fallbackPort = new TestFallbackPort
+        var decisionReadPort = new TestDecisionReadPort
         {
             NextResult = new ScriptPromotionDecision(
                 Accepted: false,
@@ -585,8 +478,8 @@ public class RuntimeScriptInfrastructurePortsTests
         var service = CreateEvolutionInteractionService(
             runtime,
             projectionPort,
-            fallbackPort,
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+            decisionReadPort,
+            new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -600,7 +493,7 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         decision.FailureReason.Should().Be("fallback-decision");
-        fallbackPort.Calls.Should().ContainSingle();
+        decisionReadPort.Calls.Should().ContainSingle();
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
     }
@@ -609,13 +502,13 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task EvolutionInteractionService_ShouldThrowTimeout_WhenSessionTimesOutWithoutFallback()
     {
         var projectionPort = new TestProjectionPort();
-        var fallbackPort = new TestFallbackPort { NextResult = null };
+        var decisionReadPort = new TestDecisionReadPort { NextResult = null };
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
         var service = CreateEvolutionInteractionService(
             runtime,
             projectionPort,
-            fallbackPort,
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+            decisionReadPort,
+            new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -630,16 +523,16 @@ public class RuntimeScriptInfrastructurePortsTests
 
         await act.Should().ThrowAsync<TimeoutException>()
             .WithMessage("*proposal-timeout-no-fallback*");
-        fallbackPort.Calls.Should().ContainSingle();
+        decisionReadPort.Calls.Should().ContainSingle();
     }
 
     [Fact]
     public async Task EvolutionInteractionService_ShouldThrow_WhenProjectionLeaseIsUnavailable()
     {
         var projectionPort = new TestProjectionPort { ReturnNullLease = true };
-        var fallbackPort = new TestFallbackPort();
+        var decisionReadPort = new TestDecisionReadPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
-        var service = CreateEvolutionInteractionService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -672,25 +565,7 @@ public class RuntimeScriptInfrastructurePortsTests
         return new RuntimeScriptDefinitionSnapshotPort(
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
-            new FixedQueryModes(useEventDrivenDefinitionQuery: false),
-            new FixedTimeouts { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
-    }
-
-    private static RuntimeScriptEvolutionDecisionFallbackPort CreateDecisionFallbackPort(
-        TestActorRuntime runtime,
-        Func<QueryScriptEvolutionDecisionRequestedEvent, ScriptEvolutionDecisionRespondedEvent> responseFactory)
-    {
-        var streams = new InMemoryStreamProvider();
-        runtime.RegisterActor(new TestActor("manager-1", async (envelope, ct) =>
-        {
-            var request = envelope.Payload.Unpack<QueryScriptEvolutionDecisionRequestedEvent>();
-            var response = responseFactory(request);
-            await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-        }));
-        return new RuntimeScriptEvolutionDecisionFallbackPort(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
+            new ScriptingQueryTimeoutOptions { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
     private static RuntimeScriptCatalogQueryService CreateCatalogQueryService(
@@ -720,7 +595,7 @@ public class RuntimeScriptInfrastructurePortsTests
             new RuntimeScriptActorAccessor(runtime),
             new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
-            new FixedTimeouts { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
+            new ScriptingQueryTimeoutOptions { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
@@ -752,10 +627,11 @@ public class RuntimeScriptInfrastructurePortsTests
     private static RuntimeScriptEvolutionInteractionService CreateEvolutionInteractionService(
         TestActorRuntime runtime,
         TestProjectionPort projectionPort,
-        TestFallbackPort fallbackPort,
-        IScriptingPortTimeouts? timeouts = null)
+        TestDecisionReadPort decisionReadPort,
+        ScriptingInteractionTimeoutOptions? interactionTimeoutOptions = null)
     {
-        var resolvedTimeouts = timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) };
+        var resolvedInteractionTimeoutOptions = interactionTimeoutOptions
+            ?? new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(200) };
         var actorAccessor = new RuntimeScriptActorAccessor(runtime);
         var addressResolver = new StaticAddressResolver();
         var targetResolver = new ScriptEvolutionCommandTargetResolver(
@@ -771,10 +647,10 @@ public class RuntimeScriptInfrastructurePortsTests
             new ScriptEvolutionAcceptedReceiptFactory());
         var interactionService = new DefaultCommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>(
             dispatchPipeline,
-            new ScriptEvolutionTimedEventOutputStream(resolvedTimeouts),
+            new ScriptEvolutionTimedEventOutputStream(resolvedInteractionTimeoutOptions),
             new ScriptEvolutionCompletionPolicy(),
             new NoOpCommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>(),
-            new ScriptEvolutionDurableCompletionResolver(fallbackPort));
+            new ScriptEvolutionDurableCompletionResolver(decisionReadPort));
 
         return new RuntimeScriptEvolutionInteractionService(interactionService);
     }
@@ -972,20 +848,6 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
-    private sealed class FixedTimeouts : IScriptingPortTimeouts
-    {
-        public TimeSpan DefinitionSnapshotQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-
-        public TimeSpan CatalogEntryQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-
-        public TimeSpan EvolutionDecisionTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-    }
-
-    private sealed class FixedQueryModes(bool useEventDrivenDefinitionQuery) : IScriptingRuntimeQueryModes
-    {
-        public bool UseEventDrivenDefinitionQuery { get; } = useEventDrivenDefinitionQuery;
-    }
-
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
@@ -997,19 +859,18 @@ public class RuntimeScriptInfrastructurePortsTests
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 
-    private sealed class TestFallbackPort : IScriptEvolutionDecisionFallbackPort
+    private sealed class TestDecisionReadPort : IScriptEvolutionDecisionReadPort
     {
         public ScriptPromotionDecision? NextResult { get; set; }
 
-        public List<(string ManagerActorId, string ProposalId)> Calls { get; } = [];
+        public List<string> Calls { get; } = [];
 
-        public Task<ScriptPromotionDecision?> TryResolveAsync(
-            string managerActorId,
+        public Task<ScriptPromotionDecision?> TryGetAsync(
             string proposalId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            Calls.Add((managerActorId, proposalId));
+            Calls.Add(proposalId);
             return Task.FromResult(NextResult);
         }
     }

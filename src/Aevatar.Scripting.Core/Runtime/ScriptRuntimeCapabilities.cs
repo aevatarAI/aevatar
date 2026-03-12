@@ -29,9 +29,6 @@ public sealed class ScriptRuntimeCapabilities : IScriptRuntimeCapabilities
     public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
         _interaction.SendToAsync(targetActorId, eventPayload, ct);
 
-    public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct) =>
-        _agentLifecycle.InvokeAgentAsync(targetAgentId, eventPayload, ct);
-
     public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
         _agentLifecycle.CreateAgentAsync(agentTypeAssemblyQualifiedName, actorId, ct);
 

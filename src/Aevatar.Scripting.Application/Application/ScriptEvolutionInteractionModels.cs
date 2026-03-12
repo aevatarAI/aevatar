@@ -9,7 +9,6 @@ public enum ScriptEvolutionStartError
 }
 
 public sealed record ScriptEvolutionAcceptedReceipt(
-    string ManagerActorId,
     string SessionActorId,
     string ProposalId,
     string CommandId,

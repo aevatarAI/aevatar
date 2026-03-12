@@ -1,12 +1,14 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
@@ -25,12 +27,10 @@ public class ClaimComplexBusinessScenarioTests
     public async Task Should_execute_complex_claim_business_paths_with_ai_ports_projection_and_replay()
     {
         var aiCapability = new RecordingAICapability();
-        var agentRuntimePort = new RecordingAgentRuntimePort();
 
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddSingleton<IAICapability>(aiCapability);
-        services.AddSingleton<IGAgentRuntimePort>(agentRuntimePort);
         services.AddScriptCapability();
 
         using var provider = services.BuildServiceProvider();
@@ -60,14 +60,14 @@ public class ClaimComplexBusinessScenarioTests
 
         foreach (var claimCase in caseData)
         {
+            var runId = "run-" + claimCase.CaseId.ToLowerInvariant();
+            var analystActor = await CreateFreshSinkActorAsync(runtime, "role-claim-analyst-" + runId);
+            var fraudActor = await CreateFreshSinkActorAsync(runtime, "fraud-risk-agent-" + runId);
+            var complianceActor = await CreateFreshSinkActorAsync(runtime, "compliance-rule-agent-" + runId);
             var runtimeActorId = "claim-complex-runtime-" + claimCase.CaseId.ToLowerInvariant();
             var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
-
-            var invocationCountBefore = agentRuntimePort.Calls.Count;
-            var factoryCountBefore = agentRuntimePort.Created.Count;
             var aiCountBefore = aiCapability.Calls.Count;
 
-            var runId = "run-" + claimCase.CaseId.ToLowerInvariant();
             await runtimeActor.HandleEventAsync(
                 ScriptingCommandEnvelopeTestKit.CreateRunScript(
                     runtimeActorId,
@@ -95,20 +95,21 @@ public class ClaimComplexBusinessScenarioTests
             aiCalls[0].CorrelationId.Should().Be(runId);
             aiCalls[0].Prompt.Should().Contain(claimCase.CaseId);
 
-            var invocationCalls = agentRuntimePort.Calls.Skip(invocationCountBefore).ToArray();
-            invocationCalls.Should().Contain(x => x.PayloadValue == "AnalyzeClaimNarrativeEvent");
-            invocationCalls.Should().Contain(x => x.PayloadValue == "ScoreFraudRiskEvent");
-            invocationCalls.Should().Contain(x => x.PayloadValue == "ValidateClaimComplianceEvent");
+            ReadMessages(analystActor).Should().ContainSingle(x => x == "AnalyzeClaimNarrativeEvent");
+            ReadMessages(fraudActor).Should().ContainSingle(x => x == "ScoreFraudRiskEvent");
+            ReadMessages(complianceActor).Should().ContainSingle(x => x == "ValidateClaimComplianceEvent");
 
+            var manualReviewActorId = "human-review-" + runId;
             if (claimCase.ManualReviewRequired)
             {
-                agentRuntimePort.Created.Skip(factoryCountBefore).Should().ContainSingle();
-                invocationCalls.Should().Contain(x => x.PayloadValue == "RequestManualReviewEvent");
+                (await runtime.ExistsAsync(manualReviewActorId)).Should().BeTrue();
+                var manualReviewActor = await runtime.GetAsync(manualReviewActorId);
+                manualReviewActor.Should().NotBeNull();
+                ReadMessages(manualReviewActor!).Should().ContainSingle(x => x == "RequestManualReviewEvent");
             }
             else
             {
-                agentRuntimePort.Created.Skip(factoryCountBefore).Should().BeEmpty();
-                invocationCalls.Should().NotContain(x => x.PayloadValue == "RequestManualReviewEvent");
+                (await runtime.ExistsAsync(manualReviewActorId)).Should().BeFalse();
             }
 
             var persistedEvents = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
@@ -160,6 +161,12 @@ public class ClaimComplexBusinessScenarioTests
             replayedState.StatePayloads.Should().BeEquivalentTo(stateBeforeReplay.StatePayloads);
             replayedState.ReadModelPayloads.Should().BeEquivalentTo(stateBeforeReplay.ReadModelPayloads);
             replayedState.Revision.Should().Be(stateBeforeReplay.Revision);
+
+            await runtime.DestroyAsync(analystActor.Id, CancellationToken.None);
+            await runtime.DestroyAsync(fraudActor.Id, CancellationToken.None);
+            await runtime.DestroyAsync(complianceActor.Id, CancellationToken.None);
+            if (await runtime.ExistsAsync(manualReviewActorId))
+                await runtime.DestroyAsync(manualReviewActorId, CancellationToken.None);
         }
     }
 
@@ -183,6 +190,19 @@ public class ClaimComplexBusinessScenarioTests
         string ExpectedDecisionStatus,
         bool ManualReviewRequired);
 
+    private static async Task<IActor> CreateFreshSinkActorAsync(IActorRuntime runtime, string actorId)
+    {
+        if (await runtime.ExistsAsync(actorId))
+            await runtime.DestroyAsync(actorId, CancellationToken.None);
+
+        return await runtime.CreateAsync<ClaimMessageSinkGAgent>(actorId, CancellationToken.None);
+    }
+
+    private static IReadOnlyList<string> ReadMessages(IActor actor) =>
+        ((ClaimMessageSinkGAgent)actor.Agent).State.Values
+            .Select(static value => value.StringValue)
+            .ToArray();
+
     private sealed class RecordingAICapability : IAICapability
     {
         public List<(string RunId, string CorrelationId, string Prompt)> Calls { get; } = [];
@@ -201,55 +221,6 @@ public class ClaimComplexBusinessScenarioTests
                 : "normal-profile";
             return Task.FromResult(response);
         }
-    }
-
-    private sealed class RecordingAgentRuntimePort : IGAgentRuntimePort
-    {
-        public List<(string TypeName, string ActorId)> Created { get; } = [];
-        public List<(string TargetActorId, string PayloadValue, string CorrelationId)> Calls { get; } = [];
-
-        public Task<string> CreateAsync(
-            string agentTypeAssemblyQualifiedName,
-            string? actorId,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            var createdId = actorId ?? "created-" + Guid.NewGuid().ToString("N");
-            Created.Add((agentTypeAssemblyQualifiedName, createdId));
-            return Task.FromResult(createdId);
-        }
-
-        public Task PublishAsync(
-            string sourceActorId,
-            IMessage eventPayload,
-            EventDirection direction,
-            string correlationId,
-            CancellationToken ct) => Task.CompletedTask;
-
-        public Task SendToAsync(
-            string sourceActorId,
-            string targetActorId,
-            IMessage eventPayload,
-            string correlationId,
-            CancellationToken ct) => Task.CompletedTask;
-
-        public Task InvokeAsync(
-            string targetAgentId,
-            IMessage eventPayload,
-            string correlationId,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            var payloadValue = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
-            Calls.Add((targetAgentId, payloadValue, correlationId));
-            return Task.CompletedTask;
-        }
-
-        public Task DestroyAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
-
-        public Task LinkAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class InMemoryScriptProjectionStoreDispatcher
@@ -342,16 +313,16 @@ public sealed class ClaimComplexBusinessScript : IScriptPackageRuntime, IScriptC
         var input = ParseInput(requestedEvent.Payload);
         var aiSummary = await context.Capabilities!.AskAIAsync("claim-case:" + input.CaseId, ct);
 
-        await context.Capabilities.InvokeAgentAsync(
-            "role-claim-analyst",
+        await context.Capabilities.SendToAsync(
+            "role-claim-analyst-" + context.RunId,
             new StringValue { Value = "AnalyzeClaimNarrativeEvent" },
             ct);
-        await context.Capabilities.InvokeAgentAsync(
-            "fraud-risk-agent",
+        await context.Capabilities.SendToAsync(
+            "fraud-risk-agent-" + context.RunId,
             new StringValue { Value = "ScoreFraudRiskEvent" },
             ct);
-        await context.Capabilities.InvokeAgentAsync(
-            "compliance-rule-agent",
+        await context.Capabilities.SendToAsync(
+            "compliance-rule-agent-" + context.RunId,
             new StringValue { Value = "ValidateClaimComplianceEvent" },
             ct);
 
@@ -365,10 +336,10 @@ public sealed class ClaimComplexBusinessScript : IScriptPackageRuntime, IScriptC
             decisionEvent = "ClaimManualReviewRequestedEvent";
             manualReviewRequired = true;
             var manualReviewAgentId = await context.Capabilities.CreateAgentAsync(
-                "Aevatar.Scripting.Core.ScriptRuntimeGAgent, Aevatar.Scripting.Core",
+                "Aevatar.Integration.Tests.ClaimMessageSinkGAgent, Aevatar.Integration.Tests",
                 "human-review-" + context.RunId,
                 ct);
-            await context.Capabilities.InvokeAgentAsync(
+            await context.Capabilities.SendToAsync(
                 manualReviewAgentId,
                 new StringValue { Value = "RequestManualReviewEvent" },
                 ct);

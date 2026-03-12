@@ -12,24 +12,30 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public class OrleansGrainEventPublisherTests
 {
     [Fact]
-    public async Task PublishAsync_WhenDirectionIsSelf_ShouldDispatchWithoutPublisherChain()
+    public async Task PublishAsync_WhenDirectionIsSelf_ShouldEnqueueToOwnStreamWithoutPublisherChain()
     {
-        EventEnvelope? dispatched = null;
         var streams = new RecordingStreamProvider();
-        var publisher = CreatePublisher(
-            actorId: "actor-self",
-            streams: streams,
-            onDispatchToSelf: envelope =>
-            {
-                dispatched = envelope;
-                return Task.CompletedTask;
-            });
+        var publisher = CreatePublisher(actorId: "actor-self", streams: streams);
 
         await publisher.PublishAsync(new StringValue { Value = "hello" }, EventDirection.Self, CancellationToken.None);
 
-        dispatched.Should().NotBeNull();
-        dispatched!.Runtime?.VisitedActorIds.Should().BeEmpty();
-        streams.GetProduced("actor-self").Should().BeEmpty();
+        var delivered = streams.GetProduced("actor-self").Should().ContainSingle().Subject;
+        delivered.Payload!.Unpack<StringValue>().Value.Should().Be("hello");
+        delivered.Runtime?.VisitedActorIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenDirectionIsObserve_ShouldEnqueueObserverEnvelopeWithoutRoutingTargets()
+    {
+        var streams = new RecordingStreamProvider();
+        var publisher = CreatePublisher(actorId: "actor-observe", streams: streams);
+
+        await publisher.PublishAsync(new StringValue { Value = "committed" }, EventDirection.Observe, CancellationToken.None);
+
+        var delivered = streams.GetProduced("actor-observe").Should().ContainSingle().Subject;
+        delivered.Payload!.Unpack<StringValue>().Value.Should().Be("committed");
+        delivered.Route!.Direction.Should().Be(EventDirection.Observe);
+        delivered.Runtime!.RouteTargetCount.Should().Be(0);
     }
 
     [Fact]
@@ -39,7 +45,6 @@ public class OrleansGrainEventPublisherTests
         var publisher = CreatePublisher(
             actorId: "child-actor",
             streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask,
             getParentId: () => "parent-actor");
 
         var inbound = new EventEnvelope();
@@ -56,34 +61,24 @@ public class OrleansGrainEventPublisherTests
     }
 
     [Fact]
-    public async Task SendToAsync_WhenTargetIsSelf_ShouldDispatchWithoutPublisherChain()
+    public async Task SendToAsync_WhenTargetIsSelf_ShouldEnqueueToOwnStreamWithoutPublisherChain()
     {
-        EventEnvelope? dispatched = null;
         var streams = new RecordingStreamProvider();
-        var publisher = CreatePublisher(
-            actorId: "actor-self",
-            streams: streams,
-            onDispatchToSelf: envelope =>
-            {
-                dispatched = envelope;
-                return Task.CompletedTask;
-            });
+        var publisher = CreatePublisher(actorId: "actor-self", streams: streams);
 
         await publisher.SendToAsync("actor-self", new StringValue { Value = "direct" }, CancellationToken.None);
 
-        dispatched.Should().NotBeNull();
-        dispatched!.Runtime?.VisitedActorIds.Should().BeEmpty();
-        streams.GetProduced("actor-self").Should().BeEmpty();
+        var delivered = streams.GetProduced("actor-self").Should().ContainSingle().Subject;
+        delivered.Payload!.Unpack<StringValue>().Value.Should().Be("direct");
+        delivered.Route!.TargetActorId.Should().Be("actor-self");
+        delivered.Runtime?.VisitedActorIds.Should().BeEmpty();
     }
 
     [Fact]
     public async Task SendToAsync_WhenSourceContainsPublisherChain_ShouldAppendCurrentPublisher()
     {
         var streams = new RecordingStreamProvider();
-        var publisher = CreatePublisher(
-            actorId: "sender",
-            streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask);
+        var publisher = CreatePublisher(actorId: "sender", streams: streams);
 
         var inbound = new EventEnvelope();
         VisitedActorChain.AppendIfMissing(inbound, "upstream");
@@ -102,10 +97,7 @@ public class OrleansGrainEventPublisherTests
     public async Task SendToAsync_ShouldDispatchViaStreamProvider()
     {
         var streams = new RecordingStreamProvider();
-        var publisher = CreatePublisher(
-            actorId: "sender",
-            streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask);
+        var publisher = CreatePublisher(actorId: "sender", streams: streams);
 
         await publisher.SendToAsync("receiver", new StringValue { Value = "stream" }, CancellationToken.None);
 
@@ -133,10 +125,7 @@ public class OrleansGrainEventPublisherTests
             },
             CancellationToken.None);
 
-        var publisher = CreatePublisher(
-            actorId: "root",
-            streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask);
+        var publisher = CreatePublisher(actorId: "root", streams: streams);
 
         await publisher.PublishAsync(new StringValue { Value = "task" }, EventDirection.Down, CancellationToken.None);
 
@@ -180,10 +169,7 @@ public class OrleansGrainEventPublisherTests
             },
             CancellationToken.None);
 
-        var publisher = CreatePublisher(
-            actorId: "root",
-            streams: streams,
-            onDispatchToSelf: _ => Task.CompletedTask);
+        var publisher = CreatePublisher(actorId: "root", streams: streams);
 
         await publisher.PublishAsync(new StringValue { Value = "transit" }, EventDirection.Down, CancellationToken.None);
 
@@ -198,38 +184,28 @@ public class OrleansGrainEventPublisherTests
     [Fact]
     public async Task PublishAsync_WhenForwardingGraphContainsCycle_ShouldSkipLoopbackTarget()
     {
-        var selfDispatchCount = 0;
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new RecordingStreamProvider(registry);
         await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("root", "middle"), CancellationToken.None);
         await registry.UpsertAsync(StreamForwardingRules.CreateHierarchyBinding("middle", "root"), CancellationToken.None);
 
-        var publisher = CreatePublisher(
-            actorId: "root",
-            streams: streams,
-            onDispatchToSelf: _ =>
-            {
-                Interlocked.Increment(ref selfDispatchCount);
-                return Task.CompletedTask;
-            });
+        var publisher = CreatePublisher(actorId: "root", streams: streams);
 
         await publisher.PublishAsync(new StringValue { Value = "cycle" }, EventDirection.Down, CancellationToken.None);
 
         var middleEnvelope = streams.GetProduced("middle").Should().ContainSingle().Subject;
-        selfDispatchCount.Should().Be(0);
+        streams.GetProduced("root").Should().ContainSingle();
         middleEnvelope.Runtime?.VisitedActorIds.Should().BeEmpty();
     }
 
     private static OrleansGrainEventPublisher CreatePublisher(
         string actorId,
         RecordingStreamProvider streams,
-        Func<EventEnvelope, Task> onDispatchToSelf,
         Func<string?>? getParentId = null)
     {
         return new OrleansGrainEventPublisher(
             actorId,
             getParentId ?? (() => null),
-            onDispatchToSelf,
             new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy()),
             streams);
     }

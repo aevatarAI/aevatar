@@ -8,10 +8,10 @@ public sealed class ScriptEvolutionTimedEventOutputStream
 {
     private readonly TimeSpan _decisionTimeout;
 
-    public ScriptEvolutionTimedEventOutputStream(IScriptingPortTimeouts timeouts)
+    public ScriptEvolutionTimedEventOutputStream(ScriptingInteractionTimeoutOptions timeoutOptions)
     {
-        _decisionTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
-            .GetEvolutionDecisionTimeout();
+        _decisionTimeout = (timeoutOptions ?? throw new ArgumentNullException(nameof(timeoutOptions)))
+            .ResolveEvolutionCompletionTimeout();
     }
 
     public async Task PumpAsync(

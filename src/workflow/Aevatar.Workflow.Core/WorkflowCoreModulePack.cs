@@ -29,6 +29,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<ReflectModule>("reflect"),
         WorkflowModuleRegistration.Create<DelayModule>("delay", "sleep"),
         WorkflowModuleRegistration.Create<EmitModule>("emit", "publish"),
+        WorkflowModuleRegistration.Create<ActorSendModule>("actor_send"),
         WorkflowModuleRegistration.Create<CacheModule>("cache"),
         WorkflowModuleRegistration.Create<HumanApprovalModule>("human_approval"),
         WorkflowModuleRegistration.Create<HumanInputModule>("human_input"),

@@ -109,6 +109,25 @@ public class EventRouterTests
     }
 
     [Fact]
+    public async Task Observe_DoesNotHandleSelfOrForward()
+    {
+        var router = new EventRouter("actor-observe");
+        router.SetParent("parent");
+        router.AddChild("child-1");
+
+        var handled = false;
+        var sent = new List<string>();
+
+        await router.RouteAsync(
+            MakeEnvelope(EventDirection.Observe),
+            _ => { handled = true; return Task.CompletedTask; },
+            (id, _) => { sent.Add(id); return Task.CompletedTask; });
+
+        handled.ShouldBeFalse();
+        sent.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void Hierarchy_AddRemoveChild()
     {
         var router = new EventRouter("p");

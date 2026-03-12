@@ -291,6 +291,12 @@ message MapReduceItemResult
   string output = 2;
 }
 
+message ActorSendState
+{
+  string target_actor_id = 1;
+  google.protobuf.Any payload = 2;
+}
+
 message MapReduceParentState
 {
   int32 map_count = 1;

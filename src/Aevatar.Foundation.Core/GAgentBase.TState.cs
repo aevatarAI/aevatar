@@ -117,6 +117,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             _state = eventSourcing.TransitionState(_state, evt);
 
         await OnStateChangedAsync(_state, ct);
+        await PublishCommittedDomainEventsAsync(domainEvents, ct);
     }
 
     private IEventSourcingBehavior<TState> EnsureEventSourcingConfigured()
@@ -161,6 +162,20 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             .OrderBy(x => x.Order)
             .ToArray();
         return _appliers;
+    }
+
+    private async Task PublishCommittedDomainEventsAsync(
+        IReadOnlyList<IMessage> domainEvents,
+        CancellationToken ct)
+    {
+        for (var i = 0; i < domainEvents.Count; i++)
+        {
+            await EventPublisher.PublishAsync(
+                domainEvents[i],
+                EventDirection.Observe,
+                ct,
+                ActiveInboundEnvelope);
+        }
     }
 
 }

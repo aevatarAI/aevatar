@@ -367,7 +367,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
             await context.Capabilities.SendToAsync("target-1", new StringValue { Value = "SentEvent" }, ct);
 
             var reviewActorId = await context.Capabilities.CreateAgentAsync("Fake.ManualReviewAgent, Fake", "manual-" + context.RunId, ct);
-            await context.Capabilities.InvokeAgentAsync(reviewActorId, new StringValue { Value = "ClaimManualReviewRequestedEvent" }, ct);
+            await context.Capabilities.SendToAsync(reviewActorId, new StringValue { Value = "ClaimManualReviewRequestedEvent" }, ct);
 
             return new ScriptHandlerResult(
                 new IMessage[] { new StringValue { Value = requestedEvent.EventType } },
@@ -454,7 +454,7 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
         capabilities.Published.Should().ContainSingle(x => x.Direction == EventDirection.Up && x.EventName == "PublishedEvent");
         capabilities.Sent.Should().ContainSingle(x => x.TargetActorId == "target-1" && x.EventName == "SentEvent");
         capabilities.CreatedAgents.Should().ContainSingle(x => x.actorId == "manual-run-capability-1");
-        capabilities.Invocations.Should().ContainSingle(x => x.target == "manual-run-capability-1" && x.eventName == "ClaimManualReviewRequestedEvent");
+        capabilities.Sent.Should().Contain(x => x.TargetActorId == "manual-run-capability-1" && x.EventName == "ClaimManualReviewRequestedEvent");
     }
 
     private sealed class RecordingScriptRuntimeCapabilities(string aiResult) : IScriptRuntimeCapabilities
@@ -463,8 +463,6 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
         public List<(EventDirection Direction, string EventName)> Published { get; } = [];
         public List<(string TargetActorId, string EventName)> Sent { get; } = [];
         public List<(string typeName, string? actorId)> CreatedAgents { get; } = [];
-        public List<(string target, string eventName)> Invocations { get; } = [];
-
         public Task<string> AskAIAsync(string prompt, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -485,14 +483,6 @@ public sealed class CapabilityRuntimeScript : IScriptPackageRuntime
             ct.ThrowIfCancellationRequested();
             var eventName = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
             Sent.Add((targetActorId, eventName));
-            return Task.CompletedTask;
-        }
-
-        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            var eventName = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
-            Invocations.Add((targetAgentId, eventName));
             return Task.CompletedTask;
         }
 

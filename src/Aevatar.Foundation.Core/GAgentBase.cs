@@ -37,6 +37,9 @@ public abstract class GAgentBase : IAgent
     /// <summary>Unique agent identifier.</summary>
     public string Id { get; private set; } = string.Empty;
 
+    /// <summary>Current inbound envelope during handler execution, if any.</summary>
+    protected EventEnvelope? ActiveInboundEnvelope => _activeInboundEnvelope;
+
     // Framework-injected dependencies (set by Runtime)
 
     /// <summary>Event publisher injected by actor/runtime.</summary>

@@ -38,8 +38,10 @@
 
 ## Command / Envelope / Dispatch 抽象（强制）
 - 统一包络不等于统一语义：`Envelope` 只是 Actor System 的统一消息包络，可承载 `command/reply/internal signal/domain event/query`；是否可持久化、可投影、可对外观察必须由消息契约显式定义，禁止因“都走 Envelope”而混淆语义。
+- 已提交领域事件必须可观察：write-side 一旦完成 committed domain event，必须把该事实送入统一 observation/projection 主链；禁止只落 event store / actor state 而不进入可观察流，再由上层用 query fallback 猜测完成态。
 - 命令骨架必须内聚：标准命令生命周期应收敛为 `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`；业务模块只负责目标解析、载荷映射和结果映射，禁止各能力入口各自拼装一套流程。
 - 传输载体必须可替换：直接远程调用、`IActorDispatchPort`、stream/broker 都只是消息传输机制；上层依赖投递契约，不依赖具体载体，确保链路可从直投切换为异步传输而不污染应用语义。
+- 投递语义必须 runtime-neutral：`publish/send` 统一表示“进入目标 actor inbox 等待处理”，不得因目标是 `self` 或底层 runtime 差异而退化为 inline dispatch；需要立即执行时必须走独立 `dispatch` 契约，禁止在基类、业务层或中间适配层绕过标准 publisher 直接操作 `stream/provider/grain` 等底层传输对象。
 - Runtime 与 Dispatch 必须分责：`Runtime` 负责 actor 的 lifecycle / topology / lookup，`Dispatch Port` 负责消息投递；禁止把创建、查询、投递、观察等职责揉进一个全能接口。
 - ACK 语义必须诚实：同步返回只能承诺已经真实达到的阶段，默认应是 `accepted for dispatch + stable command id`；`committed`、`read-model observed` 等更强保证必须通过独立契约或异步观察获取，禁止在弱语义 ACK 中暗示强保证。
 - 追踪标识与目标身份必须分离：`commandId/correlationId` 用于追踪一次请求，`actorId` 用于标识处理实体；禁止把追踪 ID 与目标身份混成同一语义，也不得假设二者天然一一对应。
@@ -49,6 +51,7 @@
 - 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据；业务事实必须来自 actor-owned contract 或 read model。
 - 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
 - 读写边界不能混合：写侧端口只负责 lifecycle / command；读取必须走窄 query contract 或 projection，禁止在 Application / Infrastructure 直接读取 write-model 内部状态。
+- projection 只消费 committed 事实：projection/read model 必须基于 committed domain event 或其同源 durable feed 构建；禁止订阅入站 command、self continuation 或 actor 运行时偶然结构去推测业务完成态。
 - 默认路径必须先定义资源语义：任何“缺失即创建”的默认策略，都必须同时定义稳定归属、复用规则和清理责任；禁止生成不可达、不可复用、不可回收的隐式资源。
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
@@ -64,6 +67,7 @@
 - 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
 - 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
 - 业务推进内聚：工作流推进（成功/失败/分支/重试）必须在 Actor 事件处理流程内完成，保证顺序性与可重放性。
+- self continuation 必须事件化：Actor 需要“下一拍继续”时，必须通过标准 self-message 进入自身 inbox，再由 Actor 事件处理流程消费；禁止新增绕过消息抽象的临时 helper，或依赖特定 runtime 的 self-dispatch 偶然行为来推进业务。
 - 延迟与超时事件化：所有 `delay/timeout/retry backoff` 统一采用“异步等待 -> 发布内部事件 -> Actor 内消费并对账”的模式，禁止回调线程直接改状态。
 - 显式对账：内部触发事件必须携带最小充分相关键（如 `run_id + step_id`），由 Actor 内做活跃态校验，拒绝陈旧事件。
 - 无锁优先：若设计需要加锁才能正确，优先判定为“破坏 Actor 边界”，应先重构为事件化串行模型，再实现功能。
