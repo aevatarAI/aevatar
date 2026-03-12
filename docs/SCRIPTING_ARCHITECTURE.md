@@ -21,7 +21,7 @@
 
 强约束：
 
-1. 事实源在 Actor 持久状态（`ScriptDefinitionState`/`ScriptRuntimeState`/`ScriptEvolutionManagerState`/`ScriptCatalogState`）。
+1. 事实源在 Actor 持久状态（`ScriptDefinitionState`/`ScriptRuntimeState`/`ScriptEvolutionSessionState`/`ScriptEvolutionManagerState`/`ScriptCatalogState`）。
 2. 禁止中间层以进程内字典维护跨请求事实态。
 3. 查询返回走事件响应，不走跨层强转接口。
 
@@ -30,7 +30,7 @@
 | 分层 | 项目 | 核心职责 |
 |---|---|---|
 | Abstractions | `Aevatar.Scripting.Abstractions` | Proto 状态/事件契约、脚本运行抽象 |
-| Core | `Aevatar.Scripting.Core` | 4 个主 Actor（Definition/Runtime/EvolutionManager/Catalog）与状态机 |
+| Core | `Aevatar.Scripting.Core` | 5 个主 Actor（Definition/Runtime/EvolutionSession/EvolutionManager/Catalog）与状态机 |
 | Application | `Aevatar.Scripting.Application` | 命令/查询模型、CQRS interaction 语义装配、运行编排器 |
 | Infrastructure | `Aevatar.Scripting.Infrastructure` | Roslyn 编译执行、脚本专用查询/命令端口、查询超时与运行模式策略 |
 | Hosting | `Aevatar.Scripting.Hosting` | DI 组装、Host API 接入 |
@@ -73,13 +73,20 @@ flowchart LR
 - 职责：接收运行请求、加载定义快照、执行脚本并提交 `ScriptRunDomainEventCommitted`。
 - Orleans 路径下使用“事件化 definition 查询 + `pending_definition_queries` 持久事实状态 + activation 恢复”避免同步阻塞与 reactivation 丢 run。
 
-### 4.3 ScriptEvolutionManagerGAgent
+### 4.3 ScriptEvolutionSessionGAgent
+
+- 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
+- 状态：`ScriptEvolutionSessionState`
+- 职责：proposal-scoped 演化执行 owner；负责 `proposed / build_requested / validated / promoted / rejected / completed / rollback*` 事实推进、终态查询响应与 session completion 发布。
+- 执行启动采用标准 `PublishAsync(..., EventDirection.Self)` 的 inbox 下一拍事件化模型；Local 与 Orleans runtime 已统一为入队语义，不再依赖 runtime-specific 内联自调用或 reminder 粒度。
+
+### 4.4 ScriptEvolutionManagerGAgent
 
 - 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionManagerGAgent.cs`
 - 状态：`ScriptEvolutionManagerState`
-- 职责：提案状态机推进，决策查询响应。
+- 职责：长期索引/治理 actor；镜像 session 终态与 proposal 索引，不再拥有 proposal 执行主链。
 
-### 4.4 ScriptCatalogGAgent
+### 4.5 ScriptCatalogGAgent
 
 - 文件：`src/Aevatar.Scripting.Core/ScriptCatalogGAgent.cs`
 - 状态：`ScriptCatalogState`
@@ -124,8 +131,9 @@ Infrastructure 查询/命令端口：
 Core 响应处理要点：
 
 1. Definition/Catalog/EvolutionManager 的 Query Handler 都在 Actor 内直接读取自身状态并返回响应事件。
-2. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
-3. Evolution 终态回推统一走 `Projection -> ProjectionSessionEventHub`，`ScriptEvolutionSessionGAgent` 不再直接向固定 stream 推送终态事件。
+2. Evolution durable completion fallback 已切回 session actor：`QueryScriptEvolutionDecisionRequestedEvent` / `ScriptEvolutionDecisionRespondedEvent` 由 `ScriptEvolutionSessionGAgent` 直接返回权威终态。
+3. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
+4. Evolution 终态回推统一走 `Projection -> ProjectionSessionEventHub`，`ScriptEvolutionSessionGAgent` 不再直接向固定 stream 推送终态事件。
 
 ## 6. 运行与演化两条主链
 
@@ -141,15 +149,16 @@ Core 响应处理要点：
 
 ### 6.2 演化链（Evolution）
 
-`ProposeScriptEvolutionRequestedEvent -> ScriptEvolutionManagerGAgent -> IScriptEvolutionFlowPort -> ScriptCatalog/Definition`
+`ProposeScriptEvolutionRequestedEvent -> ScriptEvolutionSessionGAgent -> typed evolution services -> ScriptCatalog/Definition`
 
 双入口合流：
 
 1. 外部入口：Host API -> `IScriptEvolutionApplicationService`
 2. 脚本入口：`IScriptRuntimeCapabilities.ProposeScriptEvolutionAsync`
-3. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionInteractionService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
+3. 两条入口都先命中 `ScriptEvolutionSessionGAgent`。
+4. 外部入口等待终态时走 `IScriptEvolutionProposalPort`，由 `RuntimeScriptEvolutionInteractionService -> ICommandInteractionService<...>` 驱动统一 `resolve -> bind projection/live sink -> dispatch -> observe -> durable fallback -> release` 链路。
 
-两条入口在 Manager 状态机与 Catalog 事实层合流，保证策略、验证、发布、回滚语义一致。
+两条入口在 Session 执行主链与 Catalog 事实层合流，Manager 只做索引镜像，保证策略、验证、发布、回滚语义一致。
 
 ### 6.3 与 Workflow YAML 的关系（当前结论）
 
@@ -173,7 +182,8 @@ sequenceDiagram
     participant RT as "ScriptRuntimeGAgent"
     participant DEF as "ScriptDefinitionGAgent"
     participant ORC as "ScriptRuntimeExecutionOrchestrator"
-    participant EVO as "ScriptEvolutionManagerGAgent"
+    participant SES as "ScriptEvolutionSessionGAgent"
+    participant MGR as "ScriptEvolutionManagerGAgent"
     participant CAT as "ScriptCatalogGAgent"
 
     RT->>DEF: "QueryScriptDefinitionSnapshotRequestedEvent"
@@ -181,10 +191,11 @@ sequenceDiagram
     RT->>ORC: "ExecuteRunAsync"
     ORC-->>RT: "ScriptRunDomainEventCommitted*"
 
-    RT->>EVO: "ProposeScriptEvolutionRequestedEvent"
-    EVO->>CAT: "PromoteScriptRevisionRequestedEvent"
-    CAT-->>EVO: "ScriptCatalogRevisionPromotedEvent"
-    EVO-->>RT: "ScriptEvolutionDecisionRespondedEvent"
+    RT->>SES: "ProposeScriptEvolutionRequestedEvent"
+    SES->>CAT: "PromoteScriptRevisionRequestedEvent"
+    CAT-->>SES: "ScriptCatalogRevisionPromotedEvent"
+    SES->>MGR: "Mirror index events"
+    SES-->>RT: "ScriptEvolutionDecisionRespondedEvent"
 ```
 
 ## 8. 测试覆盖
@@ -198,6 +209,7 @@ sequenceDiagram
 3. Runtime 回放契约与演化管理器单元测试：
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptRuntimeGAgentReplayContractTests.cs`
    `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionManagerGAgentTests.cs`
+   `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptEvolutionSessionGAgentTests.cs`
 4. YAML/Script 等价与迁移回归：
    `test/Aevatar.Integration.Tests/WorkflowYamlScriptParityTests.cs`
 
@@ -210,10 +222,13 @@ sequenceDiagram
 
 本轮局部验证（2026-03-12）：
 
-1. `dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo --filter TextNormalizationProtocolContractTests`：通过。
-2. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter ScriptCapabilityHostExtensionsTests`：通过。
-3. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter ScriptAgentLifecycleCapabilitiesTests`：通过。
-4. `bash tools/ci/architecture_guards.sh`：通过。
+1. `dotnet build aevatar.slnx --nologo`：通过。
+2. `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptEvolutionSessionGAgentTests|FullyQualifiedName~ScriptEvolutionManagerGAgentTests|FullyQualifiedName~ScriptEvolutionExecutionServicesTests|FullyQualifiedName~RuntimeScriptInfrastructurePortsTests"`：`58/58` 通过。
+3. `dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptExternalEvolutionE2ETests.ExternalEvolutionFlow_ShouldPromoteRevisionThroughUnifiedManagerChain"`：`1/1` 通过。
+4. `AEVATAR_TEST_ORLEANS_3NODE=1 dotnet test test/Aevatar.Integration.Slow.Tests/Aevatar.Integration.Slow.Tests.csproj --nologo --filter "FullyQualifiedName=Aevatar.Integration.Tests.ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos"`：`1/1` 通过。
+5. `dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~ScriptCapabilityHostExtensionsTests"`：`3/3` 通过。
+6. `bash tools/ci/architecture_guards.sh`：通过。
+7. `bash tools/ci/test_stability_guards.sh`：通过。
 
 ## 9. 已知架构债务
 

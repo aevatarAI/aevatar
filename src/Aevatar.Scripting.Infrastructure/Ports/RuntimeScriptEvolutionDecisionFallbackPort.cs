@@ -22,26 +22,26 @@ public sealed class RuntimeScriptEvolutionDecisionFallbackPort : IScriptEvolutio
     }
 
     public async Task<ScriptPromotionDecision?> TryResolveAsync(
-        string managerActorId,
+        string sessionActorId,
         string proposalId,
         CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(managerActorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
 
-        var managerActor = await _actorAccessor.GetAsync(managerActorId);
-        if (managerActor == null)
+        var sessionActor = await _actorAccessor.GetAsync(sessionActorId);
+        if (sessionActor == null)
             return null;
 
         ScriptEvolutionDecisionRespondedEvent? response;
         try
         {
             response = await _queryClient.QueryActorAsync<ScriptEvolutionDecisionRespondedEvent>(
-                managerActor,
+                sessionActor,
                 ScriptingQueryRouteConventions.EvolutionReplyStreamPrefix,
                 _decisionTimeout,
                 (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateEvolutionDecisionQuery(
-                    managerActorId,
+                    sessionActorId,
                     requestId,
                     replyStreamId,
                     proposalId),

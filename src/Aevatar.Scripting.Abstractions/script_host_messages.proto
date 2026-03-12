@@ -124,6 +124,11 @@ message ScriptEvolutionSessionState {
   repeated string diagnostics = 11;
   int64 last_applied_event_version = 12;
   string last_event_id = 13;
+  string candidate_source_hash = 14;
+  string reason = 15;
+  bool policy_allowed = 16;
+  bool validation_succeeded = 17;
+  string candidate_source = 18;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -304,6 +309,9 @@ message ScriptEvolutionSessionStartedEvent {
   string script_id = 2;
   string base_revision = 3;
   string candidate_revision = 4;
+  string candidate_source_hash = 5;
+  string reason = 6;
+  string candidate_source = 7;
 }
 
 message ScriptEvolutionSessionCompletedEvent {
@@ -331,6 +339,10 @@ message ScriptEvolutionBuildRequestedEvent {
   string candidate_revision = 3;
 }
 
+message ScriptEvolutionExecutionRequestedEvent {
+  string proposal_id = 1;
+}
+
 message ScriptEvolutionValidatedEvent {
   string proposal_id = 1;
   string script_id = 2;
@@ -344,6 +356,7 @@ message ScriptEvolutionRejectedEvent {
   string script_id = 2;
   string candidate_revision = 3;
   string failure_reason = 4;
+  string status = 5;
 }
 
 message ScriptEvolutionPromotedEvent {

@@ -20,7 +20,9 @@ public sealed class ScriptEvolutionRejectedEventReducer
         readModel.ProposalId = evt.ProposalId ?? string.Empty;
         readModel.ScriptId = evt.ScriptId ?? string.Empty;
         readModel.CandidateRevision = evt.CandidateRevision ?? string.Empty;
-        readModel.PromotionStatus = ScriptEvolutionStatuses.Rejected;
+        readModel.PromotionStatus = string.IsNullOrWhiteSpace(evt.Status)
+            ? ScriptEvolutionStatuses.Rejected
+            : evt.Status;
         readModel.FailureReason = evt.FailureReason ?? string.Empty;
         readModel.LastEventId = envelope.Id ?? string.Empty;
         readModel.UpdatedAt = now;

@@ -79,8 +79,20 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptCatalogQueryPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
-            x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
+            x.ServiceType == typeof(IScriptEvolutionPolicyEvaluator) &&
+            x.ImplementationType == typeof(DefaultScriptEvolutionPolicyEvaluator));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionValidationService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionValidationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogBaselineReader) &&
+            x.ImplementationType == typeof(RuntimeScriptCatalogBaselineReader));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptPromotionCompensationService) &&
+            x.ImplementationType == typeof(RuntimeScriptPromotionCompensationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionRollbackService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionRollbackService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }

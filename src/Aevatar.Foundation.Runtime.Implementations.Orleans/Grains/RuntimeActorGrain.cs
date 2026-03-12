@@ -331,7 +331,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
             actorId,
             () => _state.State.ParentId,
-            envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
             _streams);
         gAgent.Logger = agentLogger;

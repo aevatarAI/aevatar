@@ -49,7 +49,6 @@ public sealed class ScriptEvolutionCommandTargetResolver
         return CommandTargetResolution<ScriptEvolutionCommandTarget, ScriptEvolutionStartError>.Success(
             new ScriptEvolutionCommandTarget(
                 sessionActor,
-                managerActorId,
                 proposalId,
                 _projectionPort));
     }

@@ -48,6 +48,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
         services.TryAddSingleton<IScriptingPortTimeouts, DefaultScriptingPortTimeouts>();
         services.TryAddSingleton<IScriptingRuntimeQueryModes, DefaultScriptingRuntimeQueryModes>();
+        services.TryAddSingleton<IScriptEvolutionPolicyEvaluator, DefaultScriptEvolutionPolicyEvaluator>();
+        services.TryAddSingleton<IScriptEvolutionValidationService, RuntimeScriptEvolutionValidationService>();
+        services.TryAddSingleton<IScriptCatalogBaselineReader, RuntimeScriptCatalogBaselineReader>();
+        services.TryAddSingleton<IScriptPromotionCompensationService, RuntimeScriptPromotionCompensationService>();
+        services.TryAddSingleton<IScriptEvolutionRollbackService, RuntimeScriptEvolutionRollbackService>();
         services.TryAddSingleton<IScriptEvolutionDecisionFallbackPort, RuntimeScriptEvolutionDecisionFallbackPort>();
         services.TryAddSingleton<RuntimeScriptActorAccessor>();
         services.TryAddSingleton<RuntimeScriptQueryClient>();
@@ -89,7 +94,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptRuntimeCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCommandService>());
         services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
         services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
-        services.TryAddSingleton<IScriptEvolutionFlowPort, RuntimeScriptEvolutionFlowPort>();
         services.AddScriptingProjectionComponents();
         services.TryAddSingleton<IAICapability>(sp =>
         {

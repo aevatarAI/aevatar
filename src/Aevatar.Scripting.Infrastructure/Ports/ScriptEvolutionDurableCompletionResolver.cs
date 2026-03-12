@@ -22,7 +22,7 @@ public sealed class ScriptEvolutionDurableCompletionResolver
         ArgumentNullException.ThrowIfNull(receipt);
 
         var decision = await _decisionFallbackPort.TryResolveAsync(
-            receipt.ManagerActorId,
+            receipt.SessionActorId,
             receipt.ProposalId,
             ct);
         if (decision == null)
