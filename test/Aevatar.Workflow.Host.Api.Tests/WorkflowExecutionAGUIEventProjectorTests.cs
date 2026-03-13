@@ -119,6 +119,63 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             WorkflowRunEventEnvelope.EventOneofCase.Custom);
     }
 
+    [Fact]
+    public async Task ProjectAsync_WhenContextCommandIdMissing_ShouldFallbackToEnvelopeCorrelationId()
+    {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
+            streams,
+            new WorkflowRunEventSessionCodec());
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper([BuildRunFinished("actor-1", "done")]),
+            streamHub);
+
+        var context = BuildContext();
+        context.CommandId = string.Empty;
+        var sink = new RecordingSink();
+
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-fallback", evt => sink.PushAsync(evt));
+
+        await projector.ProjectAsync(context, new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-fallback",
+            },
+        });
+
+        await sink.WaitForCountAsync(1, TimeSpan.FromSeconds(2));
+        sink.SnapshotEvents().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WhenNoCommandIdAvailable_ShouldNotPublish()
+    {
+        var streams = new InMemoryStreamProvider();
+        var streamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
+            streams,
+            new WorkflowRunEventSessionCodec());
+        var projector = new WorkflowExecutionRunEventProjector(
+            new StaticMapper([BuildRunFinished("actor-1", "done")]),
+            streamHub);
+
+        var context = BuildContext();
+        context.CommandId = string.Empty;
+        var sink = new RecordingSink();
+
+        await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
+
+        await projector.ProjectAsync(context, new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+
+        sink.SnapshotEvents().Should().BeEmpty();
+    }
+
     private static WorkflowExecutionProjectionContext BuildContext() => new()
     {
         ProjectionId = "actor-1",

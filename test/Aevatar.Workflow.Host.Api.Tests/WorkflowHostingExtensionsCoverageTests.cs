@@ -276,6 +276,88 @@ public sealed class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldUseAspNetCoreEnvironmentVariableForProductionPolicy()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+        var previousDotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        var previousAspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
+
+        try
+        {
+            var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*InMemory document provider is not allowed*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", previousDotnet);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", previousAspnet);
+        }
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldInferElasticsearchProviderFromEndpoints()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldInferNeo4jProviderFromUri()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        services.Any(x => x.ServiceType == typeof(IProjectionGraphStore))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldRejectInMemoryDocumentProviderWhenDeniedByPolicy()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:DenyInMemoryDocumentReadStore"] = "true",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed*");
+    }
+
+    [Fact]
     public void AddWorkflowProjectionReadModelProviders_ShouldBeIdempotent()
     {
         var services = new ServiceCollection();
