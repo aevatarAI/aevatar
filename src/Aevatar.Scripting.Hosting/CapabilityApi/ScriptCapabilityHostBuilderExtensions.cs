@@ -6,12 +6,12 @@ namespace Aevatar.Scripting.Hosting.CapabilityApi;
 
 public static class ScriptCapabilityHostBuilderExtensions
 {
-    public static WebApplicationBuilder AddScriptCapability(this WebApplicationBuilder builder)
+    public static WebApplicationBuilder AddScriptingCapabilityBundle(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         return builder.AddAevatarCapability(
-            name: "script",
+            name: "scripting-bundle",
             configureServices: static (services, configuration) => services.AddScriptCapability(configuration),
             mapEndpoints: static app => app.MapScriptCapabilityEndpoints());
     }

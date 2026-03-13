@@ -527,25 +527,25 @@ if rg -n "MapMakerCapabilityEndpoints|/api/maker" src -g '*.cs'; then
   exit 1
 fi
 
-if ! rg -n "AddWorkflowMakerExtensions\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
-  echo "Mainnet host must register workflow maker extensions via AddWorkflowMakerExtensions()."
+if ! rg -n "AddAevatarPlatform\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
-if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
-  echo "Mainnet host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
+if ! rg -n "EnableMakerExtensions\s*=\s*true" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must enable Maker via AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })."
   exit 1
 fi
 
-if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/workflow/Aevatar.Workflow.Host.Api/Program.cs >/dev/null; then
-  echo "Workflow host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
+if ! rg -n "AddAevatarPlatform\(" src/workflow/Aevatar.Workflow.Host.Api/Program.cs >/dev/null; then
+  echo "Workflow host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
 if ! rg -n "AddWorkflowProjectionReadModelProviders\(" \
-  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowCapabilityHostBuilderExtensions.cs >/dev/null
+  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/AevatarPlatformHostBuilderExtensions.cs >/dev/null
 then
-  echo "Workflow hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
+  echo "Platform hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
   exit 1
 fi
 

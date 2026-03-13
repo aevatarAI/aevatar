@@ -165,7 +165,7 @@ Core 响应处理要点：
 
 ### 6.3 与 Workflow YAML 的关系（当前结论）
 
-1. Host 侧 `AddWorkflowCapabilityWithAIDefaults` 默认装配 workflow + script capability；可通过 `includeScriptCapability: false` 显式关闭 script capability。
+1. Host 侧统一通过 `builder.AddAevatarPlatform(...)` 装配 workflow + script capability；可通过 `options.EnableScriptingCapability = false` 显式关闭 script capability。
 2. Script 演化与 Workflow YAML 执行互不覆盖，属于并行能力，不改变 Workflow YAML 既有语义入口。
 3. 迁移建议采用“同输入同输出”对照回归（见第 8 节新增 parity 测试）。
 

@@ -7,12 +7,12 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowCapabilityHostBuilderExtensions
 {
-    public static WebApplicationBuilder AddWorkflowCapability(this WebApplicationBuilder builder)
+    public static WebApplicationBuilder AddWorkflowCapabilityBundle(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         return builder.AddAevatarCapability(
-            name: "workflow",
+            name: "workflow-bundle",
             configureServices: static (services, configuration) => services.AddWorkflowCapability(configuration),
             mapEndpoints: static app => app.MapWorkflowCapabilityEndpoints());
     }

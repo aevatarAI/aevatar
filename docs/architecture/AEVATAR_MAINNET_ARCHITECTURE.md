@@ -697,8 +697,7 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 
 1. `AddAevatarDefaultHost(...)` — Bootstrap + Runtime Provider 选择
 2. `AddMainnetDistributedOrleansHost()` — 按配置启用 Orleans Silo
-3. `AddWorkflowCapabilityWithAIDefaults()` — 注册工作流能力
-4. `AddWorkflowMakerExtensions()` — 注册 Maker 扩展
+3. `AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })` — 统一注册 Workflow/Scripting/AI/Maker 平台能力
 
 ---
 

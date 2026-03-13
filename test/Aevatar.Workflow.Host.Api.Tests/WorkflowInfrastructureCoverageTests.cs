@@ -48,13 +48,13 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapability_ShouldValidateBuilder_AndRegisterCapability()
+    public void AddWorkflowCapabilityBundle_ShouldValidateBuilder_AndRegisterCapability()
     {
-        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapability(null!);
+        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapabilityBundle(null!);
         act.Should().Throw<ArgumentNullException>();
 
         var builder = WebApplication.CreateBuilder();
-        var returned = builder.AddWorkflowCapability();
+        var returned = builder.AddWorkflowCapabilityBundle();
 
         returned.Should().BeSameAs(builder);
         builder.Services
@@ -62,7 +62,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .Should()
-            .Contain(x => x.Name == "workflow");
+            .Contain(x => x.Name == "workflow-bundle");
     }
 
     [Fact]

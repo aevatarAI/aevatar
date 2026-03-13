@@ -23,13 +23,13 @@ namespace Aevatar.Hosting.Tests;
 public class ScriptCapabilityHostExtensionsTests
 {
     [Fact]
-    public void AddScriptCapability_ShouldRegisterCapabilityAndValidateNull()
+    public void AddScriptingCapabilityBundle_ShouldRegisterCapabilityAndValidateNull()
     {
-        Action act = () => ScriptCapabilityHostBuilderExtensions.AddScriptCapability(null!);
+        Action act = () => ScriptCapabilityHostBuilderExtensions.AddScriptingCapabilityBundle(null!);
         act.Should().Throw<ArgumentNullException>();
 
         var builder = WebApplication.CreateBuilder();
-        var returned = builder.AddScriptCapability();
+        var returned = builder.AddScriptingCapabilityBundle();
 
         returned.Should().BeSameAs(builder);
         var registrations = builder.Services
@@ -37,7 +37,7 @@ public class ScriptCapabilityHostExtensionsTests
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .ToList();
-        registrations.Should().ContainSingle(x => x.Name == "script");
+        registrations.Should().ContainSingle(x => x.Name == "scripting-bundle");
     }
 
     [Fact]
@@ -98,10 +98,10 @@ public class ScriptCapabilityHostExtensionsTests
     }
 
     [Fact]
-    public void AddScriptCapability_ShouldMapEvolutionProposalEndpoint()
+    public void AddScriptingCapabilityBundle_ShouldMapEvolutionProposalEndpoint()
     {
         var builder = WebApplication.CreateBuilder();
-        builder.AddScriptCapability();
+        builder.AddScriptingCapabilityBundle();
 
         var app = builder.Build();
         app.MapAevatarCapabilities();

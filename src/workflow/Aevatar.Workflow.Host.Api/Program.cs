@@ -21,7 +21,7 @@ builder.AddAevatarDefaultHost(
         options.ServiceName = "Aevatar.Workflow.Host.Api";
         options.EnableWebSockets = true;
     });
-builder.AddWorkflowCapabilityWithAIDefaults();
+builder.AddAevatarPlatform();
 builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();
