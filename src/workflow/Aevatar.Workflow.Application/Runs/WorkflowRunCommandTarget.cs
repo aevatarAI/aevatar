@@ -65,40 +65,13 @@ internal sealed class WorkflowRunCommandTarget
         if (sink == null)
             return;
 
-        Exception? firstException = null;
         if (ProjectionLease != null)
         {
-            try
-            {
-                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
-            }
-            catch (Exception ex)
-            {
-                firstException ??= ex;
-            }
+            await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
         }
 
-        try
-        {
-            sink.Complete();
-        }
-        catch (Exception ex)
-        {
-            firstException ??= ex;
-        }
-
-        try
-        {
-            await sink.DisposeAsync();
-        }
-        catch (Exception ex)
-        {
-            firstException ??= ex;
-        }
-
+        await CompleteAndDisposeLiveSinkAsync(sink, ct);
         LiveSink = null;
-        if (firstException != null)
-            ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
     public Task ReleaseAfterInteractionAsync(
@@ -119,52 +92,52 @@ internal sealed class WorkflowRunCommandTarget
         CancellationToken ct = default)
     {
         Exception? firstException = null;
-        if (ProjectionLease != null && LiveSink != null)
+        var projectionLease = ProjectionLease;
+        var liveSink = LiveSink;
+
+        if (projectionLease != null && liveSink != null)
         {
             try
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
-                    ProjectionLease,
-                    LiveSink,
+                    projectionLease,
+                    liveSink,
                     onDetachedAsync,
                     ct);
+                ProjectionLease = null;
+                LiveSink = null;
             }
             catch (Exception ex)
             {
                 firstException ??= ex;
             }
-
-            ProjectionLease = null;
-            LiveSink = null;
         }
         else
         {
-            if (LiveSink != null)
+            if (liveSink != null)
             {
                 try
                 {
-                    await LiveSink.DisposeAsync();
+                    await CompleteAndDisposeLiveSinkAsync(liveSink, ct);
+                    LiveSink = null;
                 }
                 catch (Exception ex)
                 {
                     firstException ??= ex;
                 }
-
-                LiveSink = null;
             }
 
-            if (ProjectionLease != null)
+            if (projectionLease != null)
             {
                 try
                 {
-                    await _projectionPort.ReleaseActorProjectionAsync(ProjectionLease, ct);
+                    await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
+                    ProjectionLease = null;
                 }
                 catch (Exception ex)
                 {
                     firstException ??= ex;
                 }
-
-                ProjectionLease = null;
             }
         }
 
@@ -178,6 +151,36 @@ internal sealed class WorkflowRunCommandTarget
             {
                 firstException ??= ex;
             }
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private static async Task CompleteAndDisposeLiveSinkAsync(
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        Exception? firstException = null;
+        try
+        {
+            sink.Complete();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        try
+        {
+            await sink.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
         }
 
         if (firstException != null)

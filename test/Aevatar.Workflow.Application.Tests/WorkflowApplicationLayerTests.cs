@@ -200,8 +200,6 @@ public sealed class WorkflowApplicationLayerTests
         };
         var service = CreateDetachedDispatchService(
             pipeline,
-            new FakeEventOutputStream(),
-            new FakeWorkflowRunCompletionPolicy(),
             new FakeDurableCompletionResolver());
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
@@ -211,7 +209,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldDrainInBackgroundAndReleaseTarget()
+    public async Task DetachedCommandDispatchService_ShouldDetachLiveObservation_AndUseDurableCompletion()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort
@@ -220,23 +218,108 @@ public sealed class WorkflowApplicationLayerTests
         };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var outputStream = new FakeEventOutputStream
-        {
-            Events = [BuildEvent("progress"), BuildEvent("done")],
-        };
         var service = CreateDetachedDispatchService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
-            outputStream,
-            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
-            new FakeDurableCompletionResolver());
+            new FakeDurableCompletionResolver(
+                new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
+                    true,
+                    WorkflowProjectionCompletionStatus.Completed)));
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
-        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldReleaseProjection_BeforeDurableCompletionPolling()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var resolver = new AssertingDurableCompletionResolver(
+            () => projectionPort.ReleaseCalls.Count,
+            new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
+                true,
+                WorkflowProjectionCompletionStatus.Completed));
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            resolver);
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        result.Succeeded.Should().BeTrue();
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldDestroyActors_WhenDetachFailsButDurableCompletionIsTerminal()
+    {
+        var projectionPort = new FakeProjectionPort
+        {
+            DetachException = new InvalidOperationException("detach failed"),
+            DetachFailureCount = 1,
+        };
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            new FakeDurableCompletionResolver(
+                new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
+                    true,
+                    WorkflowProjectionCompletionStatus.Completed)));
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        result.Succeeded.Should().BeTrue();
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.DetachCalls.Should().HaveCount(2);
+        projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldRetryProjectionRelease_WhenInitialReleaseThrows()
+    {
+        var projectionPort = new FakeProjectionPort
+        {
+            ReleaseException = new InvalidOperationException("release failed"),
+            ReleaseFailureCount = 1,
+        };
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ExpectedDestroyCount = 2,
+        };
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            new FakeDurableCompletionResolver(
+                new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
+                    true,
+                    WorkflowProjectionCompletionStatus.Completed)));
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        result.Succeeded.Should().BeTrue();
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseAttemptCount.Should().Be(2);
+        projectionPort.ReleaseCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
@@ -255,13 +338,9 @@ public sealed class WorkflowApplicationLayerTests
 
     private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
-        IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope> outputStream,
-        ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> completionPolicy,
         ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> durableCompletionResolver) =>
-        new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+        new WorkflowRunDetachedDispatchService(
             pipeline,
-            outputStream,
-            completionPolicy,
             durableCompletionResolver);
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
@@ -411,14 +490,34 @@ public sealed class WorkflowApplicationLayerTests
         }
     }
 
+    private sealed class AssertingDurableCompletionResolver(
+        Func<int> releaseCallCountAccessor,
+        CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus> observation)
+        : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
+    {
+        public Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+            ct.ThrowIfCancellationRequested();
+            releaseCallCountAccessor().Should().Be(1);
+            return Task.FromResult(observation);
+        }
+    }
+
     private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];
+        public List<IWorkflowExecutionProjectionLease> ReleaseAttempts { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Exception? DetachException { get; set; }
         public Exception? ReleaseException { get; set; }
+        public int DetachFailureCount { get; set; }
+        public int ReleaseFailureCount { get; set; }
+        public int ReleaseAttemptCount => ReleaseAttempts.Count;
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -431,8 +530,13 @@ public sealed class WorkflowApplicationLayerTests
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            if (lease is FakeProjectionLease trackingLease)
+                trackingLease.LiveSinkAttached = true;
+
+            return Task.CompletedTask;
+        }
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
@@ -440,8 +544,14 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken ct = default)
         {
             DetachCalls.Add((lease, sink));
-            if (DetachException != null)
-                throw DetachException;
+            if (DetachFailureCount > 0)
+            {
+                DetachFailureCount--;
+                throw DetachException ?? new InvalidOperationException("detach failed");
+            }
+
+            if (lease is FakeProjectionLease trackingLease)
+                trackingLease.LiveSinkAttached = false;
 
             return Task.CompletedTask;
         }
@@ -450,10 +560,23 @@ public sealed class WorkflowApplicationLayerTests
             IWorkflowExecutionProjectionLease lease,
             CancellationToken ct = default)
         {
+            ReleaseAttempts.Add(lease);
+            if (lease is FakeProjectionLease trackingLease &&
+                trackingLease.LiveSinkAttached)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (ReleaseFailureCount > 0)
+            {
+                ReleaseFailureCount--;
+                throw ReleaseException ?? new InvalidOperationException("release failed");
+            }
+
             ReleaseCalls.Add(lease);
             Released.TrySetResult(true);
-            if (ReleaseException != null)
-                throw ReleaseException;
+            if (lease is FakeProjectionLease releasedLease)
+                releasedLease.Released = true;
 
             return Task.CompletedTask;
         }
@@ -469,6 +592,8 @@ public sealed class WorkflowApplicationLayerTests
 
         public string ActorId { get; }
         public string CommandId { get; }
+        public bool LiveSinkAttached { get; set; } = true;
+        public bool Released { get; set; }
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

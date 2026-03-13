@@ -104,6 +104,39 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task ReleaseService_ShouldReleaseOwnership_WhenMarkStoppedThrows()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater
+        {
+            MarkStoppedException = new InvalidOperationException("mark stopped failed"),
+        };
+        var ownership = new TrackingOwnershipCoordinator();
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            readModelUpdater,
+            ownership);
+        var lease = new WorkflowExecutionRuntimeLease(
+            new WorkflowExecutionProjectionContext
+            {
+                ProjectionId = "projection-release-fail",
+                RootActorId = "actor-release-fail",
+                CommandId = "cmd-release-fail",
+                WorkflowName = "direct",
+                StartedAt = new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero),
+                Input = "hello",
+            });
+
+        var act = async () => await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("mark stopped failed");
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        ownership.Released.Should().ContainSingle()
+            .Which.Should().Be(("actor-release-fail", "cmd-release-fail"));
+    }
+
+    [Fact]
     public async Task ReadModelUpdater_ShouldRefreshMetadataAndMarkStopped()
     {
         var startedAt = new DateTimeOffset(2026, 2, 21, 12, 0, 0, TimeSpan.Zero);
@@ -827,6 +860,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         public List<(string ActorId, WorkflowExecutionProjectionContext Context)> Refreshed { get; } = [];
         public List<string> MarkStoppedActorIds { get; } = [];
+        public Exception? MarkStoppedException { get; set; }
 
         public Task RefreshMetadataAsync(
             string actorId,
@@ -842,6 +876,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             ct.ThrowIfCancellationRequested();
             MarkStoppedActorIds.Add(actorId);
+            if (MarkStoppedException != null)
+                throw MarkStoppedException;
             return Task.CompletedTask;
         }
     }

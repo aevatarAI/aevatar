@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext
+internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext, IWorkflowExecutionItemsContext
 {
     private readonly IEventHandlerContext _inner;
     private readonly IWorkflowExecutionStateHost _stateHost;
@@ -85,6 +85,32 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
         return _stateHost.ClearExecutionStateAsync(scopeKey, ct);
+    }
+
+    public bool TryGetItem<TItem>(string itemKey, out TItem? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (_stateHost.TryGetExecutionItem(itemKey, out var boxed) &&
+            boxed is TItem typed)
+        {
+            value = typed;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    public void SetItem(string itemKey, object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        _stateHost.SetExecutionItem(itemKey, value);
+    }
+
+    public bool RemoveItem(string itemKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return _stateHost.RemoveExecutionItem(itemKey);
     }
 
     public Task PublishAsync<TEvent>(

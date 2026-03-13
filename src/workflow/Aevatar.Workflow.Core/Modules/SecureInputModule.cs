@@ -9,7 +9,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Secure human input module. Suspends the workflow, captures a secret value,
 /// and only emits a redacted completion output while keeping the raw value in
-/// actor-owned workflow execution state without placing it on event payload fields.
+/// actor-local workflow runtime items instead of durable event payload/state.
 /// </summary>
 public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -37,6 +37,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             var workflowCompleted = payload.Unpack<WorkflowCompletedEvent>();
             var state = SecureInputStateAccess.Load(ctx);
             SecureInputStateAccess.RemoveRun(state, workflowCompleted.RunId);
+            SecureInputRuntimeItemsAccess.RemoveRun(ctx, workflowCompleted.RunId);
             await SecureInputStateAccess.SaveAsync(state, ctx, ct);
             return;
         }
@@ -53,10 +54,10 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 "Please provide the secure value:",
                 "prompt",
                 "message");
-            var variable = WorkflowParameterValueParser.GetString(
+            var requestVariableName = NormalizeVariableName(WorkflowParameterValueParser.GetString(
                 request.Parameters,
                 "secure_input",
-                "variable");
+                "variable"));
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 1800);
@@ -77,16 +78,17 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 Input = request.Input ?? string.Empty,
                 OnTimeout = request.Parameters.GetValueOrDefault("on_timeout", "fail"),
                 AllowEmpty = requestAllowEmpty,
-                VariableName = variable,
+                VariableName = requestVariableName,
                 MaskedOutput = requestMaskedOutput,
             };
             await SecureInputStateAccess.SaveAsync(state, ctx, ct);
+            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, runId, requestVariableName);
 
             ctx.Logger.LogInformation(
                 "SecureInput: run={RunId} step={StepId} suspended, variable={Variable}, timeout={Timeout}s",
                 runId,
                 request.StepId,
-                variable,
+                requestVariableName,
                 timeoutSeconds);
 
             var suspended = new WorkflowSuspendedEvent
@@ -96,9 +98,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 SuspensionType = Name,
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-                VariableName = variable,
+                VariableName = requestVariableName,
             };
-            suspended.Metadata["variable"] = variable;
+            suspended.Metadata["variable"] = requestVariableName;
             suspended.Metadata["secure"] = "true";
             suspended.Metadata["input_mode"] = "password";
             suspended.Metadata["redacted_output"] = requestMaskedOutput;
@@ -115,13 +117,14 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         var userInput = resumed.UserInput ?? string.Empty;
         var onTimeout = pending.OnTimeout;
         var allowEmpty = pending.AllowEmpty;
-        var variableName = string.IsNullOrWhiteSpace(pending.VariableName) ? "secure_input" : pending.VariableName;
+        var variableName = NormalizeVariableName(pending.VariableName);
         var maskedOutput = string.IsNullOrWhiteSpace(pending.MaskedOutput) ? DefaultMaskedOutput : pending.MaskedOutput;
 
         if (string.IsNullOrEmpty(userInput) && !resumed.Approved)
         {
             stateForResume.Pending.Remove(pendingKey);
             await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
+            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
 
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} timed out or cancelled",
@@ -143,6 +146,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         {
             stateForResume.Pending.Remove(pendingKey);
             await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
+            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
 
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} rejected empty secure value",
@@ -166,7 +170,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             userInput.Length);
 
         stateForResume.Pending.Remove(pendingKey);
-        SecureInputStateAccess.SetCapturedValue(stateForResume, pending.RunId, variableName, userInput);
+        SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, pending.RunId, variableName, userInput);
         await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
 
         await ctx.PublishAsync(new SecureValueCapturedEvent
@@ -174,7 +178,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             RunId = pending.RunId,
             StepId = pending.StepId,
             Variable = variableName,
-            // Keep payload redacted. Raw value remains in actor-local runtime store.
+            // Keep payload redacted. Raw value remains in actor-local runtime items.
             Value = string.Empty,
         }, EventDirection.Self, ct);
 
@@ -198,6 +202,9 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             "redacted_output",
             "masked_output",
             "display_value");
+
+    private static string NormalizeVariableName(string? variable) =>
+        string.IsNullOrWhiteSpace(variable) ? "secure_input" : variable.Trim();
 
     private bool TryResolvePending(
         SecureInputModuleState state,

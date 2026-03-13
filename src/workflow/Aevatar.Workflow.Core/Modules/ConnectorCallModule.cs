@@ -48,18 +48,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
             if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
             {
-                var state = SecureInputStateAccess.Load(ctx);
-                SecureInputStateAccess.SetCapturedValue(state, captured.RunId, captured.Variable, captured.Value);
-                await SecureInputStateAccess.SaveAsync(state, ctx, ct);
+                SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
             }
             return;
         }
 
         if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
         {
-            var state = SecureInputStateAccess.Load(ctx);
-            SecureInputStateAccess.RemoveRun(state, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
-            await SecureInputStateAccess.SaveAsync(state, ctx, ct);
+            SecureInputRuntimeItemsAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
             return;
         }
 
@@ -122,7 +118,6 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var attempts = Math.Max(1, retry + 1);
         ConnectorResponse? response = null;
         Exception? lastError = null;
-        var secureInputState = isSecureStep ? SecureInputStateAccess.Load(ctx) : null;
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
@@ -140,7 +135,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
-                    Payload = ResolvePayload(request, isSecureStep, secureInputState) ?? string.Empty,
+                    Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
                     Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
                 };
 
@@ -262,7 +257,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private string? ResolvePayload(
         StepRequestEvent request,
         bool isSecureStep,
-        SecureInputModuleState? secureInputState)
+        IWorkflowExecutionContext ctx)
     {
         var mode = WorkflowParameterValueParser.GetString(
             request.Parameters,
@@ -287,7 +282,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "secret_variable",
                 "secure_variable",
                 "variable");
-            return ResolveSecureVariable(secureInputState, request.RunId, variable);
+            return ResolveSecureVariable(ctx, request.RunId, variable);
         }
 
         if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
@@ -299,14 +294,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "stdin_template",
                 "payload_template",
                 "stdin_value");
-            return ResolveSecureTemplate(secureInputState, request.RunId, template);
+            return ResolveSecureTemplate(ctx, request.RunId, template);
         }
 
         return request.Input;
     }
 
     private static string ResolveSecureVariable(
-        SecureInputModuleState? secureInputState,
+        IWorkflowExecutionContext ctx,
         string? runId,
         string variable)
     {
@@ -314,8 +309,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (secureInputState != null &&
-            SecureInputStateAccess.TryGetCapturedValue(secureInputState, runId, normalizedVariable, out var value))
+        if (SecureInputRuntimeItemsAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
         {
             return value;
         }
@@ -325,7 +319,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     }
 
     private static string ResolveSecureTemplate(
-        SecureInputModuleState? secureInputState,
+        IWorkflowExecutionContext ctx,
         string? runId,
         string template)
     {
@@ -335,14 +329,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
         {
             var variable = match.Groups[1].Value;
-            var value = ResolveSecureVariable(secureInputState, runId, variable);
+            var value = ResolveSecureVariable(ctx, runId, variable);
             return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
         });
 
         return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
         {
             var variable = match.Groups[1].Value;
-            return ResolveSecureVariable(secureInputState, runId, variable);
+            return ResolveSecureVariable(ctx, runId, variable);
         });
     }
 

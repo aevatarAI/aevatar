@@ -1031,8 +1031,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();
-        resumedState.Captured.Should().ContainKey("run-secure::api_key");
-        resumedState.Captured["run-secure::api_key"].Value.Should().Be("top-secret-value");
+        resumedState.Captured.Should().BeEmpty();
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
+        ((Dictionary<string, string>)capturedItems!).Should().Contain(new KeyValuePair<string, string>("run-secure::api_key", "top-secret-value"));
 
         await resumedModule.HandleAsync(
             Envelope(new WorkflowCompletedEvent
@@ -1043,6 +1044,79 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SecureInputModule_ShouldClearPreviousCapturedValue_WhenSameVariableIsRequestedAgainAndRecaptureFails()
+    {
+        var services = new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider();
+        var agent = new TestWorkflowRunAgent("workflow-secure-recapture-test-agent", "run-secure-recapture");
+        var module = new SecureInputModule();
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-1",
+                StepType = "secure_input",
+                RunId = "run-secure-recapture",
+                Parameters =
+                {
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure-recapture",
+                StepId = "secure-1",
+                Approved = true,
+                UserInput = "old-secret",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
+        ((Dictionary<string, string>)capturedItems!).Should().Contain(
+            new KeyValuePair<string, string>("run-secure-recapture::api_key", "old-secret"));
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-2",
+                StepType = "secure_input",
+                RunId = "run-secure-recapture",
+                Parameters =
+                {
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure-recapture",
+                StepId = "secure-2",
+                Approved = false,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("timed out");
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
     }
 
     [Fact]

@@ -174,24 +174,12 @@ public sealed class WorkflowRunFallbackCoverageTests
                 }));
 
         var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-            new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+            new WorkflowRunDetachedDispatchService(
                 pipeline,
-                new FakeEventOutputStream
-                {
-                    Events =
-                    [
-                        new WorkflowRunEventEnvelope
-                        {
-                            RunFinished = new WorkflowRunFinishedEventPayload
-                            {
-                                ThreadId = receipt.ActorId,
-                                Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
-                            },
-                        },
-                    ],
-                },
-                new FakeWorkflowRunCompletionPolicy(),
-                new FakeDurableCompletionResolver(),
+                new FakeDurableCompletionResolver(
+                    new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
+                        true,
+                        WorkflowProjectionCompletionStatus.Completed)),
                 logger: null),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
@@ -302,13 +290,21 @@ public sealed class WorkflowRunFallbackCoverageTests
     private sealed class FakeDurableCompletionResolver
         : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
     {
+        private readonly CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus> _observation;
+
+        public FakeDurableCompletionResolver(
+            CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>? observation = null)
+        {
+            _observation = observation ?? CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete;
+        }
+
         public Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
             WorkflowChatRunAcceptedReceipt receipt,
             CancellationToken ct = default)
         {
             _ = receipt;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete);
+            return Task.FromResult(_observation);
         }
     }
 
