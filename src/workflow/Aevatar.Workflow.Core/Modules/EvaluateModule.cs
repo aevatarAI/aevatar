@@ -59,7 +59,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = "evaluate step requires non-empty step_id",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -91,7 +91,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = $"evaluate target resolution failed: {ex.Message}",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -139,7 +139,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = $"evaluate dispatch failed: {ex.Message}",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
             return;

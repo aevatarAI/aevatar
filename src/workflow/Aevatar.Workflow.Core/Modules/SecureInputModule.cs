@@ -105,7 +105,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             suspended.Metadata["input_mode"] = "password";
             suspended.Metadata["redacted_output"] = requestMaskedOutput;
 
-            await ctx.PublishAsync(suspended, EventDirection.Both, ct);
+            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -138,7 +138,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 Success = onTimeout != "fail",
                 Output = pending.Input,
                 Error = onTimeout == "fail" ? "Secure input timed out" : "",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -159,7 +159,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 RunId = pending.RunId,
                 Success = false,
                 Error = "Secure input is required",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -180,7 +180,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             Variable = variableName,
             // Keep payload redacted. Raw value remains in actor-local runtime items.
             Value = string.Empty,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
 
         var stepCompleted = new StepCompletedEvent
         {
@@ -192,7 +192,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         stepCompleted.Annotations["secure.input"] = "true";
         stepCompleted.Annotations["secure.variable"] = variableName;
         stepCompleted.Annotations["secure.redacted_output"] = maskedOutput;
-        await ctx.PublishAsync(stepCompleted, EventDirection.Self, ct);
+        await ctx.PublishAsync(stepCompleted, TopologyAudience.Self, ct);
     }
 
     private static string ResolveMaskedOutput(IReadOnlyDictionary<string, string> parameters) =>

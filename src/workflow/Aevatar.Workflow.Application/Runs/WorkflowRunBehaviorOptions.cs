@@ -42,4 +42,14 @@ public sealed class WorkflowRunBehaviorOptions
         {
             typeof(WorkflowDirectFallbackTriggerException),
         };
+
+    /// <summary>
+    /// Maximum time the detached dispatch path waits for durable completion before giving up background monitoring.
+    /// </summary>
+    public TimeSpan DetachedDurableCompletionMonitoringTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Poll interval used by detached durable completion monitoring.
+    /// </summary>
+    public TimeSpan DetachedDurableCompletionPollInterval { get; set; } = TimeSpan.FromSeconds(1);
 }

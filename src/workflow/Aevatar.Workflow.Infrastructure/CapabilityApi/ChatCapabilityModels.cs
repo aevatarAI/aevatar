@@ -55,6 +55,7 @@ public sealed record WorkflowResumeInput
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
+    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowSignalInput

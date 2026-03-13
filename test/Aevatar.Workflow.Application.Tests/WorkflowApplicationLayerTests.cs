@@ -323,6 +323,31 @@ public sealed class WorkflowApplicationLayerTests
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldStopMonitoring_WhenDurableCompletionTimesOut()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var resolver = new BlockingDurableCompletionResolver();
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            resolver,
+            new WorkflowRunBehaviorOptions
+            {
+                DetachedDurableCompletionMonitoringTimeout = TimeSpan.FromMilliseconds(50),
+                DetachedDurableCompletionPollInterval = TimeSpan.FromMilliseconds(10),
+            });
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        result.Succeeded.Should().BeTrue();
+        await resolver.Canceled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
         IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope> outputStream,
@@ -338,10 +363,13 @@ public sealed class WorkflowApplicationLayerTests
 
     private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
-        ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> durableCompletionResolver) =>
+        ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> durableCompletionResolver,
+        WorkflowRunBehaviorOptions? behaviorOptions = null) =>
         new WorkflowRunDetachedDispatchService(
             pipeline,
-            durableCompletionResolver);
+            durableCompletionResolver,
+            logger: null,
+            behaviorOptions: behaviorOptions);
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
         WorkflowRunCommandTarget target,
@@ -503,6 +531,29 @@ public sealed class WorkflowApplicationLayerTests
             ct.ThrowIfCancellationRequested();
             releaseCallCountAccessor().Should().Be(1);
             return Task.FromResult(observation);
+        }
+    }
+
+    private sealed class BlockingDurableCompletionResolver
+        : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
+    {
+        public TaskCompletionSource<bool> Canceled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
+            WorkflowChatRunAcceptedReceipt receipt,
+            CancellationToken ct = default)
+        {
+            _ = receipt;
+
+            var waitForCancellation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() =>
+            {
+                Canceled.TrySetResult(true);
+                waitForCancellation.TrySetCanceled(ct);
+            });
+
+            await waitForCancellation.Task;
+            return CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete;
         }
     }
 

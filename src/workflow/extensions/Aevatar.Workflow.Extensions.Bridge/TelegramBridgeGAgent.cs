@@ -949,7 +949,7 @@ public class TelegramBridgeGAgent : GAgentBase
                     SessionId = request.SessionId,
                     Content = content,
                 },
-                EventDirection.Up);
+                TopologyAudience.Parent);
         }
 
         await PublishAsync(
@@ -958,7 +958,7 @@ public class TelegramBridgeGAgent : GAgentBase
                 SessionId = request.SessionId,
                 Content = content,
             },
-            EventDirection.Up);
+            TopologyAudience.Parent);
     }
 
     private async Task PublishFailureAsync(ChatRequestEvent request, string error)
@@ -970,7 +970,7 @@ public class TelegramBridgeGAgent : GAgentBase
                 SessionId = request.SessionId,
                 Content = $"{LlmFailureContentPrefix} {safeError}",
             },
-            EventDirection.Up);
+            TopologyAudience.Parent);
     }
 
     private static bool ShouldEmitChatResponse(Google.Protobuf.Collections.MapField<string, string> metadata)

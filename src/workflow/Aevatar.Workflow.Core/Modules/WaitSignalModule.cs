@@ -67,7 +67,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = true,
                     Output = string.IsNullOrEmpty(buffered.Payload) ? request.Input ?? string.Empty : buffered.Payload,
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -112,6 +112,13 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 await SaveStateAsync(state, ctx, ct);
             }
 
+            await ctx.PublishAsync(new WaitingForSignalEvent
+            {
+                StepId = stepId,
+                SignalName = signalName,
+                Prompt = prompt,
+                TimeoutMs = timeoutMs,
+                RunId = runId,
             }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
@@ -145,6 +152,13 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 stepId,
                 runId,
                 signalName);
+
+            await ctx.PublishAsync(new StepCompletedEvent
+            {
+                StepId = stepId,
+                RunId = runId,
+                Success = false,
+                Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
             }, TopologyAudience.Self, ct);
 
             state.Pending.Remove(BuildPendingKey(pendingKey));

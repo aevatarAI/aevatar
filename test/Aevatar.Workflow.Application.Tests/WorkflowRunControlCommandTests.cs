@@ -66,7 +66,17 @@ public sealed class WorkflowRunControlCommandTests
     {
         var factory = new WorkflowResumeCommandEnvelopeFactory();
         var envelope = factory.CreateEnvelope(
-            new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved"),
+            new WorkflowResumeCommand(
+                "actor-1",
+                "run-1",
+                "step-1",
+                "cmd-1",
+                true,
+                "approved",
+                new Dictionary<string, string>
+                {
+                    ["source"] = "tests",
+                }),
             new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
@@ -78,6 +88,7 @@ public sealed class WorkflowRunControlCommandTests
         resumed.StepId.Should().Be("step-1");
         resumed.Approved.Should().BeTrue();
         resumed.UserInput.Should().Be("approved");
+        resumed.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
     }
 
     [Fact]

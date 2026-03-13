@@ -342,6 +342,10 @@ public sealed class ChatEndpointsInternalTests
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["source"] = "host",
+                },
             },
             service,
             CancellationToken.None);
@@ -357,6 +361,7 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");
+        service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
     }
 
     [Fact]

@@ -52,7 +52,7 @@ public sealed class TelegramBridgeGAgentTests
         var textEnd = publisher.Published[0].evt.Should().BeOfType<TextMessageEndEvent>().Subject;
         textEnd.SessionId.Should().Be("session-1");
         textEnd.Content.Should().Be("telegram-ok");
-        publisher.Published[0].direction.Should().Be(EventDirection.Up);
+        publisher.Published[0].direction.Should().Be(TopologyAudience.Parent);
     }
 
     [Fact]
@@ -503,11 +503,7 @@ public sealed class TelegramBridgeGAgentTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };
     }
 
@@ -577,11 +573,11 @@ public sealed class TelegramBridgeGAgentTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)

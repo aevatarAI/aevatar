@@ -229,7 +229,8 @@ public static class WorkflowCapabilityEndpoints
                     stepId,
                     commandId,
                     input.Approved,
-                    input.UserInput),
+                    input.UserInput,
+                    NormalizeMetadata(input.Metadata)),
                 ct);
             if (!dispatch.Succeeded || dispatch.Receipt == null)
             {
@@ -369,6 +370,27 @@ public static class WorkflowCapabilityEndpoints
     {
         var normalized = (value ?? string.Empty).Trim();
         return string.IsNullOrWhiteSpace(normalized)
+            ? null
+            : normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string>? NormalizeMetadata(IDictionary<string, string>? metadata)
+    {
+        if (metadata == null || metadata.Count == 0)
+            return null;
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            var normalizedValue = NormalizeOptional(value);
+            if (normalizedKey == null || normalizedValue == null)
+                continue;
+
+            normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized.Count == 0
             ? null
             : normalized;
     }
