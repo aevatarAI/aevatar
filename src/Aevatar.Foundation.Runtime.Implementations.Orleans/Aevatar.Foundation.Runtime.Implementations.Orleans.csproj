@@ -27,6 +27,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
     <PackageReference Include="Google.Protobuf" />
   </ItemGroup>
 </Project>
