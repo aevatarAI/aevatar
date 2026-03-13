@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
-- 版本：R2
+- 状态：Implemented
+- 版本：R3
 - 日期：2026-03-14
 - 适用范围：
   - `src/Aevatar.Scripting.Abstractions`
@@ -13,11 +13,13 @@
   - `src/Aevatar.Scripting.Projection`
   - `src/Aevatar.Scripting.Hosting`
 - 关联文档：
+  - `docs/SCRIPTING_ARCHITECTURE.md`
   - `docs/architecture/2026-03-13-scripting-gagent-behavior-parity-detailed-design.md`
   - `docs/architecture/2026-03-14-scripting-gagent-behavior-parity-implementation-closeout.md`
 - 本文定位：
   - 本文只讨论下一阶段重构：把脚本 authoring surface 从 `Any` 暴露模型升级为 typed/generic authoring model。
   - 本文不考虑兼容性，允许直接删除旧 authoring API、旧命名和旧脚本样例。
+  - 截至 2026-03-14，本文设计已在仓库落地；若与实现细节冲突，以 `implementation-closeout` 和实际代码为准。
 
 ## 2. 问题定义
 

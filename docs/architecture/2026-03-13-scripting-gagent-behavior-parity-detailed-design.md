@@ -1,8 +1,8 @@
-# Scripting GAgent 行为等价详细架构变更方案（2026-03-13）
+# Scripting GAgent 行为等价详细架构变更方案（历史设计基线，2026-03-13）
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-13
 - 适用范围：
@@ -18,6 +18,8 @@
 - 文档定位：
   - 本文是 detailed design，不再重复“为什么做”，而是直接回答“怎么做”。
   - 本文不考虑兼容性，默认允许删除旧接口、旧 proto 字段、旧 projector/read-model 结构。
+  - 自 `2026-03-14` 起，本文已被 `docs/architecture/2026-03-14-scripting-gagent-behavior-parity-implementation-closeout.md` 与 `docs/architecture/2026-03-14-scripting-typed-authoring-surface-detailed-design.md` 取代，不再代表当前仓库实现。
+  - 本文保留的价值是记录第一阶段的设计分解与命名演进，而不是作为当前代码阅读入口。
 
 ## 2. 设计总原则
 

@@ -1,8 +1,8 @@
-# Scripting GAgent 行为等价重构蓝图（2026-03-13）
+# Scripting GAgent 行为等价重构蓝图（历史基线，2026-03-13）
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-13
 - 适用范围：
@@ -22,6 +22,8 @@
   - 本文描述 `scripting` 从“动态脚本宿主能力”重构到“与静态 `GAgent` 行为等价”的目标态。
   - 本文默认不保留兼容层，不为历史 bag / 临时接口 / 双轨链路背书。
   - 本文允许继续保留 wrapper 形态，但 wrapper 不得再弱化静态 `GAgent` 已有能力。
+  - 自 `2026-03-14` 起，本文已被 `docs/architecture/2026-03-14-scripting-gagent-behavior-parity-implementation-closeout.md` 与 `docs/architecture/2026-03-14-scripting-typed-authoring-surface-detailed-design.md` 取代，不再作为当前实现依据。
+  - 本文仅保留为差距基线与设计留痕，帮助理解“旧主链为什么被删除”。
 
 ## 2. 背景与关键决策（统一认知）
 
@@ -755,4 +757,3 @@ query contract 要求：
 3. 不允许通过 query runtime actor state 代替 read-side query。
 4. 新增 contract 必须先有 proto / descriptor 设计，再落实现。
 5. 每完成一个工作包，必须同步更新本文档的状态矩阵、执行清单与执行快照。
-
