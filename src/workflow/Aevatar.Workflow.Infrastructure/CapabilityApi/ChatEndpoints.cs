@@ -23,6 +23,7 @@ public static class WorkflowCapabilityEndpoints
         var group = app.MapGroup("/api").WithTags("Chat");
         MapInteractionEndpoints(group);
         ChatQueryEndpoints.Map(group);
+        WorkflowAuthoringEndpoints.Map(group);
 
         return app;
     }

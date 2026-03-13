@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Hosting;
+using Aevatar.Workflow.Application.Abstractions.Authoring;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -16,6 +17,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Infrastructure.Authoring;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
@@ -95,9 +97,11 @@ public sealed class WorkflowInfrastructureCoverageTests
         using var provider = services.BuildServiceProvider();
         var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
         var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+        var refreshPort = provider.GetRequiredService<IWorkflowDefinitionSourceRefreshPort>();
         catalogPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
         capabilitiesPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
         catalogPort.Should().BeSameAs(capabilitiesPort);
+        refreshPort.Should().BeSameAs(catalogPort);
     }
 
     [Fact]
@@ -259,6 +263,151 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         logger.Messages.Should().Contain(message =>
             message.Contains("Failed to parse workflow yaml", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FileBackedWorkflowCatalogPort_ShouldHonorConfiguredDirectoryPrecedence()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "aevatar-workflow-precedence-" + Guid.NewGuid().ToString("N"));
+        var firstDir = Path.Combine(tempRoot, "first");
+        var secondDir = Path.Combine(tempRoot, "second");
+        Directory.CreateDirectory(firstDir);
+        Directory.CreateDirectory(secondDir);
+        try
+        {
+            var firstPath = Path.Combine(firstDir, "shared_flow.yaml");
+            var secondPath = Path.Combine(secondDir, "shared_flow.yaml");
+            File.WriteAllText(firstPath, "name: shared_flow\ndescription: first\nroles: []\nsteps: []\n");
+            File.WriteAllText(secondPath, "name: shared_flow\ndescription: second\nroles: []\nsteps: []\n");
+
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+            };
+            options.WorkflowDirectories.Add(firstDir);
+            options.WorkflowDirectories.Add(secondDir);
+
+            var registry = new WorkflowDefinitionRegistry();
+            new WorkflowDefinitionFileLoader().LoadInto(
+                registry,
+                options.WorkflowDirectories,
+                NullLogger.Instance,
+                options.DuplicatePolicy);
+
+            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+
+            var detail = port.GetWorkflowDetail("shared_flow");
+
+            detail.Should().NotBeNull();
+            detail!.Yaml.Should().Contain("description: second");
+            detail.Catalog.Source.Should().Be("file");
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileBackedWorkflowCatalogPort_RefreshAsync_ShouldInvalidateDiscoveryCache()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-refresh-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var options = new WorkflowDefinitionFileSourceOptions();
+            options.WorkflowDirectories.Add(tempDir);
+            var registry = new WorkflowDefinitionRegistry();
+            registry.Register("cached_source", "name: cached_source\nroles: []\nsteps: []\n");
+            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+
+            var firstCatalog = port.ListWorkflowCatalog();
+            firstCatalog.Should().Contain(item => item.Name == "cached_source" && item.Source == "builtin");
+
+            var filePath = Path.Combine(tempDir, "cached_source.yaml");
+            await File.WriteAllTextAsync(filePath, "name: cached_source\nroles: []\nsteps: []\n");
+
+            var cachedCatalog = port.ListWorkflowCatalog();
+            cachedCatalog.Should().Contain(item => item.Name == "cached_source" && item.Source == "builtin");
+
+            await port.RefreshAsync("cached_source");
+
+            var refreshedCatalog = port.ListWorkflowCatalog();
+            refreshedCatalog.Should().Contain(item => item.Name == "cached_source" && item.Source == "file");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FileSystemWorkflowAuthoringPersistencePort_ShouldSaveWorkflowAndRefreshEffectivePath()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "aevatar-authoring-save-" + Guid.NewGuid().ToString("N"));
+        var repoDir = Path.Combine(tempRoot, "repo");
+        var homeDir = Path.Combine(tempRoot, "home");
+        Directory.CreateDirectory(repoDir);
+        Directory.CreateDirectory(homeDir);
+        try
+        {
+            var repoPath = Path.Combine(repoDir, "saved_flow.yaml");
+            await File.WriteAllTextAsync(repoPath, "name: saved_flow\ndescription: repo\nroles: []\nsteps: []\n");
+
+            var options = new WorkflowDefinitionFileSourceOptions
+            {
+                DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
+            };
+            options.WorkflowDirectories.Add(repoDir);
+            options.WorkflowDirectories.Add(homeDir);
+
+            var registry = new WorkflowDefinitionRegistry();
+            new WorkflowDefinitionFileLoader().LoadInto(
+                registry,
+                options.WorkflowDirectories,
+                NullLogger.Instance,
+                options.DuplicatePolicy);
+            var catalogPort = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+            var persistencePort = new FileSystemWorkflowAuthoringPersistencePort(
+                registry,
+                catalogPort,
+                Options.Create(options),
+                NullLogger<FileSystemWorkflowAuthoringPersistencePort>.Instance,
+                () => homeDir);
+
+            var result = await persistencePort.SaveWorkflowAsync(
+                new PlaygroundWorkflowSaveRequest
+                {
+                    Yaml = "name: saved_flow\ndescription: home\nroles: []\nsteps: []\n",
+                    Filename = "saved flow.yaml",
+                },
+                "saved_flow");
+
+            result.Saved.Should().BeTrue();
+            result.Filename.Should().Be("saved_flow.yaml");
+            result.EffectivePath.Should().Be(Path.Combine(homeDir, "saved_flow.yaml"));
+            registry.GetYaml("saved_flow").Should().Contain("description: home");
+
+            var detail = catalogPort.GetWorkflowDetail("saved_flow");
+            detail.Should().NotBeNull();
+            detail!.Yaml.Should().Contain("description: home");
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileSystemWorkflowAuthoringPersistencePort_ShouldNormalizeFilenameAndContent()
+    {
+        FileSystemWorkflowAuthoringPersistencePort.NormalizeWorkflowSaveFilename(" My Flow!.yml ", "ignored")
+            .Should().Be("My_Flow.yaml");
+        FileSystemWorkflowAuthoringPersistencePort.NormalizeWorkflowContentForSave("name: demo\n")
+            .Should().Be("name: demo" + Environment.NewLine);
     }
 
     [Fact]

@@ -17,12 +17,9 @@ public sealed class WorkflowDefinitionFileLoader
 
         var loaded = 0;
         var registeredNames = new HashSet<string>(registry.GetNames(), StringComparer.OrdinalIgnoreCase);
-        var normalizedDirectories = directories
-            .Where(static directory => !string.IsNullOrWhiteSpace(directory))
-            .Select(static directory => Path.GetFullPath(directory))
-            .Select(static directory => Path.TrimEndingDirectorySeparator(directory))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(Directory.Exists);
+        var normalizedDirectories = WorkflowDefinitionFileSourceResolver.ResolveNormalizedExistingDirectories(
+            directories,
+            logger);
 
         foreach (var directory in normalizedDirectories)
         {

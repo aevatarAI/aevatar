@@ -1,4 +1,5 @@
 using Aevatar.Configuration;
+using Aevatar.Workflow.Application.Abstractions.Authoring;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core;
@@ -9,7 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
-internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWorkflowCapabilitiesPort
+internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWorkflowCapabilitiesPort, IWorkflowDefinitionSourceRefreshPort
 {
     private static readonly TimeSpan WorkflowFileDiscoveryCacheTtl = TimeSpan.FromSeconds(5);
 
@@ -482,25 +483,8 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
         var entries = new Dictionary<string, WorkflowFileEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in ResolveNormalizedWorkflowDirectories())
         {
-            var sourceKind = ResolveSourceKind(directory);
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(directory, "*.*")
-                             .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                             .Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
-                                         f.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)))
-                {
-                    var name = Path.GetFileNameWithoutExtension(file);
-                    if (string.IsNullOrWhiteSpace(name))
-                        continue;
-
-                    entries[name] = new WorkflowFileEntry(name.Trim(), file, sourceKind);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to enumerate workflow files from directory '{WorkflowDirectory}'.", directory);
-            }
+            foreach (var entry in WorkflowDefinitionFileSourceResolver.DiscoverWorkflowFiles([directory], _logger))
+                entries[entry.Key] = new WorkflowFileEntry(entry.Value.Name, entry.Value.FilePath, entry.Value.SourceKind);
         }
 
         return entries;
@@ -508,27 +492,9 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
 
     private IReadOnlyList<string> ResolveNormalizedWorkflowDirectories()
     {
-        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var rawDirectory in _options.Value.WorkflowDirectories)
-        {
-            if (string.IsNullOrWhiteSpace(rawDirectory))
-                continue;
-
-            try
-            {
-                var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawDirectory));
-                if (Directory.Exists(normalized))
-                    directories.Add(normalized);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to normalize workflow directory '{WorkflowDirectory}'.", rawDirectory);
-            }
-        }
-
-        return directories
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return WorkflowDefinitionFileSourceResolver.ResolveNormalizedExistingDirectories(
+            _options.Value.WorkflowDirectories,
+            _logger);
     }
 
     private bool TryGetCachedDefinition(
@@ -691,25 +657,23 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
             .ToList();
     }
 
-    private static string ResolveSourceKind(string directory)
+    public Task RefreshAsync(string? workflowName = null, CancellationToken ct = default)
     {
-        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(AevatarPaths.Workflows)), StringComparison.OrdinalIgnoreCase))
-            return "home";
+        ct.ThrowIfCancellationRequested();
+        lock (_cacheLock)
+        {
+            _workflowFileDiscoveryCache = null;
+            if (string.IsNullOrWhiteSpace(workflowName))
+            {
+                _parsedWorkflowCache.Clear();
+            }
+            else
+            {
+                _parsedWorkflowCache.Remove(workflowName.Trim());
+            }
+        }
 
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(AevatarPaths.RepoRootWorkflows)), StringComparison.OrdinalIgnoreCase))
-            return "repo";
-
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "workflows"))), StringComparison.OrdinalIgnoreCase))
-            return "cwd";
-
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "workflows"))), StringComparison.OrdinalIgnoreCase))
-            return "app";
-
-        if (normalized.EndsWith($"{Path.DirectorySeparatorChar}turing-completeness", StringComparison.OrdinalIgnoreCase))
-            return "turing";
-
-        return "file";
+        return Task.CompletedTask;
     }
 
     private sealed record FileDiscoveryCacheEntry(

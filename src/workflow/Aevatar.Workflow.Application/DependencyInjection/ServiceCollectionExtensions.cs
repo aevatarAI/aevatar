@@ -1,10 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Authoring;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Adapters;
+using Aevatar.Workflow.Application.Authoring;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
@@ -74,6 +76,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IWorkflowExecutionProjectionQueryPort>(),
                 sp.GetRequiredService<IWorkflowCatalogPort>(),
                 sp.GetRequiredService<IWorkflowCapabilitiesPort>()));
+        services.AddSingleton<IWorkflowAuthoringQueryApplicationService, WorkflowAuthoringQueryApplicationService>();
+        services.AddSingleton<IWorkflowAuthoringCommandApplicationService, WorkflowAuthoringCommandApplicationService>();
         services.TryAddSingleton<WorkflowCommandExecutionServiceAdapter>();
         services.TryAddSingleton<ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>(sp =>
             sp.GetRequiredService<WorkflowCommandExecutionServiceAdapter>());

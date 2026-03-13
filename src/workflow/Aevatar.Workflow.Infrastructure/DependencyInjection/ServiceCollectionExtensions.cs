@@ -1,7 +1,9 @@
 using Aevatar.Workflow.Application.Abstractions.Reporting;
+using Aevatar.Workflow.Application.Abstractions.Authoring;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Infrastructure.Authoring;
 using Aevatar.Workflow.Infrastructure.Reporting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -27,6 +29,9 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
+        services.TryAddSingleton<IWorkflowDefinitionValidationPort, WorkflowDefinitionValidationPort>();
+        services.TryAddSingleton<IWorkflowAuthoringPersistencePort, FileSystemWorkflowAuthoringPersistencePort>();
+        services.TryAddSingleton<IWorkflowRuntimeStatusPort, WorkflowRuntimeStatusPort>();
         return services;
     }
 
@@ -43,6 +48,8 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IWorkflowCatalogPort>(sp =>
             sp.GetRequiredService<FileBackedWorkflowCatalogPort>()));
         services.Replace(ServiceDescriptor.Singleton<IWorkflowCapabilitiesPort>(sp =>
+            sp.GetRequiredService<FileBackedWorkflowCatalogPort>()));
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowDefinitionSourceRefreshPort>(sp =>
             sp.GetRequiredService<FileBackedWorkflowCatalogPort>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowDefinitionBootstrapHostedService>());
         return services;

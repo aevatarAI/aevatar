@@ -48,6 +48,12 @@ public class ChatEndpointsInternalTests
         routePatterns.Should().Contain("/api/actors/{actorId}/timeline");
         routePatterns.Should().Contain("/api/actors/{actorId}/graph-edges");
         routePatterns.Should().Contain("/api/actors/{actorId}/graph-subgraph");
+        routePatterns.Should().Contain("/api/workflow-authoring/parse");
+        routePatterns.Should().Contain("/api/playground/parse");
+        routePatterns.Should().Contain("/api/workflow-authoring/workflows");
+        routePatterns.Should().Contain("/api/playground/workflows");
+        routePatterns.Should().Contain("/api/primitives");
+        routePatterns.Should().Contain("/api/llm/status");
     }
 
     [Fact]
