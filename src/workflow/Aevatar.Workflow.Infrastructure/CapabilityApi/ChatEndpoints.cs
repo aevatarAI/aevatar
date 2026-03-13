@@ -346,6 +346,12 @@ public static class WorkflowCapabilityEndpoints
             WorkflowRunControlStartErrorCode.InvalidRunId => (
                 StatusCodes.Status400BadRequest,
                 "runId is required."),
+            WorkflowRunControlStartErrorCode.InvalidStepId => (
+                StatusCodes.Status400BadRequest,
+                "stepId is required."),
+            WorkflowRunControlStartErrorCode.InvalidSignalName => (
+                StatusCodes.Status400BadRequest,
+                "signalName is required."),
             WorkflowRunControlStartErrorCode.ActorNotFound => (
                 StatusCodes.Status404NotFound,
                 $"Actor '{error.ActorId}' not found."),

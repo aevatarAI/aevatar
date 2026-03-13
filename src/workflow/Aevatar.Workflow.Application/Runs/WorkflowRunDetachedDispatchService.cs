@@ -57,7 +57,7 @@ internal sealed class WorkflowRunDetachedDispatchService
         _ = Task.Run(
             async () =>
             {
-                var destroyCreatedActors = false;
+                var durableCompletionObserved = false;
 
                 try
                 {
@@ -74,31 +74,7 @@ internal sealed class WorkflowRunDetachedDispatchService
                             receipt.CommandId);
                     }
 
-                    try
-                    {
-                        await target.ReleaseAsync(
-                            destroyCreatedActors: false,
-                            ct: CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(
-                            ex,
-                            "Detached workflow run projection release failed. actorId={ActorId}, commandId={CommandId}",
-                            receipt.ActorId,
-                            receipt.CommandId);
-                    }
-
-                    using var monitoringCts = new CancellationTokenSource(_durableCompletionMonitoringTimeout);
-                    destroyCreatedActors = await WaitForDurableCompletionAsync(receipt, monitoringCts.Token);
-                    if (!destroyCreatedActors)
-                    {
-                        _logger.LogWarning(
-                            "Detached workflow run monitoring timed out before durable completion. actorId={ActorId}, commandId={CommandId}, timeoutMs={TimeoutMs}",
-                            receipt.ActorId,
-                            receipt.CommandId,
-                            (long)_durableCompletionMonitoringTimeout.TotalMilliseconds);
-                    }
+                    durableCompletionObserved = await WaitForDurableCompletionAsync(receipt, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -108,22 +84,23 @@ internal sealed class WorkflowRunDetachedDispatchService
                         receipt.ActorId,
                         receipt.CommandId);
                 }
-                finally
+
+                if (!durableCompletionObserved)
+                    return;
+
+                try
                 {
-                    try
-                    {
-                        await target.ReleaseAsync(
-                            destroyCreatedActors: destroyCreatedActors,
-                            ct: CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(
-                            ex,
-                            "Detached workflow run cleanup failed. actorId={ActorId}, commandId={CommandId}",
-                            receipt.ActorId,
-                            receipt.CommandId);
-                    }
+                    await target.ReleaseAsync(
+                        destroyCreatedActors: true,
+                        ct: CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Detached workflow run cleanup failed. actorId={ActorId}, commandId={CommandId}",
+                        receipt.ActorId,
+                        receipt.CommandId);
                 }
             },
             CancellationToken.None);
@@ -134,20 +111,47 @@ internal sealed class WorkflowRunDetachedDispatchService
         CancellationToken ct)
     {
         using var timer = new PeriodicTimer(_durableCompletionPollInterval);
+        var resolveTimeoutWarningLogged = false;
         while (true)
         {
+            using var resolveCts = CreateDurableCompletionResolveTimeoutSource(ct);
             try
             {
-                var durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, ct);
+                var durableCompletion = await _durableCompletionResolver.ResolveAsync(receipt, resolveCts?.Token ?? ct);
                 if (durableCompletion.HasTerminalCompletion)
                     return true;
-
-                await timer.WaitForNextTickAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return false;
             }
+            catch (OperationCanceledException) when (resolveCts?.IsCancellationRequested == true)
+            {
+                if (!resolveTimeoutWarningLogged)
+                {
+                    resolveTimeoutWarningLogged = true;
+                    _logger.LogWarning(
+                        "Detached workflow run durable completion observation timed out; background monitoring will keep retrying. actorId={ActorId}, commandId={CommandId}, timeoutMs={TimeoutMs}",
+                        receipt.ActorId,
+                        receipt.CommandId,
+                        (long)_durableCompletionMonitoringTimeout.TotalMilliseconds);
+                }
+            }
+
+            await timer.WaitForNextTickAsync(ct);
         }
+    }
+
+    private CancellationTokenSource? CreateDurableCompletionResolveTimeoutSource(CancellationToken ct)
+    {
+        if (_durableCompletionMonitoringTimeout <= TimeSpan.Zero ||
+            _durableCompletionMonitoringTimeout == Timeout.InfiniteTimeSpan)
+        {
+            return null;
+        }
+
+        var resolveCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        resolveCts.CancelAfter(_durableCompletionMonitoringTimeout);
+        return resolveCts;
     }
 }

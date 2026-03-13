@@ -44,7 +44,7 @@ public sealed class WorkflowRunBehaviorOptions
         };
 
     /// <summary>
-    /// Maximum time the detached dispatch path waits for durable completion before giving up background monitoring.
+    /// Maximum time one detached durable-completion observation attempt may take before it is canceled and retried in the background.
     /// </summary>
     public TimeSpan DetachedDurableCompletionMonitoringTimeout { get; set; } = TimeSpan.FromMinutes(5);
 

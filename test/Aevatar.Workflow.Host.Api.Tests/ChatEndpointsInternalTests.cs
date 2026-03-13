@@ -421,6 +421,33 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleResume_ShouldMapInvalidStepId_FromApplicationLayer()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.InvalidStepId("actor-1", "run-1", " ")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "step-1",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("stepId is required");
+    }
+
+    [Fact]
     public async Task HandleSignal_ShouldRejectNonRunActor()
     {
         var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
@@ -496,6 +523,33 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("run-expected");
         service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleSignal_ShouldMapInvalidSignalName_FromApplicationLayer()
+    {
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.InvalidSignalName("actor-1", "run-1", " ")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                SignalName = "approve",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("signalName is required");
     }
 
     [Fact]

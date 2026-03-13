@@ -43,7 +43,7 @@
 ### CQRS Interaction / Detached Dispatch
 
 - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
-- `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：先 detach live observation，再按 durable completion 收敛并清理 projection / created actors
+- `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：先 detach live observation，保留 projection 继续推进 read model；只有在 durable completion 真正收敛后才统一清理 projection / created actors，durable query 超时只会触发后台重试，不会伪造 `Stopped`
 - `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发

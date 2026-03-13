@@ -13,10 +13,11 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
+        var stepId = NormalizeRequired(command.StepId, nameof(command.StepId));
         var resumed = new WorkflowResumedEvent
         {
             RunId = command.RunId,
-            StepId = command.StepId,
+            StepId = stepId,
             Approved = command.Approved,
             UserInput = command.UserInput ?? string.Empty,
         };
@@ -51,5 +52,13 @@ internal sealed class WorkflowResumeCommandEnvelopeFactory : ICommandEnvelopeFac
 
             destination[normalizedKey] = normalizedValue;
         }
+    }
+
+    private static string NormalizeRequired(string? value, string paramName)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        return normalized.Length == 0
+            ? throw new ArgumentException("Value is required.", paramName)
+            : normalized;
     }
 }

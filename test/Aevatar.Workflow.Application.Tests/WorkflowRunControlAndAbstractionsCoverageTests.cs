@@ -90,6 +90,21 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                 string.Empty,
                 string.Empty,
                 string.Empty));
+        WorkflowRunControlStartError.InvalidStepId(null!, null!, null!)
+            .Should().Be(new WorkflowRunControlStartError(
+                WorkflowRunControlStartErrorCode.InvalidStepId,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty));
+        WorkflowRunControlStartError.InvalidSignalName(null!, null!, null!)
+            .Should().Be(new WorkflowRunControlStartError(
+                WorkflowRunControlStartErrorCode.InvalidSignalName,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty));
     }
 
     [Theory]
@@ -228,9 +243,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var actOnContext = () => factory.CreateEnvelope(
             new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved"),
             null!);
+        var actOnStepId = () => factory.CreateEnvelope(
+            new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
+            context);
 
         actOnCommand.Should().Throw<ArgumentNullException>();
         actOnContext.Should().Throw<ArgumentNullException>();
+        actOnStepId.Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -249,9 +268,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var actOnContext = () => factory.CreateEnvelope(
             new WorkflowSignalCommand("actor-1", "run-1", "approve", "cmd-1", "yes"),
             null!);
+        var actOnSignalName = () => factory.CreateEnvelope(
+            new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
+            context);
 
         actOnCommand.Should().Throw<ArgumentNullException>();
         actOnContext.Should().Throw<ArgumentNullException>();
+        actOnSignalName.Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -282,6 +305,36 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowRunControlStartError.InvalidRunId("actor-1", string.Empty));
+    }
+
+    [Fact]
+    public async Task WorkflowRunControlResolver_ShouldRejectInvalidStepId()
+    {
+        var resolver = new WorkflowResumeCommandTargetResolver(
+            new FakeActorRuntime(),
+            new FakeWorkflowActorBindingReader());
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowRunControlStartError.InvalidStepId("actor-1", "run-1", " "));
+    }
+
+    [Fact]
+    public async Task WorkflowRunControlResolver_ShouldRejectInvalidSignalName()
+    {
+        var resolver = new WorkflowSignalCommandTargetResolver(
+            new FakeActorRuntime(),
+            new FakeWorkflowActorBindingReader());
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowRunControlStartError.InvalidSignalName("actor-1", "run-1", " "));
     }
 
     [Fact]
