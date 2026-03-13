@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0.103 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish apps/aevatar-app/src/Aevatar.App.Host.Api/Aevatar.App.Host.Api.csproj \
