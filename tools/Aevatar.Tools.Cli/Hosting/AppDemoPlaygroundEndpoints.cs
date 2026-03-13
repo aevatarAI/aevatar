@@ -1255,6 +1255,7 @@ internal static class AppDemoPlaygroundEndpoints
                 "workflow.suspended",
                 new Dictionary<string, object?>
                 {
+                    ["actorId"] = actorId,
                     ["runId"] = runId,
                     ["stepId"] = ReadJsonValue(value, "stepId", "StepId"),
                     ["suspensionType"] = Coalesce(
@@ -1276,6 +1277,7 @@ internal static class AppDemoPlaygroundEndpoints
                 "workflow.waiting_signal",
                 new Dictionary<string, object?>
                 {
+                    ["actorId"] = actorId,
                     ["runId"] = runId,
                     ["stepId"] = ReadJsonValue(value, "stepId", "StepId"),
                     ["signalName"] = ReadJsonValue(value, "signalName", "SignalName"),

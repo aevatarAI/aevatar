@@ -1756,6 +1756,9 @@
       : (type === "human_approval" ? "Manual approval required" : "Manual input required");
     const missingSession = !runId || !actorId;
     const disabledAttr = missingSession ? " disabled" : "";
+    const decisionOptions = type === "human_input"
+      ? extractDecisionOptions(prompt)
+      : [];
 
     let controlHtml = "";
     if (type === "human_approval") {
@@ -1774,14 +1777,29 @@
     } else {
       const variableName = interaction.metadata?.variable ? ` (${interaction.metadata.variable})` : "";
       const secure = isSecureInteraction(interaction);
+      const optionButtons = decisionOptions.length > 0
+        ? `
+        <div class="interaction-note">Choose one action below. Add a comment only when you want the workflow to revise or narrow scope.</div>
+        <div class="interaction-actions">
+          ${decisionOptions.map((option) => `
+            <button
+              id="${prefix}-interaction-option-${esc(option.token)}"
+              class="btn ${option.token === "approve" ? "btn-primary" : (option.token === "stop" ? "btn-danger" : "btn-secondary")}"
+              data-token="${esc(option.token)}"${disabledAttr}>${esc(option.label)}</button>`).join("")}
+        </div>`
+        : "";
+      const submitButtonHtml = decisionOptions.length > 0
+        ? ""
+        : `<div class="interaction-actions">
+          <button id="${prefix}-interaction-submit" class="btn btn-primary"${disabledAttr}>Submit input</button>
+        </div>`;
       controlHtml = `
         ${secure
           ? `<input id="${prefix}-interaction-input" class="interaction-input" type="password" placeholder="Secure input for human step${esc(variableName)}" autocomplete="off"${disabledAttr}>`
-          : `<textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="Input for human step${esc(variableName)}"${disabledAttr}></textarea>`}
+          : `<textarea id="${prefix}-interaction-input" class="interaction-input" rows="3" placeholder="${esc(decisionOptions.length > 0 ? "Optional comment for revise / narrow scope" : `Input for human step${variableName}`)}"${disabledAttr}></textarea>`}
         ${secure ? `<div class="interaction-note">Sensitive input is masked locally and will not be echoed back into the workflow log.</div>` : ""}
-        <div class="interaction-actions">
-          <button id="${prefix}-interaction-submit" class="btn btn-primary"${disabledAttr}>Submit input</button>
-        </div>`;
+        ${optionButtons}
+        ${submitButtonHtml}`;
     }
 
     container.innerHTML = `
@@ -1818,6 +1836,7 @@
     const commandId = interaction.commandId || "";
     const stepId = interaction.stepId || "";
     const signalName = interaction.signalName || "";
+    const prompt = interaction.prompt || "";
 
     const clearIfStillCurrentInteraction = () => {
       const current = prefix === "pg" ? pgPendingInteraction : pendingInteraction;
@@ -1900,11 +1919,13 @@
 
       const submitBtn = $(`#${prefix}-interaction-submit`);
       const inputEl = $(`#${prefix}-interaction-input`);
-      if (!submitBtn || !inputEl || !stepId) return;
+      if (!inputEl || !stepId) return;
 
-      submitBtn.addEventListener("click", async () => {
-        submitBtn.disabled = true;
-        const userInput = inputEl.value.trim();
+      const decisionOptions = type === "human_input"
+        ? extractDecisionOptions(prompt)
+        : [];
+
+      const submitHumanInput = async (userInput, actionLabel, actionDetail) => {
         try {
           await postJson("/api/workflows/resume", {
             actorId,
@@ -1914,11 +1935,57 @@
             approved: true,
             userInput,
           });
-        logFn(
-          "action",
-          isSecureInteraction(interaction) ? "✍ Secure input submitted" : "✍ Human input submitted",
-          isSecureInteraction(interaction) ? "(secure input hidden)" : (userInput || "(empty input)"));
+          logFn(
+            "action",
+            actionLabel,
+            actionDetail);
           clearIfStillCurrentInteraction();
+        } catch (e) {
+          logFn("error", "\u274C Resume failed", e.message || String(e));
+        }
+      };
+
+      decisionOptions.forEach((option) => {
+        const btn = $(`#${prefix}-interaction-option-${option.token}`);
+        if (!btn) return;
+        btn.addEventListener("click", async () => {
+          if (submitBtn) submitBtn.disabled = true;
+          decisionOptions.forEach((item) => {
+            const itemBtn = $(`#${prefix}-interaction-option-${item.token}`);
+            if (itemBtn) itemBtn.disabled = true;
+          });
+          const comment = inputEl.value.trim();
+          const payload = buildDecisionInput(option.token, comment);
+          const detail = isSecureInteraction(interaction)
+            ? "(secure input hidden)"
+            : payload;
+          try {
+            await submitHumanInput(payload, `✍ ${option.label}`, detail);
+          } finally {
+            if (submitBtn) submitBtn.disabled = false;
+            decisionOptions.forEach((item) => {
+              const itemBtn = $(`#${prefix}-interaction-option-${item.token}`);
+              if (itemBtn) itemBtn.disabled = false;
+            });
+          }
+        });
+      });
+
+      if (!submitBtn) return;
+
+      submitBtn.addEventListener("click", async () => {
+        submitBtn.disabled = true;
+        const userInput = inputEl.value.trim();
+        if (!userInput) {
+          logFn("error", "❌ Input required", "Choose an action button or enter a response before submitting.");
+          submitBtn.disabled = false;
+          return;
+        }
+        try {
+          await submitHumanInput(
+            userInput,
+            isSecureInteraction(interaction) ? "✍ Secure input submitted" : "✍ Human input submitted",
+            isSecureInteraction(interaction) ? "(secure input hidden)" : (userInput || "(empty input)"));
         } catch (e) {
           logFn("error", "\u274C Resume failed", e.message || String(e));
         } finally {
@@ -1950,6 +2017,50 @@
     }
 
     return data;
+  }
+
+  function extractDecisionOptions(prompt) {
+    const text = String(prompt || "");
+    if (!text) return [];
+    const options = [];
+    const seen = new Set();
+    const lines = text.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      const match = line.match(/^-\s*([a-z_]+)(?::.*)?$/i);
+      if (!match) continue;
+      const token = String(match[1] || "").trim().toLowerCase();
+      if (!["approve", "revise", "narrow_scope", "stop"].includes(token)) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      options.push({
+        token,
+        label: decisionLabelForToken(token),
+      });
+    }
+    return options;
+  }
+
+  function decisionLabelForToken(token) {
+    switch (String(token || "").toLowerCase()) {
+      case "approve":
+        return "Approve";
+      case "revise":
+        return "Revise";
+      case "narrow_scope":
+        return "Narrow scope";
+      case "stop":
+        return "Stop";
+      default:
+        return token || "Submit";
+    }
+  }
+
+  function buildDecisionInput(token, comment) {
+    const normalized = String(token || "").trim().toLowerCase();
+    if (!comment) return normalized;
+    if (normalized === "approve" || normalized === "stop") return normalized;
+    return `${normalized}: ${comment}`;
   }
 
   function renderWorkflowConfig(configuration) {

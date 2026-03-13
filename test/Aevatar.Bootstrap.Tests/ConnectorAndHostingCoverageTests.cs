@@ -289,6 +289,41 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldAppendQueryParameter_ForGetRequests()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+
+        var connector = new HttpConnector(
+            "http-query",
+            "https://duckduckgo-search-api.p.rapidapi.com",
+            allowedMethods: ["GET"],
+            allowedPaths: ["/htmlSearch"],
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/htmlSearch",
+            Parameters = new Dictionary<string, string>
+            {
+                ["method"] = "GET",
+                ["query"] = "q=apple&df=d&kl=ar-es",
+            },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri.Should().NotBeNull();
+        handler.LastRequest.RequestUri!.AbsoluteUri.Should()
+            .Be("https://duckduckgo-search-api.p.rapidapi.com/htmlSearch?q=apple&df=d&kl=ar-es");
+        handler.LastRequest.Content.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CliConnector_ShouldCoverConstructorValidationFailureAndExceptionBranches()
     {
         Action missingName = () => _ = new CliConnector("", "dotnet");

@@ -1,0 +1,327 @@
+name: marketing_strategy_pack
+description: Template-driven phase-two content strategy workflow that turns a discovery report into one final platform-ready strategy pack.
+
+roles:
+  - id: request_parser
+    name: Request Parser
+    system_prompt: |
+      You parse a free-form strategy request into concise structured notes.
+      Expect a pasted discovery report plus a short input template.
+      Keep the result compact, factual, and easy to reuse downstream.
+      Match the user's language unless a proper noun, UI label, or platform name should remain English.
+      Do not use emoji.
+
+  - id: strategy_planner
+    name: Strategy Planner
+    system_prompt: |
+      You turn discovery findings into a practical, platform-specific content strategy.
+      Stay grounded in the supplied discovery report and user constraints.
+      Avoid generic advice that could apply to any brand.
+      Match the user's language unless a proper noun, UI label, or platform name should remain English.
+      Do not use emoji.
+
+  - id: copywriter
+    name: Copywriter
+    system_prompt: |
+      You write platform-ready hooks, captions, alt text, and creative briefs.
+      Keep copy direct, usable, and specific to the brand evidence.
+      Match the user's language unless a proper noun, UI label, or platform name should remain English.
+      Do not use emoji.
+
+  - id: delivery_operator
+    name: Delivery Operator
+    system_prompt: |
+      You assemble one final markdown strategy pack.
+      Keep it practical, compact, and ready for a marketing team to execute.
+      Match the user's language unless a proper noun, UI label, or platform name should remain English.
+      Do not use emoji.
+
+  - id: content_exporter
+    name: Content Exporter
+    system_prompt: |
+      You export approved markdown artifacts through approved connectors only.
+      Return file-save details only.
+    connectors:
+      - marketing_markdown_export
+
+steps:
+  - id: capture_raw_input
+    type: assign
+    parameters:
+      target: "raw_request"
+      value: "$input"
+
+  - id: parse_strategy_input
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Parse the following phase-two strategy request.
+        The input may include:
+        - a pasted discovery report
+        - the template fields below
+
+        Template fields:
+        目标平台：
+        目标市场/时区：
+        周期长度（2周或4周）：
+        总资产数（10-20）：
+        首要目标（注册 / 试用 / 认知 / 引流）：
+        品牌限制（禁用词、是否允许竞品对比、语气要求）：
+
+        If a field is missing, infer a conservative default and mark it as assumed.
+        Treat the pasted discovery report as the primary source of brand truth.
+        Keep the result under 260 words.
+        Use exactly these sections:
+
+        # Strategy Inputs
+        - Discovery source:
+        - Platforms:
+        - Market / timezone:
+        - Duration:
+        - Asset count:
+        - Primary goal:
+        - Brand constraints:
+        - Assumptions:
+
+  - id: save_strategy_inputs
+    type: assign
+    parameters:
+      target: "strategy_inputs"
+      value: "$input"
+
+  - id: build_strategy_foundation
+    type: llm_call
+    role: strategy_planner
+    parameters:
+      prompt_prefix: |
+        Build the strategy foundation for phase two.
+
+        Use the pasted discovery report embedded in this request as the brand evidence source:
+        ${variables.raw_request}
+
+        Parsed strategy inputs:
+        ${variables.strategy_inputs}
+
+        Scheduling rule:
+        - Today's date is March 12, 2026.
+        - If no start date is provided, schedule from Monday, March 16, 2026.
+        - Use exact dates and local posting times in the provided timezone.
+
+        Keep the result under 420 words.
+        Use short bullet lists only.
+        No tables.
+        No long paragraphs.
+        Keep all recommendations traceable to the discovery report.
+
+        Use exactly these sections:
+
+        # Strategy Foundation
+        ## Brand Anchors
+        ## Audience Priorities
+        ## Platform Priorities
+        ## Content Pillars
+        ## Format Guardrails
+        ## Scheduling Assumptions
+
+  - id: save_strategy_foundation
+    type: assign
+    parameters:
+      target: "strategy_foundation"
+      value: "$input"
+
+  - id: build_content_calendar
+    type: llm_call
+    role: strategy_planner
+    parameters:
+      prompt_prefix: |
+        Create a phase-two content calendar from the strategy foundation.
+
+        Discovery evidence:
+        ${variables.raw_request}
+
+        Strategy foundation:
+        ${variables.strategy_foundation}
+
+        Requirements:
+        - Build a 2 to 4 week calendar based on the requested duration.
+        - Create the requested number of assets; keep it between 10 and 20.
+        - Every item must include content type, platform, publish date, publish time, and a short description.
+        - Optimize timing for engagement using the supplied discovery benchmarks if available; otherwise use conservative platform heuristics.
+        - Use exact dates.
+        - Keep platform mix realistic.
+
+        Use exactly this markdown structure:
+
+        # Content Calendar
+        | # | Date | Time | Platform | Asset Type | Goal | Theme | Description |
+        |---|---|---|---|---|---|---|---|
+
+  - id: save_content_calendar
+    type: assign
+    parameters:
+      target: "content_calendar"
+      value: "$input"
+
+  - id: build_asset_briefs
+    type: llm_call
+    role: copywriter
+    parameters:
+      prompt_prefix: |
+        Create one concise creative brief for each item in the content calendar.
+
+        Discovery evidence:
+        ${variables.raw_request}
+
+        Strategy foundation:
+        ${variables.strategy_foundation}
+
+        Content calendar:
+        ${variables.content_calendar}
+
+        For each asset include:
+        - Asset name
+        - Platform
+        - Asset type
+        - Hook
+        - Full caption copy with CTA
+        - Theme cluster
+        - Alt text
+        - Visual style
+        - Mood
+        - Pace
+        - Text overlay
+        - Music direction
+        - Brand elements
+        - Platform format notes
+
+        Platform rules:
+        - Instagram Reels: 9:16, max 90 seconds
+        - TikTok: include a trending-audio direction, not a fabricated exact track title
+        - LinkedIn: adjust tone to professional, credible, and practical
+        - YouTube Shorts: include thumbnail notes
+
+        Keep each asset brief compact.
+        Use exactly this structure:
+
+        # Asset Briefs
+        ## Asset 1
+        - Asset name:
+        - Platform:
+        - Asset type:
+        - Hook:
+        - Caption:
+        - Theme cluster:
+        - Alt text:
+        - Visual style:
+        - Mood:
+        - Pace:
+        - Text overlay:
+        - Music direction:
+        - Brand elements:
+        - Platform format notes:
+
+        Repeat the same pattern for every asset in the calendar.
+
+  - id: save_asset_briefs
+    type: assign
+    parameters:
+      target: "asset_briefs"
+      value: "$input"
+
+  - id: build_delivery_bundle
+    type: llm_call
+    role: delivery_operator
+    parameters:
+      prompt_prefix: |
+        Produce one final markdown content strategy pack.
+
+        Discovery evidence:
+        ${variables.raw_request}
+
+        Parsed inputs:
+        ${variables.strategy_inputs}
+
+        Strategy foundation:
+        ${variables.strategy_foundation}
+
+        Content calendar:
+        ${variables.content_calendar}
+
+        Asset briefs:
+        ${variables.asset_briefs}
+
+        This is a strategy pack, not a discovery report.
+        Keep the document compact but fully usable.
+        Avoid generic filler.
+        Keep every recommendation traceable to the discovery report or the provided constraints.
+
+        Use exactly these sections:
+
+        # Content Strategy Pack
+        ## Strategy Snapshot
+        ## 内容日历
+        ## 资产创意简报
+        ## 平台副本变体
+        ## 发布时间表
+
+        Formatting rules:
+        - Strategy Snapshot: exactly 6 bullets covering brand position, audience focus, primary platforms, core message, CTA direction, and main guardrail
+        - 内容日历: paste the full markdown table from the content calendar
+        - 资产创意简报: preserve one compact subsection per asset
+        - 平台副本变体: for each asset provide one platform-ready first-line hook and one CTA-tailored caption variation
+        - 发布时间表: summarize posting cadence by week and platform in bullets
+
+  - id: save_delivery_bundle
+    type: assign
+    parameters:
+      target: "delivery_bundle_text"
+      value: "$input"
+
+  - id: build_export_slug
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short lowercase kebab-case slug for this brand strategy pack.
+        Use 2 to 5 words.
+        Return only the slug.
+
+        Strategy inputs:
+        ${variables.strategy_inputs}
+
+  - id: save_export_slug
+    type: assign
+    parameters:
+      target: "delivery_export_slug"
+      value: "$input"
+
+  - id: export_delivery_bundle
+    type: connector_call
+    role: content_exporter
+    parameters:
+      connector: marketing_markdown_export
+      stdin_mode: template
+      payload_template: |
+        {
+          "slug": "${json(variables.delivery_export_slug)}-strategy-pack",
+          "content": "${json(variables.delivery_bundle_text)}"
+        }
+      timeout_ms: "10000"
+
+  - id: save_delivery_export_result
+    type: assign
+    parameters:
+      target: "delivery_export_result"
+      value: "$input"
+
+  - id: compose_delivery_result
+    type: assign
+    parameters:
+      target: "result"
+      value: |
+        ${variables.delivery_bundle_text}
+
+        ---
+        Export:
+        ${variables.delivery_export_result}

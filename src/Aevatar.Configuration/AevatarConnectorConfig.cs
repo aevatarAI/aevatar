@@ -265,7 +265,7 @@ public static class AevatarConnectorConfig
 
     private static string ReadString(JsonElement obj, string name) =>
         TryGetPropertyIgnoreCase(obj, name, out var val) && val.ValueKind == JsonValueKind.String
-            ? val.GetString() ?? ""
+            ? ExpandEnvironmentVariables(val.GetString() ?? "")
             : "";
 
     private static int ReadInt(JsonElement obj, string name, int fallback)
@@ -300,8 +300,13 @@ public static class AevatarConnectorConfig
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var prop in val.EnumerateObject())
         {
-            map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() ?? "" : prop.Value.ToString();
+            map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
+                ? ExpandEnvironmentVariables(prop.Value.GetString() ?? "")
+                : prop.Value.ToString();
         }
         return map;
     }
+
+    private static string ExpandEnvironmentVariables(string value) =>
+        string.IsNullOrEmpty(value) ? value : Environment.ExpandEnvironmentVariables(value);
 }

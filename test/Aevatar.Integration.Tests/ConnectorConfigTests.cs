@@ -199,6 +199,46 @@ public class ConnectorConfigTests
     }
 
     [Fact]
+    public void LoadConnectors_ShouldExpandEnvironmentVariables_InStringFields()
+    {
+        const string tokenVariable = "AEVATAR_TEST_BRAVE_TOKEN";
+        const string baseUrlVariable = "AEVATAR_TEST_BRAVE_BASEURL";
+        Environment.SetEnvironmentVariable(tokenVariable, "token-from-env");
+        Environment.SetEnvironmentVariable(baseUrlVariable, "https://api.search.brave.com");
+        var path = WriteTempJson($$"""
+            {
+              "connectors": [
+                {
+                  "name": "brave_search",
+                  "type": "http",
+                  "http": {
+                    "baseUrl": "%{{baseUrlVariable}}%",
+                    "defaultHeaders": {
+                      "X-Subscription-Token": "%{{tokenVariable}}%"
+                    }
+                  }
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().ContainSingle();
+            connectors[0].Http.BaseUrl.Should().Be("https://api.search.brave.com");
+            connectors[0].Http.DefaultHeaders.Should()
+                .ContainKey("X-Subscription-Token").WhoseValue.Should().Be("token-from-env");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(tokenVariable, null);
+            Environment.SetEnvironmentVariable(baseUrlVariable, null);
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void LoadConnectors_WhenJsonInvalid_ShouldReturnEmpty()
     {
         var path = WriteTempJson("{ \"connectors\": [");

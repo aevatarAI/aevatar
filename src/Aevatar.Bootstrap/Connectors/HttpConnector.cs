@@ -95,7 +95,11 @@ public sealed class HttpConnector : IConnector
             };
         }
 
-        var targetUri = BuildTargetUri(_baseUri, normalizedPath);
+        var rawQuery = request.Parameters.TryGetValue("query", out var query) && !string.IsNullOrWhiteSpace(query)
+            ? query
+            : string.Empty;
+
+        var targetUri = BuildTargetUri(_baseUri, normalizedPath, rawQuery);
         if (!string.Equals(targetUri.Scheme, _baseUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(targetUri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase) ||
             targetUri.Port != _baseUri.Port)
@@ -207,18 +211,33 @@ public sealed class HttpConnector : IConnector
         return p;
     }
 
-    private static Uri BuildTargetUri(Uri baseUri, string normalizedPath)
+    private static Uri BuildTargetUri(Uri baseUri, string normalizedPath, string rawQuery)
     {
         if (string.IsNullOrWhiteSpace(baseUri.AbsolutePath) ||
             string.Equals(baseUri.AbsolutePath, "/", StringComparison.Ordinal))
         {
-            return new Uri(baseUri, normalizedPath);
+            var target = new Uri(baseUri, normalizedPath);
+            return ApplyQuery(target, rawQuery);
         }
 
         var combinedPath = baseUri.AbsolutePath.TrimEnd('/') + normalizedPath;
         var builder = new UriBuilder(baseUri)
         {
             Path = combinedPath,
+        };
+        if (!string.IsNullOrWhiteSpace(rawQuery))
+            builder.Query = rawQuery.TrimStart('?');
+        return builder.Uri;
+    }
+
+    private static Uri ApplyQuery(Uri target, string rawQuery)
+    {
+        if (string.IsNullOrWhiteSpace(rawQuery))
+            return target;
+
+        var builder = new UriBuilder(target)
+        {
+            Query = rawQuery.TrimStart('?'),
         };
         return builder.Uri;
     }

@@ -1,0 +1,1560 @@
+name: marketing_campaign_orchestrator
+description: Link-grounded marketing discovery workflow that exports one final evidence summary document.
+
+roles:
+  - id: request_parser
+    name: Request Parser
+    system_prompt: |
+      You parse a free-form marketing request into concise planning notes.
+      Extract brand clues, URLs, goals, channels, asset types, and any brand manual content.
+      Keep the result structured and short.
+      Match the user's language unless a step explicitly requires a token, slug, or URL.
+      Do not use emoji.
+
+  - id: source_resolver
+    name: Source Resolver
+    system_prompt: |
+      You resolve brand source URLs from parsed request context.
+      If an explicit official website URL is present, return it.
+      If no URL can be inferred, return only NONE.
+
+  - id: discovery_analyst
+    name: Discovery Analyst
+    system_prompt: |
+      You synthesize brand and content evidence into a discovery report.
+      Ignore navigation chrome, cookie banners, and repeated boilerplate.
+      Focus on positioning, audience, proof, offer, product usage patterns, competitors, content patterns, and gaps.
+      Match the user's language.
+      Do not use emoji.
+
+  - id: marketing_strategist
+    name: Marketing Strategist
+    system_prompt: |
+      You turn discovery findings into a concise, evidence-grounded market opportunity analysis.
+      Preserve brand-specific facts, claims, offers, product mechanics, and source confidence.
+      Prefer direct observations and explicit gaps over generic recommendations.
+      Match the user's language.
+      Do not use emoji.
+
+  - id: delivery_operator
+    name: Delivery Operator
+    system_prompt: |
+      You produce one final evidence-grounded markdown summary from the researched links.
+      Keep the document factual, compact, and easy to review.
+      Match the user's language unless a proper noun, UI label, or platform name should remain English.
+      Do not use emoji.
+
+  - id: content_exporter
+    name: Content Exporter
+    system_prompt: |
+      You export approved markdown artifacts through approved connectors only.
+      Return file-save details only.
+    connectors:
+      - marketing_markdown_export
+
+  - id: web_researcher
+    name: Web Researcher
+    system_prompt: |
+      You gather website evidence through approved connectors only.
+      Treat connector output as the source of truth.
+    connectors:
+      - marketing_search_mcp
+      - marketing_extract_mcp
+
+steps:
+  - id: capture_raw_input
+    type: assign
+    parameters:
+      target: "raw_request"
+      value: "$input"
+
+  - id: infer_output_language
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Determine the preferred output language for the final report from the following request.
+        Rules:
+        - If the user explicitly asks for English or says the output should be in English, return only `en`.
+        - If the user explicitly asks for Chinese or says the output should be in Chinese, return only `zh`.
+        - Otherwise, follow the dominant language of the request.
+        - Return only one token: `zh` or `en`.
+
+        Request:
+        ${variables.raw_request}
+
+  - id: save_output_language
+    type: assign
+    parameters:
+      target: "output_language"
+      value: "$input"
+
+  - id: restore_raw_request_for_parse
+    type: assign
+    parameters:
+      target: "raw_request_for_parse"
+      value: "${variables.raw_request}"
+
+  - id: parse_request
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Parse the following free-form request into concise structured planning notes.
+        Use exactly these headings:
+
+        # Parsed Request
+        - Brand:
+        - Brand URL:
+        - Brand manual:
+        - Campaign goal:
+        - Channels:
+        - Asset types:
+        - Competitor hints:
+        - Notes:
+
+  - id: save_request_brief
+    type: assign
+    parameters:
+      target: "request_brief"
+      value: "$input"
+
+  - id: resolve_brand_url
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Resolve the official brand website URL from the following parsed request.
+        If an official URL is present or strongly implied, return only the canonical URL.
+        If no URL can be inferred, return only NONE.
+        
+        Discovery context:
+        ${variables.request_brief}
+
+  - id: save_brand_url
+    type: assign
+    parameters:
+      target: "brand_url"
+      value: "$input"
+
+  - id: route_brand_source
+    type: conditional
+    parameters:
+      condition: "${eq(variables.brand_url, 'NONE')}"
+    branches:
+      true: build_brand_lookup_query
+      false: extract_homepage
+
+  - id: build_brand_lookup_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find the official website for this brand.
+        Keep it under 12 words.
+        Discovery context:
+        ${variables.request_brief}
+        Return only the query text.
+
+  - id: save_brand_lookup_query
+    type: assign
+    parameters:
+      target: "brand_lookup_query"
+      value: "$input"
+
+  - id: discover_brand_url
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.brand_lookup_query)}",
+          "search_depth": "basic",
+          "topic": "general",
+          "max_results": 5,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "20000"
+
+  - id: infer_brand_url_from_search
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Infer the single best official brand website URL from these search results.
+        Return only one canonical URL, or NONE if unclear.
+
+  - id: save_discovered_brand_url
+    type: assign
+    parameters:
+      target: "brand_url"
+      value: "$input"
+
+  - id: route_discovered_brand_source
+    type: conditional
+    parameters:
+      condition: "${eq(variables.brand_url, 'NONE')}"
+    branches:
+      true: collect_manual_brand_profile
+      false: extract_homepage
+
+  - id: collect_manual_brand_profile
+    type: human_input
+    parameters:
+      prompt: |
+        I could not confidently resolve an official brand website from the current request and search results.
+        Please provide a short fallback brand profile so discovery can continue.
+
+        Use this structure:
+        - Brand name:
+        - Product type:
+        - Tone of voice:
+        - Value proposition:
+        - Target audience:
+        - Visual identity:
+        - Official URL (if you know it):
+        - Extra notes:
+      variable: "manual_brand_profile"
+      timeout: "3600"
+      on_timeout: "fail"
+
+  - id: build_manual_research_bundle
+    type: assign
+    parameters:
+      target: "research_bundle"
+      value: |
+        Request:
+        ${variables.request_brief}
+
+        Official URL:
+        ${variables.brand_url}
+
+        Manual fallback brand profile:
+        ${variables.manual_brand_profile}
+
+        Homepage:
+        Manual fallback was used because no official URL could be resolved from the current request and search results.
+
+        Pricing:
+        Pricing page unavailable because no official URL could be resolved.
+
+        Customers:
+        Customer proof page unavailable because no official URL could be resolved.
+
+        Features:
+        Features page unavailable because no official URL could be resolved.
+    next: normalize_research_bundle
+
+  - id: extract_homepage
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_extract_mcp
+      method: POST
+      operation: /api/url/extract
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "url": "${json(variables.brand_url)}",
+          "selectors": {
+            "title": "title",
+            "headline": "h1",
+            "hero_copy": "main h1, main h2, section:first-of-type p",
+            "section_headings": "main h2, main h3",
+            "hero_cta": "main a[href*='pricing'], main a[href*='signup'], main a[href*='trial'], main button",
+            "nav_links": "header a, nav a",
+            "main_paragraphs": "main p",
+            "feature_points": "main li",
+            "faq_questions": "details summary, .faq h3, [data-faq] h3"
+          },
+          "options": {
+            "returnText": true,
+            "returnHtml": false,
+            "maxItemsPerSelector": 8
+          }
+        }
+      timeout_ms: "20000"
+
+  - id: save_homepage
+    type: assign
+    parameters:
+      target: "homepage_data"
+      value: "$input"
+
+  - id: build_pricing_page_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find the official pricing, plans, or pricing-related page for this brand.
+        Keep it under 12 words.
+        Discovery context:
+        ${variables.request_brief}
+
+        Official URL:
+        ${variables.brand_url}
+
+        Homepage evidence:
+        ${variables.homepage_data}
+        Return only the query text.
+
+  - id: save_pricing_page_query
+    type: assign
+    parameters:
+      target: "pricing_page_query"
+      value: "$input"
+
+  - id: search_pricing_page
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.pricing_page_query)}",
+          "search_depth": "basic",
+          "topic": "general",
+          "max_results": 6,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "20000"
+
+  - id: infer_pricing_page_url
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Infer the single best official pricing or plans page URL from these search results.
+        Prefer pages on the official domain.
+        Prefer canonical pricing or plans pages whose path clearly contains words such as `pricing`, `prices`, `plans`, or `plan`.
+        Do not choose trial, signup, demo, login, onboarding, or generic try pages if a clearer pricing/plans page exists on the official domain.
+        If both a trial page and a pricing/plans page are present on the official domain, choose the pricing/plans page.
+        Return only one canonical URL, or NONE if unclear.
+
+  - id: save_pricing_page_url
+    type: assign
+    parameters:
+      target: "pricing_page_url"
+      value: "$input"
+
+  - id: route_pricing_page_source
+    type: conditional
+    parameters:
+      condition: "${eq(variables.pricing_page_url, 'NONE')}"
+    branches:
+      true: mark_pricing_unavailable
+      false: extract_pricing
+
+  - id: mark_pricing_unavailable
+    type: assign
+    parameters:
+      target: "pricing_data"
+      value: |
+        Pricing page unavailable.
+        Search query: ${variables.pricing_page_query}
+        Resolved URL: ${variables.pricing_page_url}
+    next: build_customer_page_query
+
+  - id: extract_pricing
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_extract_mcp
+      method: POST
+      operation: /api/url/extract
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "url": "${json(variables.pricing_page_url)}",
+          "selectors": {
+            "title": "title",
+            "headline": "h1",
+            "pricing_headings": "main h1, main h2, main h3",
+            "pricing_paragraphs": "main p",
+            "pricing_cta": "main a[href*='signup'], main a[href*='trial'], main a[href*='pricing'], main button",
+            "pricing_points": "main li"
+          },
+          "options": {
+            "returnText": true,
+            "returnHtml": false,
+            "maxItemsPerSelector": 8
+          }
+        }
+      timeout_ms: "20000"
+
+  - id: save_pricing
+    type: assign
+    parameters:
+      target: "pricing_data"
+      value: "$input"
+    next: build_customer_page_query
+
+  - id: build_customer_page_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find the official customer stories, testimonials, reviews, or case studies page for this brand.
+        Keep it under 12 words.
+        Discovery context:
+        ${variables.request_brief}
+
+        Official URL:
+        ${variables.brand_url}
+
+        Homepage evidence:
+        ${variables.homepage_data}
+        Return only the query text.
+
+  - id: save_customer_page_query
+    type: assign
+    parameters:
+      target: "customer_page_query"
+      value: "$input"
+
+  - id: search_customer_page
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.customer_page_query)}",
+          "search_depth": "basic",
+          "topic": "general",
+          "max_results": 6,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "20000"
+
+  - id: infer_customer_page_url
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Infer the single best official customer proof page URL from these search results.
+        Prefer pages on the official domain.
+        Return only one canonical URL, or NONE if unclear.
+
+  - id: save_customer_page_url
+    type: assign
+    parameters:
+      target: "customer_page_url"
+      value: "$input"
+
+  - id: route_customer_page_source
+    type: conditional
+    parameters:
+      condition: "${eq(variables.customer_page_url, 'NONE')}"
+    branches:
+      true: mark_customers_unavailable
+      false: extract_customers
+
+  - id: mark_customers_unavailable
+    type: assign
+    parameters:
+      target: "customers_data"
+      value: |
+        Customer proof page unavailable.
+        Search query: ${variables.customer_page_query}
+        Resolved URL: ${variables.customer_page_url}
+    next: build_feature_page_query
+
+  - id: extract_customers
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_extract_mcp
+      method: POST
+      operation: /api/url/extract
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "url": "${json(variables.customer_page_url)}",
+          "selectors": {
+            "title": "title",
+            "headline": "h1",
+            "customer_headings": "main h1, main h2, main h3",
+            "customer_quotes": "blockquote, main q",
+            "customer_paragraphs": "main p",
+            "customer_cta": "main a[href*='pricing'], main a[href*='signup'], main a[href*='trial'], main button"
+          },
+          "options": {
+            "returnText": true,
+            "returnHtml": false,
+            "maxItemsPerSelector": 8
+          }
+        }
+      timeout_ms: "20000"
+
+  - id: save_customers
+    type: assign
+    parameters:
+      target: "customers_data"
+      value: "$input"
+    next: build_feature_page_query
+
+  - id: build_feature_page_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find the official features, product tour, or product capabilities page for this brand.
+        Keep it under 12 words.
+        Discovery context:
+        ${variables.request_brief}
+
+        Official URL:
+        ${variables.brand_url}
+
+        Homepage evidence:
+        ${variables.homepage_data}
+        Return only the query text.
+
+  - id: save_feature_page_query
+    type: assign
+    parameters:
+      target: "feature_page_query"
+      value: "$input"
+
+  - id: search_feature_page
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.feature_page_query)}",
+          "search_depth": "basic",
+          "topic": "general",
+          "max_results": 6,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "20000"
+
+  - id: infer_feature_page_url
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Infer the single best official product features page URL from these search results.
+        Prefer pages on the official domain.
+        Return only one canonical URL, or NONE if unclear.
+
+  - id: save_feature_page_url
+    type: assign
+    parameters:
+      target: "feature_page_url"
+      value: "$input"
+
+  - id: route_feature_page_source
+    type: conditional
+    parameters:
+      condition: "${eq(variables.feature_page_url, 'NONE')}"
+    branches:
+      true: mark_features_unavailable
+      false: extract_features
+
+  - id: mark_features_unavailable
+    type: assign
+    parameters:
+      target: "features_data"
+      value: |
+        Features page unavailable.
+        Search query: ${variables.feature_page_query}
+        Resolved URL: ${variables.feature_page_url}
+    next: build_research_bundle
+
+  - id: extract_features
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_extract_mcp
+      method: POST
+      operation: /api/url/extract
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "url": "${json(variables.feature_page_url)}",
+          "selectors": {
+            "title": "title",
+            "headline": "h1",
+            "feature_headings": "main h1, main h2, main h3",
+            "feature_paragraphs": "main p",
+            "feature_points": "main li",
+            "feature_cta": "main a, main button"
+          },
+          "options": {
+            "returnText": true,
+            "returnHtml": false,
+            "maxItemsPerSelector": 8
+          }
+        }
+      timeout_ms: "20000"
+
+  - id: save_features
+    type: assign
+    parameters:
+      target: "features_data"
+      value: "$input"
+    next: build_research_bundle
+
+  - id: build_research_bundle
+    type: assign
+    parameters:
+      target: "research_bundle"
+      value: |
+        Request:
+        ${variables.request_brief}
+
+        Official URL:
+        ${variables.brand_url}
+
+        Pricing page URL:
+        ${variables.pricing_page_url}
+
+        Homepage:
+        ${variables.homepage_data}
+
+        Pricing:
+        ${variables.pricing_data}
+
+        Customer proof page URL:
+        ${variables.customer_page_url}
+
+        Customers:
+        ${variables.customers_data}
+
+        Feature page URL:
+        ${variables.feature_page_url}
+
+        Features:
+        ${variables.features_data}
+
+    next: normalize_research_bundle
+
+  - id: normalize_research_bundle
+    type: llm_call
+    role: discovery_analyst
+    parameters:
+      prompt_prefix: |
+        Normalize the following research bundle into a concise marketing evidence pack.
+        Keep only the facts most useful for downstream reasoning and generation.
+        Keep it under 450 words.
+        Use short bullet lists only.
+        No long paragraphs and no duplicated evidence.
+        Match the user's language.
+        Do not use emoji.
+        Ignore long CTA lists, repeated testimonials, repeated nav links, and decorative slogans.
+        Prefer direct evidence over paraphrase.
+
+        Include only:
+        - official URL
+        - homepage positioning
+        - audience hints
+        - pricing signals
+        - customer proof signals
+        - feature signals
+        - key risks or gaps
+
+        Use exactly these sections:
+
+        # Research Evidence Pack
+        ## Brand
+        ## Audience Signals
+        ## Pricing Signals
+        ## Proof Signals
+        ## Feature Signals
+        ## Risks / Gaps
+
+  - id: save_research_bundle_normalized
+    type: assign
+    parameters:
+      target: "research_bundle_normalized"
+      value: "$input"
+
+  - id: build_competitor_search_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to identify 3 to 8 direct competitors for this brand.
+        Keep it under 14 words.
+        Prefer product category, audience, and positioning clues.
+        Return only the query text.
+
+        Parsed request:
+        ${variables.request_brief}
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+  - id: save_competitor_search_query
+    type: assign
+    parameters:
+      target: "competitor_search_query"
+      value: "$input"
+
+  - id: search_competitors
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_search_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_search_results
+    type: assign
+    parameters:
+      target: "competitor_search_results"
+      value: "$input"
+
+  - id: build_competitor_shortlist
+    type: llm_call
+    role: discovery_analyst
+    parameters:
+      prompt_prefix: |
+        Build a stable shortlist of direct competitors from the current brand evidence and search results.
+        Prefer 5 to 6 names.
+        Prefer mainstream direct competitors that recur across multiple current sources and overlap on project management, collaboration, client work, or pricing logic.
+        Exclude weak or edge-case alternatives when stronger recurring competitors are present.
+        Return only this format:
+
+        # Competitor Shortlist
+        - Name
+        - Name
+        - Name
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+  - id: save_competitor_shortlist
+    type: assign
+    parameters:
+      target: "competitor_shortlist"
+      value: "$input"
+
+  - id: build_competitor_social_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find public social/platform presence for the direct competitors.
+        Keep it under 16 words.
+        Prefer platform names such as LinkedIn, Instagram, TikTok, YouTube, X, or Threads when useful.
+        Use the stable shortlist below rather than introducing new competitor names.
+        Prefer official profile-style results over news articles, roundup posts, or comparison pages.
+        Return only the query text.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+  - id: save_competitor_social_query
+    type: assign
+    parameters:
+      target: "competitor_social_query"
+      value: "$input"
+
+  - id: search_competitor_social_signals
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_social_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_social_signals
+    type: assign
+    parameters:
+      target: "competitor_social_signals"
+      value: "$input"
+
+  - id: build_competitor_social_profiles_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find official competitor social profile pages.
+        Keep it under 18 words.
+        Prefer platform names such as LinkedIn, Instagram, TikTok, YouTube, X, or Threads.
+        Prefer official profile pages, company pages, channels, or handles over generic articles.
+        Use the stable shortlist below rather than introducing new competitor names.
+        Prefer query wording that surfaces URL patterns like `linkedin.com/company`, `youtube.com/@`, `instagram.com/`, `tiktok.com/@`, or `x.com/`.
+        Avoid wording that is likely to surface thought-leadership posts, personal posts, or generic comparison articles.
+        Return only the query text.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+  - id: save_competitor_social_profiles_query
+    type: assign
+    parameters:
+      target: "competitor_social_profiles_query"
+      value: "$input"
+
+  - id: search_competitor_social_profiles
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_social_profiles_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_social_profiles
+    type: assign
+    parameters:
+      target: "competitor_social_profiles"
+      value: "$input"
+
+  - id: build_competitor_recent_activity_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find recent public social activity or recent post examples for the direct competitors.
+        Keep it under 18 words.
+        Prefer queries likely to surface recent posts, channels, reels, shorts, company page updates, or creator/account activity.
+        Use the stable shortlist below rather than introducing new competitor names.
+        Prefer official company-page posts, channel uploads, or official account activity over third-party commentary.
+        Return only the query text.
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+        Competitor social/profile signals:
+        ${variables.competitor_social_profiles}
+
+  - id: save_competitor_recent_activity_query
+    type: assign
+    parameters:
+      target: "competitor_recent_activity_query"
+      value: "$input"
+
+  - id: search_competitor_recent_activity
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_recent_activity_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_recent_activity
+    type: assign
+    parameters:
+      target: "competitor_recent_activity"
+      value: "$input"
+
+  - id: build_competitor_content_examples_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find public competitor content examples, campaign pages, or social post roundups.
+        Keep it under 16 words.
+        Use the stable shortlist below rather than introducing new competitor names.
+        Return only the query text.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+        Competitor social/platform signals:
+        ${variables.competitor_social_signals}
+
+  - id: sanitize_competitor_content_examples_query
+    type: llm_call
+    role: source_resolver
+    parameters:
+      prompt_prefix: |
+        Rewrite this competitor-content search query so it uses only competitor names that appear in the stable shortlist.
+        Remove any extra competitor or vendor names that are not in the stable shortlist.
+        Keep the query under 16 words.
+        Keep content-example terms such as `campaigns`, `content`, `examples`, `roundup`, `social`, or `compare` only if useful.
+        Return only the cleaned query text.
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+  - id: save_competitor_content_examples_query
+    type: assign
+    parameters:
+      target: "competitor_content_examples_query"
+      value: "$input"
+
+  - id: search_competitor_content_examples
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_content_examples_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_content_examples
+    type: assign
+    parameters:
+      target: "competitor_content_examples"
+      value: "$input"
+
+  - id: build_competitor_native_social_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find public native social content examples for the direct competitors.
+        Keep it under 18 words.
+        Prefer platform names such as Instagram, TikTok, YouTube, LinkedIn, X, or Threads.
+        Prefer queries likely to surface official posts, reels, shorts, channel pages, or native social examples rather than generic alternatives lists.
+        Use the stable shortlist below rather than introducing new competitor names.
+        Prefer official account posts, channel uploads, or public company-page posts rather than reposts, embeds, or commentary.
+        Return only the query text.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+        Competitor social/platform signals:
+        ${variables.competitor_social_signals}
+
+  - id: save_competitor_native_social_query
+    type: assign
+    parameters:
+      target: "competitor_native_social_query"
+      value: "$input"
+
+  - id: search_competitor_native_social_examples
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.competitor_native_social_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 8,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_competitor_native_social_examples
+    type: assign
+    parameters:
+      target: "competitor_native_social_examples"
+      value: "$input"
+
+  - id: build_engagement_benchmark_query
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short search-engine query to find public social engagement benchmarks for this market.
+        Keep it under 16 words.
+        Include content types such as Reels, carousel, and single post if relevant.
+        Return only the query text.
+
+        Parsed request:
+        ${variables.request_brief}
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+  - id: save_engagement_benchmark_query
+    type: assign
+    parameters:
+      target: "engagement_benchmark_query"
+      value: "$input"
+
+  - id: search_engagement_benchmarks
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_search_mcp
+      method: POST
+      operation: /search
+      content_type: application/json
+      stdin_mode: template
+      payload_template: |
+        {
+          "query": "${json(variables.engagement_benchmark_query)}",
+          "search_depth": "advanced",
+          "topic": "general",
+          "max_results": 6,
+          "include_answer": false,
+          "include_raw_content": false
+        }
+      timeout_ms: "45000"
+
+  - id: save_engagement_benchmark_results
+    type: assign
+    parameters:
+      target: "engagement_benchmark_results"
+      value: "$input"
+
+  - id: competitor_landscape_report
+    type: llm_call
+    role: discovery_analyst
+    parameters:
+      prompt_prefix: |
+        Build a direct-competitor landscape from the brand evidence and public search results below.
+        Only include competitors that are plausibly direct based on product category, audience, or positioning overlap.
+        Prefer competitors that recur across multiple current sources, appear in official compare/alternative pages, or clearly overlap with Basecamp on small-team project management and client collaboration.
+        Use the stable shortlist as the default candidate pool for the final set unless the broader current source set clearly disproves it.
+        The final competitor set should normally be a subset of the stable shortlist; only replace a shortlist entry if a stronger direct competitor is supported by at least three current-source signals.
+        A competitor should normally appear in at least two current sources, or in one official compare/alternative page plus one additional current source, before it is treated as stable enough for the final set.
+        Prefer mainstream direct competitors over weak or edge-case alternatives when the evidence set supports stronger recurring options.
+        If a weak candidate appears only once while a stronger direct alternative appears repeatedly, drop the weak candidate.
+        Keep the final set stable and practical rather than exhaustive. Prefer 5 to 6 competitors unless the current source set clearly supports fewer or more.
+        Keep it under 500 words.
+        Use short bullets only.
+        No tables.
+        Preferred output language token: ${variables.output_language}
+        If the token is `zh`, write in Chinese.
+        If the token is `en`, write in English.
+        Do not use emoji.
+        If engagement rate, posting frequency, or platform presence is not clearly supported by the current source set, write `Unavailable from current source set`.
+        Do not invent percentages.
+        Prefer product pages, official pages, official profile pages, and clearly attributable public pages over generic listicles.
+        Keep direct observations and lightweight inference separate inside each bullet.
+        If the benchmark set includes public industry-level numbers, keep them in `Engagement Benchmark Notes` and label them clearly as public or industry benchmarks rather than competitor-specific metrics.
+        If social profiles or recent activity results clearly identify official platform pages or recent posts, prefer those signals over generic roundup articles when writing platform presence or posting-frequency clauses.
+        Treat only official profile pages, official channels, official handles, or clearly attributable platform URLs as confirmed platform presence. Ecosystem mentions, blog embeds, or generic references do not count as confirmed platform presence.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor search results:
+        ${variables.competitor_search_results}
+
+        Competitor social/platform signals:
+        ${variables.competitor_social_signals}
+
+        Competitor social profiles:
+        ${variables.competitor_social_profiles}
+
+        Competitor content examples:
+        ${variables.competitor_content_examples}
+
+        Competitor native social examples:
+        ${variables.competitor_native_social_examples}
+
+        Competitor recent activity:
+        ${variables.competitor_recent_activity}
+
+        Public benchmark signals:
+        ${variables.engagement_benchmark_results}
+
+        Use exactly these sections:
+
+        # Competitor Landscape
+        ## Direct Competitors
+        ## Engagement Benchmark Notes
+
+        Formatting rules:
+        - Direct Competitors: 3 to 8 bullets
+        - Each competitor bullet must include:
+          - competitor name
+          - why it is direct
+          - platform presence
+          - content strategy signal
+          - engagement percentage or `Unavailable from current source set`
+          - posting frequency or `Unavailable from current source set`
+          - one short evidence anchor from the current source set
+        - If `en`, each competitor bullet should follow an English shape such as:
+          - `<Name>: Direct overlap...; Platform presence: ...; Content strategy signal: ...; Engagement data: ...; Posting frequency: ...; Evidence anchor: ...`
+        - If `zh`, each competitor bullet should follow a Chinese shape such as:
+          - `<Name>：直接重叠于...；平台存在：...；内容策略信号...；互动率数据...；发帖频率数据...；证据锚点...`
+        - If you can confirm official platform accounts, channels, or company pages, state the platform names plainly and do not append `Unavailable from current source set` to the same clause
+        - If official platform pages are not clearly confirmed, write `Platform presence: Unclear from current source set`
+        - Only use a posting-frequency description such as recent, regular, intermittent, or weekly when the current source set contains explicit dated recent activity or repeated recent-activity signals; otherwise write `Unavailable from current source set`
+        - If `en`, use `Engagement data: Unavailable from current source set` only for the engagement metric field
+        - If `zh`, use `互动率数据：Unavailable from current source set` only for the engagement metric field
+        - If `en`, use `Posting frequency: Unavailable from current source set` only for the posting-frequency field
+        - If `zh`, use `发帖频率数据：Unavailable from current source set` only for the posting-frequency field
+        - Engagement Benchmark Notes: 3 to 5 bullets
+        - Engagement Benchmark Notes should prefer concrete public benchmark numbers when present in the benchmark set
+        - If `en`, each benchmark bullet should explicitly say it is a `Public industry benchmark` or `Public platform benchmark`
+        - If `zh`, each benchmark bullet should explicitly say it is a `公开行业基准` or `公开平台基准`
+
+  - id: save_competitor_landscape_report
+    type: assign
+    parameters:
+      target: "competitor_landscape_report_text"
+      value: "$input"
+
+  - id: viral_pattern_report
+    type: llm_call
+    role: discovery_analyst
+    parameters:
+      prompt_prefix: |
+        Identify effective content patterns from the competitor landscape and public search evidence.
+        Keep it under 420 words.
+        Use short bullets only.
+        No tables.
+        Preferred output language token: ${variables.output_language}
+        If the token is `zh`, write in Chinese.
+        If the token is `en`, write in English.
+        Do not use emoji.
+        If posting time, hashtag strategy, or engagement trigger is unclear from the current source set, write `Unclear from current source set`.
+        Do not invent exact timing, hashtags, or platform metrics.
+        Only include a pattern if the current source set provides at least one concrete public signal for it.
+        Separate `observed pattern` from `why it may work` and from `how to reproduce it`.
+        Prefer actual content-format observations first, especially official platform pages, native posts, reels, shorts, carousel-style posts, social documents, or recent activity evidence before falling back to comparison posts, category roundups, proof-led testimonials, list posts, or audience-specific explainer content.
+        Do not pretend there is strong short-form social evidence if the source set mainly contains public web pages or roundup articles.
+        If a bullet is based on comparison-page or roundup-page evidence rather than direct social-post evidence, say so explicitly.
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor landscape:
+        ${variables.competitor_landscape_report_text}
+
+        Raw competitor search results:
+        ${variables.competitor_search_results}
+
+        Competitor social/platform signals:
+        ${variables.competitor_social_signals}
+
+        Competitor social profiles:
+        ${variables.competitor_social_profiles}
+
+        Competitor content examples:
+        ${variables.competitor_content_examples}
+
+        Competitor native social examples:
+        ${variables.competitor_native_social_examples}
+
+        Competitor recent activity:
+        ${variables.competitor_recent_activity}
+
+        Public engagement benchmark signals:
+        ${variables.engagement_benchmark_results}
+
+        Use exactly these sections:
+
+        # Viral Pattern Report
+        ## Effective Patterns
+
+        Formatting rules:
+        - Effective Patterns: exactly 4 to 6 bullets
+        - Each bullet must include:
+          - content format
+          - evidence type (`Social/content-format observation` or `Comparison/roundup observation` for `en`; `社媒/内容格式观察` or `比较/榜单内容观察` for `zh`)
+          - hook structure
+          - posting time signal
+          - hashtag strategy signal
+          - engagement trigger
+          - why it may work
+          - how the user could reproduce it
+          - one short evidence anchor
+        - If `en`, each bullet should read like:
+          - `Observation type: ...; Observation: ...; Timing signal: ...; Hashtag signal: ...; Trigger: ...; Why it may work: ...; How to reproduce: ...; Evidence anchor: ...`
+        - If `zh`, each bullet should read like:
+          - `观察类型：...；观察：...；时间信号：...；标签信号：...；触发点：...；为何可能有效：...；复现方式：...；证据锚点：...`
+
+  - id: save_viral_pattern_report
+    type: assign
+    parameters:
+      target: "viral_pattern_report_text"
+      value: "$input"
+
+  - id: discovery_report
+    type: llm_call
+    role: discovery_analyst
+    parameters:
+      prompt_prefix: |
+        Produce a concise discovery report from the following research evidence pack.
+        Research evidence pack:
+        ${variables.research_bundle_normalized}
+
+        Competitor landscape:
+        ${variables.competitor_landscape_report_text}
+
+        Viral patterns:
+        ${variables.viral_pattern_report_text}
+
+        Competitor content examples:
+        ${variables.competitor_content_examples}
+
+        Competitor social profiles:
+        ${variables.competitor_social_profiles}
+
+        Competitor native social examples:
+        ${variables.competitor_native_social_examples}
+
+        Competitor recent activity:
+        ${variables.competitor_recent_activity}
+
+        Public benchmark signals:
+        ${variables.engagement_benchmark_results}
+
+        Keep it under 520 words.
+        Use short bullet lists only.
+        No long paragraphs.
+        Preferred output language token: ${variables.output_language}
+        If the token is `zh`, write in Chinese.
+        If the token is `en`, write in English.
+        Do not use emoji.
+        Keep this step as a factual bridge, not a polished final report.
+        Prefer direct evidence and explicit unknowns over strategic phrasing.
+        If the benchmark set contains public industry numbers, carry them forward instead of collapsing them into `Unavailable from current source set`.
+        In `Viral Content Patterns`, preserve whether a pattern came from direct social/content evidence or from comparison/roundup content evidence.
+        Use exactly these sections:
+
+        # Discovery Report
+        ## Brand Profile
+        ## Competitor Segmentation
+        ## Viral Content Patterns
+        ## Market Gaps
+
+  - id: save_discovery_report
+    type: assign
+    parameters:
+      target: "discovery_report_text"
+      value: "$input"
+
+  - id: strategy_report
+    type: llm_call
+    role: marketing_strategist
+    parameters:
+      prompt_prefix: |
+        Generate a concise market opportunity analysis from the discovery context.
+        Discovery context:
+        ${variables.discovery_report_text}
+
+        Brand evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Competitor landscape:
+        ${variables.competitor_landscape_report_text}
+
+        Viral patterns:
+        ${variables.viral_pattern_report_text}
+
+        Competitor content examples:
+        ${variables.competitor_content_examples}
+
+        Competitor social profiles:
+        ${variables.competitor_social_profiles}
+
+        Competitor native social examples:
+        ${variables.competitor_native_social_examples}
+
+        Competitor recent activity:
+        ${variables.competitor_recent_activity}
+
+        Public benchmark signals:
+        ${variables.engagement_benchmark_results}
+
+        Keep it under 420 words.
+        Use short bullet lists only.
+        No tables.
+        No long paragraphs.
+        Preferred output language token: ${variables.output_language}
+        If the token is `zh`, write in Chinese.
+        If the token is `en`, write in English.
+        Do not use emoji.
+        Avoid generic marketing phrases and generic content advice.
+        Favor explicit opportunity tags, positioning whitespace, and benchmark clarity.
+        If a benchmark is not supported by the current source set, write `Unavailable from current source set`.
+        Treat this as a discovery-stage synthesis, not a campaign plan.
+        Use `current evidence suggests` when making an inference instead of sounding absolute.
+        If public benchmark signals contain numeric industry averages or format benchmarks, keep the numeric benchmark and label it as a public industry benchmark.
+
+        Use exactly these sections:
+
+        # Opportunity Report
+        ## Market Position Map
+        ## Content Opportunity Tags
+        ## Engagement Benchmarks
+        ## Recommended Content Mix
+        ## Notes / Assumptions
+
+  - id: save_strategy_report
+    type: assign
+    parameters:
+      target: "strategy_report_text"
+      value: "$input"
+
+  - id: delivery_bundle
+    type: llm_call
+    role: delivery_operator
+    parameters:
+      prompt_prefix: |
+        Produce one final markdown brand discovery report from the provided links and extracted evidence.
+        Base the document only on the researched pages and the summarized evidence below.
+
+        Research evidence:
+        ${variables.research_bundle_normalized}
+
+        Stable competitor shortlist:
+        ${variables.competitor_shortlist}
+
+        Discovery summary:
+        ${variables.discovery_report_text}
+
+        Opportunity summary:
+        ${variables.strategy_report_text}
+
+        Competitor landscape:
+        ${variables.competitor_landscape_report_text}
+
+        Viral patterns:
+        ${variables.viral_pattern_report_text}
+
+        This is a discovery report, not an asset pack.
+        Do not generate scripts, hook libraries, platform plans, publish orders, folder structures, export notes, or generic marketing advice.
+        Keep the document under 1200 words.
+        Use short bullets only.
+        No tables.
+        No long paragraphs.
+        Preferred output language token: ${variables.output_language}
+        If the token is `zh`, write the final report in natural Chinese.
+        If the token is `en`, write the final report in natural English.
+        In either case, proper nouns, UI labels, and platform names may remain in their original form where appropriate.
+        Do not use emoji.
+        If evidence is missing, say it is unclear instead of guessing.
+        Keep every bullet traceable to the source pages.
+        Prefer concrete nouns, product mechanics, offer details, and page language from the actual source set.
+        Avoid abstract phrasing such as `strongest fit`, `clear quadrant`, `best positioned`, or `high-conviction` unless the evidence directly supports it.
+        For inferred points:
+        - if `zh`, write `当前证据表明...`
+        - if `en`, write `Current evidence suggests...`
+        Language discipline:
+        - If `zh`, use Chinese business wording for generic terms such as audience labels, positioning labels, content pattern names, and benchmark explanations.
+        - If `en`, do not switch back into Chinese for section titles, bullets, or benchmark labels.
+        - If `en`, write benchmark labels in English, for example `Public platform benchmark`, `Public industry benchmark`, `Unavailable from current source set`, and `Unclear from current source set`.
+        - If `zh`, write benchmark labels in Chinese, for example `公开平台基准`, `公开行业基准`, `Unavailable from current source set`, and `Unclear from current source set` only when the English phrase is required by the rule.
+        Keep the output useful as a summary of the provided links, not as a consultant-style narrative.
+
+        Use exactly one matching section set:
+        - If `zh`:
+          # Brand Discovery Report
+          ## 品牌简介
+          ## 竞争对手细分
+          ## 市场位置图
+          ## 病毒内容模式
+          ## 市场缺口分析
+          ## 内容机会标签
+          ## 参与度基准
+          ## 推荐内容组合
+        - If `en`:
+          # Brand Discovery Report
+          ## Brand Profile
+          ## Competitor Segmentation
+          ## Market Position Map
+          ## Viral Content Patterns
+          ## Market Gap Analysis
+          ## Content Opportunity Tags
+          ## Engagement Benchmarks
+          ## Recommended Content Mix
+
+        Formatting rules:
+        - Brand Profile / 品牌简介: exactly 6 bullets covering brand name, product type, brand tone, value proposition, target audience, and visual identity
+        - If `zh`, generic audience labels should be translated into Chinese business wording; if `en`, keep them in natural English
+        - In the visual-identity bullet, if evidence is limited, do not stop at `unclear`; add one concrete UI or page-presentation signal from the current source set
+        - Competitor Segmentation / 竞争对手细分: 3 to 8 bullets; each bullet must include competitor name, direct-overlap reason, platform presence, content strategy signal, engagement percentage or `Unavailable from current source set`, posting frequency or `Unavailable from current source set`, and one short evidence anchor
+        - Treat the stable competitor shortlist as the default final set unless the broader current evidence clearly contradicts one entry
+        - The final competitor set should normally be a subset of the stable competitor shortlist; only replace a shortlist entry if a stronger direct competitor is supported by at least three current-source signals
+        - Prioritize competitors that recur across multiple current sources and overlap clearly with Basecamp on small-team project management, client collaboration, or pricing logic
+        - Prefer stable mainstream direct competitors over edge-case alternatives when stronger recurring competitors are present in the current source set
+        - Treat platform presence as confirmed only when the current source set includes official profile pages, official channels, official handles, or clearly attributable platform URLs
+        - If official platform presence is not confirmed, say it is unclear rather than inferring from ecosystem mentions or generic roundup references
+        - Write platform presence and missing metrics as separate clauses
+        - If `en`, use an English shape such as `Platform presence: ...; Engagement data: ...; Posting frequency: ...; Evidence anchor: ...`
+        - If `zh`, use a Chinese shape such as `平台存在：...；互动率数据：...；发帖频率数据：...；证据锚点：...`
+        - Market Position Map / 市场位置图: exactly 4 bullets describing positioning axes and where the brand sits versus competitors; each bullet must include one evidence anchor from the source pages or benchmark set
+        - Viral Content Patterns / 病毒内容模式: exactly 4 to 6 bullets; each bullet must include format, observation type, hook/opening structure, timing signal, hashtag signal, engagement trigger, why it may work, how to reproduce it, and one short evidence anchor
+        - Market Gap Analysis / 市场缺口分析: exactly 4 bullets covering underserved angle, ignored audience niche, positioning opportunity, and content gap
+        - Content Opportunity Tags / 内容机会标签: exactly 5 bullets
+        - Engagement Benchmarks / 参与度基准: exactly 4 bullets covering platform average level, LinkedIn carousel or strong-performance signal, Instagram Reels signal, and carousel vs single-image or short-video difference
+        - If public benchmark signals contain numeric values, keep the numbers and label them in the output language
+        - Keep one primary metric theme per bullet
+        - Do not combine unrelated benchmarks in the same bullet
+        - If two public sources disagree, write them as a range or as `Source A ...; Source B ...`, but keep both tied to the same metric theme
+        - Prefer the same metric type or same source type within one benchmark bullet; if a number is unusually high, explicitly mark it as a format-specific benchmark, a supplementary source, or a median/average
+        - Prefer conservative and comparable benchmark phrasing; avoid presenting a format-specific high watermark as if it were the default platform average
+        - Only use `Unavailable from current source set` when the current source set truly lacks a usable public benchmark signal
+        - Recommended Content Mix / 推荐内容组合: exactly 4 bullets and keep them framed as discovery-stage recommendations tied to observed patterns and benchmark signals
+        - Keep bullets factual and specific to the brand/site
+        - No generic statements that could apply to any SaaS site
+
+  - id: save_delivery_bundle
+    type: assign
+    parameters:
+      target: "delivery_bundle_text"
+      value: "$input"
+
+  - id: build_export_slug
+    type: llm_call
+    role: request_parser
+    parameters:
+      prompt_prefix: |
+        Build a short lowercase kebab-case slug for this brand or campaign.
+        Use 2 to 5 words.
+        Return only the slug.
+
+        Discovery context:
+        ${variables.request_brief}
+
+  - id: save_export_slug
+    type: assign
+    parameters:
+      target: "delivery_export_slug"
+      value: "$input"
+
+  - id: export_delivery_bundle
+    type: connector_call
+    role: content_exporter
+    parameters:
+      connector: marketing_markdown_export
+      stdin_mode: template
+      payload_template: |
+        {
+          "slug": "${json(variables.delivery_export_slug)}",
+          "content": "${json(variables.delivery_bundle_text)}"
+        }
+      timeout_ms: "10000"
+
+  - id: save_delivery_export_result
+    type: assign
+    parameters:
+      target: "delivery_export_result"
+      value: "$input"
+
+  - id: compose_delivery_result
+    type: assign
+    parameters:
+      target: "result"
+      value: |
+        ${variables.delivery_bundle_text}
+
+        ---
+        Export:
+        ${variables.delivery_export_result}
