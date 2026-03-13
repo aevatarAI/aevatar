@@ -65,13 +65,31 @@ internal sealed class WorkflowRunCommandTarget
         if (sink == null)
             return;
 
+        Exception? firstException = null;
         if (ProjectionLease != null)
         {
-            await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+            try
+            {
+                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
         }
 
-        await CompleteAndDisposeLiveSinkAsync(sink, ct);
-        LiveSink = null;
+        try
+        {
+            await CompleteAndDisposeLiveSinkAsync(sink, ct);
+            LiveSink = null;
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
     public Task ReleaseAfterInteractionAsync(

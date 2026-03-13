@@ -162,6 +162,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
         var pipeline = new SequencedDispatchPipeline();
+        var cleanupScheduler = new RecordingDetachedCleanupScheduler();
         pipeline.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
         pipeline.EnqueueResult(
             CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
@@ -176,10 +177,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
             new WorkflowRunDetachedDispatchService(
                 pipeline,
-                new FakeDurableCompletionResolver(
-                    new CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>(
-                        true,
-                        WorkflowProjectionCompletionStatus.Completed)),
+                cleanupScheduler,
                 logger: null),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
@@ -191,8 +189,11 @@ public sealed class WorkflowRunFallbackCoverageTests
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
         pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
-        await actorPort.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
+        cleanupScheduler.Requests.Should().ContainSingle();
+        cleanupScheduler.Requests.Single().ActorId.Should().Be("actor-1");
+        cleanupScheduler.Requests.Single().WorkflowName.Should().Be("direct");
+        cleanupScheduler.Requests.Single().CommandId.Should().Be("cmd-1");
+        cleanupScheduler.Requests.Single().CreatedActorIds.Should().Equal("actor-1");
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
@@ -305,6 +306,21 @@ public sealed class WorkflowRunFallbackCoverageTests
             _ = receipt;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_observation);
+        }
+    }
+
+    private sealed class RecordingDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
+    {
+        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+
+        public Task ScheduleAsync(
+            WorkflowRunDetachedCleanupRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.CompletedTask;
         }
     }
 

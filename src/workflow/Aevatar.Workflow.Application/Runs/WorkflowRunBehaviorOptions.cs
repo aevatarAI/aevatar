@@ -43,13 +43,4 @@ public sealed class WorkflowRunBehaviorOptions
             typeof(WorkflowDirectFallbackTriggerException),
         };
 
-    /// <summary>
-    /// Maximum time one detached durable-completion observation attempt may take before it is canceled and retried in the background.
-    /// </summary>
-    public TimeSpan DetachedDurableCompletionMonitoringTimeout { get; set; } = TimeSpan.FromMinutes(5);
-
-    /// <summary>
-    /// Poll interval used by detached durable completion monitoring.
-    /// </summary>
-    public TimeSpan DetachedDurableCompletionPollInterval { get; set; } = TimeSpan.FromSeconds(1);
 }
