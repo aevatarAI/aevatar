@@ -133,6 +133,18 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
     private async Task ReplayEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
+        try
+        {
+            await Services
+                .GetRequiredService<IProjectionOwnershipCoordinator>()
+                .AcquireAsync(entry.ActorId, entry.CommandId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            await ScheduleRetryAsync(entry, ex);
+            return;
+        }
+
         WorkflowActorSnapshot? snapshot;
         try
         {

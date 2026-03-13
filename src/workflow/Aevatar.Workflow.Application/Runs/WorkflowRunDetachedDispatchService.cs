@@ -34,13 +34,9 @@ internal sealed class WorkflowRunDetachedDispatchService
 
         var execution = dispatch.Target;
         await DetachLiveObservationAsync(execution.Target, execution.Receipt, ct);
-        await _cleanupScheduler.ScheduleAsync(
-            new WorkflowRunDetachedCleanupRequest(
-                execution.Target.ActorId,
-                execution.Target.WorkflowName,
-                execution.Receipt.CommandId,
-                execution.Target.CreatedActorIds),
-            ct);
+        if (await TryScheduleDetachedCleanupAsync(execution.Target, execution.Receipt, ct))
+            await ReleaseDetachedSessionOwnershipAsync(execution.Target, execution.Receipt);
+
         return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(execution.Receipt);
     }
 
@@ -58,6 +54,51 @@ internal sealed class WorkflowRunDetachedDispatchService
             _logger.LogWarning(
                 ex,
                 "Detached workflow run live observation detach failed. actorId={ActorId}, commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+    }
+
+    private async Task<bool> TryScheduleDetachedCleanupAsync(
+        WorkflowRunCommandTarget target,
+        WorkflowChatRunAcceptedReceipt receipt,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _cleanupScheduler.ScheduleAsync(
+                new WorkflowRunDetachedCleanupRequest(
+                    target.ActorId,
+                    target.WorkflowName,
+                    receipt.CommandId,
+                    target.CreatedActorIds),
+                ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Detached workflow cleanup scheduling failed after dispatch acceptance. actorId={ActorId}, commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+            return false;
+        }
+    }
+
+    private async Task ReleaseDetachedSessionOwnershipAsync(
+        WorkflowRunCommandTarget target,
+        WorkflowChatRunAcceptedReceipt receipt)
+    {
+        try
+        {
+            await target.ReleaseDetachedSessionOwnershipAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Detached workflow projection ownership transfer failed. actorId={ActorId}, commandId={CommandId}",
                 receipt.ActorId,
                 receipt.CommandId);
         }

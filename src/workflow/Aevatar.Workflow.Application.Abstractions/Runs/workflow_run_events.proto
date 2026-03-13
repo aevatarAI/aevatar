@@ -148,7 +148,6 @@ message WorkflowStepCompletedCustomPayload {
   string branch_key = 8;
   string assigned_variable = 9;
   string assigned_value = 10;
-  map<string, string> metadata = 11;
 }
 
 message WorkflowReasoningCustomPayload {

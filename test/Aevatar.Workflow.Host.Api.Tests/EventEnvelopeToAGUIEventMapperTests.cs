@@ -60,6 +60,35 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void StepCompletedEvent_ShouldExposeTypedFieldsWithoutMetadataMirror()
+    {
+        var events = CreateMapper().Map(Wrap(new StepCompletedEvent
+        {
+            RunId = "run-1",
+            StepId = "branch",
+            Success = true,
+            Output = "done",
+            NextStepId = "publish",
+            BranchKey = "approved",
+            AssignedVariable = "result",
+            AssignedValue = "done",
+            Annotations =
+            {
+                ["source"] = "tests",
+            },
+        }));
+
+        events.Should().HaveCount(2);
+        events[1].Custom.Name.Should().Be("aevatar.step.completed");
+        var payload = events[1].Custom.Payload.Unpack<WorkflowStepCompletedCustomPayload>();
+        payload.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        payload.NextStepId.Should().Be("publish");
+        payload.BranchKey.Should().Be("approved");
+        payload.AssignedVariable.Should().Be("result");
+        payload.AssignedValue.Should().Be("done");
+    }
+
+    [Fact]
     public void ChatResponseEvent_ShouldMapToFullTextSequence()
     {
         var envelope = Wrap(new ChatResponseEvent
@@ -151,6 +180,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         suspended[0].Custom.Name.Should().Be("aevatar.human_input.request");
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
         request.VariableName.Should().Be("user_context");
+        request.Metadata.Should().NotContainKey("variable");
 
         waiting.Should().ContainSingle();
         waiting[0].Custom.Name.Should().Be("aevatar.workflow.waiting_signal");

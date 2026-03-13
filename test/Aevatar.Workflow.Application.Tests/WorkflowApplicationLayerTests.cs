@@ -171,7 +171,15 @@ public sealed class WorkflowApplicationLayerTests
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var cleanupScheduler = new FakeDetachedCleanupScheduler();
+        var target = CreateBoundTarget(
+            projectionPort,
+            actorPort,
+            "actor-1",
+            "direct",
+            "cmd-1",
+            ["definition-1", "actor-1"],
+            cleanupScheduler);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = CreateInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
@@ -187,7 +195,11 @@ public sealed class WorkflowApplicationLayerTests
 
         result.Succeeded.Should().BeTrue();
         result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Unknown, false));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
+        cleanupScheduler.Requests.Should().ContainSingle();
+        target.ProjectionLease.Should().BeNull();
     }
 
     [Fact]
@@ -232,6 +244,7 @@ public sealed class WorkflowApplicationLayerTests
         scheduler.Requests.Single().WorkflowName.Should().Be("direct");
         scheduler.Requests.Single().CommandId.Should().Be("cmd-1");
         scheduler.Requests.Single().CreatedActorIds.Should().Equal("definition-1", "actor-1");
+        target.ProjectionLease.Should().BeNull();
     }
 
     [Fact]
@@ -251,6 +264,7 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeTrue();
         projectionPort.DetachCalls.Should().ContainSingle();
         scheduler.Requests.Should().ContainSingle();
+        target.ProjectionLease.Should().BeNull();
     }
 
     [Fact]
@@ -277,10 +291,11 @@ public sealed class WorkflowApplicationLayerTests
         actorPort.DestroyCalls.Should().BeEmpty();
         scheduler.Requests.Should().ContainSingle();
         target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeNull();
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldBubble_WhenDurableCleanupCannotBeScheduled()
+    public async Task DetachedCommandDispatchService_ShouldReturnSuccess_WhenDurableCleanupCannotBeScheduled()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -290,11 +305,12 @@ public sealed class WorkflowApplicationLayerTests
             new FakeDispatchPipeline { Result = Success(target, receipt) },
             new ThrowingDetachedCleanupScheduler(new InvalidOperationException("schedule failed")));
 
-        var act = async () => await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("schedule failed");
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(receipt);
         projectionPort.DetachCalls.Should().ContainSingle();
+        target.ProjectionLease.Should().NotBeNull();
     }
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
@@ -336,14 +352,16 @@ public sealed class WorkflowApplicationLayerTests
         string actorId,
         string workflowName,
         string commandId,
-        IReadOnlyList<string>? createdActorIds = null)
+        IReadOnlyList<string>? createdActorIds = null,
+        IWorkflowRunDetachedCleanupScheduler? cleanupScheduler = null)
     {
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
             workflowName,
             createdActorIds ?? [],
             projectionPort,
-            actorPort);
+            actorPort,
+            cleanupScheduler ?? new FakeDetachedCleanupScheduler());
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
@@ -585,7 +603,7 @@ public sealed class WorkflowApplicationLayerTests
         }
     }
 
-    private sealed class FakeProjectionLease : IWorkflowExecutionProjectionLease
+    private sealed class FakeProjectionLease : IWorkflowExecutionProjectionOwnershipLease
     {
         public FakeProjectionLease(string actorId, string commandId)
         {
@@ -597,6 +615,14 @@ public sealed class WorkflowApplicationLayerTests
         public string CommandId { get; }
         public bool LiveSinkAttached { get; set; } = true;
         public bool Released { get; set; }
+
+        public int OwnershipHeartbeatStopCalls { get; private set; }
+
+        public ValueTask StopOwnershipHeartbeatAsync()
+        {
+            OwnershipHeartbeatStopCalls++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

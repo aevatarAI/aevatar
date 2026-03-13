@@ -134,21 +134,6 @@ public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEv
         var annotations = new Dictionary<string, string>();
         foreach (var (key, value) in evt.Annotations)
             annotations[key] = value;
-        var metadata = new Dictionary<string, string>(annotations, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(evt.NextStepId))
-            metadata["nextStepId"] = evt.NextStepId;
-        if (!string.IsNullOrWhiteSpace(evt.BranchKey))
-            metadata["branchKey"] = evt.BranchKey;
-        if (!string.IsNullOrWhiteSpace(evt.AssignedVariable))
-        {
-            metadata["assignedVariable"] = evt.AssignedVariable;
-            metadata["assign.target"] = evt.AssignedVariable;
-        }
-        if (!string.IsNullOrWhiteSpace(evt.AssignedValue))
-        {
-            metadata["assignedValue"] = evt.AssignedValue;
-            metadata["assign.value"] = evt.AssignedValue;
-        }
         events =
         [
             new WorkflowRunEventEnvelope
@@ -177,7 +162,6 @@ public sealed class StepCompletedRunEventEnvelopeMappingHandler : IWorkflowRunEv
                         BranchKey = evt.BranchKey,
                         AssignedVariable = evt.AssignedVariable,
                         AssignedValue = evt.AssignedValue,
-                        Metadata = { metadata },
                     }),
                 },
             },
@@ -485,8 +469,6 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (key, value) in evt.Metadata)
             metadata[key] = value;
-        if (!string.IsNullOrWhiteSpace(evt.VariableName))
-            metadata["variable"] = evt.VariableName;
 
         events =
         [

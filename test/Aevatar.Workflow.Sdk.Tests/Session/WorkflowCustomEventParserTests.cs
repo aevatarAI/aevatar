@@ -53,6 +53,28 @@ public sealed class WorkflowCustomEventParserTests
     }
 
     [Fact]
+    public void TryParseStepCompleted_ShouldReturnTypedControlFields()
+    {
+        var frame = new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.StepCompleted,
+            Value = ParseObject("""{"runId":"run-1","stepId":"branch-1","success":true,"output":"done","annotations":{"source":"tests"},"nextStepId":"publish","branchKey":"approved","assignedVariable":"result","assignedValue":"done"}"""),
+        };
+
+        var ok = WorkflowCustomEventParser.TryParseStepCompleted(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.RunId.Should().Be("run-1");
+        data.StepId.Should().Be("branch-1");
+        data.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+        data.NextStepId.Should().Be("publish");
+        data.BranchKey.Should().Be("approved");
+        data.AssignedVariable.Should().Be("result");
+        data.AssignedValue.Should().Be("done");
+    }
+
+    [Fact]
     public void TryParseHumanInputRequest_WhenEventNameMismatch_ShouldReturnFalse()
     {
         var frame = new WorkflowOutputFrame
@@ -65,6 +87,24 @@ public sealed class WorkflowCustomEventParserTests
         var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out _);
 
         ok.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryParseHumanInputRequest_ShouldReturnTypedVariableWithoutMetadataMirror()
+    {
+        var frame = new WorkflowOutputFrame
+        {
+            Type = WorkflowEventTypes.Custom,
+            Name = WorkflowCustomEventNames.HumanInputRequest,
+            Value = ParseObject("""{"runId":"run-1","stepId":"approve","suspensionType":"human_input","prompt":"approve?","timeoutSeconds":30,"variableName":"decision","metadata":{"secure":"true"}}"""),
+        };
+
+        var ok = WorkflowCustomEventParser.TryParseHumanInputRequest(frame, out var data);
+
+        ok.Should().BeTrue();
+        data.VariableName.Should().Be("decision");
+        data.Metadata.Should().ContainKey("secure").WhoseValue.Should().Be("true");
+        data.Metadata.Should().NotContainKey("variable");
     }
 
     [Fact]

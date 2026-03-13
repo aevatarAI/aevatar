@@ -29,7 +29,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateTarget(projectionPort, actorPort, ["definition-1", "run-1"]);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1", "run-1"]);
         target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
         var detached = false;
 
@@ -45,6 +48,34 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         detached.Should().BeTrue();
         projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
         actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReleaseAfterInteractionAsync_WhenNonTerminal_ShouldScheduleDetachedCleanupAndTransferOwnership()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var cleanupScheduler = new FakeDetachedCleanupScheduler();
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            cleanupScheduler: cleanupScheduler,
+            createdActorIds: ["definition-1", "run-1"]);
+        var lease = new FakeProjectionLease("run-1", "cmd-1");
+        target.BindLiveObservation(lease, new FakeEventSink());
+
+        await target.ReleaseAfterInteractionAsync(
+            new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
+            new Aevatar.CQRS.Core.Abstractions.Interactions.CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                false,
+                WorkflowProjectionCompletionStatus.Unknown,
+                Aevatar.CQRS.Core.Abstractions.Interactions.CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
+            CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:run-1");
+        cleanupScheduler.Requests.Should().ContainSingle();
+        cleanupScheduler.Requests.Single().ActorId.Should().Be("run-1");
+        lease.OwnershipHeartbeatStopCalls.Should().Be(1);
         target.ProjectionLease.Should().BeNull();
         target.LiveSink.Should().BeNull();
     }
@@ -93,7 +124,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         {
             DestroyException = new InvalidOperationException("destroy failed"),
         };
-        var target = CreateTarget(projectionPort, actorPort, ["definition-1"]);
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            createdActorIds: ["definition-1"]);
         target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
 
         var act = async () => await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
@@ -167,13 +201,15 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     private static WorkflowRunCommandTarget CreateTarget(
         FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
+        FakeDetachedCleanupScheduler? cleanupScheduler = null,
         IReadOnlyList<string>? createdActorIds = null) =>
         new(
             new FakeActor("run-1"),
             "direct",
             createdActorIds ?? [],
             projectionPort ?? new FakeProjectionPort(),
-            actorPort ?? new FakeWorkflowRunActorPort());
+            actorPort ?? new FakeWorkflowRunActorPort(),
+            cleanupScheduler ?? new FakeDetachedCleanupScheduler());
 
     private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
@@ -205,10 +241,28 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         }
     }
 
-    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease
+    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionOwnershipLease
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
+        public int OwnershipHeartbeatStopCalls { get; private set; }
+
+        public ValueTask StopOwnershipHeartbeatAsync()
+        {
+            OwnershipHeartbeatStopCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
+    {
+        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+
+        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>

@@ -208,7 +208,8 @@ public sealed class WorkflowRunFallbackCoverageTests
             workflowName,
             [actorId],
             projectionPort,
-            actorPort);
+            actorPort,
+            new RecordingDetachedCleanupScheduler());
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }

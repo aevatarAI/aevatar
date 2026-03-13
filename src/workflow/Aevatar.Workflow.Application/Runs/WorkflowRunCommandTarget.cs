@@ -16,6 +16,7 @@ internal sealed class WorkflowRunCommandTarget
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -23,7 +24,8 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
@@ -32,6 +34,7 @@ internal sealed class WorkflowRunCommandTarget
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
 
     public IActor Actor { get; }
@@ -95,14 +98,8 @@ internal sealed class WorkflowRunCommandTarget
     public Task ReleaseAfterInteractionAsync(
         WorkflowChatRunAcceptedReceipt receipt,
         CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(receipt);
-        ArgumentNullException.ThrowIfNull(cleanup);
-
-        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
-        return ReleaseAsync(destroyCreatedActors: destroyCreatedActors, ct: ct);
-    }
+        CancellationToken ct = default) =>
+        ReleaseAfterInteractionCoreAsync(receipt, cleanup, ct);
 
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,
@@ -175,6 +172,18 @@ internal sealed class WorkflowRunCommandTarget
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
+    public async Task ReleaseDetachedSessionOwnershipAsync()
+    {
+        var projectionLease = ProjectionLease;
+        if (projectionLease == null)
+            return;
+
+        if (projectionLease is IWorkflowExecutionProjectionOwnershipLease ownershipLease)
+            await ownershipLease.StopOwnershipHeartbeatAsync();
+
+        ProjectionLease = null;
+    }
+
     private static async Task CompleteAndDisposeLiveSinkAsync(
         IEventSink<WorkflowRunEventEnvelope> sink,
         CancellationToken ct)
@@ -240,4 +249,35 @@ internal sealed class WorkflowRunCommandTarget
                 ? failures[0]
                 : new AggregateException("Workflow actor cleanup failed.", failures)).Throw();
     }
+
+    private async Task ReleaseAfterInteractionCoreAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(cleanup);
+
+        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
+        if (destroyCreatedActors)
+        {
+            await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+            return;
+        }
+
+        await DetachLiveObservationAsync(ct);
+        await ScheduleDetachedCleanupAsync(receipt, ct);
+        await ReleaseDetachedSessionOwnershipAsync();
+    }
+
+    private Task ScheduleDetachedCleanupAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CancellationToken ct) =>
+        _cleanupScheduler.ScheduleAsync(
+            new WorkflowRunDetachedCleanupRequest(
+                receipt.ActorId,
+                WorkflowName,
+                receipt.CommandId,
+                CreatedActorIds),
+            ct);
 }

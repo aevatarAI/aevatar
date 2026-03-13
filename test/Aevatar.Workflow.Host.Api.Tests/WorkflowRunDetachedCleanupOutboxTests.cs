@@ -106,6 +106,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         lifecycle.StopCalls.Should().ContainSingle();
         lifecycle.StopCalls[0].RootActorId.Should().Be("actor-1");
         lifecycle.StopCalls[0].CommandId.Should().Be("cmd-1");
+        ownershipCoordinator.AcquireCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
         ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
@@ -143,6 +144,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         entry.AttemptCount.Should().Be(0);
         lifecycle.StopCalls.Should().BeEmpty();
         readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        ownershipCoordinator.AcquireCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
     }
@@ -361,9 +363,14 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
     private sealed class RecordingOwnershipCoordinator : IProjectionOwnershipCoordinator
     {
+        public List<(string ActorId, string CommandId)> AcquireCalls { get; } = [];
         public List<(string ActorId, string CommandId)> ReleaseCalls { get; } = [];
 
-        public Task AcquireAsync(string scopeId, string sessionId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AcquireAsync(string scopeId, string sessionId, CancellationToken ct = default)
+        {
+            AcquireCalls.Add((scopeId, sessionId));
+            return Task.CompletedTask;
+        }
 
         public Task<bool> HasActiveLeaseAsync(string scopeId, string sessionId, CancellationToken ct = default) =>
             Task.FromResult(false);

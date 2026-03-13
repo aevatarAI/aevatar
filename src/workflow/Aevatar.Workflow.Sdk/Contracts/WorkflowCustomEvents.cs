@@ -38,6 +38,11 @@ public sealed record WorkflowStepCompletedEventData
     public bool? Success { get; init; }
     public string? Output { get; init; }
     public string? Error { get; init; }
+    public IDictionary<string, string>? Annotations { get; init; }
+    public string? NextStepId { get; init; }
+    public string? BranchKey { get; init; }
+    public string? AssignedVariable { get; init; }
+    public string? AssignedValue { get; init; }
 }
 
 public sealed record WorkflowHumanInputRequestEventData
@@ -47,6 +52,7 @@ public sealed record WorkflowHumanInputRequestEventData
     public string? SuspensionType { get; init; }
     public string? Prompt { get; init; }
     public int? TimeoutSeconds { get; init; }
+    public string? VariableName { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 
@@ -136,6 +142,11 @@ public static class WorkflowCustomEventParser
             Success = TryReadBoolean(obj, "success", "Success"),
             Output = WorkflowSdkJson.TryReadString(obj, "output", "Output"),
             Error = WorkflowSdkJson.TryReadString(obj, "error", "Error"),
+            Annotations = TryReadStringMap(obj, "annotations", "Annotations"),
+            NextStepId = WorkflowSdkJson.TryReadString(obj, "nextStepId", "NextStepId"),
+            BranchKey = WorkflowSdkJson.TryReadString(obj, "branchKey", "BranchKey"),
+            AssignedVariable = WorkflowSdkJson.TryReadString(obj, "assignedVariable", "AssignedVariable"),
+            AssignedValue = WorkflowSdkJson.TryReadString(obj, "assignedValue", "AssignedValue"),
         };
         return true;
     }
@@ -158,6 +169,7 @@ public static class WorkflowCustomEventParser
             SuspensionType = WorkflowSdkJson.TryReadString(obj, "suspensionType", "SuspensionType"),
             Prompt = WorkflowSdkJson.TryReadString(obj, "prompt", "Prompt"),
             TimeoutSeconds = TryReadInt(obj, "timeoutSeconds", "TimeoutSeconds"),
+            VariableName = WorkflowSdkJson.TryReadString(obj, "variableName", "VariableName"),
             Metadata = TryReadStringMap(obj, "metadata", "Metadata"),
         };
         return true;

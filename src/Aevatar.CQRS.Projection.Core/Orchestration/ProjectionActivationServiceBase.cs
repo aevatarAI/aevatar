@@ -33,20 +33,26 @@ public abstract class ProjectionActivationServiceBase<TRuntimeLease, TContext, T
             commandId,
             ct);
 
+        TContext? context = null;
+        var started = false;
         try
         {
-            var context = CreateContext(
+            context = CreateContext(
                 rootEntityId,
                 projectionName,
                 input,
                 commandId,
                 ct);
             await _lifecycle.StartAsync(context, ct);
+            started = true;
             await OnStartedAsync(rootEntityId, commandId, context, ct);
             return CreateRuntimeLease(context);
         }
         catch
         {
+            if (started && context != null)
+                await TryStopStartedContextAsync(context);
+
             await CleanupOnStartFailureAsync(rootEntityId, commandId);
             throw;
         }
@@ -77,4 +83,16 @@ public abstract class ProjectionActivationServiceBase<TRuntimeLease, TContext, T
         CancellationToken ct);
 
     protected abstract TRuntimeLease CreateRuntimeLease(TContext context);
+
+    private async Task TryStopStartedContextAsync(TContext context)
+    {
+        try
+        {
+            await _lifecycle.StopAsync(context, CancellationToken.None);
+        }
+        catch
+        {
+            // Preserve the original startup failure; ownership cleanup will still run next.
+        }
+    }
 }

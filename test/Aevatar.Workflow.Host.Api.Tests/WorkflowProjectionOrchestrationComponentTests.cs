@@ -67,6 +67,36 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task ActivationService_WhenPostStartRefreshFails_ShouldStopStartedProjectionAndReleaseOwnership()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var ownership = new TrackingOwnershipCoordinator();
+        var readModelUpdater = new RecordingReadModelUpdater
+        {
+            RefreshMetadataException = new InvalidOperationException("refresh failed"),
+        };
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            ownership,
+            readModelUpdater);
+
+        var act = async () => await activationService.EnsureAsync(
+            "actor-refresh-fail",
+            "direct",
+            "hello",
+            "cmd-refresh-fail",
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("refresh failed");
+        lifecycle.StartedContexts.Should().ContainSingle();
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-refresh-fail", "cmd-refresh-fail"));
+        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-refresh-fail", "cmd-refresh-fail"));
+    }
+
+    [Fact]
     public async Task ActivationAndReleaseServices_ShouldRenewOwnershipLease_AndStopHeartbeatBeforeRelease()
     {
         var lifecycle = new RecordingLifecycleService();
@@ -860,6 +890,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         public List<(string ActorId, WorkflowExecutionProjectionContext Context)> Refreshed { get; } = [];
         public List<string> MarkStoppedActorIds { get; } = [];
+        public Exception? RefreshMetadataException { get; set; }
         public Exception? MarkStoppedException { get; set; }
 
         public Task RefreshMetadataAsync(
@@ -869,6 +900,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             ct.ThrowIfCancellationRequested();
             Refreshed.Add((actorId, context));
+            if (RefreshMetadataException != null)
+                throw RefreshMetadataException;
             return Task.CompletedTask;
         }
 

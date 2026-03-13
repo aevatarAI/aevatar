@@ -8,7 +8,7 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionRuntimeLease
     : ProjectionRuntimeLeaseBase<IEventSink<WorkflowRunEventEnvelope>>,
-      IWorkflowExecutionProjectionLease,
+      IWorkflowExecutionProjectionOwnershipLease,
       IProjectionPortSessionLease
 {
     private readonly CancellationTokenSource? _ownershipHeartbeatCts;
