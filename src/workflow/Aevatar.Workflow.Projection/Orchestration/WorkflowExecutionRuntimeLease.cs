@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -19,6 +20,9 @@ public sealed class WorkflowExecutionRuntimeLease
     private readonly Task? _projectionReleaseListenerTask;
     private readonly TaskCompletionSource<bool> _projectionReleaseListenerReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly IProjectionOwnershipCoordinator? _ownershipCoordinator;
+    private readonly IProjectionSessionEventHub<WorkflowProjectionControlEvent>? _projectionControlHub;
+    private readonly IWorkflowProjectionReadModelUpdater? _readModelUpdater;
     private readonly ILogger<WorkflowExecutionRuntimeLease> _logger;
     private int _ownershipHeartbeatStopped;
     private int _projectionReleaseListenerStopped;
@@ -30,11 +34,15 @@ public sealed class WorkflowExecutionRuntimeLease
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
+        IWorkflowProjectionReadModelUpdater? readModelUpdater = null,
         ILogger<WorkflowExecutionRuntimeLease>? logger = null)
         : base(context.RootActorId)
     {
         Context = context;
         CommandId = context.CommandId;
+        _ownershipCoordinator = ownershipCoordinator;
+        _projectionControlHub = projectionControlHub;
+        _readModelUpdater = readModelUpdater;
         _logger = logger ?? NullLogger<WorkflowExecutionRuntimeLease>.Instance;
 
         if (ownershipCoordinator == null)
@@ -198,6 +206,8 @@ public sealed class WorkflowExecutionRuntimeLease
         try
         {
             await lifecycle.StopAsync(Context, CancellationToken.None).ConfigureAwait(false);
+            await FinalizeProjectionReleaseAsync().ConfigureAwait(false);
+            await TryPublishReleaseCompletedAsync().ConfigureAwait(false);
             if (_projectionReleaseListenerCts != null &&
                 Interlocked.Exchange(ref _projectionReleaseListenerStopped, 1) == 0)
             {
@@ -210,6 +220,78 @@ public sealed class WorkflowExecutionRuntimeLease
             _logger.LogWarning(
                 ex,
                 "Workflow projection release request handling failed. actorId={ActorId}, commandId={CommandId}",
+                ActorId,
+                CommandId);
+        }
+    }
+
+    private async Task FinalizeProjectionReleaseAsync()
+    {
+        Exception? firstException = null;
+
+        try
+        {
+            await StopOwnershipHeartbeatAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        if (_readModelUpdater != null)
+        {
+            try
+            {
+                await _readModelUpdater.MarkStoppedAsync(ActorId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
+        if (_ownershipCoordinator != null)
+        {
+            try
+            {
+                await _ownershipCoordinator.ReleaseAsync(ActorId, CommandId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private async Task TryPublishReleaseCompletedAsync()
+    {
+        if (_projectionControlHub == null)
+            return;
+
+        try
+        {
+            await _projectionControlHub.PublishAsync(
+                    ActorId,
+                    CommandId,
+                    new WorkflowProjectionControlEvent
+                    {
+                        ReleaseCompleted = new WorkflowProjectionReleaseCompletedEvent
+                        {
+                            ActorId = ActorId,
+                            CommandId = CommandId,
+                        },
+                    },
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow projection release completion publish failed. actorId={ActorId}, commandId={CommandId}",
                 ActorId,
                 CommandId);
         }

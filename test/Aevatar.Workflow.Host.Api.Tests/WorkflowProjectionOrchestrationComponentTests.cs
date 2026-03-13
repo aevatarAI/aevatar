@@ -907,7 +907,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         string actorId,
         string commandId,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
-        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null) => new(
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
+        IProjectionOwnershipCoordinator? ownershipCoordinator = null,
+        IWorkflowProjectionReadModelUpdater? readModelUpdater = null) => new(
         new WorkflowExecutionProjectionContext
         {
             ProjectionId = actorId,
@@ -917,8 +919,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             Input = "hello",
             StartedAt = DateTimeOffset.UtcNow,
         },
+        ownershipCoordinator: ownershipCoordinator,
         lifecycle: lifecycle,
-        projectionControlHub: projectionControlHub);
+        projectionControlHub: projectionControlHub,
+        readModelUpdater: readModelUpdater);
 
     private static WorkflowRunEventEnvelope BuildRunStartedEvent(string threadId) =>
         new()

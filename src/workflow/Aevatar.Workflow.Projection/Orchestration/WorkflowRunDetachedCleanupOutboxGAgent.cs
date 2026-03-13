@@ -147,18 +147,6 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
     private async Task ReplayEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
-        try
-        {
-            await Services
-                .GetRequiredService<IProjectionOwnershipCoordinator>()
-                .AcquireAsync(entry.ActorId, entry.CommandId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            await ScheduleRetryAsync(entry, ex);
-            return;
-        }
-
         WorkflowActorSnapshot? snapshot;
         try
         {
@@ -176,7 +164,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         {
             try
             {
-                await CompleteEntryAsync(entry);
+                await CompleteDirectEntryAsync(entry);
             }
             catch (Exception ex)
             {
@@ -191,7 +179,17 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         try
         {
-            await CompleteEntryAsync(entry);
+            if (RequiresProjectionRelease(snapshot))
+            {
+                await Services
+                    .GetRequiredService<IProjectionOwnershipCoordinator>()
+                    .AcquireAsync(entry.ActorId, entry.CommandId, CancellationToken.None);
+                await CompleteReleasedEntryAsync(entry);
+            }
+            else
+            {
+                await CompleteDirectEntryAsync(entry);
+            }
         }
         catch (Exception ex)
         {
@@ -199,34 +197,12 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         }
     }
 
-    private async Task CleanupAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    private async Task FinalizeDetachedCleanupAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
-        var projectionControlHub = Services.GetRequiredService<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
         var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
         var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
-        var actorPort = Services.GetRequiredService<IWorkflowRunActorPort>();
 
         Exception? firstException = null;
-
-        try
-        {
-            await projectionControlHub.PublishAsync(
-                entry.ActorId,
-                entry.CommandId,
-                new WorkflowProjectionControlEvent
-                {
-                    ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
-                    {
-                        ActorId = entry.ActorId,
-                        CommandId = entry.CommandId,
-                    },
-                },
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            firstException ??= ex;
-        }
 
         try
         {
@@ -245,6 +221,25 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         {
             firstException ??= ex;
         }
+
+        try
+        {
+            await DestroyCreatedActorsAsync(entry);
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private async Task DestroyCreatedActorsAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        var actorPort = Services.GetRequiredService<IWorkflowRunActorPort>();
+
+        Exception? firstException = null;
 
         foreach (var actorId in entry.CreatedActorIds
                      .Where(static x => !string.IsNullOrWhiteSpace(x))
@@ -267,9 +262,64 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
-    private async Task CompleteEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    private async Task RequestProjectionReleaseAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
-        await CleanupAsync(entry);
+        var projectionControlHub = Services.GetRequiredService<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
+        var options = Services.GetRequiredService<WorkflowExecutionProjectionOptions>();
+        var releaseCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var subscription = await projectionControlHub.SubscribeAsync(
+            entry.ActorId,
+            entry.CommandId,
+            evt =>
+            {
+                if (evt.EventCase != WorkflowProjectionControlEvent.EventOneofCase.ReleaseCompleted)
+                    return ValueTask.CompletedTask;
+
+                var completed = evt.ReleaseCompleted;
+                if (completed == null ||
+                    !string.Equals(completed.ActorId, entry.ActorId, StringComparison.Ordinal) ||
+                    !string.Equals(completed.CommandId, entry.CommandId, StringComparison.Ordinal))
+                {
+                    return ValueTask.CompletedTask;
+                }
+
+                releaseCompleted.TrySetResult(true);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await projectionControlHub.PublishAsync(
+            entry.ActorId,
+            entry.CommandId,
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = entry.ActorId,
+                    CommandId = entry.CommandId,
+                },
+            },
+            CancellationToken.None);
+
+        var timeout = TimeSpan.FromMilliseconds(Math.Max(100, options.DetachedCleanupReleaseAckTimeoutMs));
+        await releaseCompleted.Task.WaitAsync(timeout);
+    }
+
+    private async Task CompleteDirectEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        await FinalizeDetachedCleanupAsync(entry);
+        await PersistDomainEventAsync(new WorkflowRunDetachedCleanupSucceededEvent
+        {
+            RecordId = entry.RecordId,
+            CompletedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+    }
+
+    private async Task CompleteReleasedEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        await RequestProjectionReleaseAsync(entry);
+        await DestroyCreatedActorsAsync(entry);
         await PersistDomainEventAsync(new WorkflowRunDetachedCleanupSucceededEvent
         {
             RecordId = entry.RecordId,
@@ -312,6 +362,11 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             WorkflowRunCompletionStatus.Stopped or
             WorkflowRunCompletionStatus.NotFound or
             WorkflowRunCompletionStatus.Disabled;
+
+    private static bool RequiresProjectionRelease(WorkflowActorSnapshot? snapshot) =>
+        snapshot?.CompletionStatus is WorkflowRunCompletionStatus.Completed or
+            WorkflowRunCompletionStatus.TimedOut or
+            WorkflowRunCompletionStatus.Failed;
 
     private bool ShouldTreatAsAbandonedPreDispatch(
         WorkflowRunDetachedCleanupOutboxEntry entry,

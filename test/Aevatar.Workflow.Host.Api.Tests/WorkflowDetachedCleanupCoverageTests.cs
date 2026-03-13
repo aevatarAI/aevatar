@@ -546,4 +546,26 @@ public sealed class WorkflowProjectionControlEventSessionCodecCoverageTests
         deserialized.ReleaseRequested.ActorId.Should().Be("actor-1");
         deserialized.ReleaseRequested.CommandId.Should().Be("cmd-1");
     }
+
+    [Fact]
+    public void SerializeAndDeserialize_ShouldRoundTripReleaseCompletedEvent()
+    {
+        var codec = new WorkflowProjectionControlEventSessionCodec();
+        var evt = new WorkflowProjectionControlEvent
+        {
+            ReleaseCompleted = new WorkflowProjectionReleaseCompletedEvent
+            {
+                ActorId = "actor-1",
+                CommandId = "cmd-1",
+            },
+        };
+
+        var payload = codec.Serialize(evt);
+        var deserialized = codec.Deserialize("release_completed", payload);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.EventCase.Should().Be(WorkflowProjectionControlEvent.EventOneofCase.ReleaseCompleted);
+        deserialized.ReleaseCompleted.ActorId.Should().Be("actor-1");
+        deserialized.ReleaseCompleted.CommandId.Should().Be("cmd-1");
+    }
 }

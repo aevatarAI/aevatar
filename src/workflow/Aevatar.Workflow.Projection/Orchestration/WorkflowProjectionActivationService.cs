@@ -84,6 +84,7 @@ public sealed class WorkflowProjectionActivationService
             _ownershipOptions,
             _lifecycle,
             _projectionControlHub,
+            _readModelUpdater,
             _runtimeLeaseLogger);
 
     protected override async Task OnRuntimeLeaseCreatedAsync(

@@ -6,6 +6,7 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 internal static class WorkflowProjectionControlEventTypes
 {
     public const string ReleaseRequested = "release_requested";
+    public const string ReleaseCompleted = "release_completed";
 
     public static string GetEventType(WorkflowProjectionControlEvent evt)
     {
@@ -13,6 +14,7 @@ internal static class WorkflowProjectionControlEventTypes
         return evt.EventCase switch
         {
             WorkflowProjectionControlEvent.EventOneofCase.ReleaseRequested => ReleaseRequested,
+            WorkflowProjectionControlEvent.EventOneofCase.ReleaseCompleted => ReleaseCompleted,
             _ => string.Empty,
         };
     }

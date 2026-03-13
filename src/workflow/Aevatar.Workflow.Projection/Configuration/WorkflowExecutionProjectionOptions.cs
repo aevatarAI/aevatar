@@ -97,6 +97,11 @@ public sealed class WorkflowExecutionProjectionOptions
     public int DetachedCleanupReplayBatchSize { get; set; } = 20;
 
     /// <summary>
+    /// Max time to wait for projection release completion acknowledgement before retrying detached cleanup.
+    /// </summary>
+    public int DetachedCleanupReleaseAckTimeoutMs { get; set; } = 5000;
+
+    /// <summary>
     /// Base retry delay for failed detached cleanup replay.
     /// </summary>
     public int DetachedCleanupRetryBaseDelayMs { get; set; } = 1000;
