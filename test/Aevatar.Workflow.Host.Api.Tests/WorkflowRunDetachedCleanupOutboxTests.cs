@@ -112,7 +112,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             originalContext,
             lifecycle: lifecycle,
             projectionControlHub: projectionControlHub);
-        await projectionControlHub.SubscriptionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await runtimeLease.WaitForProjectionReleaseListenerReadyAsync();
 
         await agent.HandleEnqueueAsync(CreateEnqueueEvent(
             "actor-1",
@@ -122,8 +122,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
         await lifecycle.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var entry = agent.State.Entries.Values.Single();
-        entry.CompletedAtUtc.Should().NotBeNull();
+        agent.State.Entries.Should().BeEmpty();
         lifecycle.StopCalls.Should().ContainSingle();
         lifecycle.StopCalls.Single().Should().BeSameAs(originalContext);
         streamSubscriptionLease.DisposeCalls.Should().Be(1);
@@ -202,6 +201,78 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
+    public async Task HandleTriggerReplay_WhenSnapshotIsMissingPastPreDispatchGrace_ShouldCleanupAndRemoveEntry()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownershipCoordinator = new RecordingOwnershipCoordinator();
+        var actorPort = new RecordingActorPort();
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            DetachedCleanupRetryBaseDelayMs = 0,
+            DetachedCleanupRetryMaxDelayMs = 0,
+            DetachedCleanupPreDispatchGraceMs = 0,
+        };
+        var agent = CreateAgent(CreateAgentServices(
+            lifecycle: lifecycle,
+            readModelUpdater: readModelUpdater,
+            ownershipCoordinator: ownershipCoordinator,
+            actorPort: actorPort,
+            options: options));
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1"]));
+        await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+
+        agent.State.Entries.Should().BeEmpty();
+        lifecycle.StopCalls.Should().BeEmpty();
+        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        ownershipCoordinator.AcquireCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("definition-1");
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenSnapshotHasNoProjectedEventsPastPreDispatchGrace_ShouldCleanupAndRemoveEntry()
+    {
+        var queryPort = new RecordingQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "actor-1",
+                WorkflowName = "direct",
+                CompletionStatus = WorkflowRunCompletionStatus.Unknown,
+                StateVersion = 0,
+                LastEventId = string.Empty,
+                LastUpdatedAt = DateTimeOffset.UtcNow,
+            },
+        };
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownershipCoordinator = new RecordingOwnershipCoordinator();
+        var actorPort = new RecordingActorPort();
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            DetachedCleanupRetryBaseDelayMs = 0,
+            DetachedCleanupRetryMaxDelayMs = 0,
+            DetachedCleanupPreDispatchGraceMs = 0,
+        };
+        var agent = CreateAgent(CreateAgentServices(
+            queryPort: queryPort,
+            readModelUpdater: readModelUpdater,
+            ownershipCoordinator: ownershipCoordinator,
+            actorPort: actorPort,
+            options: options));
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]));
+        await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+
+        agent.State.Entries.Should().BeEmpty();
+        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        ownershipCoordinator.AcquireCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
     public async Task State_ShouldSurviveDeactivateAndReactivate()
     {
         var store = new InMemoryEventStore();
@@ -247,7 +318,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
         await timer.ReplayOnceAsync();
 
-        agent.State.Entries["actor-1::cmd-1"].CompletedAtUtc.Should().NotBeNull();
+        agent.State.Entries.Should().BeEmpty();
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("definition-1");
     }
 

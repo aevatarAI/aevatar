@@ -34,6 +34,7 @@ public abstract class ProjectionActivationServiceBase<TRuntimeLease, TContext, T
             ct);
 
         TContext? context = null;
+        TRuntimeLease? runtimeLease = null;
         var started = false;
         try
         {
@@ -46,7 +47,14 @@ public abstract class ProjectionActivationServiceBase<TRuntimeLease, TContext, T
             await _lifecycle.StartAsync(context, ct);
             started = true;
             await OnStartedAsync(rootEntityId, commandId, context, ct);
-            return CreateRuntimeLease(context);
+            runtimeLease = CreateRuntimeLease(context);
+            await OnRuntimeLeaseCreatedAsync(
+                rootEntityId,
+                commandId,
+                context,
+                runtimeLease,
+                ct);
+            return runtimeLease;
         }
         catch
         {
@@ -69,6 +77,13 @@ public abstract class ProjectionActivationServiceBase<TRuntimeLease, TContext, T
         string rootEntityId,
         string commandId,
         TContext context,
+        CancellationToken ct) => Task.CompletedTask;
+
+    protected virtual Task OnRuntimeLeaseCreatedAsync(
+        string rootEntityId,
+        string commandId,
+        TContext context,
+        TRuntimeLease runtimeLease,
         CancellationToken ct) => Task.CompletedTask;
 
     protected virtual Task CleanupOnStartFailureAsync(

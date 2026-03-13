@@ -86,6 +86,28 @@ public sealed class WorkflowProjectionActivationService
             _projectionControlHub,
             _runtimeLeaseLogger);
 
+    protected override async Task OnRuntimeLeaseCreatedAsync(
+        string rootEntityId,
+        string commandId,
+        WorkflowExecutionProjectionContext context,
+        WorkflowExecutionRuntimeLease runtimeLease,
+        CancellationToken ct)
+    {
+        _ = rootEntityId;
+        _ = commandId;
+        _ = context;
+
+        try
+        {
+            await runtimeLease.WaitForProjectionReleaseListenerReadyAsync(ct);
+        }
+        catch
+        {
+            await TryStopRuntimeLeaseAsync(runtimeLease);
+            throw;
+        }
+    }
+
     protected override async Task CleanupOnStartFailureAsync(
         string rootEntityId,
         string commandId)
@@ -104,6 +126,27 @@ public sealed class WorkflowProjectionActivationService
         catch
         {
             // Best effort cleanup: ownership may already be released or unavailable.
+        }
+    }
+
+    private static async Task TryStopRuntimeLeaseAsync(WorkflowExecutionRuntimeLease runtimeLease)
+    {
+        try
+        {
+            await runtimeLease.StopProjectionReleaseListenerAsync();
+        }
+        catch
+        {
+            // Preserve the activation failure.
+        }
+
+        try
+        {
+            await runtimeLease.StopOwnershipHeartbeatAsync();
+        }
+        catch
+        {
+            // Preserve the activation failure.
         }
     }
 }

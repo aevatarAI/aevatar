@@ -17,6 +17,8 @@ public sealed class WorkflowExecutionRuntimeLease
     private readonly Task? _ownershipHeartbeatTask;
     private readonly CancellationTokenSource? _projectionReleaseListenerCts;
     private readonly Task? _projectionReleaseListenerTask;
+    private readonly TaskCompletionSource<bool> _projectionReleaseListenerReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ILogger<WorkflowExecutionRuntimeLease> _logger;
     private int _ownershipHeartbeatStopped;
     private int _projectionReleaseListenerStopped;
@@ -53,6 +55,7 @@ public sealed class WorkflowExecutionRuntimeLease
         {
             _projectionReleaseListenerCts = null;
             _projectionReleaseListenerTask = null;
+            _projectionReleaseListenerReady.TrySetResult(true);
             return;
         }
 
@@ -116,6 +119,9 @@ public sealed class WorkflowExecutionRuntimeLease
         }
     }
 
+    public Task WaitForProjectionReleaseListenerReadyAsync(CancellationToken ct = default) =>
+        _projectionReleaseListenerReady.Task.WaitAsync(ct);
+
     private async Task RunOwnershipHeartbeatAsync(
         IProjectionOwnershipCoordinator ownershipCoordinator,
         TimeSpan interval,
@@ -152,10 +158,17 @@ public sealed class WorkflowExecutionRuntimeLease
                 CommandId,
                 evt => HandleProjectionControlAsync(lifecycle, evt),
                 ct).ConfigureAwait(false);
+            _projectionReleaseListenerReady.TrySetResult(true);
             await Task.Delay(Timeout.InfiniteTimeSpan, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            _projectionReleaseListenerReady.TrySetCanceled(ct);
+        }
+        catch (Exception ex)
+        {
+            _projectionReleaseListenerReady.TrySetException(ex);
+            throw;
         }
         finally
         {

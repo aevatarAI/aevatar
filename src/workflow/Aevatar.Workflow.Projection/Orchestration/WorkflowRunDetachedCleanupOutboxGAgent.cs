@@ -141,13 +141,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         WorkflowRunDetachedCleanupSucceededEvent evt)
     {
         var next = current.Clone();
-        if (!next.Entries.TryGetValue(evt.RecordId, out var existing))
-            return next;
-
-        var updated = existing.Clone();
-        updated.CompletedAtUtc = evt.CompletedAtUtc;
-        updated.LastError = string.Empty;
-        next.Entries[evt.RecordId] = updated;
+        next.Entries.Remove(evt.RecordId);
         return next;
     }
 
@@ -178,17 +172,26 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             return;
         }
 
+        if (ShouldTreatAsAbandonedPreDispatch(entry, snapshot))
+        {
+            try
+            {
+                await CompleteEntryAsync(entry);
+            }
+            catch (Exception ex)
+            {
+                await ScheduleRetryAsync(entry, ex);
+            }
+
+            return;
+        }
+
         if (!HasTerminalCompletion(snapshot))
             return;
 
         try
         {
-            await CleanupAsync(entry, snapshot!);
-            await PersistDomainEventAsync(new WorkflowRunDetachedCleanupSucceededEvent
-            {
-                RecordId = entry.RecordId,
-                CompletedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
+            await CompleteEntryAsync(entry);
         }
         catch (Exception ex)
         {
@@ -196,9 +199,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         }
     }
 
-    private async Task CleanupAsync(
-        WorkflowRunDetachedCleanupOutboxEntry entry,
-        WorkflowActorSnapshot snapshot)
+    private async Task CleanupAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
         var projectionControlHub = Services.GetRequiredService<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
         var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
@@ -266,6 +267,16 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
+    private async Task CompleteEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        await CleanupAsync(entry);
+        await PersistDomainEventAsync(new WorkflowRunDetachedCleanupSucceededEvent
+        {
+            RecordId = entry.RecordId,
+            CompletedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+    }
+
     private async Task ScheduleRetryAsync(
         WorkflowRunDetachedCleanupOutboxEntry entry,
         Exception exception)
@@ -302,6 +313,24 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             WorkflowRunCompletionStatus.NotFound or
             WorkflowRunCompletionStatus.Disabled;
 
+    private bool ShouldTreatAsAbandonedPreDispatch(
+        WorkflowRunDetachedCleanupOutboxEntry entry,
+        WorkflowActorSnapshot? snapshot)
+    {
+        var options = Services.GetRequiredService<WorkflowExecutionProjectionOptions>();
+        var graceMs = Math.Max(0, options.DetachedCleanupPreDispatchGraceMs);
+        var enqueuedAtUtc = NormalizeUtc(entry.EnqueuedAtUtc?.ToDateTime() ?? DateTime.UnixEpoch);
+        if (DateTime.UtcNow - enqueuedAtUtc < TimeSpan.FromMilliseconds(graceMs))
+            return false;
+
+        if (snapshot == null)
+            return true;
+
+        return snapshot.CompletionStatus == WorkflowRunCompletionStatus.Unknown &&
+               snapshot.StateVersion == 0 &&
+               string.IsNullOrWhiteSpace(snapshot.LastEventId);
+    }
+
     private static bool IsVisible(
         WorkflowRunDetachedCleanupOutboxEntry entry,
         DateTime utcNow)
@@ -315,4 +344,9 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         return utcNow >= nextVisible;
     }
+
+    private static DateTime NormalizeUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc
+            ? value
+            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }

@@ -102,6 +102,11 @@ public sealed class WorkflowExecutionProjectionOptions
     public int DetachedCleanupRetryBaseDelayMs { get; set; } = 1000;
 
     /// <summary>
+    /// Grace window before treating a detached cleanup entry with no projected run activity as abandoned pre-dispatch state.
+    /// </summary>
+    public int DetachedCleanupPreDispatchGraceMs { get; set; } = 30_000;
+
+    /// <summary>
     /// Max retry delay for failed detached cleanup replay.
     /// </summary>
     public int DetachedCleanupRetryMaxDelayMs { get; set; } = 60_000;
