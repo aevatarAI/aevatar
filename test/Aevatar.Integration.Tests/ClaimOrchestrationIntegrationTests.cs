@@ -1,7 +1,8 @@
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
@@ -15,8 +16,8 @@ public class ClaimOrchestrationIntegrationTests
     [Fact]
     public void Should_not_resolve_agents_from_IServiceProvider()
     {
-        typeof(ScriptExecutionContext).GetProperty("Services").Should().BeNull();
-        typeof(IScriptRuntimeCapabilities).GetMethod(
+        typeof(ScriptCommandContext<ClaimCaseState>).GetProperty("Services").Should().BeNull();
+        typeof(IScriptBehaviorRuntimeCapabilities).GetMethod(
             "GetRequiredService",
             System.Reflection.BindingFlags.Public |
             System.Reflection.BindingFlags.Instance |
@@ -24,30 +25,54 @@ public class ClaimOrchestrationIntegrationTests
     }
 
     [Fact]
-    public async Task Should_call_agents_via_actor_messaging_and_runtime_only()
+    public async Task Should_call_agents_via_runtime_capabilities_only()
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestratorScript = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var compilation = compiler.Compile(
+            new ScriptBehaviorCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source));
+        compilation.IsSuccess.Should().BeTrue();
+        compilation.Artifact.Should().NotBeNull();
+
+        await using var artifact = compilation.Artifact!;
+        var behavior = artifact.CreateBehavior();
+        var capabilities = new RecordingCapabilities("high-risk-profile");
+
+        var emitted = await behavior.DispatchAsync(
+            new ClaimSubmitted
+            {
+                CommandId = "command-case-b",
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                RiskScore = 0.91d,
+                CompliancePassed = true,
+            },
+            new ScriptDispatchContext(
+                ActorId: "orchestrator-runtime",
+                ScriptId: orchestratorScript.ScriptId,
+                Revision: orchestratorScript.Revision,
+                RunId: "run-claim-b",
+                MessageType: ClaimSubmitted.Descriptor.FullName,
+                MessageId: "message-1",
+                CommandId: "command-case-b",
+                CorrelationId: "corr-claim-b",
+                CausationId: "cause-claim-b",
+                DefinitionActorId: "definition-1",
+                CurrentState: null,
+                RuntimeCapabilities: capabilities),
             CancellationToken.None);
 
-        var runtime = new RecordingRuntime();
-        var sender = new RecordingMessageSender();
-        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, runtime, sender);
-
-        await orchestrator.ExecuteAsync(
-            runId: "run-claim-b",
-            correlationId: "corr-claim-b",
-            inputPayload: BuildClaimPayload("Case-B", 0.91, true),
-            CancellationToken.None);
-
-        sender.Calls.Should().Contain(x => x.PayloadValue == "ClaimFactsExtractionRequestedEvent");
-        sender.Calls.Should().Contain(x => x.PayloadValue == "ClaimRiskScoringRequestedEvent");
-        sender.Calls.Should().Contain(x => x.PayloadValue == "ClaimComplianceValidationRequestedEvent");
-        sender.Calls.Should().Contain(x => x.PayloadValue == "ClaimManualReviewRequestedEvent");
-        runtime.Created.Should().HaveCount(1);
+        capabilities.SendCalls.Select(static x => x.MessageType).Should().ContainInOrder(
+            nameof(ClaimAnalystReviewRequested),
+            nameof(ClaimFraudScoringRequested),
+            nameof(ClaimComplianceCheckRequested),
+            nameof(ClaimManualReviewRequested));
+        capabilities.CreateCalls.Should().ContainSingle();
+        capabilities.CreateCalls[0].ActorId.Should().Be("human-review-run-claim-b");
+        emitted.Should().ContainSingle();
+        emitted[0].Should().BeOfType<ClaimDecisionRecorded>()
+            .Which.Current.DecisionStatus.Should().Be("ManualReview");
     }
 
     [Fact]
@@ -55,163 +80,96 @@ public class ClaimOrchestrationIntegrationTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestratorScript = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source),
-            CancellationToken.None);
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var compilation = compiler.Compile(
+            new ScriptBehaviorCompilationRequest(orchestratorScript.ScriptId, orchestratorScript.Revision, orchestratorScript.Source));
+        compilation.IsSuccess.Should().BeTrue();
+        compilation.Artifact.Should().NotBeNull();
 
-        var runtime = new RecordingRuntime();
-        var sender = new RecordingMessageSender();
-        var orchestrator = new ClaimRuntimeOrchestrator(compilation.CompiledDefinition!, runtime, sender);
+        await using var artifact = compilation.Artifact!;
+        var behavior = artifact.CreateBehavior();
+        var capabilities = new RecordingCapabilities("normal-profile");
 
-        await orchestrator.ExecuteAsync(
-            runId: "run-claim-a",
-            correlationId: "corr-claim-a",
-            inputPayload: BuildClaimPayload("Case-A", 0.12, true),
-            CancellationToken.None);
-
-        sender.Calls.Should().Contain(x => x.PayloadValue == "ClaimApprovedEvent");
-        runtime.Created.Should().BeEmpty();
-    }
-
-    private sealed class ClaimRuntimeOrchestrator(
-        Aevatar.Scripting.Abstractions.Definitions.IScriptPackageDefinition definition,
-        IActorRuntime runtime,
-        RecordingMessageSender sender)
-    {
-        public async Task ExecuteAsync(
-            string runId,
-            string correlationId,
-            Any inputPayload,
-            CancellationToken ct)
-        {
-            var decision = await definition.HandleRequestedEventAsync(
-                new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
-                    EventType: "claim.submitted",
-                    Payload: inputPayload,
-                    EventId: "evt-" + runId,
-                    CorrelationId: correlationId,
-                    CausationId: "cause-" + runId),
-                new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
-                    ActorId: "orchestrator-runtime",
-                    ScriptId: definition.ScriptId,
-                    Revision: definition.Revision,
-                    RunId: runId,
-                    CorrelationId: correlationId,
-                    InputPayload: inputPayload),
-                ct);
-
-            foreach (var evt in decision.DomainEvents.OfType<StringValue>())
+        var emitted = await behavior.DispatchAsync(
+            new ClaimSubmitted
             {
-                var eventName = evt.Value ?? string.Empty;
-                if (string.Equals(eventName, "ClaimManualReviewRequestedEvent", StringComparison.Ordinal))
-                {
-                    var reviewActorId = await CreateRequiredAgentAsync(
-                        runtime,
-                        typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-                        "manual-review-" + runId,
-                        ct);
-                    await sender.SendToAsync(
-                        reviewActorId,
-                        new StringValue { Value = eventName },
-                        ct);
-                    continue;
-                }
+                CommandId = "command-case-a",
+                CaseId = "Case-A",
+                PolicyId = "POLICY-A",
+                RiskScore = 0.12d,
+                CompliancePassed = true,
+            },
+            new ScriptDispatchContext(
+                ActorId: "orchestrator-runtime",
+                ScriptId: orchestratorScript.ScriptId,
+                Revision: orchestratorScript.Revision,
+                RunId: "run-claim-a",
+                MessageType: ClaimSubmitted.Descriptor.FullName,
+                MessageId: "message-2",
+                CommandId: "command-case-a",
+                CorrelationId: "corr-claim-a",
+                CausationId: "cause-claim-a",
+                DefinitionActorId: "definition-1",
+                CurrentState: null,
+                RuntimeCapabilities: capabilities),
+            CancellationToken.None);
 
-                await sender.SendToAsync(
-                    targetActorId: "agent-" + eventName,
-                    eventPayload: new StringValue { Value = eventName },
-                    ct: ct);
-            }
-        }
-
-        private static async Task<string> CreateRequiredAgentAsync(
-            IActorRuntime runtime,
-            string agentTypeAssemblyQualifiedName,
-            string? actorId,
-            CancellationToken ct)
-        {
-            var agentType = global::System.Type.GetType(
-                agentTypeAssemblyQualifiedName,
-                throwOnError: false,
-                ignoreCase: false)
-                ?? throw new InvalidOperationException($"Unable to resolve GAgent type: {agentTypeAssemblyQualifiedName}");
-            if (!typeof(IAgent).IsAssignableFrom(agentType))
-                throw new InvalidOperationException(
-                    $"Resolved type does not implement IAgent: {agentTypeAssemblyQualifiedName}");
-
-            var actor = await runtime.CreateAsync(agentType, actorId, ct);
-            return actor.Id;
-        }
+        capabilities.CreateCalls.Should().BeEmpty();
+        capabilities.SendCalls.Select(static x => x.MessageType).Should().ContainInOrder(
+            nameof(ClaimAnalystReviewRequested),
+            nameof(ClaimFraudScoringRequested),
+            nameof(ClaimComplianceCheckRequested));
+        emitted[0].Should().BeOfType<ClaimDecisionRecorded>()
+            .Which.Current.DecisionStatus.Should().Be("Approved");
     }
 
-    private sealed class RecordingMessageSender
+    private sealed class RecordingCapabilities(string aiOutput) : IScriptBehaviorRuntimeCapabilities
     {
-        public List<(string TargetActorId, string PayloadValue, string CorrelationId)> Calls { get; } = [];
+        public List<(string TargetActorId, string MessageType)> SendCalls { get; } = [];
+        public List<(string AgentType, string? ActorId)> CreateCalls { get; } = [];
 
-        public Task SendToAsync(
-            string targetActorId,
-            IMessage eventPayload,
-            CancellationToken ct)
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            var payloadValue = eventPayload is StringValue sv ? sv.Value : eventPayload.Descriptor.Name;
-            Calls.Add((targetActorId, payloadValue, string.Empty));
+            return Task.FromResult(aiOutput);
+        }
+
+        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            SendCalls.Add((targetActorId, eventPayload.Descriptor.Name));
             return Task.CompletedTask;
         }
-    }
 
-    private sealed class RecordingRuntime : IActorRuntime
-    {
-        public List<(global::System.Type AgentType, string? ActorId)> Created { get; } = [];
+        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage eventPayload,
+            CancellationToken ct) =>
+            Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
+        public Task CancelDurableCallbackAsync(Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
 
-        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default)
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            Created.Add((agentType, id));
-            return Task.FromResult<IActor>(new FakeActor(id ?? "created-runtime"));
+            CreateCalls.Add((agentTypeAssemblyQualifiedName, actorId));
+            return Task.FromResult(actorId ?? "created");
         }
 
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class FakeActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private static Any BuildClaimPayload(string caseId, double riskScore, bool compliancePassed)
-    {
-        return Any.Pack(new Struct
-        {
-            Fields =
-            {
-                ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString(caseId),
-                ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(riskScore),
-                ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
-            },
-        });
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) => Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) => Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) => Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) => Task.CompletedTask;
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) => Task.CompletedTask;
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) => Task.CompletedTask;
     }
 }

@@ -1,26 +1,33 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Integration.Tests.Protocols;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests;
 
-public sealed class ClaimMessageSinkGAgent : GAgentBase<ListValue>
+public sealed class ClaimMessageSinkGAgent : GAgentBase<ClaimSinkState>
 {
     [EventHandler]
-    public Task HandleReceived(StringValue evt) =>
+    public Task HandleAnalystRequested(ClaimAnalystReviewRequested evt) =>
         PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
 
-    protected override ListValue TransitionState(ListValue current, IMessage evt) =>
-        StateTransitionMatcher
-            .Match(current, evt)
-            .On<StringValue>((state, message) =>
-            {
-                var next = state.Clone();
-                next.Values.Add(Value.ForString(message.Value ?? string.Empty));
-                return next;
-            })
-            .OrCurrent();
+    [EventHandler]
+    public Task HandleFraudRequested(ClaimFraudScoringRequested evt) =>
+        PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
+
+    [EventHandler]
+    public Task HandleComplianceRequested(ClaimComplianceCheckRequested evt) =>
+        PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
+
+    [EventHandler]
+    public Task HandleManualReviewRequested(ClaimManualReviewRequested evt) =>
+        PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
+
+    protected override ClaimSinkState TransitionState(ClaimSinkState current, IMessage evt)
+    {
+        var next = current.Clone();
+        next.MessageTypes.Add(evt.Descriptor.Name);
+        return next;
+    }
 }

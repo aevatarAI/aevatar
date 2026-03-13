@@ -8,9 +8,11 @@ using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
 using Google.Protobuf;
@@ -657,7 +659,47 @@ public class RuntimeScriptInfrastructurePortsTests
 
     private static RuntimeScriptProvisioningService CreateRuntimeProvisioningService(TestActorRuntime runtime)
     {
-        return new RuntimeScriptProvisioningService(new RuntimeScriptActorAccessor(runtime));
+        return new RuntimeScriptProvisioningService(
+            new RuntimeScriptActorAccessor(runtime),
+            CreateDefinitionSnapshotPort(
+                runtime,
+                request => new ScriptDefinitionSnapshotRespondedEvent
+                {
+                    RequestId = request.RequestId,
+                    Found = true,
+                    ScriptId = "script-1",
+                    Revision = string.IsNullOrWhiteSpace(request.RequestedRevision) ? "latest" : request.RequestedRevision,
+                    SourceText =
+                        """
+                        using System;
+                        using System.Threading;
+                        using System.Threading.Tasks;
+                        using Aevatar.Scripting.Abstractions;
+                        using Aevatar.Scripting.Abstractions.Behaviors;
+                        using Google.Protobuf.WellKnownTypes;
+
+                        public sealed class ProvisioningBehavior : ScriptBehavior<StringValue, StringValue>
+                        {
+                            protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+                            {
+                                builder.OnQuery<Empty, StringValue>(HandleQueryAsync);
+                            }
+
+                            private static Task<StringValue?> HandleQueryAsync(
+                                Empty queryPayload,
+                                ScriptQueryContext<StringValue> snapshot,
+                                CancellationToken ct)
+                            {
+                                _ = queryPayload;
+                                ct.ThrowIfCancellationRequested();
+                                return Task.FromResult<StringValue?>(snapshot.CurrentReadModel);
+                            }
+                        }
+                        """,
+                    SourceHash = "provisioning-hash",
+                }),
+            new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()),
+            new NoOpScriptExecutionProjectionPort());
     }
 
     private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
@@ -945,4 +987,45 @@ public class RuntimeScriptInfrastructurePortsTests
                 sink.Push(evt);
         }
     }
+
+    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    {
+        public bool ProjectionEnabled => true;
+
+        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
+        }
+
+        public Task AttachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptExecutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
 }

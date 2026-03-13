@@ -49,26 +49,28 @@ message ScriptDefinitionState {
   repeated string read_model_schema_store_kinds = 10;
   string read_model_schema_status = 11;
   string read_model_schema_failure_reason = 12;
+  string state_type_url = 13;
+  string read_model_type_url = 14;
+  repeated string command_type_urls = 15;
+  repeated string domain_event_type_urls = 16;
+  repeated string query_type_urls = 17;
+  repeated string internal_signal_type_urls = 18;
 }
 
-message ScriptRuntimeState {
+message ScriptBehaviorState {
   string definition_actor_id = 1;
-  string revision = 2;
-  string last_run_id = 3;
-  map<string, google.protobuf.Any> state_payloads = 4;
-  map<string, google.protobuf.Any> read_model_payloads = 5;
-  int64 last_applied_event_version = 6;
-  string last_event_id = 7;
-  string last_applied_schema_version = 8;
-  string last_schema_hash = 9;
-  map<string, PendingScriptDefinitionQueryState> pending_definition_queries = 10;
-}
-
-message PendingScriptDefinitionQueryState {
-  string request_id = 1;
-  RunScriptRequestedEvent run_event = 2;
-  int64 queued_at_unix_time_ms = 3;
-  string timeout_callback_id = 4;
+  string script_id = 2;
+  string revision = 3;
+  string source_text = 4;
+  string source_hash = 5;
+  string state_type_url = 6;
+  string read_model_type_url = 7;
+  google.protobuf.Any state_root = 8;
+  int64 last_applied_event_version = 9;
+  string last_event_id = 10;
+  string last_run_id = 11;
+  string read_model_schema_version = 12;
+  string read_model_schema_hash = 13;
 }
 
 message ScriptCatalogEntryState {
@@ -147,6 +149,12 @@ message ScriptDefinitionUpsertedEvent {
   string read_model_schema_hash = 6;
   string read_model_schema_version = 7;
   repeated string read_model_schema_store_kinds = 8;
+  string state_type_url = 9;
+  string read_model_type_url = 10;
+  repeated string command_type_urls = 11;
+  repeated string domain_event_type_urls = 12;
+  repeated string query_type_urls = 13;
+  repeated string internal_signal_type_urls = 14;
 }
 
 message ScriptReadModelSchemaDeclaredEvent {
@@ -178,18 +186,79 @@ message RunScriptRequestedEvent {
   string script_revision = 3;
   string definition_actor_id = 4;
   string requested_event_type = 5;
+  string command_id = 6;
+  string correlation_id = 7;
 }
 
-message ScriptRunDomainEventCommitted {
-  string run_id = 1;
-  string script_revision = 2;
-  string definition_actor_id = 3;
-  string event_type = 4;
-  google.protobuf.Any payload = 5;
-  map<string, google.protobuf.Any> state_payloads = 6;
-  map<string, google.protobuf.Any> read_model_payloads = 7;
+message BindScriptBehaviorRequestedEvent {
+  string definition_actor_id = 1;
+  string script_id = 2;
+  string revision = 3;
+  string source_text = 4;
+  string source_hash = 5;
+  string state_type_url = 6;
+  string read_model_type_url = 7;
   string read_model_schema_version = 8;
   string read_model_schema_hash = 9;
+}
+
+message ScriptBehaviorBoundEvent {
+  string definition_actor_id = 1;
+  string script_id = 2;
+  string revision = 3;
+  string source_text = 4;
+  string source_hash = 5;
+  string state_type_url = 6;
+  string read_model_type_url = 7;
+  string read_model_schema_version = 8;
+  string read_model_schema_hash = 9;
+}
+
+message QueryScriptBehaviorBindingRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ScriptBehaviorBindingRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  string definition_actor_id = 3;
+  string script_id = 4;
+  string revision = 5;
+  string source_hash = 6;
+  string state_type_url = 7;
+  string read_model_type_url = 8;
+  string read_model_schema_version = 9;
+  string read_model_schema_hash = 10;
+  string failure_reason = 11;
+}
+
+message ScriptDomainFactCommitted {
+  string actor_id = 1;
+  string definition_actor_id = 2;
+  string script_id = 3;
+  string revision = 4;
+  string run_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  int64 event_sequence = 8;
+  string event_type = 9;
+  google.protobuf.Any domain_event_payload = 10;
+  string state_type_url = 11;
+  string read_model_type_url = 12;
+  int64 state_version = 13;
+  int64 occurred_at_unix_time_ms = 14;
+}
+
+message ScriptBehaviorDispatchFailedEvent {
+  string actor_id = 1;
+  string script_id = 2;
+  string definition_actor_id = 3;
+  string script_revision = 4;
+  string run_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+  string failure_reason = 8;
 }
 
 message StartScriptEvolutionSessionRequestedEvent {
@@ -246,22 +315,9 @@ message ScriptDefinitionSnapshotRespondedEvent {
   string read_model_schema_version = 6;
   string read_model_schema_hash = 7;
   string failure_reason = 8;
-}
-
-message ScriptDefinitionQueryQueuedEvent {
-  string request_id = 1;
-  RunScriptRequestedEvent run_event = 2;
-  int64 queued_at_unix_time_ms = 3;
-  string timeout_callback_id = 4;
-}
-
-message ScriptDefinitionQueryClearedEvent {
-  string request_id = 1;
-}
-
-message ScriptDefinitionQueryTimeoutFiredEvent {
-  string request_id = 1;
-  string run_id = 2;
+  string source_hash = 9;
+  string state_type_url = 10;
+  string read_model_type_url = 11;
 }
 
 message QueryScriptCatalogEntryRequestedEvent {

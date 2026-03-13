@@ -1,4 +1,6 @@
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Ports;
@@ -36,10 +38,10 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     [Fact]
-    public async Task ValidationService_ShouldDisposeCompiledDefinition_AndReturnDiagnostics()
+    public async Task ValidationService_ShouldDisposeCompiledArtifact_AndReturnDiagnostics()
     {
-        var definition = new DisposableNoopDefinition();
-        var service = new RuntimeScriptEvolutionValidationService(new DisposableTrackingCompiler(definition, false, ["compile-failed"]));
+        var compiler = new DisposableTrackingCompiler(false, ["compile-failed"]);
+        var service = new RuntimeScriptEvolutionValidationService(compiler);
 
         var result = await service.ValidateAsync(
             new ScriptEvolutionProposal(
@@ -54,7 +56,7 @@ public class ScriptEvolutionExecutionServicesTests
 
         result.IsSuccess.Should().BeFalse();
         result.Diagnostics.Should().ContainSingle(x => x == "compile-failed");
-        definition.IsDisposed.Should().BeTrue();
+        compiler.IsDisposed.Should().BeTrue();
     }
 
     [Fact]
@@ -157,71 +159,60 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     private sealed class DisposableTrackingCompiler(
-        DisposableNoopDefinition definition,
         bool isSuccess,
-        IReadOnlyList<string> diagnostics) : IScriptPackageCompiler
+        IReadOnlyList<string> diagnostics) : IScriptBehaviorCompiler
     {
-        private readonly DisposableNoopDefinition _definition = definition;
-        private readonly bool _isSuccess = isSuccess;
-        private readonly IReadOnlyList<string> _diagnostics = diagnostics;
+        public bool IsDisposed { get; private set; }
 
-        public Task<ScriptPackageCompilationResult> CompileAsync(
-            ScriptPackageCompilationRequest request,
-            CancellationToken ct)
+        public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
         {
             _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPackageCompilationResult(
-                    IsSuccess: _isSuccess,
-                    CompiledDefinition: _definition,
-                    ContractManifest: new ScriptContractManifest("input", [], "state", "readmodel"),
-                    Diagnostics: _diagnostics));
+            return new ScriptBehaviorCompilationResult(
+                IsSuccess: isSuccess,
+                Artifact: new ScriptBehaviorArtifact(
+                    "script-1",
+                    "rev-2",
+                    "hash",
+                    new NoopBehavior().Descriptor,
+                    new NoopBehavior().Descriptor.ToContract(),
+                    static () => new NoopBehavior(),
+                    dispose: () =>
+                    {
+                        IsDisposed = true;
+                        return ValueTask.CompletedTask;
+                    }),
+                Diagnostics: diagnostics);
         }
     }
 
-    private sealed class DisposableNoopDefinition : IScriptPackageDefinition, IAsyncDisposable
+    private sealed class NoopBehavior : ScriptBehavior<StringValue, StringValue>
     {
-        public string ScriptId => "script-1";
-        public string Revision => "rev-2";
-        public ScriptContractManifest ContractManifest { get; } = new("input", [], "state", "readmodel");
-        public bool IsDisposed { get; private set; }
-
-        public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-            ScriptRequestedEventEnvelope requestedEvent,
-            ScriptExecutionContext context,
-            CancellationToken ct)
+        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
         {
-            _ = requestedEvent;
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ScriptHandlerResult([new StringValue { Value = "noop" }]));
+            builder
+                .OnCommand<StringValue>(HandleAsync)
+                .OnEvent<StringValue>(apply: static (_, evt, _) => evt, reduce: static (_, evt, _) => evt)
+                .OnQuery<Empty, StringValue>(HandleQueryAsync);
         }
 
-        public ValueTask<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?> ApplyDomainEventAsync(
-            IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> currentState,
-            ScriptDomainEventEnvelope domainEvent,
+        private static Task HandleAsync(
+            StringValue command,
+            ScriptCommandContext<StringValue> context,
             CancellationToken ct)
         {
-            _ = domainEvent;
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?>(currentState);
+            context.Emit(command.Clone());
+            return Task.CompletedTask;
         }
 
-        public ValueTask<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?> ReduceReadModelAsync(
-            IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> currentReadModel,
-            ScriptDomainEventEnvelope domainEvent,
+        private static Task<StringValue?> HandleQueryAsync(
+            Empty query,
+            ScriptQueryContext<StringValue> snapshot,
             CancellationToken ct)
         {
-            _ = domainEvent;
+            _ = query;
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?>(currentReadModel);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            IsDisposed = true;
-            return ValueTask.CompletedTask;
+            return Task.FromResult(snapshot.CurrentReadModel);
         }
     }
 
@@ -299,11 +290,8 @@ public class ScriptEvolutionExecutionServicesTests
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
-
         public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
-
         public string GetCatalogActorId() => "script-catalog";
-
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 }

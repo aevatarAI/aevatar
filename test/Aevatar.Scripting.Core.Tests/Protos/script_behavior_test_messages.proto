@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package aevatar.scripting.tests;
+
+option csharp_namespace = "Aevatar.Scripting.Core.Tests.Messages";
+
+message ScriptProfileState {
+  int32 command_count = 1;
+  string last_command_id = 2;
+  string normalized_text = 3;
+}
+
+message ScriptProfileSearchIndex {
+  string lookup_key = 1;
+  string sort_key = 2;
+}
+
+message ScriptProfileDocumentRef {
+  string actor_id = 1;
+  string policy_id = 2;
+}
+
+message ScriptProfileReadModel {
+  bool has_value = 1;
+  string actor_id = 2;
+  string policy_id = 3;
+  string last_command_id = 4;
+  string input_text = 5;
+  string normalized_text = 6;
+  repeated string tags = 7;
+  ScriptProfileSearchIndex search = 8;
+  ScriptProfileDocumentRef refs = 9;
+}
+
+message ScriptProfileUpdateCommand {
+  string command_id = 1;
+  string actor_id = 2;
+  string policy_id = 3;
+  string input_text = 4;
+  repeated string tags = 5;
+}
+
+message ScriptProfileUpdated {
+  string command_id = 1;
+  ScriptProfileReadModel current = 2;
+}
+
+message ScriptProfileQueryRequested {
+  string request_id = 1;
+}
+
+message ScriptProfileQueryResponded {
+  string request_id = 1;
+  ScriptProfileReadModel current = 2;
+}
+
+message ClaimSearchIndex {
+  string lookup_key = 1;
+  string decision_key = 2;
+}
+
+message ClaimRefs {
+  string policy_id = 1;
+  string owner_actor_id = 2;
+}
+
+message ClaimState {
+  string case_id = 1;
+  string policy_id = 2;
+  string decision_status = 3;
+  bool manual_review_required = 4;
+  string ai_summary = 5;
+  double risk_score = 6;
+  bool compliance_passed = 7;
+  string last_command_id = 8;
+}
+
+message ClaimReadModel {
+  bool has_value = 1;
+  string case_id = 2;
+  string policy_id = 3;
+  string decision_status = 4;
+  bool manual_review_required = 5;
+  string ai_summary = 6;
+  double risk_score = 7;
+  bool compliance_passed = 8;
+  string last_command_id = 9;
+  ClaimSearchIndex search = 10;
+  ClaimRefs refs = 11;
+  repeated string trace_steps = 12;
+}
+
+message ClaimSubmitted {
+  string command_id = 1;
+  string case_id = 2;
+  double risk_score = 3;
+  bool compliance_passed = 4;
+  string policy_id = 5;
+}
+
+message ClaimDecisionRecorded {
+  string command_id = 1;
+  ClaimReadModel current = 2;
+}
+
+message ClaimQueryRequested {
+  string request_id = 1;
+}
+
+message ClaimQueryResponded {
+  string request_id = 1;
+  ClaimReadModel current = 2;
+}
+
+message ClaimAnalystReviewRequested {
+  string case_id = 1;
+}
+
+message ClaimFraudScoringRequested {
+  string case_id = 1;
+}
+
+message ClaimComplianceCheckRequested {
+  string case_id = 1;
+}
+
+message ClaimManualReviewRequested {
+  string case_id = 1;
+}

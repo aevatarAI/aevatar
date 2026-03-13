@@ -1,18 +1,14 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Hosting;
-using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core.AI;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
-using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
@@ -23,7 +19,7 @@ namespace Aevatar.Hosting.Tests;
 public class ScriptCapabilityHostExtensionsTests
 {
     [Fact]
-    public void AddScriptingCapabilityBundle_ShouldRegisterCapabilityAndValidateNull()
+    public void AddScriptingCapabilityBundle_ShouldRegisterCapability()
     {
         Action act = () => ScriptCapabilityHostBuilderExtensions.AddScriptingCapabilityBundle(null!);
         act.Should().Throw<ArgumentNullException>();
@@ -41,64 +37,26 @@ public class ScriptCapabilityHostExtensionsTests
     }
 
     [Fact]
-    public void AddScriptCapabilityServices_ShouldRegisterCoreScriptServices()
+    public void AddScriptCapability_ShouldResolveBehaviorAndReadModelServices()
     {
         var services = new ServiceCollection();
 
+        services.AddAevatarRuntime();
         services.AddScriptCapability();
 
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ScriptSandboxPolicy) &&
-            x.ImplementationType == typeof(ScriptSandboxPolicy));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptPackageCompiler) &&
-            x.ImplementationType == typeof(RoslynScriptPackageCompiler));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionApplicationService) &&
-            x.ImplementationType == typeof(ScriptEvolutionApplicationService));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptRuntimeCapabilityComposer) &&
-            x.ImplementationType == typeof(ScriptRuntimeCapabilityComposer));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptingActorAddressResolver) &&
-            x.ImplementationType == typeof(DefaultScriptingActorAddressResolver));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionProposalPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptDefinitionCommandPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptRuntimeProvisioningPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptRuntimeCommandPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptCatalogCommandPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptCatalogQueryPort));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionPolicyEvaluator) &&
-            x.ImplementationType == typeof(DefaultScriptEvolutionPolicyEvaluator));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionValidationService) &&
-            x.ImplementationType == typeof(RuntimeScriptEvolutionValidationService));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptCatalogBaselineReader) &&
-            x.ImplementationType == typeof(RuntimeScriptCatalogBaselineReader));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptPromotionCompensationService) &&
-            x.ImplementationType == typeof(RuntimeScriptPromotionCompensationService));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionRollbackService) &&
-            x.ImplementationType == typeof(RuntimeScriptEvolutionRollbackService));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IAICapability));
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScriptBehaviorCompiler>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptBehaviorArtifactResolver>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptBehaviorDispatcher>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptBehaviorRuntimeCapabilityFactory>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptExecutionProjectionPort>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptReadModelQueryPort>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
     }
 
     [Fact]
-    public void AddScriptingCapabilityBundle_ShouldMapEvolutionProposalEndpoint()
+    public void AddScriptingCapabilityBundle_ShouldMapEvolutionAndReadModelEndpoints()
     {
         var builder = WebApplication.CreateBuilder();
         builder.AddScriptingCapabilityBundle();
@@ -110,9 +68,20 @@ public class ScriptCapabilityHostExtensionsTests
         var routeEndpoints = routeBuilder.DataSources
             .SelectMany(x => x.Endpoints)
             .OfType<RouteEndpoint>()
-            .Select(x => x.RoutePattern.RawText)
+            .Select(x => NormalizeRoute(x.RoutePattern.RawText))
             .ToList();
 
         routeEndpoints.Should().Contain("/api/scripts/evolutions/proposals");
+        routeEndpoints.Should().Contain("/api/scripts/runtimes");
+        routeEndpoints.Should().Contain("/api/scripts/runtimes/{actorId}/readmodel");
+        routeEndpoints.Should().Contain("/api/scripts/runtimes/{actorId}/queries");
+    }
+
+    private static string NormalizeRoute(string? route)
+    {
+        if (string.IsNullOrWhiteSpace(route) || string.Equals(route, "/", StringComparison.Ordinal))
+            return route ?? string.Empty;
+
+        return route.TrimEnd('/');
     }
 }

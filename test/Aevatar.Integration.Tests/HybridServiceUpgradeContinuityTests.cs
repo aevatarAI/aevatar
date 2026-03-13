@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -27,7 +28,7 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddScriptCapability();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<Aevatar.Foundation.Abstractions.Persistence.IEventStore>();
 

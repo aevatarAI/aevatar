@@ -1,7 +1,8 @@
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
@@ -17,11 +18,11 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     private const string SchemaStatusDeclared = "declared";
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
-    private readonly IScriptPackageCompiler _compiler;
+    private readonly IScriptBehaviorCompiler _compiler;
     private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
     public ScriptDefinitionGAgent(
-        IScriptPackageCompiler compiler,
+        IScriptBehaviorCompiler compiler,
         IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
@@ -34,15 +35,14 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     {
         ArgumentNullException.ThrowIfNull(evt);
         var sourceText = evt.SourceText ?? string.Empty;
-        var compilation = await _compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
+        var compilation = _compiler.Compile(
+            new ScriptBehaviorCompilationRequest(
                 evt.ScriptId ?? string.Empty,
                 evt.ScriptRevision ?? string.Empty,
-                sourceText),
-            CancellationToken.None);
+                sourceText));
         try
         {
-            if (!compilation.IsSuccess || compilation.ContractManifest == null)
+            if (!compilation.IsSuccess || compilation.Artifact == null)
                 throw new InvalidOperationException(
                     "Script definition compilation failed: " + string.Join("; ", compilation.Diagnostics));
 
@@ -53,7 +53,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             var hasReadModelSchema = false;
             var extracted = ScriptReadModelDefinitionExtraction.Empty;
             if (ScriptReadModelDefinitionExtractor.TryExtractFromContract(
-                    compilation.ContractManifest,
+                    compilation.Artifact.Contract,
                     out extracted))
             {
                 hasReadModelSchema = true;
@@ -73,6 +73,12 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ReadModelSchemaHash = readModelSchemaHash,
                 ReadModelSchemaVersion = readModelSchemaVersion,
                 ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
+                StateTypeUrl = compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,
+                ReadModelTypeUrl = compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
+                CommandTypeUrls = { compilation.Artifact.Contract.CommandTypeUrls },
+                DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
+                QueryTypeUrls = { compilation.Artifact.Contract.QueryTypeUrls },
+                InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
             });
 
             if (!hasReadModelSchema)
@@ -119,7 +125,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         }
         finally
         {
-            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            await DisposeCompiledArtifactAsync(compilation.Artifact);
         }
     }
 
@@ -171,6 +177,9 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             SourceText = State.SourceText ?? string.Empty,
             ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
             ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+            SourceHash = State.SourceHash ?? string.Empty,
+            StateTypeUrl = State.StateTypeUrl ?? string.Empty,
+            ReadModelTypeUrl = State.ReadModelTypeUrl ?? string.Empty,
             FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
                 ? "Script source text is empty."
                 : string.Empty,
@@ -194,16 +203,10 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
     }
 
-    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
+    private static async Task DisposeCompiledArtifactAsync(ScriptBehaviorArtifact? artifact)
     {
-        if (definition is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (definition is IDisposable disposable)
-            disposable.Dispose();
+        if (artifact != null)
+            await artifact.DisposeAsync();
     }
 
     private static ScriptDefinitionState ApplyDefinitionUpserted(
@@ -220,6 +223,16 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty;
         next.ReadModelSchemaStoreKinds.Clear();
         next.ReadModelSchemaStoreKinds.Add(evt.ReadModelSchemaStoreKinds);
+        next.StateTypeUrl = evt.StateTypeUrl ?? string.Empty;
+        next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
+        next.CommandTypeUrls.Clear();
+        next.CommandTypeUrls.Add(evt.CommandTypeUrls);
+        next.DomainEventTypeUrls.Clear();
+        next.DomainEventTypeUrls.Add(evt.DomainEventTypeUrls);
+        next.QueryTypeUrls.Clear();
+        next.QueryTypeUrls.Add(evt.QueryTypeUrls);
+        next.InternalSignalTypeUrls.Clear();
+        next.InternalSignalTypeUrls.Add(evt.InternalSignalTypeUrls);
         next.ReadModelSchemaStatus = next.ReadModelSchema == null || next.ReadModelSchema.Is(Empty.Descriptor)
             ? string.Empty
             : SchemaStatusPending;

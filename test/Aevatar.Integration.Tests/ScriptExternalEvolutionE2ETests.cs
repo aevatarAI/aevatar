@@ -1,33 +1,35 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
 [Trait("Category", "Slow")]
-public class ScriptExternalEvolutionE2ETests
+public sealed class ScriptExternalEvolutionE2ETests
 {
     [Fact]
     public async Task ExternalEvolutionFlow_ShouldPromoteRevisionThroughUnifiedManagerChain()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-
-        using var provider = services.BuildServiceProvider();
+        await using var provider = ScriptEvolutionIntegrationTestKit.BuildProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var evolutionService = provider.GetRequiredService<IScriptEvolutionApplicationService>();
+
+        var source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+            "ExternalScriptV1",
+            "EXTERNAL-V1",
+            "external_normalization",
+            "1");
 
         var decision = await evolutionService.ProposeAsync(
             new ProposeScriptEvolutionRequest(
                 ScriptId: "external-script",
-                BaseRevision: "rev-0",
+                BaseRevision: string.Empty,
                 CandidateRevision: "rev-1",
-                CandidateSource: ExternalScriptSource,
+                CandidateSource: source,
                 CandidateSourceHash: string.Empty,
                 Reason: "external pipeline rollout",
                 ProposalId: "external-proposal-1"),
@@ -39,52 +41,60 @@ public class ScriptExternalEvolutionE2ETests
         decision.DefinitionActorId.Should().Be("script-definition:external-script");
         decision.CatalogActorId.Should().Be("script-catalog");
 
-        var manager = (ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent;
+        var managerActor = await runtime.GetAsync("script-evolution-manager");
+        managerActor.Should().NotBeNull();
+        var manager = managerActor!.Agent.Should().BeOfType<ScriptEvolutionManagerGAgent>().Subject;
         manager.State.Proposals.Should().ContainKey("external-proposal-1");
         manager.State.Proposals["external-proposal-1"].Status.Should().Be("promoted");
 
-        var catalog = (ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent;
-        catalog.State.Entries.Should().ContainKey("external-script");
-        catalog.State.Entries["external-script"].ActiveRevision.Should().Be("rev-1");
+        var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
+            provider,
+            "external-script",
+            CancellationToken.None);
+        catalogEntry.Should().NotBeNull();
+        catalogEntry!.ActiveRevision.Should().Be("rev-1");
+        catalogEntry.ActiveDefinitionActorId.Should().Be("script-definition:external-script");
+        catalogEntry.RevisionHistory.Should().Contain("rev-1");
 
-        var definition = (ScriptDefinitionGAgent)(await runtime.GetAsync("script-definition:external-script"))!.Agent;
-        definition.State.ScriptId.Should().Be("external-script");
-        definition.State.Revision.Should().Be("rev-1");
+        var definition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+            provider,
+            "script-definition:external-script",
+            "rev-1",
+            CancellationToken.None);
+        definition.ScriptId.Should().Be("external-script");
+        definition.Revision.Should().Be("rev-1");
+        definition.SourceHash.Should().Be(ScriptingCommandEnvelopeTestKit.ComputeSourceHash(source).ToUpperInvariant());
+
+        await ScriptEvolutionIntegrationTestKit.EnsureRuntimeAsync(
+            provider,
+            definitionActorId: decision.DefinitionActorId,
+            revision: "rev-1",
+            runtimeActorId: "external-runtime",
+            ct: CancellationToken.None);
+
+        var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
+            provider,
+            runtimeActorId: "external-runtime",
+            runId: "external-run-1",
+            inputPayload: Any.Pack(new TextNormalizationRequested
+            {
+                CommandId = "external-command-1",
+                InputText = "roll out",
+            }),
+            revision: "rev-1",
+            definitionActorId: "script-definition:external-script",
+            requestedEventType: "external.requested",
+            ct: CancellationToken.None);
+
+        snapshot.ReadModelPayload.Should().NotBeNull();
+        snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("EXTERNAL-V1:ROLL OUT");
+
+        var queryResult = await ScriptEvolutionIntegrationTestKit.QueryNormalizationAsync(
+            provider,
+            "external-runtime",
+            "external-query-1",
+            CancellationToken.None);
+        queryResult.NormalizedText.Should().Be("EXTERNAL-V1:ROLL OUT");
+        queryResult.Refs.ProfileId.Should().Be("EXTERNAL-V1");
     }
-
-    private const string ExternalScriptSource = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class ExternalScriptV1 : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "ExternalScriptCompleted" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
 }

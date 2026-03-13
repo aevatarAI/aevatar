@@ -42,47 +42,91 @@ public class ScriptProtoContractsTests
     }
 
     [Fact]
-    public void ScriptRuntimeState_ShouldContainRunFacts()
+    public void ScriptBehaviorState_ShouldContainBindingAndStateRoot()
     {
-        var stateType = typeof(ScriptRuntimeState);
-        var statePayloadsProperty = stateType.GetProperty("StatePayloads");
-        var readModelPayloadsProperty = stateType.GetProperty("ReadModelPayloads");
+        var stateType = typeof(ScriptBehaviorState);
+        var stateRootProperty = stateType.GetProperty("StateRoot");
 
-        statePayloadsProperty.Should().NotBeNull("runtime state must expose keyed state payloads");
-        readModelPayloadsProperty.Should().NotBeNull("runtime state must expose keyed readmodel payloads");
+        stateRootProperty.Should().NotBeNull("behavior state must persist typed state root");
 
-        statePayloadsProperty!.PropertyType.Should().Be(typeof(MapField<string, Any>));
-        readModelPayloadsProperty!.PropertyType.Should().Be(typeof(MapField<string, Any>));
+        stateRootProperty!.PropertyType.Should().Be(typeof(Any));
     }
 
     [Fact]
-    public void ScriptRuntimeState_ShouldSupportStatelessModeByDefault()
+    public void ScriptBehaviorState_ShouldSupportEmptyStateRootByDefault()
     {
-        var state = new ScriptRuntimeState
+        var state = new ScriptBehaviorState
         {
             DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
             Revision = "rev-1",
-            LastAppliedSchemaVersion = "2",
-            LastSchemaHash = "schema-hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
             LastRunId = "run-1",
         };
 
-        var stateType = state.GetType();
-        var statePayloadsProperty = stateType.GetProperty("StatePayloads");
-        var readModelPayloadsProperty = stateType.GetProperty("ReadModelPayloads");
-
-        statePayloadsProperty.Should().NotBeNull();
-        readModelPayloadsProperty.Should().NotBeNull();
-
         state.DefinitionActorId.Should().Be("definition-1");
+        state.ScriptId.Should().Be("script-1");
         state.Revision.Should().Be("rev-1");
-        state.LastAppliedSchemaVersion.Should().Be("2");
-        state.LastSchemaHash.Should().Be("schema-hash-1");
+        state.StateTypeUrl.Should().Be("type.googleapis.com/example.State");
+        state.ReadModelTypeUrl.Should().Be("type.googleapis.com/example.ReadModel");
+        state.ReadModelSchemaVersion.Should().Be("2");
+        state.ReadModelSchemaHash.Should().Be("schema-hash-1");
         state.LastRunId.Should().Be("run-1");
+        state.StateRoot.Should().BeNull();
+    }
 
-        var statePayloads = (MapField<string, Any>)statePayloadsProperty!.GetValue(state)!;
-        var readModelPayloads = (MapField<string, Any>)readModelPayloadsProperty!.GetValue(state)!;
-        statePayloads.Count.Should().Be(0);
-        readModelPayloads.Count.Should().Be(0);
+    [Fact]
+    public void ScriptBehaviorBindingMessages_ShouldCarryBindingContractFields()
+    {
+        var bind = new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = "public sealed class Behavior {}",
+            SourceHash = "hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
+        };
+        var response = new ScriptBehaviorBindingRespondedEvent
+        {
+            RequestId = "request-1",
+            Found = true,
+            DefinitionActorId = bind.DefinitionActorId,
+            ScriptId = bind.ScriptId,
+            Revision = bind.Revision,
+            SourceHash = bind.SourceHash,
+            StateTypeUrl = bind.StateTypeUrl,
+            ReadModelTypeUrl = bind.ReadModelTypeUrl,
+            ReadModelSchemaVersion = bind.ReadModelSchemaVersion,
+            ReadModelSchemaHash = bind.ReadModelSchemaHash,
+        };
+
+        bind.DefinitionActorId.Should().Be("definition-1");
+        bind.ScriptId.Should().Be("script-1");
+        bind.Revision.Should().Be("rev-1");
+        bind.SourceHash.Should().Be("hash-1");
+        bind.ReadModelSchemaVersion.Should().Be("2");
+        response.RequestId.Should().Be("request-1");
+        response.Found.Should().BeTrue();
+        response.ReadModelSchemaHash.Should().Be("schema-hash-1");
+    }
+
+    [Fact]
+    public void QueryScriptBehaviorBindingRequestedEvent_ShouldCarryRequestAndReplyStream()
+    {
+        var query = new QueryScriptBehaviorBindingRequestedEvent
+        {
+            RequestId = "request-1",
+            ReplyStreamId = "reply-stream",
+        };
+
+        query.RequestId.Should().Be("request-1");
+        query.ReplyStreamId.Should().Be("reply-stream");
     }
 }

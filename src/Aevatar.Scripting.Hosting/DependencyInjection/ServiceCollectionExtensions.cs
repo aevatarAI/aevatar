@@ -9,16 +9,21 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Core.Schema;
+using Aevatar.Scripting.Infrastructure.Artifacts;
 using Aevatar.Scripting.Infrastructure.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Configuration;
@@ -41,12 +46,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(new ScriptingInteractionTimeoutOptions());
         services.TryAddSingleton<ScriptSandboxPolicy>();
         services.TryAddSingleton<IScriptingActorAddressResolver, DefaultScriptingActorAddressResolver>();
-        services.TryAddSingleton<IScriptExecutionEngine, RoslynScriptExecutionEngine>();
-        services.TryAddSingleton<IScriptPackageCompiler, RoslynScriptPackageCompiler>();
+        services.TryAddSingleton<IProtobufMessageCodec, ProtobufMessageCodec>();
+        services.TryAddSingleton<IScriptBehaviorCompiler, RoslynScriptBehaviorCompiler>();
+        services.TryAddSingleton<IScriptBehaviorArtifactResolver, CachedScriptBehaviorArtifactResolver>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
         services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
-        services.TryAddSingleton<IScriptRuntimeCapabilityComposer, ScriptRuntimeCapabilityComposer>();
-        services.TryAddSingleton<IScriptRuntimeExecutionOrchestrator, ScriptRuntimeExecutionOrchestrator>();
+        services.TryAddSingleton<IScriptReadModelQueryApplicationService, ScriptReadModelQueryApplicationService>();
+        services.TryAddSingleton<IScriptBehaviorDispatcher, ScriptBehaviorDispatcher>();
+        services.TryAddSingleton<IScriptBehaviorRuntimeCapabilityFactory, ScriptBehaviorRuntimeCapabilityFactory>();
         services.TryAddSingleton<IScriptEvolutionPolicyEvaluator, DefaultScriptEvolutionPolicyEvaluator>();
         services.TryAddSingleton<IScriptEvolutionValidationService, RuntimeScriptEvolutionValidationService>();
         services.TryAddSingleton<IScriptCatalogBaselineReader, RuntimeScriptCatalogBaselineReader>();
@@ -121,10 +128,10 @@ public static class ServiceCollectionExtensions
 
     private static void AddDefaultScriptingProjectionStores(IServiceCollection services)
     {
-        var executionStoreType = typeof(IProjectionDocumentStore<ScriptExecutionReadModel, string>);
+        var executionStoreType = typeof(IProjectionDocumentStore<ScriptReadModelDocument, string>);
         if (!services.Any(x => x.ServiceType == executionStoreType))
         {
-            services.AddInMemoryDocumentProjectionStore<ScriptExecutionReadModel, string>(
+            services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
                 keySelector: static readModel => readModel.Id,
                 keyFormatter: static key => key,
                 listSortSelector: static readModel => readModel.UpdatedAt);

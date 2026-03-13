@@ -55,6 +55,9 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
             response.ScriptId ?? string.Empty,
             response.Revision ?? string.Empty,
             response.SourceText ?? string.Empty,
+            response.SourceHash ?? string.Empty,
+            response.StateTypeUrl ?? string.Empty,
+            response.ReadModelTypeUrl ?? string.Empty,
             response.ReadModelSchemaVersion ?? string.Empty,
             response.ReadModelSchemaHash ?? string.Empty);
 

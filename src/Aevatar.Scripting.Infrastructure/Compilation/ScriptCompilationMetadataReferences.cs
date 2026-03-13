@@ -1,4 +1,4 @@
-using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Google.Protobuf;
 using Microsoft.CodeAnalysis;
 using System.Text.Json;
@@ -20,7 +20,7 @@ internal static class ScriptCompilationMetadataReferences
         assemblyLocations.Add(typeof(ValueTask).Assembly.Location);
         assemblyLocations.Add(typeof(Enumerable).Assembly.Location);
         assemblyLocations.Add(typeof(JsonSerializer).Assembly.Location);
-        assemblyLocations.Add(typeof(IScriptPackageRuntime).Assembly.Location);
+        assemblyLocations.Add(typeof(IScriptBehaviorBridge).Assembly.Location);
         assemblyLocations.Add(typeof(IMessage).Assembly.Location);
 
         return assemblyLocations

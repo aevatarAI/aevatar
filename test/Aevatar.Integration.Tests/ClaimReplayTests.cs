@@ -2,16 +2,16 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Scripting.Application;
+using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
+using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Scripting.Projection.Reducers;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,320 +22,147 @@ public class ClaimReplayTests
     [Fact]
     public async Task Should_recompile_from_definition_source_without_external_repository()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
-        var streams = provider.GetRequiredService<IStreamProvider>();
+        await using var provider = ClaimIntegrationTestKit.BuildProvider();
+        var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
+        var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
 
         const string definitionActorId = "claim-recompile-definition";
-        const string runtimeActorId = "claim-recompile-runtime";
-        const string scriptRevision = "rev-claim-recompile-1";
-        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
+        const string revision = "rev-claim-recompile-1";
+        const string runtimeActorId1 = "claim-recompile-runtime-1";
+        const string runtimeActorId2 = "claim-recompile-runtime-2";
 
-        var persistedDefinitionSource = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "ClaimApprovedEvent" } },
-            new Dictionary<string, Any>
-            {
-                ["claim"] = Any.Pack(new Struct
-                {
-                    Fields = { ["source_marker"] = Google.Protobuf.WellKnownTypes.Value.ForString("definition-source-v1") },
-                }),
-            },
-            new Dictionary<string, Any>
-            {
-                ["claim_case"] = Any.Pack(new Struct
-                {
-                    Fields = { ["decision_status"] = Google.Protobuf.WellKnownTypes.Value.ForString("Approved") },
-                }),
-            }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
-}
-""";
-
-        await definitionActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActorId,
-                "claim-recompile-script",
-                scriptRevision,
-                persistedDefinitionSource,
-                "hash-claim-recompile-v1"),
+        var persistedDefinitionSource = BuildPersistedSource("definition-source-v1");
+        await definitionPort.UpsertDefinitionAsync(
+            "claim-recompile-script",
+            revision,
+            persistedDefinitionSource,
+            ScriptingCommandEnvelopeTestKit.ComputeSourceHash(persistedDefinitionSource),
+            definitionActorId,
             CancellationToken.None);
 
-        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            streams,
-            runtimeActorId,
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId1, CancellationToken.None);
+        var first = await ClaimIntegrationTestKit.RunClaimAsync(
+            provider,
+            definitionActorId,
+            runtimeActorId1,
+            revision,
             "run-recompile-1",
-            () => runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActorId,
-                    "run-recompile-1",
-                    Any.Pack(new Struct()),
-                    scriptRevision,
-                    definitionActorId),
-                CancellationToken.None),
+            new ClaimSubmitted
+            {
+                CommandId = "run-recompile-1",
+                CaseId = "Case-A",
+                PolicyId = "POLICY-A",
+                RiskScore = 0.12d,
+                CompliancePassed = true,
+            },
             CancellationToken.None);
+        first.Snapshot.ReadModelPayload!.Unpack<ClaimCaseReadModel>().AiSummary.Should().Be("definition-source-v1");
 
-        var firstRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
-        firstRunState.StatePayloads.Should().ContainKey("claim");
-        firstRunState.StatePayloads["claim"]
-            .Unpack<Struct>()
-            .Fields["source_marker"]
-            .StringValue
-            .Should()
-            .Be("definition-source-v1");
-
-        var externalUpdatedSourceButNotPersisted = persistedDefinitionSource.Replace(
-            "definition-source-v1",
-            "definition-source-v2",
-            StringComparison.Ordinal);
+        var externalUpdatedSourceButNotPersisted = BuildPersistedSource("definition-source-v2");
         externalUpdatedSourceButNotPersisted.Should().Contain("definition-source-v2");
 
-        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            streams,
-            runtimeActorId,
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId2, CancellationToken.None);
+        var second = await ClaimIntegrationTestKit.RunClaimAsync(
+            provider,
+            definitionActorId,
+            runtimeActorId2,
+            revision,
             "run-recompile-2",
-            () => runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActorId,
-                    "run-recompile-2",
-                    Any.Pack(new Struct()),
-                    scriptRevision,
-                    definitionActorId),
-                CancellationToken.None),
+            new ClaimSubmitted
+            {
+                CommandId = "run-recompile-2",
+                CaseId = "Case-A",
+                PolicyId = "POLICY-A",
+                RiskScore = 0.12d,
+                CompliancePassed = true,
+            },
             CancellationToken.None);
-
-        var secondRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
-        secondRunState.StatePayloads.Should().ContainKey("claim");
-        secondRunState.StatePayloads["claim"]
-            .Unpack<Struct>()
-            .Fields["source_marker"]
-            .StringValue
-            .Should()
-            .Be("definition-source-v1");
+        second.Snapshot.ReadModelPayload!.Unpack<ClaimCaseReadModel>().AiSummary.Should().Be("definition-source-v1");
     }
 
     [Fact]
     public async Task Should_rebuild_same_state_from_event_stream()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = ClaimIntegrationTestKit.BuildProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var streams = provider.GetRequiredService<IStreamProvider>();
+        var document = ClaimScriptScenarioDocument.CreateEmbedded();
+        var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
 
         const string definitionActorId = "claim-replay-definition";
         const string runtimeActorId = "claim-replay-runtime";
-        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
+        await ClaimIntegrationTestKit.UpsertOrchestratorAsync(provider, definitionActorId, CancellationToken.None);
+        await ClaimIntegrationTestKit.EnsureRuntimeAsync(provider, definitionActorId, orchestrator.Revision, runtimeActorId, CancellationToken.None);
 
-        await definitionActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActorId,
-                "claim-script",
-                "rev-claim-replay",
-                """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class ClaimReplayScript : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        var caseId = requestedEvent.Payload != null && requestedEvent.Payload.Is(Struct.Descriptor)
-            ? requestedEvent.Payload.Unpack<Struct>().Fields.TryGetValue("caseId", out var field) ? field.StringValue : string.Empty
-            : string.Empty;
-        var evt = string.Equals(caseId, "Case-B", StringComparison.Ordinal)
-            ? "ClaimManualReviewRequestedEvent"
-            : "ClaimApprovedEvent";
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = evt } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-}
-""",
-                "hash-claim-replay"),
-            CancellationToken.None);
-
-        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            streams,
+        await ClaimIntegrationTestKit.RunClaimAsync(
+            provider,
+            definitionActorId,
             runtimeActorId,
+            orchestrator.Revision,
             "run-replay-case-b",
-            () => runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActorId,
-                    "run-replay-case-b",
-                    Any.Pack(new Struct
-                    {
-                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
-                    }),
-                    "rev-claim-replay",
-                    definitionActorId),
-                CancellationToken.None),
+            new ClaimSubmitted
+            {
+                CommandId = "run-replay-case-b",
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                RiskScore = 0.91d,
+                CompliancePassed = true,
+            },
             CancellationToken.None);
 
-        var before = (ScriptRuntimeGAgent)runtimeActor.Agent;
-        var beforeState = before.State.Clone();
+        var beforeActor = await runtime.GetAsync(runtimeActorId);
+        var beforeAgent = beforeActor!.Agent.Should().BeOfType<ScriptBehaviorGAgent>().Subject;
+        var beforeStateRoot = beforeAgent.State.StateRoot;
+        beforeStateRoot.Should().NotBeNull();
+        var beforeState = beforeStateRoot!.Clone();
 
         await runtime.DestroyAsync(runtimeActorId, CancellationToken.None);
-        var replayedActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
-        var replayed = (ScriptRuntimeGAgent)replayedActor.Agent;
+        await ClaimIntegrationTestKit.EnsureRuntimeAsync(provider, definitionActorId, orchestrator.Revision, runtimeActorId, CancellationToken.None);
 
-        replayed.State.Revision.Should().Be(beforeState.Revision);
-        replayed.State.LastRunId.Should().Be(beforeState.LastRunId);
-        replayed.State.StatePayloads.Should().BeEquivalentTo(beforeState.StatePayloads);
-        replayed.State.LastAppliedEventVersion.Should().Be(beforeState.LastAppliedEventVersion);
+        var replayedActor = await runtime.GetAsync(runtimeActorId);
+        var replayedAgent = replayedActor!.Agent.Should().BeOfType<ScriptBehaviorGAgent>().Subject;
+
+        replayedAgent.State.Revision.Should().Be(beforeAgent.State.Revision);
+        replayedAgent.State.LastRunId.Should().Be(beforeAgent.State.LastRunId);
+        replayedAgent.State.StateRoot.Should().NotBeNull();
+        replayedAgent.State.StateRoot!.Unpack<ClaimCaseState>().Should().BeEquivalentTo(beforeState.Unpack<ClaimCaseState>());
+        replayedAgent.State.LastAppliedEventVersion.Should().Be(beforeAgent.State.LastAppliedEventVersion);
     }
 
     [Fact]
-    public async Task Should_rebuild_same_readmodel_from_event_stream()
+    public async Task Should_rebuild_same_readmodel_from_committed_fact_stream()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
+        await using var provider = ClaimIntegrationTestKit.BuildProvider();
         var eventStore = provider.GetRequiredService<IEventStore>();
-        var streams = provider.GetRequiredService<IStreamProvider>();
+        var definitionSnapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
+        var artifactResolver = provider.GetRequiredService<Aevatar.Scripting.Core.Artifacts.IScriptBehaviorArtifactResolver>();
+        var codec = provider.GetRequiredService<IProtobufMessageCodec>();
+        var document = ClaimScriptScenarioDocument.CreateEmbedded();
+        var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
 
         const string definitionActorId = "claim-readmodel-definition";
         const string runtimeActorId = "claim-readmodel-runtime";
-        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
+        await ClaimIntegrationTestKit.UpsertOrchestratorAsync(provider, definitionActorId, CancellationToken.None);
+        await ClaimIntegrationTestKit.EnsureRuntimeAsync(provider, definitionActorId, orchestrator.Revision, runtimeActorId, CancellationToken.None);
 
-        await definitionActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActorId,
-                "claim-script-rm",
-                "rev-claim-rm",
-                """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class ClaimReadModelScript : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "ClaimManualReviewRequestedEvent" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["state"] = Any.Pack(new Struct { Fields = { ["last_event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-}
-""",
-                "hash-claim-rm"),
-            CancellationToken.None);
-
-        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            streams,
+        await ClaimIntegrationTestKit.RunClaimAsync(
+            provider,
+            definitionActorId,
             runtimeActorId,
+            orchestrator.Revision,
             "run-readmodel",
-            () => runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActorId,
-                    "run-readmodel",
-                    Any.Pack(new Struct
-                    {
-                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
-                    }),
-                    "rev-claim-rm",
-                    definitionActorId),
-                CancellationToken.None),
+            new ClaimSubmitted
+            {
+                CommandId = "run-readmodel",
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                RiskScore = 0.91d,
+                CompliancePassed = true,
+            },
             CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         var committedEvents = persisted
-            .Where(x => x.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) == true)
+            .Where(x => x.EventData?.Is(ScriptDomainFactCommitted.Descriptor) == true)
             .Select(x => new EventEnvelope
             {
                 Id = x.EventId,
@@ -349,29 +176,32 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             })
             .ToArray();
 
-        var context = new ScriptProjectionContext
+        var context = new ScriptExecutionProjectionContext
         {
             ProjectionId = "projection-claim-readmodel",
             RootActorId = runtimeActorId,
-            ScriptId = "claim-script-rm",
         };
 
         var projectionNow = DateTimeOffset.UtcNow;
-        var dispatcher1 = new InMemoryScriptProjectionStoreDispatcher();
-        var projector1 = new ScriptExecutionReadModelProjector(
+        var dispatcher1 = new InMemoryReadModelDispatcher();
+        var projector1 = new ScriptReadModelProjector(
             dispatcher1,
             new FixedProjectionClock(projectionNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
+            definitionSnapshotPort,
+            artifactResolver,
+            codec);
         await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel1 = await dispatcher1.GetAsync(runtimeActorId, CancellationToken.None);
 
-        var dispatcher2 = new InMemoryScriptProjectionStoreDispatcher();
-        var projector2 = new ScriptExecutionReadModelProjector(
+        var dispatcher2 = new InMemoryReadModelDispatcher();
+        var projector2 = new ScriptReadModelProjector(
             dispatcher2,
             new FixedProjectionClock(projectionNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
+            definitionSnapshotPort,
+            artifactResolver,
+            codec);
         await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);
@@ -380,22 +210,95 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
         readModel2.Should().BeEquivalentTo(readModel1);
     }
 
-    private sealed class InMemoryScriptProjectionStoreDispatcher
-        : IProjectionStoreDispatcher<ScriptExecutionReadModel, string>
-    {
-        private readonly Dictionary<string, ScriptExecutionReadModel> _store = new(StringComparer.Ordinal);
+    private static string BuildPersistedSource(string marker) =>
+        $$"""
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Aevatar.Integration.Tests.Protocols;
+        using Aevatar.Scripting.Abstractions.Behaviors;
+        using Aevatar.Scripting.Abstractions.Definitions;
 
-        public Task UpsertAsync(ScriptExecutionReadModel readModel, CancellationToken ct = default)
+        public sealed class PersistedDefinitionSourceBehavior : ScriptBehavior<ClaimCaseState, ClaimCaseReadModel>
         {
+            protected override void Configure(IScriptBehaviorBuilder<ClaimCaseState, ClaimCaseReadModel> builder)
+            {
+                builder
+                    .OnCommand<ClaimSubmitted>(HandleAsync)
+                    .OnEvent<ClaimDecisionRecorded>(
+                        apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState
+                        {
+                            CaseId = evt.Current.CaseId,
+                            PolicyId = evt.Current.PolicyId,
+                            DecisionStatus = evt.Current.DecisionStatus,
+                            AiSummary = evt.Current.AiSummary,
+                            LastCommandId = evt.CommandId ?? string.Empty,
+                        },
+                        reduce: static (_, evt, _) => evt.Current)
+                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync)
+                    .DescribeReadModel(
+                        new ScriptReadModelDefinition(
+                            "claim_case",
+                            "1",
+                            new[] { new ScriptReadModelFieldDefinition("ai_summary", "keyword", "ai_summary", false) },
+                            new[] { new ScriptReadModelIndexDefinition("idx_ai_summary", new[] { "ai_summary" }, false, "document") },
+                            new ScriptReadModelRelationDefinition[] { }),
+                        new[] { "document" });
+            }
+
+            private static Task HandleAsync(
+                ClaimSubmitted command,
+                ScriptCommandContext<ClaimCaseState> context,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                context.Emit(new ClaimDecisionRecorded
+                {
+                    CommandId = command.CommandId ?? string.Empty,
+                    Current = new ClaimCaseReadModel
+                    {
+                        HasValue = true,
+                        CaseId = command.CaseId ?? string.Empty,
+                        PolicyId = command.PolicyId ?? string.Empty,
+                        DecisionStatus = "Approved",
+                        AiSummary = "{{marker}}",
+                        LastCommandId = command.CommandId ?? string.Empty,
+                    },
+                });
+                return Task.CompletedTask;
+            }
+
+            private static Task<ClaimQueryResponded?> HandleQueryAsync(
+                ClaimQueryRequested request,
+                ScriptQueryContext<ClaimCaseReadModel> snapshot,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ClaimQueryResponded?>(new ClaimQueryResponded
+                {
+                    RequestId = request.RequestId ?? string.Empty,
+                    Current = snapshot.CurrentReadModel ?? new ClaimCaseReadModel(),
+                });
+            }
+        }
+        """;
+
+    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
+    {
+        private readonly Dictionary<string, ScriptReadModelDocument> _store = new(StringComparer.Ordinal);
+
+        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
             _store[readModel.Id] = readModel;
             return Task.CompletedTask;
         }
 
-        public Task MutateAsync(string key, Action<ScriptExecutionReadModel> mutate, CancellationToken ct = default)
+        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             if (!_store.TryGetValue(key, out var readModel))
             {
-                readModel = new ScriptExecutionReadModel { Id = key };
+                readModel = new ScriptReadModelDocument { Id = key };
                 _store[key] = readModel;
             }
 
@@ -403,14 +306,18 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             return Task.CompletedTask;
         }
 
-        public Task<ScriptExecutionReadModel?> GetAsync(string key, CancellationToken ct = default)
+        public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             _store.TryGetValue(key, out var readModel);
             return Task.FromResult(readModel);
         }
 
-        public Task<IReadOnlyList<ScriptExecutionReadModel>> ListAsync(int take = 50, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScriptExecutionReadModel>>(_store.Values.Take(take).ToArray());
+        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_store.Values.Take(take).ToArray());
+        }
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

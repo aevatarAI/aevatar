@@ -3,11 +3,11 @@ using FluentAssertions;
 
 namespace Aevatar.Scripting.Core.Tests.Architecture;
 
-public class ScriptInheritanceGuardTests
+public sealed class ScriptInheritanceGuardTests
 {
     [Theory]
     [InlineData("src/Aevatar.Scripting.Core/ScriptDefinitionGAgent.cs", "ScriptDefinitionGAgent")]
-    [InlineData("src/Aevatar.Scripting.Core/ScriptRuntimeGAgent.cs", "ScriptRuntimeGAgent")]
+    [InlineData("src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs", "ScriptBehaviorGAgent")]
     public void ScriptAgents_ShouldInheritDirectlyFromGAgentBase(
         string relativePath,
         string agentName)
@@ -31,8 +31,8 @@ public class ScriptInheritanceGuardTests
 
         var source = File.ReadAllText(guardPath);
         source.Should().Contain("ScriptDefinitionGAgent");
-        source.Should().Contain("ScriptRuntimeGAgent");
-        source.Should().NotContain("ScriptHostGAgent");
+        source.Should().Contain("ScriptBehaviorGAgent");
+        source.Should().NotContain("ScriptRuntimeGAgent");
     }
 
     private static string FindRepoRoot()
@@ -43,6 +43,7 @@ public class ScriptInheritanceGuardTests
             var marker = Path.Combine(dir.FullName, "aevatar.slnx");
             if (File.Exists(marker))
                 return dir.FullName;
+
             dir = dir.Parent;
         }
 

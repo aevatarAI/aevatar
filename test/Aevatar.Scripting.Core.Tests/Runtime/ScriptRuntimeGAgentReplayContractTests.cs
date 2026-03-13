@@ -1,310 +1,246 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core.AI;
-using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
-using Aevatar.Scripting.Core.Schema;
+using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Artifacts;
 using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
-public class ScriptRuntimeGAgentReplayContractTests
+public class ScriptBehaviorGAgentReplayContractTests
 {
     [Fact]
-    public async Task HandleRunRequested_ShouldPersistDomainEvent_AndMutateViaTransitionOnly()
+    public async Task HandleEnvelopeAsync_ShouldPersistCommittedFact_AndMutateViaTransitionOnly()
     {
-        var definition = CreateDefinitionAgent();
-        await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
-        {
-            ScriptId = "script-1",
-            ScriptRevision = "rev-1",
-            SourceText = BuildStatefulRuntimeSource(),
-            SourceHash = "hash-1",
-        });
-
         var harness = CreateRuntimeHarness();
-        var agent = harness.Agent;
 
-        await ExecuteRunAsync(harness, definition, "run-1", "rev-1");
+        await BindAsync(harness.Agent, harness.SourceHash);
+        await RunAsync(harness.Agent, "run-1", "rev-1", "runtime.requested");
 
-        agent.State.LastRunId.Should().Be("run-1");
-        agent.State.Revision.Should().Be("rev-1");
-        agent.State.DefinitionActorId.Should().Be("definition-1");
-        agent.State.StatePayloads.Should().ContainKey("state");
-        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(1);
-        agent.State.ReadModelPayloads.Should().ContainKey("view");
-        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
-        agent.State.LastAppliedSchemaVersion.Should().Be("7");
-        agent.State.LastAppliedEventVersion.Should().BeGreaterThan(0);
+        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
+        harness.Agent.State.ScriptId.Should().Be("script-1");
+        harness.Agent.State.Revision.Should().Be("rev-1");
+        harness.Agent.State.LastRunId.Should().Be("run-1");
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.StateRoot.Should().NotBeNull();
+        harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(1);
+        harness.Agent.State.LastEventId.Should().Be(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
     }
 
     [Fact]
-    public async Task HandleRunRequested_ShouldCarryStateAndReadModelPayloadBetweenRuns_ByScriptApplyAndReduce()
+    public async Task HandleEnvelopeAsync_ShouldCarryStateAcrossRuns_ByApplyDomainEvent()
     {
-        var definition = CreateDefinitionAgent();
-        await definition.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
-        {
-            ScriptId = "script-stateful-1",
-            ScriptRevision = "rev-stateful-1",
-            SourceText = BuildStatefulRuntimeSource(),
-            SourceHash = "hash-stateful-1",
-        });
-
         var harness = CreateRuntimeHarness();
-        var agent = harness.Agent;
 
-        await ExecuteRunAsync(harness, definition, "run-state-1", "rev-stateful-1");
+        await BindAsync(harness.Agent, harness.SourceHash);
+        await RunAsync(harness.Agent, "run-1", "rev-1", "runtime.requested");
+        await RunAsync(harness.Agent, "run-2", "rev-1", "runtime.requested");
 
-        agent.State.StatePayloads.Should().ContainKey("state");
-        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(1);
-        agent.State.ReadModelPayloads.Should().ContainKey("view");
-        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
-        agent.State.LastAppliedSchemaVersion.Should().Be("7");
-
-        await ExecuteRunAsync(harness, definition, "run-state-2", "rev-stateful-1");
-
-        agent.State.StatePayloads.Should().ContainKey("state");
-        agent.State.StatePayloads["state"].Unpack<Int32Value>().Value.Should().Be(2);
-        agent.State.ReadModelPayloads.Should().ContainKey("view");
-        agent.State.ReadModelPayloads["view"].Unpack<StringValue>().Value.Should().Be("RuntimeContractEvent");
-        agent.State.LastAppliedSchemaVersion.Should().Be("7");
+        harness.Agent.State.LastRunId.Should().Be("run-2");
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(3);
+        harness.Agent.State.StateRoot.Should().NotBeNull();
+        harness.Agent.State.StateRoot.Unpack<ScriptProfileState>().CommandCount.Should().Be(2);
     }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRejectRun_WhenRequestedRevisionDiffersFromBinding()
+    {
+        var harness = CreateRuntimeHarness();
+        await BindAsync(harness.Agent, harness.SourceHash);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-mismatch",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-2",
+            RequestedEventType = "runtime.requested",
+            InputPayload = Any.Pack(BuildCommand("run-mismatch")),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*bound to revision*rev-1*rev-2*");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRespondToBindingQuery()
+    {
+        var harness = CreateRuntimeHarness();
+        await BindAsync(harness.Agent, harness.SourceHash);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
+        {
+            RequestId = "request-1",
+            ReplyStreamId = "reply-stream",
+        }));
+
+        harness.Publisher.Sent.Should().ContainSingle();
+        var response = harness.Publisher.Sent[0].Should().BeOfType<ScriptBehaviorBindingRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-1");
+        response.Found.Should().BeTrue();
+        response.DefinitionActorId.Should().Be("definition-1");
+        response.Revision.Should().Be("rev-1");
+        response.SourceHash.Should().Be(harness.SourceHash);
+    }
+
+    private static async Task BindAsync(ScriptBehaviorGAgent agent, string sourceHash)
+    {
+        await agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = StatefulBehaviorSource,
+            SourceHash = sourceHash,
+            StateTypeUrl = Any.Pack(new ScriptProfileState()).TypeUrl,
+            ReadModelTypeUrl = Any.Pack(new ScriptProfileReadModel()).TypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
+        }));
+    }
+
+    private static async Task RunAsync(
+        ScriptBehaviorGAgent agent,
+        string runId,
+        string revision,
+        string requestedEventType)
+    {
+        await agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = runId,
+            DefinitionActorId = "definition-1",
+            ScriptRevision = revision,
+            RequestedEventType = requestedEventType,
+            InputPayload = Any.Pack(BuildCommand(runId)),
+        }));
+    }
+
+    private static ScriptProfileUpdateCommand BuildCommand(string runId) =>
+        new()
+        {
+            CommandId = "command-" + runId,
+            ActorId = "actor-" + runId,
+            PolicyId = "policy-1",
+            InputText = " runtime requested ",
+            Tags = { "runtime", runId },
+        };
+
+    private static EventEnvelope BuildEnvelope(IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(payload),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("runtime-test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+            },
+        };
 
     private static RuntimeHarness CreateRuntimeHarness()
     {
-        var ports = new NullScriptPorts();
-        var capabilityComposer = new ScriptRuntimeCapabilityComposer(
-            new NullAICapability(),
-            new NullActorRuntime(),
-            ports,
-            ports,
-            ports,
-            ports,
-            ports);
-
-        var orchestrator = new ScriptRuntimeExecutionOrchestrator(
-            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
-            capabilityComposer);
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var artifactResolver = new CachedScriptBehaviorArtifactResolver(compiler);
+        var codec = new ProtobufMessageCodec();
+        var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(artifactResolver, codec);
         var publisher = new RecordingEventPublisher();
-
-        return new RuntimeHarness(new ScriptRuntimeGAgent(orchestrator)
+        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, codec)
         {
             EventPublisher = publisher,
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-            Services = new ServiceCollection()
-                .AddSingleton<IActorRuntimeCallbackScheduler>(new NoOpCallbackScheduler())
-                .BuildServiceProvider(),
-        }, publisher);
-    }
-
-    private static async Task ExecuteRunAsync(
-        RuntimeHarness harness,
-        ScriptDefinitionGAgent definition,
-        string runId,
-        string revision)
-    {
-        harness.Publisher.Sent.Clear();
-
-        await harness.Agent.HandleRunScriptRequested(new RunScriptRequestedEvent
-        {
-            RunId = runId,
-            InputPayload = Any.Pack(new Struct()),
-            ScriptRevision = revision,
-            DefinitionActorId = "definition-1",
-            RequestedEventType = "claim.submitted",
-        });
-
-        var query = harness.Publisher.Sent
-            .Select(x => x.Payload)
-            .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
-            .Single();
-
-        await harness.Agent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = query.RequestId,
-            Found = true,
-            ScriptId = definition.State.ScriptId ?? string.Empty,
-            Revision = definition.State.Revision ?? string.Empty,
-            SourceText = definition.State.SourceText ?? string.Empty,
-            ReadModelSchemaVersion = definition.State.ReadModelSchemaVersion ?? string.Empty,
-            ReadModelSchemaHash = definition.State.ReadModelSchemaHash ?? string.Empty,
-        });
-    }
-
-    private static ScriptDefinitionGAgent CreateDefinitionAgent()
-    {
-        return new ScriptDefinitionGAgent(
-            new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
-            new DefaultScriptReadModelSchemaActivationPolicy())
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(
                 new InMemoryEventStore()),
         };
+
+        return new RuntimeHarness(agent, publisher, ComputeSourceHash(StatefulBehaviorSource));
     }
 
-    private static string BuildStatefulRuntimeSource()
+    private static string ComputeSourceHash(string source)
     {
-        return """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContractProvider
-{
-    public ScriptContractManifest ContractManifest => new(
-        "runtime_case_v1",
-        new[] { "RuntimeContractEvent" },
-        "runtime_state_v1",
-        "runtime_case_readmodel_v7",
-        new ScriptReadModelDefinition(
-            "runtime_case",
-            "7",
-            new[]
-            {
-                new ScriptReadModelFieldDefinition("status", "keyword", "status", false),
-            },
-            new[]
-            {
-                new ScriptReadModelIndexDefinition("idx_status", new[] { "status" }, false, "elasticsearch"),
-            },
-            new ScriptReadModelRelationDefinition[] { }),
-        new[] { "elasticsearch" });
-
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "RuntimeContractEvent" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-
-        var step = 0;
-        if (currentState.TryGetValue("state", out var statePayload) && statePayload != null)
-        {
-            try
-            {
-                step = statePayload.Unpack<Int32Value>().Value;
-            }
-            catch
-            {
-                step = 0;
-            }
-        }
-
-        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["state"] = Any.Pack(new Int32Value { Value = step + 1 }),
-            });
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["view"] = Any.Pack(new StringValue { Value = domainEvent.EventType }),
-            });
-    }
-}
-""";
-    }
-    private sealed class NullAICapability : IAICapability
-    {
-        public Task<string> AskAsync(
-            string runId,
-            string correlationId,
-            string prompt,
-            CancellationToken ct) => Task.FromResult("noop");
-    }
-
-    private sealed class NullActorRuntime : IActorRuntime
-    {
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
-            Task.FromResult<IActor>(new NullActor(id ?? "agent-created"));
-
-        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new NullActor(id ?? "agent-created"));
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class NullActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private sealed record RuntimeHarness(
-        ScriptRuntimeGAgent Agent,
-        RecordingEventPublisher Publisher);
+        ScriptBehaviorGAgent Agent,
+        RecordingEventPublisher Publisher,
+        string SourceHash);
 
-    private sealed record PublishedMessage(
-        string TargetActorId,
-        IMessage Payload);
+    private sealed class StaticCapabilityFactory : IScriptBehaviorRuntimeCapabilityFactory
+    {
+        public IScriptBehaviorRuntimeCapabilities Create(
+            ScriptBehaviorRuntimeCapabilityContext context,
+            Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
+            Func<string, IMessage, CancellationToken, Task> sendToAsync,
+            Func<IMessage, CancellationToken, Task> publishToSelfAsync,
+            Func<string, TimeSpan, IMessage, CancellationToken, Task<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>> scheduleSelfSignalAsync,
+            Func<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync)
+        {
+            _ = context;
+            _ = publishAsync;
+            _ = sendToAsync;
+            _ = publishToSelfAsync;
+            _ = scheduleSelfSignalAsync;
+            _ = cancelCallbackAsync;
+            return new NoOpCapabilities();
+        }
+    }
+
+    private sealed class NoOpCapabilities : IScriptBehaviorRuntimeCapabilities
+    {
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult(string.Empty);
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
+            Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+        public Task CancelDurableCallbackAsync(Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
+            Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+            Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
+    }
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<PublishedMessage> Sent { get; } = [];
+        public List<IMessage> Sent { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            TopologyAudience direction = TopologyAudience.Children,
+            TopologyAudience audience = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = evt;
-            _ = direction;
+            _ = audience;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();
+            Sent.Add(evt);
             return Task.CompletedTask;
         }
 
@@ -316,182 +252,89 @@ public sealed class StatefulRuntimeScript : IScriptPackageRuntime, IScriptContra
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = targetActorId;
             _ = sourceEnvelope;
             _ = options;
             ct.ThrowIfCancellationRequested();
-            Sent.Add(new PublishedMessage(targetActorId, evt));
-            return Task.CompletedTask;
-        }
-
-        public Task PublishCommittedStateEventAsync(
-            CommittedStateEventPublished evt,
-            ObserverAudience audience = ObserverAudience.CommittedFacts,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-        {
-            _ = evt;
-            _ = audience;
-            _ = sourceEnvelope;
-            _ = options;
-            ct.ThrowIfCancellationRequested();
+            Sent.Add(evt);
             return Task.CompletedTask;
         }
     }
 
-    private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler
-    {
-        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
-            RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                Generation: 1,
-                RuntimeCallbackBackend.InMemory));
-        }
+    private const string StatefulBehaviorSource =
+        """
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
+        using Aevatar.Scripting.Abstractions.Behaviors;
+        using Aevatar.Scripting.Core.Tests.Messages;
 
-        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
-            RuntimeCallbackTimerRequest request,
-            CancellationToken ct = default)
+        public sealed class StatefulBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
         {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                Generation: 1,
-                RuntimeCallbackBackend.InMemory));
-        }
+            protected override void Configure(IScriptBehaviorBuilder<ScriptProfileState, ScriptProfileReadModel> builder)
+            {
+                builder
+                    .OnCommand<ScriptProfileUpdateCommand>(HandleCommandAsync)
+                    .OnEvent<ScriptProfileUpdated>(
+                        apply: static (state, evt, _) => new ScriptProfileState
+                        {
+                            CommandCount = (state?.CommandCount ?? 0) + 1,
+                            LastCommandId = evt.CommandId ?? string.Empty,
+                            NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
+                        },
+                        reduce: static (_, evt, _) => evt.Current)
+                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+            }
 
-        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
-        {
-            _ = lease;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+            private static Task HandleCommandAsync(
+                ScriptProfileUpdateCommand inbound,
+                ScriptCommandContext<ScriptProfileState> context,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                var evt = new ScriptProfileUpdated
+                {
+                    CommandId = inbound.CommandId ?? string.Empty,
+                    Current = new ScriptProfileReadModel
+                    {
+                        HasValue = true,
+                        ActorId = inbound.ActorId ?? string.Empty,
+                        PolicyId = inbound.PolicyId ?? string.Empty,
+                        LastCommandId = inbound.CommandId ?? string.Empty,
+                        InputText = inbound.InputText ?? string.Empty,
+                        NormalizedText = (inbound.InputText ?? string.Empty).Trim().ToUpperInvariant(),
+                        Search = new ScriptProfileSearchIndex
+                        {
+                            LookupKey = $"{inbound.ActorId}:{inbound.PolicyId}".ToLowerInvariant(),
+                            SortKey = (inbound.InputText ?? string.Empty).Trim().ToUpperInvariant(),
+                        },
+                        Refs = new ScriptProfileDocumentRef
+                        {
+                            ActorId = inbound.ActorId ?? string.Empty,
+                            PolicyId = inbound.PolicyId ?? string.Empty,
+                        },
+                    },
+                };
+                evt.Current.Tags.AddRange(inbound.Tags.Select(static tag => tag.Trim().ToLowerInvariant()));
+                context.Emit(evt);
+                return Task.CompletedTask;
+            }
 
-        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            private static Task<ScriptProfileQueryResponded?> HandleQueryAsync(
+                ScriptProfileQueryRequested queryPayload,
+                ScriptQueryContext<ScriptProfileReadModel> snapshot,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptProfileQueryResponded?>(new ScriptProfileQueryResponded
+                {
+                    RequestId = queryPayload.RequestId ?? string.Empty,
+                    Current = snapshot.CurrentReadModel ?? new ScriptProfileReadModel(),
+                });
+            }
         }
-    }
-
-    private sealed class NullScriptPorts :
-        IScriptEvolutionProposalPort,
-        IScriptDefinitionCommandPort,
-        IScriptRuntimeProvisioningPort,
-        IScriptRuntimeCommandPort,
-        IScriptCatalogCommandPort
-    {
-        public Task<ScriptPromotionDecision> ProposeAsync(
-            ScriptEvolutionProposal proposal,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: true,
-                    ProposalId: proposal.ProposalId,
-                    ScriptId: proposal.ScriptId,
-                    BaseRevision: proposal.BaseRevision,
-                    CandidateRevision: proposal.CandidateRevision,
-                    Status: "promoted",
-                    FailureReason: string.Empty,
-                    DefinitionActorId: "definition-1",
-                    CatalogActorId: "script-catalog",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
-        }
-
-        public Task<string> UpsertDefinitionAsync(
-            string scriptId,
-            string scriptRevision,
-            string sourceText,
-            string sourceHash,
-            string? definitionActorId,
-            CancellationToken ct)
-        {
-            _ = scriptId;
-            _ = scriptRevision;
-            _ = sourceText;
-            _ = sourceHash;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(definitionActorId ?? "definition-1");
-        }
-
-        public Task<string> EnsureRuntimeAsync(
-            string definitionActorId,
-            string scriptRevision,
-            string? runtimeActorId,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = scriptRevision;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(runtimeActorId ?? "runtime-1");
-        }
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct)
-        {
-            _ = runtimeActorId;
-            _ = runId;
-            _ = inputPayload;
-            _ = scriptRevision;
-            _ = definitionActorId;
-            _ = requestedEventType;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task PromoteCatalogRevisionAsync(
-            string? catalogActorId,
-            string scriptId,
-            string expectedBaseRevision,
-            string revision,
-            string definitionActorId,
-            string sourceHash,
-            string proposalId,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            _ = expectedBaseRevision;
-            _ = revision;
-            _ = definitionActorId;
-            _ = sourceHash;
-            _ = proposalId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task RollbackCatalogRevisionAsync(
-            string? catalogActorId,
-            string scriptId,
-            string targetRevision,
-            string reason,
-            string proposalId,
-            string expectedCurrentRevision,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            _ = targetRevision;
-            _ = reason;
-            _ = proposalId;
-            _ = expectedCurrentRevision;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-    }
+        """;
 }

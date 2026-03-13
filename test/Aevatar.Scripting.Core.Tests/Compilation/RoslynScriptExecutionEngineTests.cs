@@ -1,4 +1,7 @@
-using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 using Google.Protobuf;
@@ -6,313 +9,126 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Compilation;
 
-public class RoslynScriptExecutionEngineTests
+public sealed class RoslynScriptExecutionEngineTests
 {
     [Fact]
-    public async Task HandleRequestedEventAsync_ShouldReturnEmptyResult_WhenSourceIsBlank()
+    public async Task CompiledArtifact_ShouldInstantiateBehavior_AndThrowAfterDispose()
     {
-        var engine = new RoslynScriptExecutionEngine();
-
-        var result = await engine.HandleRequestedEventAsync(
-            source: "   ",
-            BuildRequestedEnvelope("claim.requested"),
-            BuildContext(),
-            CancellationToken.None);
-
-        result.DomainEvents.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ApplyDomainEventAsync_ShouldReturnCurrentState_WhenSourceIsBlank()
-    {
-        var engine = new RoslynScriptExecutionEngine();
-        var currentState = new Dictionary<string, Any>(StringComparer.Ordinal)
-        {
-            ["seed"] = Any.Pack(new StringValue { Value = "seed-state" }),
-        };
-
-        var next = await engine.ApplyDomainEventAsync(
-            source: string.Empty,
-            currentState,
-            BuildDomainEventEnvelope("claim.approved"),
-            CancellationToken.None);
-
-        next.Should().BeSameAs(currentState);
-    }
-
-    [Fact]
-    public async Task ReduceReadModelAsync_ShouldReturnCurrentReadModel_WhenSourceIsBlank()
-    {
-        var engine = new RoslynScriptExecutionEngine();
-        var currentReadModel = new Dictionary<string, Any>(StringComparer.Ordinal)
-        {
-            ["seed"] = Any.Pack(new StringValue { Value = "seed-view" }),
-        };
-
-        var next = await engine.ReduceReadModelAsync(
-            source: string.Empty,
-            currentReadModel,
-            BuildDomainEventEnvelope("claim.approved"),
-            CancellationToken.None);
-
-        next.Should().BeSameAs(currentReadModel);
-    }
-
-    [Fact]
-    public async Task HandleRequestedEventAsync_ShouldThrow_WhenCompilationFails()
-    {
-        var engine = new RoslynScriptExecutionEngine();
-
-        var act = () => engine.HandleRequestedEventAsync(
-            "if (true {",
-            BuildRequestedEnvelope("claim.requested"),
-            BuildContext(),
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Script execution compilation failed*");
-    }
-
-    [Fact]
-    public async Task HandleRequestedEventAsync_ShouldThrow_WhenRuntimeTypeIsMissing()
-    {
-        var engine = new RoslynScriptExecutionEngine();
-        var source = """
-using System.Threading;
-using System.Threading.Tasks;
-
-public sealed class NotARuntimeScript
-{
-    public Task<string> ExecuteAsync(CancellationToken ct) => Task.FromResult("noop");
-}
-""";
-
-        var act = () => engine.HandleRequestedEventAsync(
-            source,
-            BuildRequestedEnvelope("claim.requested"),
-            BuildContext(),
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*implementing IScriptPackageRuntime*");
-    }
-
-    [Fact]
-    public async Task HandleRequestedEventAsync_ShouldThrow_WhenRuntimeTypeCannotBeInstantiated()
-    {
-        var engine = new RoslynScriptExecutionEngine();
-        var source = """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class PrivateCtorRuntimeScript : IScriptPackageRuntime
-{
-    private PrivateCtorRuntimeScript() { }
-
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct) =>
-        Task.FromResult(new ScriptHandlerResult(System.Array.Empty<Google.Protobuf.IMessage>()));
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-        var act = () => engine.HandleRequestedEventAsync(
-            source,
-            BuildRequestedEnvelope("claim.requested"),
-            BuildContext(),
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<Exception>();
-    }
-
-    [Fact]
-    public async Task HandleRequestedEventAsync_ShouldDisposeRuntime_WhenRuntimeImplementsIDisposable()
-    {
-        ScriptRuntimeLoaderTestHooks.Reset();
-        var engine = new RoslynScriptExecutionEngine();
-        var source = """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class DisposableRuntimeScript : IScriptPackageRuntime, IDisposable
-{
-    public void Dispose()
-    {
-        Aevatar.Scripting.Core.Tests.Compilation.ScriptRuntimeLoaderTestHooks.IncrementDispose();
-    }
-
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = requestedEvent.EventType } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-        var result = await engine.HandleRequestedEventAsync(
-            source,
-            BuildRequestedEnvelope("claim.requested"),
-            BuildContext(),
-            CancellationToken.None);
-
-        result.DomainEvents.Should().ContainSingle();
-        ScriptRuntimeLoaderTestHooks.DisposeCount.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task ApplyAndReduce_ShouldExecuteRuntimeLogic_AndDisposeAsyncRuntime()
-    {
-        ScriptRuntimeLoaderTestHooks.Reset();
-        var engine = new RoslynScriptExecutionEngine();
-        var source = """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class AsyncDisposableRuntimeScript : IScriptPackageRuntime, IAsyncDisposable
-{
-    public ValueTask DisposeAsync()
-    {
-        Aevatar.Scripting.Core.Tests.Compilation.ScriptRuntimeLoaderTestHooks.IncrementAsyncDispose();
-        return ValueTask.CompletedTask;
-    }
-
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct) =>
-        Task.FromResult(new ScriptHandlerResult(System.Array.Empty<IMessage>()));
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["state"] = Any.Pack(new StringValue { Value = "state:" + domainEvent.EventType }),
-            });
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["view"] = Any.Pack(new StringValue { Value = "view:" + domainEvent.EventType }),
-            });
-    }
-}
-""";
-
-        var nextState = await engine.ApplyDomainEventAsync(
-            source,
-            new Dictionary<string, Any>(StringComparer.Ordinal),
-            BuildDomainEventEnvelope("claim.approved"),
-            CancellationToken.None);
-
-        nextState.Should().NotBeNull();
-        nextState!["state"].Unpack<StringValue>().Value.Should().Be("state:claim.approved");
-
-        var nextReadModel = await engine.ReduceReadModelAsync(
-            source,
-            new Dictionary<string, Any>(StringComparer.Ordinal),
-            BuildDomainEventEnvelope("claim.approved"),
-            CancellationToken.None);
-
-        nextReadModel.Should().NotBeNull();
-        nextReadModel!["view"].Unpack<StringValue>().Value.Should().Be("view:claim.approved");
-        ScriptRuntimeLoaderTestHooks.AsyncDisposeCount.Should().Be(2);
-    }
-
-    private static ScriptRequestedEventEnvelope BuildRequestedEnvelope(string eventType) =>
-        new(
-            EventType: eventType,
-            Payload: Any.Pack(new Struct()),
-            EventId: "evt-1",
-            CorrelationId: "corr-1",
-            CausationId: "cause-1");
-
-    private static ScriptDomainEventEnvelope BuildDomainEventEnvelope(string eventType) =>
-        new(
-            EventType: eventType,
-            Payload: Any.Pack(new Struct()),
-            EventId: "evt-2",
-            CorrelationId: "corr-1",
-            CausationId: "cause-1");
-
-    private static ScriptExecutionContext BuildContext() =>
-        new(
-            ActorId: "runtime-1",
-            ScriptId: "script-1",
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-exec",
             Revision: "rev-1",
-            RunId: "run-1",
-            CorrelationId: "corr-1");
-}
+            Source: """
+                    using System.Collections.Generic;
+                    using System.Threading;
+                    using System.Threading.Tasks;
+                    using Aevatar.Scripting.Abstractions;
+                    using Aevatar.Scripting.Abstractions.Behaviors;
+                    using Google.Protobuf;
+                    using Google.Protobuf.WellKnownTypes;
 
-public static class ScriptRuntimeLoaderTestHooks
-{
-    private static int _disposeCount;
-    private static int _asyncDisposeCount;
+                    public sealed class ExecutionBehavior : ScriptBehavior<StringValue, StringValue>
+                    {
+                        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+                        {
+                            builder
+                                .OnCommand<StringValue>(HandleCommandAsync)
+                                .OnEvent<StringValue>(
+                                    apply: static (_, evt, _) => new StringValue { Value = evt.Value },
+                                    reduce: static (_, evt, _) => new StringValue { Value = evt.Value })
+                                .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                        }
 
-    public static int DisposeCount => Volatile.Read(ref _disposeCount);
-    public static int AsyncDisposeCount => Volatile.Read(ref _asyncDisposeCount);
+                        private static Task HandleCommandAsync(
+                            StringValue inbound,
+                            ScriptCommandContext<StringValue> context,
+                            CancellationToken ct)
+                        {
+                            _ = context;
+                            ct.ThrowIfCancellationRequested();
+                            context.Emit(new StringValue { Value = inbound.Value ?? string.Empty });
+                            return Task.CompletedTask;
+                        }
 
-    public static void IncrementDispose() => Interlocked.Increment(ref _disposeCount);
+                        private static Task<StringValue?> HandleQueryAsync(
+                            Empty queryPayload,
+                            ScriptQueryContext<StringValue> snapshot,
+                            CancellationToken ct)
+                        {
+                            _ = queryPayload;
+                            ct.ThrowIfCancellationRequested();
+                            return Task.FromResult<StringValue?>(snapshot.CurrentReadModel == null
+                                ? null
+                                : new StringValue { Value = snapshot.CurrentReadModel.Value });
+                        }
+                    }
+                    """));
 
-    public static void IncrementAsyncDispose() => Interlocked.Increment(ref _asyncDisposeCount);
+        result.IsSuccess.Should().BeTrue();
+        result.Artifact.Should().NotBeNull();
 
-    public static void Reset()
+        await using var artifact = result.Artifact!;
+        var behavior = artifact.CreateBehavior();
+        try
+        {
+            var dispatch = await behavior.DispatchAsync(
+                new StringValue { Value = "HELLO" },
+                new ScriptDispatchContext(
+                    ActorId: "runtime-1",
+                    ScriptId: "script-exec",
+                    Revision: "rev-1",
+                    RunId: "run-1",
+                    MessageType: "integration.requested",
+                    MessageId: "msg-1",
+                    CommandId: "command-1",
+                    CorrelationId: "corr-1",
+                    CausationId: "cause-1",
+                    DefinitionActorId: "definition-1",
+                    CurrentState: null,
+                    RuntimeCapabilities: new NoOpCapabilities()),
+                CancellationToken.None);
+
+            dispatch.Should().ContainSingle();
+            dispatch[0].Should().BeOfType<StringValue>().Which.Value.Should().Be("HELLO");
+        }
+        finally
+        {
+            if (behavior is IDisposable disposable)
+                disposable.Dispose();
+        }
+
+        await artifact.DisposeAsync();
+
+        var act = () => artifact.CreateBehavior();
+        act.Should().Throw<ObjectDisposedException>();
+    }
+
+    private sealed class NoOpCapabilities : IScriptBehaviorRuntimeCapabilities
     {
-        Interlocked.Exchange(ref _disposeCount, 0);
-        Interlocked.Exchange(ref _asyncDisposeCount, 0);
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult(string.Empty);
+        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
+            Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+        public Task CancelDurableCallbackAsync(Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision> ProposeScriptEvolutionAsync(Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionProposal proposal, CancellationToken ct) =>
+            Task.FromResult(new Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+            Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 }

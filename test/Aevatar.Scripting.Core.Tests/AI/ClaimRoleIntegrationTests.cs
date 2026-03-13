@@ -1,7 +1,12 @@
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Core.AI;
-using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 using Google.Protobuf;
@@ -30,72 +35,50 @@ public class ClaimRoleIntegrationTests
     }
 
     [Fact]
-    public async Task Should_map_ai_output_to_ClaimFactsExtractedEvent()
+    public async Task Should_map_ai_output_to_typed_claim_decision_event()
     {
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var compilation = compiler.Compile(
+            new ScriptBehaviorCompilationRequest(
                 ScriptId: "claim-role-script",
                 Revision: "rev-role-1",
-                Source: """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+                Source: ClaimScriptSources.RoleBehavior));
 
-public sealed class ClaimRoleScript : IScriptPackageRuntime
-{
-    public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        var aiOutput = await context.Capabilities!.AskAIAsync("extract-claim-facts", ct);
-        var mapped = string.IsNullOrWhiteSpace(aiOutput)
-            ? "ClaimFactsExtractionFailedEvent"
-            : "ClaimFactsExtractedEvent";
-        return new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = mapped } });
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(new Dictionary<string, Any>());
-}
-"""),
-            CancellationToken.None);
         compilation.IsSuccess.Should().BeTrue();
+        compilation.Artifact.Should().NotBeNull();
 
-        var result = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope(
-                EventType: "claim.role.analysis.requested",
-                Payload: Any.Pack(new Struct()),
-                EventId: "evt-role-1",
-                CorrelationId: "corr-role-1",
-                CausationId: "cause-role-1"),
-            new ScriptExecutionContext(
+        await using var artifact = compilation.Artifact!;
+        var behavior = artifact.CreateBehavior();
+
+        var emitted = await behavior.DispatchAsync(
+            new ClaimSubmitted
+            {
+                CommandId = "command-1",
+                CaseId = "Case-A",
+                PolicyId = "POLICY-1",
+                RiskScore = 0.12d,
+                CompliancePassed = true,
+            },
+            new ScriptDispatchContext(
                 ActorId: "claim-role-runtime",
                 ScriptId: "claim-role-script",
                 Revision: "rev-role-1",
                 RunId: "run-role-1",
+                MessageType: ClaimSubmitted.Descriptor.FullName,
+                MessageId: "message-1",
+                CommandId: "command-1",
                 CorrelationId: "corr-role-1",
-                Capabilities: new FakeCapabilities("facts-ready")),
+                CausationId: "cause-role-1",
+                DefinitionActorId: "definition-1",
+                CurrentState: null,
+                RuntimeCapabilities: new FakeCapabilities("facts-ready")),
             CancellationToken.None);
 
-        result.DomainEvents.Should().ContainSingle();
-        ((StringValue)result.DomainEvents[0]).Value.Should().Be("ClaimFactsExtractedEvent");
+        emitted.Should().ContainSingle();
+        var decision = emitted[0].Should().BeOfType<ClaimDecisionRecorded>().Subject;
+        decision.Current.DecisionStatus.Should().Be("FactsReady");
+        decision.Current.AiSummary.Should().Be("facts-ready");
+        decision.Current.TraceSteps.Should().ContainSingle("ai-facts-ready");
     }
 
     private sealed class RecordingRoleAgentPort : IRoleAgentPort
@@ -118,7 +101,7 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
         }
     }
 
-    private sealed class FakeCapabilities(string aiResult) : IScriptRuntimeCapabilities
+    private sealed class FakeCapabilities(string aiResult) : IScriptBehaviorRuntimeCapabilities
     {
         public Task<string> AskAIAsync(string prompt, CancellationToken ct)
         {
@@ -127,23 +110,24 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
             return Task.FromResult(aiResult);
         }
 
-        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.TopologyAudience direction, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
 
-        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage eventPayload,
+            CancellationToken ct) =>
+            Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 0, RuntimeCallbackBackend.InMemory));
 
-        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) =>
-            Task.FromResult(actorId ?? "created");
-
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct) =>
-            Task.CompletedTask;
-
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) =>
-            Task.CompletedTask;
-
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? "created");
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
 
         public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
             ScriptEvolutionProposal proposal,
@@ -159,51 +143,21 @@ public sealed class ClaimRoleScript : IScriptPackageRuntime
                     FailureReason: string.Empty,
                     DefinitionActorId: $"script-definition:{proposal.ScriptId}",
                     CatalogActorId: "script-catalog",
-                    ValidationReport: new ScriptEvolutionValidationReport(true, Array.Empty<string>())));
+                    ValidationReport: new ScriptEvolutionValidationReport(true, [])));
 
-        public Task<string> UpsertScriptDefinitionAsync(
-            string scriptId,
-            string scriptRevision,
-            string sourceText,
-            string sourceHash,
-            string? definitionActorId,
-            CancellationToken ct) =>
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
             Task.FromResult(definitionActorId ?? "definition-1");
 
-        public Task<string> SpawnScriptRuntimeAsync(
-            string definitionActorId,
-            string scriptRevision,
-            string? runtimeActorId,
-            CancellationToken ct) =>
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
             Task.FromResult(runtimeActorId ?? "runtime-1");
 
-        public Task RunScriptInstanceAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) =>
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task PromoteRevisionAsync(
-            string catalogActorId,
-            string scriptId,
-            string revision,
-            string definitionActorId,
-            string sourceHash,
-            string proposalId,
-            CancellationToken ct) =>
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task RollbackRevisionAsync(
-            string catalogActorId,
-            string scriptId,
-            string targetRevision,
-            string reason,
-            string proposalId,
-            CancellationToken ct) =>
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) =>
             Task.CompletedTask;
     }
 }

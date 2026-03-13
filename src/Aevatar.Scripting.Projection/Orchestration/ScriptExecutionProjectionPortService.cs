@@ -1,0 +1,40 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Projection.Configuration;
+
+namespace Aevatar.Scripting.Projection.Orchestration;
+
+public sealed class ScriptExecutionProjectionPortService
+    : EventSinkProjectionLifecyclePortServiceBase<IScriptExecutionProjectionLease, ScriptExecutionRuntimeLease, EventEnvelope>,
+      IScriptExecutionProjectionPort
+{
+    private const string ProjectionName = "script-execution-read-model";
+
+    public ScriptExecutionProjectionPortService(
+        ScriptExecutionProjectionOptions options,
+        IProjectionPortActivationService<ScriptExecutionRuntimeLease> activationService,
+        IProjectionPortReleaseService<ScriptExecutionRuntimeLease> releaseService,
+        IEventSinkProjectionSubscriptionManager<ScriptExecutionRuntimeLease, EventEnvelope> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<ScriptExecutionRuntimeLease, EventEnvelope> liveSinkForwarder)
+        : base(
+            () => options?.Enabled ?? false,
+            activationService,
+            releaseService,
+            sinkSubscriptionManager,
+            liveSinkForwarder)
+    {
+    }
+
+    public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+        string actorId,
+        CancellationToken ct = default) =>
+        EnsureProjectionAsync(
+            actorId,
+            ProjectionName,
+            input: string.Empty,
+            commandId: actorId,
+            ct);
+}

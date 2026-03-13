@@ -4,6 +4,9 @@ public sealed record ScriptDefinitionSnapshot(
     string ScriptId,
     string Revision,
     string SourceText,
+    string SourceHash,
+    string StateTypeUrl,
+    string ReadModelTypeUrl,
     string ReadModelSchemaVersion,
     string ReadModelSchemaHash);
 

@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -8,10 +9,10 @@ namespace Aevatar.Scripting.Core.Compilation;
 internal static class ScriptReadModelDefinitionExtractor
 {
     public static bool TryExtractFromContract(
-        ScriptContractManifest? manifest,
+        ScriptGAgentContract? contract,
         out ScriptReadModelDefinitionExtraction extraction)
     {
-        var definition = manifest?.ReadModelDefinition;
+        var definition = contract?.ReadModelDefinition;
         if (definition == null)
         {
             extraction = ScriptReadModelDefinitionExtraction.Empty;
@@ -22,7 +23,7 @@ internal static class ScriptReadModelDefinitionExtractor
         var capabilities = ResolveStoreCapabilities(
             definition.Indexes,
             definition.Relations,
-            manifest!.ReadModelStoreCapabilities);
+            contract!.StoreKinds ?? Array.Empty<string>());
         extraction = new ScriptReadModelDefinitionExtraction(
             definition,
             Any.Pack(schemaSpec),

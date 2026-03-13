@@ -1,197 +1,232 @@
-using System.Reflection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
-using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
-public class ScriptRuntimeGAgentBranchCoverageTests
+public sealed class ScriptRuntimeGAgentBranchCoverageTests
 {
     [Fact]
-    public void Ctor_ShouldThrow_WhenDependenciesAreNull()
+    public async Task HandleEnvelopeAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
-        Action actWithNullOrchestrator = () => new ScriptRuntimeGAgent(null!);
+        var harness = CreateHarness();
 
-        actWithNullOrchestrator.Should().Throw<ArgumentNullException>();
+        await harness.Agent.HandleEnvelopeAsync(new EventEnvelope
+        {
+            Id = "evt-empty",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("runtime-test", TopologyAudience.Self),
+        });
+
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(0);
+        harness.Publisher.Sent.Should().BeEmpty();
     }
 
     [Fact]
-    public void BuildRunFailureCommittedEvent_ShouldFallbackToStateRevision_AndDefaultReason()
+    public async Task HandleEnvelopeAsync_ShouldTreatIdenticalBindingAsNoOp()
     {
-        var agent = CreateAgent();
-        agent.State.Revision = "state-rev";
-        agent.State.LastAppliedSchemaVersion = "schema-v1";
-        agent.State.LastSchemaHash = "schema-hash";
-        agent.State.StatePayloads["state"] = Any.Pack(new StringValue { Value = "state-value" });
-        agent.State.ReadModelPayloads["view"] = Any.Pack(new StringValue { Value = "view-value" });
-
-        var runEvent = new RunScriptRequestedEvent
+        var harness = CreateHarness();
+        var bind = new BindScriptBehaviorRequestedEvent
         {
-            RunId = string.Empty,
-            ScriptRevision = string.Empty,
-            DefinitionActorId = string.Empty,
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = ScriptSources.UppercaseBehavior,
+            SourceHash = ScriptSources.UppercaseBehaviorHash,
+            StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+            ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
         };
 
-        var committed = InvokePrivateInstance<ScriptRunDomainEventCommitted>(
-            agent,
-            "BuildRunFailureCommittedEvent",
-            runEvent,
-            string.Empty);
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(bind));
+        var versionAfterFirstBind = harness.Agent.State.LastAppliedEventVersion;
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(bind));
 
-        committed.EventType.Should().Be("script.run.failed");
-        committed.RunId.Should().BeEmpty();
-        committed.ScriptRevision.Should().Be("state-rev");
-        committed.DefinitionActorId.Should().BeEmpty();
-        committed.ReadModelSchemaVersion.Should().Be("schema-v1");
-        committed.ReadModelSchemaHash.Should().Be("schema-hash");
-        committed.Payload.Unpack<StringValue>().Value.Should().Be("Script run failed.");
-        committed.StatePayloads.Should().ContainKey("state");
-        committed.ReadModelPayloads.Should().ContainKey("view");
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(versionAfterFirstBind);
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().ContainSingle(x => x.EventData.Is(ScriptBehaviorBoundEvent.Descriptor));
     }
 
     [Fact]
-    public void ApplyCommitted_ShouldHandleFailureAndSuccessBranches_WithNullFields()
+    public async Task HandleEnvelopeAsync_ShouldIgnoreIncompleteBindingQuery()
     {
-        var state = new ScriptRuntimeState
+        var harness = CreateHarness();
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
         {
-            Revision = "rev-old",
-            DefinitionActorId = "definition-old",
-            LastAppliedEventVersion = 9,
-        };
-        state.StatePayloads["state"] = Any.Pack(new StringValue { Value = "state-old" });
-        state.ReadModelPayloads["view"] = Any.Pack(new StringValue { Value = "view-old" });
+            RequestId = "request-1",
+            ReplyStreamId = string.Empty,
+        }));
 
-        var failedCommitted = new ScriptRunDomainEventCommitted
-        {
-            EventType = "script.run.failed",
-            RunId = string.Empty,
-            ScriptRevision = string.Empty,
-            DefinitionActorId = string.Empty,
-            ReadModelSchemaVersion = string.Empty,
-            ReadModelSchemaHash = string.Empty,
-        };
-        failedCommitted.StatePayloads[""] = Any.Pack(new StringValue { Value = "ignored-empty-key" });
-        failedCommitted.StatePayloads["state"] = Any.Pack(new StringValue { Value = "state-failed" });
-
-        var failedNext = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyCommitted",
-            state,
-            failedCommitted);
-
-        failedNext.DefinitionActorId.Should().Be("definition-old");
-        failedNext.Revision.Should().Be("rev-old");
-        failedNext.LastRunId.Should().BeEmpty();
-        failedNext.LastAppliedSchemaVersion.Should().BeEmpty();
-        failedNext.LastSchemaHash.Should().BeEmpty();
-        failedNext.LastEventId.Should().BeEmpty();
-        failedNext.StatePayloads.Should().ContainKey("state");
-        failedNext.StatePayloads.Should().NotContainKey(string.Empty);
-
-        var succeededCommitted = new ScriptRunDomainEventCommitted
-        {
-            EventType = "script.executed",
-            RunId = string.Empty,
-            ScriptRevision = string.Empty,
-            DefinitionActorId = string.Empty,
-            ReadModelSchemaVersion = string.Empty,
-            ReadModelSchemaHash = string.Empty,
-        };
-
-        var successNext = InvokePrivateStatic<ScriptRuntimeState>(
-            typeof(ScriptRuntimeGAgent),
-            "ApplyCommitted",
-            state,
-            succeededCommitted);
-
-        successNext.DefinitionActorId.Should().BeEmpty();
-        successNext.Revision.Should().BeEmpty();
+        harness.Publisher.Sent.Should().BeEmpty();
     }
 
     [Fact]
-    public void BuildDefinitionQueryTimeoutCallbackId_ShouldEncodeStructuredCallbackId()
+    public async Task HandleEnvelopeAsync_ShouldRejectDispatch_WhenActorIsNotBound()
     {
-        var callbackId = InvokePrivateStatic<string>(
-            typeof(ScriptRuntimeGAgent),
-            "BuildDefinitionQueryTimeoutCallbackId",
-            "request/id:1");
+        var harness = CreateHarness();
 
-        callbackId.Should().Be("script-definition-query-timeout:request%2Fid%3A1");
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-1",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new StringValue { Value = "hello" }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*is not bound*");
     }
 
-    [Fact]
-    public void CloneAndCopyPayloads_ShouldSkipEmptyKeys()
+    private static BranchCoverageHarness CreateHarness()
     {
-        var source = new MapField<string, Any>
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var agent = new ScriptBehaviorGAgent(
+            new NoOpDispatcher(),
+            new NoOpCapabilityFactory(),
+            new NoOpArtifactResolver(),
+            new ProtobufMessageCodec())
         {
-            [""] = Any.Pack(new StringValue { Value = "ignored" }),
-            ["state"] = Any.Pack(new StringValue { Value = "state-v1" }),
+            EventPublisher = publisher,
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(eventStore),
         };
 
-        var cloned = InvokePrivateStatic<IReadOnlyDictionary<string, Any>>(
-            typeof(ScriptRuntimeGAgent),
-            "ClonePayloads",
-            source);
+        return new BranchCoverageHarness(agent, publisher, eventStore);
+    }
 
-        cloned.Should().ContainKey("state");
-        cloned.Should().NotContainKey(string.Empty);
-
-        var target = new MapField<string, Any>
+    private static EventEnvelope BuildEnvelope(IMessage payload) =>
+        new()
         {
-            ["legacy"] = Any.Pack(new StringValue { Value = "legacy-v1" }),
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(payload),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("runtime-test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+            },
         };
 
-        InvokePrivateStatic<object?>(
-            typeof(ScriptRuntimeGAgent),
-            "CopyPayloads",
-            source,
-            target);
+    private sealed record BranchCoverageHarness(
+        ScriptBehaviorGAgent Agent,
+        RecordingEventPublisher Publisher,
+        InMemoryEventStore EventStore);
 
-        target.Should().ContainKey("state");
-        target.Should().NotContainKey("legacy");
-        target.Should().NotContainKey(string.Empty);
-    }
-
-    private static ScriptRuntimeGAgent CreateAgent()
+    private sealed class NoOpDispatcher : IScriptBehaviorDispatcher
     {
-        return new ScriptRuntimeGAgent(new NoopOrchestrator())
-        {
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-        };
-    }
-
-    private static TResult InvokePrivateStatic<TResult>(System.Type type, string methodName, params object?[] args)
-    {
-        var method = type.GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic);
-        method.Should().NotBeNull($"private static method `{methodName}` must exist for branch tests");
-        var result = method!.Invoke(null, args);
-        return (TResult)result!;
-    }
-
-    private static TResult InvokePrivateInstance<TResult>(object instance, string methodName, params object?[] args)
-    {
-        var method = instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
-        method.Should().NotBeNull($"private instance method `{methodName}` must exist for branch tests");
-        var result = method!.Invoke(instance, args);
-        return (TResult)result!;
-    }
-
-    private sealed class NoopOrchestrator : IScriptRuntimeExecutionOrchestrator
-    {
-        public Task<IReadOnlyList<IMessage>> ExecuteRunAsync(
-            ScriptRuntimeExecutionRequest request,
+        public Task<IReadOnlyList<ScriptDomainFactCommitted>> DispatchAsync(
+            ScriptBehaviorDispatchRequest request,
             CancellationToken ct)
         {
             _ = request;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<IMessage>>([]);
+            return Task.FromResult<IReadOnlyList<ScriptDomainFactCommitted>>([]);
+        }
+    }
+
+    private sealed class NoOpArtifactResolver : IScriptBehaviorArtifactResolver
+    {
+        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
+        {
+            throw new InvalidOperationException($"Artifact resolution should not be reached in this test. request={request}");
+        }
+    }
+
+    private sealed class NoOpCapabilityFactory : IScriptBehaviorRuntimeCapabilityFactory
+    {
+        public IScriptBehaviorRuntimeCapabilities Create(
+            ScriptBehaviorRuntimeCapabilityContext context,
+            Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
+            Func<string, IMessage, CancellationToken, Task> sendToAsync,
+            Func<IMessage, CancellationToken, Task> publishToSelfAsync,
+            Func<string, TimeSpan, IMessage, CancellationToken, Task<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>> scheduleSelfSignalAsync,
+            Func<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync)
+        {
+            _ = context;
+            _ = publishAsync;
+            _ = sendToAsync;
+            _ = publishToSelfAsync;
+            _ = scheduleSelfSignalAsync;
+            _ = cancelCallbackAsync;
+            return new NoOpCapabilities();
+        }
+    }
+
+    private sealed class NoOpCapabilities : IScriptBehaviorRuntimeCapabilities
+    {
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult(string.Empty);
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
+            Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime-1", callbackId, 0, Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+        public Task CancelDurableCallbackAsync(Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<Aevatar.Scripting.Abstractions.Queries.ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) =>
+            Task.FromResult<Aevatar.Scripting.Abstractions.Queries.ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision> ProposeScriptEvolutionAsync(Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionProposal proposal, CancellationToken ct) =>
+            Task.FromResult(new Aevatar.Scripting.Abstractions.Definitions.ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new Aevatar.Scripting.Abstractions.Definitions.ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+            Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<IMessage> Sent { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Sent.Add(evt);
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Sent.Add(evt);
+            return Task.CompletedTask;
         }
     }
 }

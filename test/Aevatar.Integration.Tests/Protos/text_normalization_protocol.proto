@@ -9,6 +9,16 @@ message TextNormalizationReadModel {
   string last_command_id = 2;
   string input_text = 3;
   string normalized_text = 4;
+  TextNormalizationLookup lookup = 5;
+  TextNormalizationRefs refs = 6;
+}
+
+message TextNormalizationLookup {
+  string normalized = 1;
+}
+
+message TextNormalizationRefs {
+  string profile_id = 1;
 }
 
 message TextNormalizationRequested {
