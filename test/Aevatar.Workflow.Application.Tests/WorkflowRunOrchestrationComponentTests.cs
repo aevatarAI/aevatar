@@ -266,6 +266,13 @@ public sealed class WorkflowRunOrchestrationComponentTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeActor : IActor

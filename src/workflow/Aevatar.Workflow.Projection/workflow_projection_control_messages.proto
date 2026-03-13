@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.Workflow.Projection.Orchestration";
+
+message WorkflowProjectionControlEvent {
+  oneof event {
+    WorkflowProjectionReleaseRequestedEvent release_requested = 1;
+  }
+}
+
+message WorkflowProjectionReleaseRequestedEvent {
+  string actor_id = 1;
+  string command_id = 2;
+}

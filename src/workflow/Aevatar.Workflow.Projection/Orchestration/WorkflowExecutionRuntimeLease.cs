@@ -3,6 +3,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -13,25 +15,52 @@ public sealed class WorkflowExecutionRuntimeLease
 {
     private readonly CancellationTokenSource? _ownershipHeartbeatCts;
     private readonly Task? _ownershipHeartbeatTask;
+    private readonly CancellationTokenSource? _projectionReleaseListenerCts;
+    private readonly Task? _projectionReleaseListenerTask;
+    private readonly ILogger<WorkflowExecutionRuntimeLease> _logger;
     private int _ownershipHeartbeatStopped;
+    private int _projectionReleaseListenerStopped;
+    private int _projectionReleaseRequested;
 
     public WorkflowExecutionRuntimeLease(
         WorkflowExecutionProjectionContext context,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
-        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null)
+        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
+        ILogger<WorkflowExecutionRuntimeLease>? logger = null)
         : base(context.RootActorId)
     {
         Context = context;
         CommandId = context.CommandId;
+        _logger = logger ?? NullLogger<WorkflowExecutionRuntimeLease>.Instance;
 
         if (ownershipCoordinator == null)
-            return;
+        {
+            _ownershipHeartbeatCts = null;
+            _ownershipHeartbeatTask = null;
+        }
+        else
+        {
+            _ownershipHeartbeatCts = new CancellationTokenSource();
+            _ownershipHeartbeatTask = RunOwnershipHeartbeatAsync(
+                ownershipCoordinator,
+                ResolveHeartbeatInterval(ownershipOptions),
+                _ownershipHeartbeatCts.Token);
+        }
 
-        _ownershipHeartbeatCts = new CancellationTokenSource();
-        _ownershipHeartbeatTask = RunOwnershipHeartbeatAsync(
-            ownershipCoordinator,
-            ResolveHeartbeatInterval(ownershipOptions),
-            _ownershipHeartbeatCts.Token);
+        if (lifecycle == null || projectionControlHub == null)
+        {
+            _projectionReleaseListenerCts = null;
+            _projectionReleaseListenerTask = null;
+            return;
+        }
+
+        _projectionReleaseListenerCts = new CancellationTokenSource();
+        _projectionReleaseListenerTask = RunProjectionReleaseListenerAsync(
+            lifecycle,
+            projectionControlHub,
+            _projectionReleaseListenerCts.Token);
     }
 
     public string ActorId => RootEntityId;
@@ -64,6 +93,29 @@ public sealed class WorkflowExecutionRuntimeLease
         }
     }
 
+    public async ValueTask StopProjectionReleaseListenerAsync()
+    {
+        if (_projectionReleaseListenerCts == null)
+            return;
+
+        if (Interlocked.Exchange(ref _projectionReleaseListenerStopped, 1) == 0)
+            _projectionReleaseListenerCts.Cancel();
+
+        try
+        {
+            if (_projectionReleaseListenerTask != null)
+                await _projectionReleaseListenerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected once the projection release listener is being stopped.
+        }
+        finally
+        {
+            _projectionReleaseListenerCts.Dispose();
+        }
+    }
+
     private async Task RunOwnershipHeartbeatAsync(
         IProjectionOwnershipCoordinator ownershipCoordinator,
         TimeSpan interval,
@@ -84,6 +136,69 @@ public sealed class WorkflowExecutionRuntimeLease
             {
                 // Renewal is best-effort; keep trying until release stops the lease heartbeat.
             }
+        }
+    }
+
+    private async Task RunProjectionReleaseListenerAsync(
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent> projectionControlHub,
+        CancellationToken ct)
+    {
+        IAsyncDisposable? subscription = null;
+        try
+        {
+            subscription = await projectionControlHub.SubscribeAsync(
+                ActorId,
+                CommandId,
+                evt => HandleProjectionControlAsync(lifecycle, evt),
+                ct).ConfigureAwait(false);
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (subscription != null)
+                await subscription.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask HandleProjectionControlAsync(
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        WorkflowProjectionControlEvent evt)
+    {
+        if (evt.EventCase != WorkflowProjectionControlEvent.EventOneofCase.ReleaseRequested)
+            return;
+
+        var releaseRequested = evt.ReleaseRequested;
+        if (releaseRequested == null ||
+            !string.Equals(releaseRequested.ActorId, ActorId, StringComparison.Ordinal) ||
+            !string.Equals(releaseRequested.CommandId, CommandId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _projectionReleaseRequested, 1) != 0)
+            return;
+
+        try
+        {
+            await lifecycle.StopAsync(Context, CancellationToken.None).ConfigureAwait(false);
+            if (_projectionReleaseListenerCts != null &&
+                Interlocked.Exchange(ref _projectionReleaseListenerStopped, 1) == 0)
+            {
+                _projectionReleaseListenerCts.Cancel();
+            }
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Exchange(ref _projectionReleaseRequested, 0);
+            _logger.LogWarning(
+                ex,
+                "Workflow projection release request handling failed. actorId={ActorId}, commandId={CommandId}",
+                ActorId,
+                CommandId);
         }
     }
 

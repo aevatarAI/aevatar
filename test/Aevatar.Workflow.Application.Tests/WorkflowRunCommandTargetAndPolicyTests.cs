@@ -263,6 +263,13 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             Requests.Add(request);
             return Task.CompletedTask;
         }
+
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>

@@ -23,6 +23,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
         IWorkflowProjectionReadModelUpdater? readModelUpdater = null,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         IWorkflowRunActorPort? actorPort = null,
         WorkflowExecutionProjectionOptions? options = null)
     {
@@ -41,6 +42,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         services.AddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.AddSingleton<IWorkflowProjectionReadModelUpdater>(readModelUpdater ?? new RecordingReadModelUpdater());
         services.AddSingleton<IProjectionOwnershipCoordinator>(ownershipCoordinator ?? new RecordingOwnershipCoordinator());
+        services.AddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>(projectionControlHub ?? new RecordingProjectionControlHub());
         services.AddSingleton<IWorkflowRunActorPort>(actorPort ?? new RecordingActorPort());
         return services.BuildServiceProvider();
     }
@@ -71,7 +73,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenSnapshotIsTerminal_ShouldReleaseOwnershipAndDestroyActors()
+    public async Task HandleTriggerReplay_WhenSnapshotIsTerminal_ShouldReleaseOriginalProjectionLeaseAndDestroyActors()
     {
         var queryPort = new RecordingQueryPort
         {
@@ -84,6 +86,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             },
         };
         var lifecycle = new RecordingLifecycleService();
+        var projectionControlHub = new RecordingProjectionControlHub();
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
@@ -92,7 +95,24 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             lifecycle: lifecycle,
             readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
+            projectionControlHub: projectionControlHub,
             actorPort: actorPort));
+        var streamSubscriptionLease = new RecordingStreamSubscriptionLease("actor-1");
+        var originalContext = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "actor-1",
+            CommandId = "cmd-1",
+            RootActorId = "actor-1",
+            WorkflowName = "direct",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+            StreamSubscriptionLease = streamSubscriptionLease,
+        };
+        var runtimeLease = new WorkflowExecutionRuntimeLease(
+            originalContext,
+            lifecycle: lifecycle,
+            projectionControlHub: projectionControlHub);
+        await projectionControlHub.SubscriptionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await agent.HandleEnqueueAsync(CreateEnqueueEvent(
             "actor-1",
@@ -100,16 +120,19 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             "cmd-1",
             ["definition-1", "actor-1"]));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+        await lifecycle.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var entry = agent.State.Entries.Values.Single();
         entry.CompletedAtUtc.Should().NotBeNull();
         lifecycle.StopCalls.Should().ContainSingle();
-        lifecycle.StopCalls[0].RootActorId.Should().Be("actor-1");
-        lifecycle.StopCalls[0].CommandId.Should().Be("cmd-1");
+        lifecycle.StopCalls.Single().Should().BeSameAs(originalContext);
+        streamSubscriptionLease.DisposeCalls.Should().Be(1);
         ownershipCoordinator.AcquireCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
         ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+
+        await runtimeLease.StopProjectionReleaseListenerAsync();
     }
 
     [Fact]
@@ -328,15 +351,19 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         : IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
     {
         public List<WorkflowExecutionProjectionContext> StopCalls { get; } = [];
+        public TaskCompletionSource<bool> Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task StartAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public async Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
         {
             StopCalls.Add(context);
-            return Task.CompletedTask;
+            if (context.StreamSubscriptionLease != null)
+                await context.StreamSubscriptionLease.DisposeAsync();
+
+            Stopped.TrySetResult(true);
         }
 
         public Task CompleteAsync(
@@ -419,11 +446,92 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 request.CommandId,
                 request.CreatedActorIds));
 
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default) =>
+            agent.HandleDiscardAsync(new WorkflowRunDetachedCleanupDiscardedEvent
+            {
+                RecordId = WorkflowRunDetachedCleanupOutboxGAgent.BuildRecordId(request.ActorId, request.CommandId),
+                DiscardedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
         public Task TriggerReplayAsync(int batchSize, CancellationToken ct = default) =>
             agent.HandleTriggerReplayAsync(
                 new WorkflowRunDetachedCleanupTriggerReplayEvent
                 {
                     BatchSize = batchSize,
                 });
+    }
+
+    private sealed class RecordingProjectionControlHub : IProjectionSessionEventHub<WorkflowProjectionControlEvent>
+    {
+        private readonly Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> _handlers = new();
+
+        public TaskCompletionSource<bool> SubscriptionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task PublishAsync(
+            string scopeId,
+            string sessionId,
+            WorkflowProjectionControlEvent evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(evt);
+
+            if (!_handlers.TryGetValue((scopeId, sessionId), out var handlers))
+                return;
+
+            foreach (var handler in handlers.ToArray())
+                await handler(evt);
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string scopeId,
+            string sessionId,
+            Func<WorkflowProjectionControlEvent, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(handler);
+
+            var key = (scopeId, sessionId);
+            if (!_handlers.TryGetValue(key, out var handlers))
+            {
+                handlers = [];
+                _handlers[key] = handlers;
+            }
+
+            handlers.Add(handler);
+            SubscriptionStarted.TrySetResult(true);
+            return Task.FromResult<IAsyncDisposable>(new Subscription(_handlers, key, handler));
+        }
+
+        private sealed class Subscription(
+            Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> handlers,
+            (string ScopeId, string SessionId) key,
+            Func<WorkflowProjectionControlEvent, ValueTask> handler) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                if (handlers.TryGetValue(key, out var registered))
+                {
+                    registered.Remove(handler);
+                    if (registered.Count == 0)
+                        handlers.Remove(key);
+                }
+
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    private sealed class RecordingStreamSubscriptionLease(string actorId) : IActorStreamSubscriptionLease
+    {
+        public string ActorId { get; } = actorId;
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.CompletedTask;
+        }
     }
 }

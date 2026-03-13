@@ -20,6 +20,7 @@ public enum WorkflowChatRunStartError
     AgentWorkflowNotConfigured = 6,
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
+    DetachedCleanupUnavailable = 9,
 }
 
 public enum WorkflowProjectionCompletionStatus

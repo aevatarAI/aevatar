@@ -14,4 +14,14 @@ internal sealed class MissingWorkflowRunDetachedCleanupScheduler
         throw new InvalidOperationException(
             "Workflow detached cleanup scheduler is not registered. Register workflow projection services before using detached workflow dispatch.");
     }
+
+    public Task DiscardAsync(
+        WorkflowRunDetachedCleanupDiscardRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ct.ThrowIfCancellationRequested();
+        throw new InvalidOperationException(
+            "Workflow detached cleanup scheduler is not registered. Register workflow projection services before using detached workflow dispatch.");
+    }
 }

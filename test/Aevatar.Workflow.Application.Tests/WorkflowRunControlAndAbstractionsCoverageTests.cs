@@ -782,6 +782,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             Requests.Add(request);
             return Task.CompletedTask;
         }
+
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease

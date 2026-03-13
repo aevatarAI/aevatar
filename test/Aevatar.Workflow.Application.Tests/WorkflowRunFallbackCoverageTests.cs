@@ -220,16 +220,50 @@ public sealed class WorkflowRunFallbackCoverageTests
         private readonly Queue<object> _results = new();
 
         public List<WorkflowChatRunRequest> Requests { get; } = [];
+        public List<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>> PreparedDispatches { get; } = [];
 
         public void EnqueueException(Exception ex) => _results.Enqueue(ex);
 
         public void EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> result) =>
             _results.Enqueue(result);
 
-        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareAsync(
             WorkflowChatRunRequest command,
+            CancellationToken ct = default) =>
+            PrepareCoreAsync(command, ct);
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
+            ArgumentNullException.ThrowIfNull(execution);
+            ct.ThrowIfCancellationRequested();
+            PreparedDispatches.Add(execution);
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsyncCore(
+            WorkflowChatRunRequest command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareCoreAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
+        }
+
+        private Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareCoreAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
             Requests.Add(command);
             var next = _results.Dequeue();
             if (next is Exception ex)
@@ -313,6 +347,7 @@ public sealed class WorkflowRunFallbackCoverageTests
     private sealed class RecordingDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
     {
         public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
 
         public Task ScheduleAsync(
             WorkflowRunDetachedCleanupRequest request,
@@ -321,6 +356,16 @@ public sealed class WorkflowRunFallbackCoverageTests
             ArgumentNullException.ThrowIfNull(request);
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task DiscardAsync(
+            WorkflowRunDetachedCleanupDiscardRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DiscardRequests.Add(request);
             return Task.CompletedTask;
         }
     }

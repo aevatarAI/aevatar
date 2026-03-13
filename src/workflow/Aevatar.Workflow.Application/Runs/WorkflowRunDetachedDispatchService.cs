@@ -28,15 +28,30 @@ internal sealed class WorkflowRunDetachedDispatchService
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var dispatch = await _dispatchPipeline.DispatchAsync(command, ct);
-        if (!dispatch.Succeeded || dispatch.Target == null)
-            return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Failure(dispatch.Error);
+        var prepared = await _dispatchPipeline.PrepareAsync(command, ct);
+        if (!prepared.Succeeded || prepared.Target == null)
+            return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Failure(prepared.Error);
 
-        var execution = dispatch.Target;
+        var execution = prepared.Target;
+        if (!await TryScheduleDetachedCleanupAsync(execution.Target, execution.Receipt, ct))
+        {
+            await CleanupPreparedDispatchAsync(execution.Target, execution.Receipt);
+            return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Failure(
+                WorkflowChatRunStartError.DetachedCleanupUnavailable);
+        }
+
+        try
+        {
+            await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
+        }
+        catch
+        {
+            await TryDiscardDetachedCleanupAsync(execution.Target, execution.Receipt);
+            throw;
+        }
+
         await DetachLiveObservationAsync(execution.Target, execution.Receipt, ct);
-        if (await TryScheduleDetachedCleanupAsync(execution.Target, execution.Receipt, ct))
-            await ReleaseDetachedSessionOwnershipAsync(execution.Target, execution.Receipt);
-
+        await ReleaseDetachedSessionOwnershipAsync(execution.Target, execution.Receipt);
         return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(execution.Receipt);
     }
 
@@ -79,10 +94,50 @@ internal sealed class WorkflowRunDetachedDispatchService
         {
             _logger.LogError(
                 ex,
-                "Detached workflow cleanup scheduling failed after dispatch acceptance. actorId={ActorId}, commandId={CommandId}",
+                "Detached workflow cleanup scheduling failed before detached dispatch. actorId={ActorId}, commandId={CommandId}",
                 receipt.ActorId,
                 receipt.CommandId);
             return false;
+        }
+    }
+
+    private async Task CleanupPreparedDispatchAsync(
+        WorkflowRunCommandTarget target,
+        WorkflowChatRunAcceptedReceipt receipt)
+    {
+        try
+        {
+            await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Detached workflow prepared cleanup failed. actorId={ActorId}, commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+    }
+
+    private async Task TryDiscardDetachedCleanupAsync(
+        WorkflowRunCommandTarget target,
+        WorkflowChatRunAcceptedReceipt receipt)
+    {
+        try
+        {
+            await _cleanupScheduler.DiscardAsync(
+                new WorkflowRunDetachedCleanupDiscardRequest(
+                    target.ActorId,
+                    receipt.CommandId),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Detached workflow cleanup discard failed after dispatch failure. actorId={ActorId}, commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
         }
     }
 

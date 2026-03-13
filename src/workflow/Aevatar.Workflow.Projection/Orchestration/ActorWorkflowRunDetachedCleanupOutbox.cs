@@ -69,6 +69,22 @@ internal sealed class ActorWorkflowRunDetachedCleanupOutbox
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
+    public async Task DiscardAsync(
+        WorkflowRunDetachedCleanupDiscardRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var actor = await ResolveOutboxActorAsync(ct);
+        var envelope = CreateEnvelope(
+            new WorkflowRunDetachedCleanupDiscardedEvent
+            {
+                RecordId = WorkflowRunDetachedCleanupOutboxGAgent.BuildRecordId(request.ActorId, request.CommandId),
+                DiscardedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            },
+            request.CommandId);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    }
+
     public async Task TriggerReplayAsync(
         int batchSize,
         CancellationToken ct = default)

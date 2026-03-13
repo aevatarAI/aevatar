@@ -32,6 +32,15 @@ public sealed class WorkflowProjectionReleaseService
 
         try
         {
+            await runtimeLease.StopProjectionReleaseListenerAsync();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        try
+        {
             await runtimeLease.StopOwnershipHeartbeatAsync();
         }
         catch (Exception ex)

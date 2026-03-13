@@ -42,6 +42,11 @@ message WorkflowRunDetachedCleanupSucceededEvent {
   google.protobuf.Timestamp completed_at_utc = 2;
 }
 
+message WorkflowRunDetachedCleanupDiscardedEvent {
+  string record_id = 1;
+  google.protobuf.Timestamp discarded_at_utc = 2;
+}
+
 message WorkflowRunDetachedCleanupTriggerReplayEvent {
   int32 batch_size = 1;
 }

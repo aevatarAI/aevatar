@@ -224,13 +224,39 @@ public sealed class DefaultCommandInteractionServiceTests
         CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result)
         : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
     {
-        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
             string command,
             CancellationToken ct = default)
         {
             _ = command;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);
+        }
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            _ = execution;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsyncCore(
+            string command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
         }
     }
 

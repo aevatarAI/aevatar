@@ -52,6 +52,16 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     }
 
     [EventHandler]
+    public async Task HandleDiscardAsync(WorkflowRunDetachedCleanupDiscardedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (string.IsNullOrWhiteSpace(evt.RecordId))
+            throw new InvalidOperationException("Record id is required to discard detached cleanup.");
+
+        await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler]
     public async Task HandleTriggerReplayAsync(WorkflowRunDetachedCleanupTriggerReplayEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -77,6 +87,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<WorkflowRunDetachedCleanupEnqueuedEvent>(ApplyEnqueued)
+            .On<WorkflowRunDetachedCleanupDiscardedEvent>(ApplyDiscarded)
             .On<WorkflowRunDetachedCleanupRetryScheduledEvent>(ApplyRetryScheduled)
             .On<WorkflowRunDetachedCleanupSucceededEvent>(ApplySucceeded)
             .OrCurrent();
@@ -113,6 +124,15 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         updated.NextVisibleAtUtc = evt.NextVisibleAtUtc;
         updated.LastError = evt.Error;
         next.Entries[evt.RecordId] = updated;
+        return next;
+    }
+
+    private static WorkflowRunDetachedCleanupOutboxState ApplyDiscarded(
+        WorkflowRunDetachedCleanupOutboxState current,
+        WorkflowRunDetachedCleanupDiscardedEvent evt)
+    {
+        var next = current.Clone();
+        next.Entries.Remove(evt.RecordId);
         return next;
     }
 
@@ -180,30 +200,27 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         WorkflowRunDetachedCleanupOutboxEntry entry,
         WorkflowActorSnapshot snapshot)
     {
-        var contextFactory = Services.GetRequiredService<IWorkflowExecutionProjectionContextFactory>();
-        var lifecycle = Services.GetRequiredService<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
+        var projectionControlHub = Services.GetRequiredService<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
         var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
         var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
         var actorPort = Services.GetRequiredService<IWorkflowRunActorPort>();
-        var workflowName = string.IsNullOrWhiteSpace(snapshot.WorkflowName)
-            ? entry.WorkflowName
-            : snapshot.WorkflowName;
-        var startedAt = snapshot.LastUpdatedAt == default
-            ? DateTimeOffset.UtcNow
-            : snapshot.LastUpdatedAt;
-        var context = contextFactory.Create(
-            entry.ActorId,
-            entry.CommandId,
-            entry.ActorId,
-            workflowName,
-            input: string.Empty,
-            startedAt);
 
         Exception? firstException = null;
 
         try
         {
-            await lifecycle.StopAsync(context, CancellationToken.None);
+            await projectionControlHub.PublishAsync(
+                entry.ActorId,
+                entry.CommandId,
+                new WorkflowProjectionControlEvent
+                {
+                    ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                    {
+                        ActorId = entry.ActorId,
+                        CommandId = entry.CommandId,
+                    },
+                },
+                CancellationToken.None);
         }
         catch (Exception ex)
         {

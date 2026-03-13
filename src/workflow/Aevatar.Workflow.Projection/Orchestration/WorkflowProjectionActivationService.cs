@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -8,9 +9,12 @@ public sealed class WorkflowProjectionActivationService
 {
     private readonly IProjectionClock _clock;
     private readonly IWorkflowExecutionProjectionContextFactory _contextFactory;
+    private readonly IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> _lifecycle;
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly ProjectionOwnershipCoordinatorOptions _ownershipOptions;
+    private readonly IProjectionSessionEventHub<WorkflowProjectionControlEvent>? _projectionControlHub;
     private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
+    private readonly ILogger<WorkflowExecutionRuntimeLease>? _runtimeLeaseLogger;
 
     public WorkflowProjectionActivationService(
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
@@ -18,14 +22,19 @@ public sealed class WorkflowProjectionActivationService
         IWorkflowExecutionProjectionContextFactory contextFactory,
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IWorkflowProjectionReadModelUpdater readModelUpdater,
-        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null)
+        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
+        ILogger<WorkflowExecutionRuntimeLease>? runtimeLeaseLogger = null)
         : base(lifecycle)
     {
+        _lifecycle = lifecycle;
         _clock = clock;
         _contextFactory = contextFactory;
         _ownershipCoordinator = ownershipCoordinator;
         _ownershipOptions = ownershipOptions ?? new ProjectionOwnershipCoordinatorOptions();
+        _projectionControlHub = projectionControlHub;
         _readModelUpdater = readModelUpdater;
+        _runtimeLeaseLogger = runtimeLeaseLogger;
     }
 
     protected override async Task AcquireBeforeStartAsync(
@@ -69,7 +78,13 @@ public sealed class WorkflowProjectionActivationService
     }
 
     protected override WorkflowExecutionRuntimeLease CreateRuntimeLease(WorkflowExecutionProjectionContext context) =>
-        new(context, _ownershipCoordinator, _ownershipOptions);
+        new(
+            context,
+            _ownershipCoordinator,
+            _ownershipOptions,
+            _lifecycle,
+            _projectionControlHub,
+            _runtimeLeaseLogger);
 
     protected override async Task CleanupOnStartFailureAsync(
         string rootEntityId,
