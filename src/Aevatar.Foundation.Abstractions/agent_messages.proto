@@ -11,15 +11,19 @@ option csharp_namespace = "Aevatar.Foundation.Abstractions";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
-// Event propagation direction.
+// Publication audiences.
 
-enum EventDirection {
-  EVENT_DIRECTION_UNSPECIFIED = 0;
-  EVENT_DIRECTION_DOWN        = 1;   // Parent -> children
-  EVENT_DIRECTION_UP          = 2;   // Child -> parent stream -> siblings
-  EVENT_DIRECTION_BOTH        = 3;   // Both directions
-  EVENT_DIRECTION_SELF        = 4;   // Local only
-  EVENT_DIRECTION_OBSERVE     = 5;   // Observer/projection stream only; never handled as actor inbox input
+enum TopologyAudience {
+  TOPOLOGY_AUDIENCE_UNSPECIFIED         = 0;
+  TOPOLOGY_AUDIENCE_SELF                = 1;
+  TOPOLOGY_AUDIENCE_PARENT              = 2;
+  TOPOLOGY_AUDIENCE_CHILDREN            = 3;
+  TOPOLOGY_AUDIENCE_PARENT_AND_CHILDREN = 4;
+}
+
+enum ObserverAudience {
+  OBSERVER_AUDIENCE_UNSPECIFIED     = 0;
+  OBSERVER_AUDIENCE_COMMITTED_FACTS = 1;
 }
 
 // Event envelope: 8 semantic fields (reduced from 16).
@@ -34,9 +38,31 @@ message EventEnvelope {
 }
 
 message EnvelopeRoute {
-  string         publisher_actor_id = 1;
-  EventDirection direction          = 2;
-  string         target_actor_id    = 3;
+  string publisher_actor_id = 1;
+
+  oneof route {
+    DirectRoute      direct      = 2;
+    PublicationRoute publication = 3;
+  }
+}
+
+message DirectRoute {
+  string target_actor_id = 1;
+}
+
+message PublicationRoute {
+  oneof audience {
+    TopologyPublication topology = 1;
+    ObserverPublication observer = 2;
+  }
+}
+
+message TopologyPublication {
+  TopologyAudience audience = 1;
+}
+
+message ObserverPublication {
+  ObserverAudience audience = 1;
 }
 
 message TraceContext {
@@ -106,6 +132,16 @@ message StateEvent {
   string                      event_type = 4;
   google.protobuf.Any         event_data = 5;
   string                      agent_id   = 6;
+}
+
+message EventStoreCommitResult {
+  string                agent_id         = 1;
+  int64                 latest_version   = 2;
+  repeated StateEvent   committed_events = 3;
+}
+
+message CommittedStateEventPublished {
+  StateEvent state_event = 1;
 }
 
 // Hierarchy change events.

@@ -70,7 +70,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             StepId = request.StepId,
             RunId = request.RunId,
             Success = true, Output = output,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private static int CountLines(string s) => s.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;

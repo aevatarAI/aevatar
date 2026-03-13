@@ -130,7 +130,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
             return Task.FromResult(string.Empty);
         }
 
-        public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct)
         {
             _ = eventPayload;
             _ = direction;
@@ -285,7 +285,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
     {
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -300,5 +300,20 @@ public class ScriptRuntimeExecutionOrchestratorTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
             Task.CompletedTask;
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = evt;
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 }

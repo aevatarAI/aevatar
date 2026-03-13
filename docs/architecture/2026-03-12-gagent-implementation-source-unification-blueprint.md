@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R2
 - 日期：2026-03-12
 - 适用范围：
@@ -21,9 +21,10 @@
   - `docs/architecture/2026-03-11-gagent-centric-cqrs-capability-unification-blueprint.md`
   - `docs/architecture/2026-03-09-cqrs-command-actor-receipt-projection-blueprint.md`
 - 文档定位：
-  - 本文定义“静态 `GAgent`、workflow、scripting 在同一通信层次互通”的目标架构。
-  - 本文刻意避免引入过重的统一实现来源模型，不新增对外 `capabilityId`，不强制统一 `implementation_kind/source_binding`。
-  - 本文只统一真正需要统一的东西：`EventEnvelope`、typed `proto` 协议、`actorId` 语义、projection 观察语义、升级语义。
+  - 本文保留为 `implementation source unification` 方向的原始蓝图留痕。
+  - 其中绝大部分目标已由 `2026-03-12 gagent-protocol phase 1-5` 文档落地吸收。
+  - 当前最终总收口见 `docs/architecture/2026-03-13-gagent-protocol-series-closeout.md`。
+  - Host/Mainnet 最后一项收尾验收记录见 `docs/architecture/2026-03-13-gagent-protocol-host-mainnet-forward-only-validation-task-list.md`。
 
 ## 2. 一句话结论
 

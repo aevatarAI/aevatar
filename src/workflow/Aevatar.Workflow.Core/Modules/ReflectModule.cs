@@ -140,7 +140,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 };
                 completed.Annotations["reflect.rounds"] = round.ToString();
                 completed.Annotations["reflect.passed"] = passed.ToString();
-                await ctx.PublishAsync(completed, EventDirection.Self, ct);
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
                 runtimeStateForCompletion.PendingBySessionId.Remove(sessionId);
                 await SaveStateAsync(runtimeStateForCompletion, ctx, ct);
@@ -211,7 +211,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
         else
-            await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
+            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
     }
 
     private async Task SendImproveAsync(
@@ -245,7 +245,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
         else
-            await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
+            await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
     }
 
     private static Task SaveStateAsync(
@@ -274,7 +274,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 Error = error,
                 WorkerId = ctx.AgentId,
             },
-            EventDirection.Self,
+            TopologyAudience.Self,
             ct);
 
     private static void CopyParameters(

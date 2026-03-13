@@ -43,7 +43,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 StepId = request.StepId,
                 RunId = request.RunId,
                 Success = false, Error = "tool_call 缺少 tool 参数",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -56,7 +56,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ToolName = toolName,
             ArgumentsJson = argumentsJson,
             CallId = request.StepId,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
 
         var tool = await ResolveToolAsync(toolName, ctx, ct);
         if (tool == null)
@@ -75,7 +75,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 CallId = request.StepId,
                 Success = true,
                 ResultJson = result,
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
 
             await ctx.PublishAsync(new StepCompletedEvent
             {
@@ -83,7 +83,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 RunId = request.RunId,
                 Success = true,
                 Output = result,
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
         }
         catch (Exception ex)
         {
@@ -148,7 +148,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
             Success = false,
             Error = errorMessage,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
 
         await ctx.PublishAsync(new StepCompletedEvent
         {
@@ -156,6 +156,6 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = request.RunId,
             Success = false,
             Error = errorMessage,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

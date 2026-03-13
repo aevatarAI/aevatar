@@ -15,12 +15,7 @@ public class EventEnvelopeTests
         {
             Id = "evt-001",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "agent-a",
-                Direction = EventDirection.Up,
-                TargetActorId = "agent-b",
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("agent-a", "agent-b"),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = "corr-123",
@@ -33,9 +28,9 @@ public class EventEnvelopeTests
 
         restored.Id.ShouldBe("evt-001");
         restored.Route.PublisherActorId.ShouldBe("agent-a");
-        restored.Route.Direction.ShouldBe(EventDirection.Up);
+        restored.Route.RouteCase.ShouldBe(EnvelopeRoute.RouteOneofCase.Direct);
         restored.Propagation.CorrelationId.ShouldBe("corr-123");
-        restored.Route.TargetActorId.ShouldBe("agent-b");
+        restored.Route.Direct.TargetActorId.ShouldBe("agent-b");
         restored.Propagation.Baggage["key1"].ShouldBe("value1");
     }
 
@@ -60,14 +55,13 @@ public class EventEnvelopeTests
     }
 
     [Fact]
-    public void EventDirection_HasExpectedValues()
+    public void TopologyAudience_HasExpectedValues()
     {
         // Ensure Proto-generated enum values are consistent with design
-        ((int)EventDirection.Unspecified).ShouldBe(0);
-        ((int)EventDirection.Down).ShouldBe(1);
-        ((int)EventDirection.Up).ShouldBe(2);
-        ((int)EventDirection.Both).ShouldBe(3);
-        ((int)EventDirection.Self).ShouldBe(4);
-        ((int)EventDirection.Observe).ShouldBe(5);
+        ((int)TopologyAudience.Unspecified).ShouldBe(0);
+        ((int)TopologyAudience.Self).ShouldBe(1);
+        ((int)TopologyAudience.Parent).ShouldBe(2);
+        ((int)TopologyAudience.Children).ShouldBe(3);
+        ((int)TopologyAudience.ParentAndChildren).ShouldBe(4);
     }
 }

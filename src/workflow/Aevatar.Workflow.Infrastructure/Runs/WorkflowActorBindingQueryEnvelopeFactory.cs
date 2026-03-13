@@ -24,12 +24,7 @@ internal static class WorkflowActorBindingQueryEnvelopeFactory
                 RequestId = requestId,
                 ReplyStreamId = replyStreamId,
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = WorkflowQueryChannels.ActorBindingPublisherId,
-                Direction = EventDirection.Self,
-                TargetActorId = targetActorId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(WorkflowQueryChannels.ActorBindingPublisherId, targetActorId),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = requestId,

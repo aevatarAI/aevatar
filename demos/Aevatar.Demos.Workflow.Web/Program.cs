@@ -447,11 +447,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
             WorkflowYaml = yaml,
             WorkflowName = name,
         }),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "web.demo",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("web.demo", TopologyAudience.Self),
         Propagation = new EnvelopePropagation
         {
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -481,11 +477,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
                     Id = Guid.NewGuid().ToString("N"),
                     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                     Payload = Any.Pack(resumed),
-                    Route = new EnvelopeRoute
-                    {
-                        PublisherActorId = "web.demo.auto-human",
-                        Direction = EventDirection.Self,
-                    },
+                    Route = EnvelopeRouteSemantics.CreateTopologyPublication("web.demo.auto-human", TopologyAudience.Self),
                     Propagation = new EnvelopePropagation
                     {
                         CorrelationId = Guid.NewGuid().ToString("N"),
@@ -637,11 +629,7 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(new ChatRequestEvent { Prompt = actualInput, SessionId = $"web-{name}" }),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = "web.demo",
-            Direction = EventDirection.Self,
-        },
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("web.demo", TopologyAudience.Self),
     });
 
     try

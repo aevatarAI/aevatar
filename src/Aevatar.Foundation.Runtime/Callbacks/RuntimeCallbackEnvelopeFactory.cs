@@ -25,9 +25,10 @@ public static class RuntimeCallbackEnvelopeFactory
         var envelope = triggerEnvelope.Clone();
         envelope.Id = Guid.NewGuid().ToString("N");
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        var route = envelope.EnsureRoute();
-        route.TargetActorId = actorId;
-        route.Direction = EventDirection.Self;
+        var publisherActorId = string.IsNullOrWhiteSpace(envelope.Route?.PublisherActorId)
+            ? actorId
+            : envelope.Route.PublisherActorId;
+        envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherActorId, TopologyAudience.Self);
 
         var callback = envelope.EnsureRuntime().EnsureCallback();
         callback.CallbackId = callbackId;
@@ -66,10 +67,6 @@ public static class RuntimeCallbackEnvelopeFactory
         ArgumentNullException.ThrowIfNull(triggerEnvelope);
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
 
-        var envelope = triggerEnvelope.Clone();
-        var route = envelope.EnsureRoute();
-        if (string.IsNullOrWhiteSpace(route.TargetActorId))
-            route.TargetActorId = actorId;
-        return envelope;
+        return triggerEnvelope.Clone();
     }
 }

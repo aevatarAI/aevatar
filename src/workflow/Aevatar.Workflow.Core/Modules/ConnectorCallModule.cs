@@ -176,7 +176,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
             foreach (var (key, value) in response.Metadata)
                 ok.Annotations[key] = value;
-            await ctx.PublishAsync(ok, EventDirection.Self, ct);
+            await ctx.PublishAsync(ok, TopologyAudience.Self, ct);
             return;
         }
 
@@ -200,7 +200,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
             continued.Annotations["connector.continued_on_error"] = "true";
             continued.Annotations["connector.error"] = errorText ?? "";
-            await ctx.PublishAsync(continued, EventDirection.Self, ct);
+            await ctx.PublishAsync(continued, TopologyAudience.Self, ct);
             return;
         }
 
@@ -212,7 +212,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Error = errorText ?? "connector call failed",
         };
         AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-        await ctx.PublishAsync(failed, EventDirection.Self, ct);
+        await ctx.PublishAsync(failed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
@@ -227,7 +227,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             RunId = request.RunId,
             Success = false,
             Error = error,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishSkippedAsync(
@@ -251,7 +251,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         skipped.Annotations["connector.name"] = connectorName;
         skipped.Annotations["connector.operation"] = operation;
         skipped.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
-        await ctx.PublishAsync(skipped, EventDirection.Self, ct);
+        await ctx.PublishAsync(skipped, TopologyAudience.Self, ct);
     }
 
     private string? ResolvePayload(

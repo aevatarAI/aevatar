@@ -18,7 +18,6 @@ using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Local.TypeSystem;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Observability;
-using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -86,9 +85,6 @@ public static class ServiceCollectionExtensions
 
         // Deduplication
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
-
-        // Routing
-        services.TryAddSingleton<IRouterHierarchyStore, InMemoryRouterStore>();
 
         // Context
         services.TryAddSingleton<IRunManager, RunManager>();

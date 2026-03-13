@@ -78,7 +78,7 @@ flowchart LR
 - 文件：`src/Aevatar.Scripting.Core/ScriptEvolutionSessionGAgent.cs`
 - 状态：`ScriptEvolutionSessionState`
 - 职责：proposal-scoped 演化执行 owner；负责 `proposed / build_requested / validated / promoted / rejected / completed / rollback*` 事实推进、终态查询响应与 session completion 发布。
-- 执行启动采用标准 `PublishAsync(..., EventDirection.Self)` 的 inbox 下一拍事件化模型；Local 与 Orleans runtime 已统一为入队语义，不再依赖 runtime-specific 内联自调用或 reminder 粒度。
+- 执行启动采用标准 `PublishAsync(..., TopologyAudience.Self)` 的 inbox 下一拍事件化模型；Local 与 Orleans runtime 已统一为入队语义，不再依赖 runtime-specific 内联自调用或 reminder 粒度。
 
 ### 4.4 ScriptEvolutionManagerGAgent
 
@@ -133,7 +133,7 @@ Core 响应处理要点：
 1. Definition/Catalog 的 Query Handler 都在 Actor 内直接读取自身状态并返回响应事件。
 2. Query Response 统一用 `EventPublisher.SendToAsync(..., sourceEnvelope: null)`，避免响应被 publisher chain 回路过滤。
 3. Evolution 终态 live path 统一走 `ScriptEvolutionSessionCompletedEventProjector -> ProjectionSessionEventHub`。
-4. `PersistDomainEventsAsync(...)` 在 commit 成功后统一把领域事件以 `EventDirection.Observe` 写入 actor 可观察流；actor inbox 忽略该路由，但 projection / live sink 可见。
+4. `PersistDomainEventsAsync(...)` 在 commit 成功后统一把领域事件包装为 `CommittedStateEventPublished`，并以 `PublicationRoute.observer(CommittedFacts)` 写入统一消息平面；actor inbox 忽略该 audience，但 projection / live sink 可见。
 5. Evolution durable completion 不再 query session actor，而是读取和 live path 同源的 `ScriptEvolutionReadModel`。
 
 ## 6. 运行与演化两条主链
@@ -249,7 +249,6 @@ sequenceDiagram
    - `ProjectionScriptEvolutionDecisionReadPort`：`100%`
 2. `test/Aevatar.Foundation.Core.Tests/TestResults/9bcd56a4-d819-4323-9733-1fea7b67b572/coverage.cobertura.xml`
    - `Aevatar.Foundation.Core` package line-rate：`78.45%`
-   - `EventRouter`：`100%`
    - `GAgentBase<TState>`：`90.38%`
    - `PersistDomainEventsAsync` state path：`94.11%`
 3. `test/Aevatar.Foundation.Runtime.Hosting.Tests/TestResults/9e6cbf41-8982-4cb2-86ad-c38e3c75c71a/coverage.cobertura.xml`

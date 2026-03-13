@@ -188,11 +188,7 @@ public class MakerVoteModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test-publisher",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 
@@ -206,7 +202,7 @@ public class MakerVoteModuleCoverageTests
             InboundEnvelope = new EventEnvelope();
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId { get; }
         public string RunId => AgentId;
@@ -245,7 +241,7 @@ public class MakerVoteModuleCoverageTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
@@ -261,7 +257,7 @@ public class MakerVoteModuleCoverageTests
         {
             _ = targetActorId;
             _ = options;
-            return PublishAsync(evt, EventDirection.Self, ct);
+            return PublishAsync(evt, TopologyAudience.Self, ct);
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(

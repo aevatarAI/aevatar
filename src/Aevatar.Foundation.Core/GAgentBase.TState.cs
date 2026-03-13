@@ -3,6 +3,7 @@
 // State + mandatory EventSourcing + OnStateChanged Hook
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -110,14 +111,14 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         foreach (var evt in domainEvents)
             eventSourcing.RaiseEvent(evt);
 
-        await eventSourcing.ConfirmEventsAsync(ct);
+        var commitResult = await eventSourcing.ConfirmEventsAsync(ct);
 
         using var guard = StateGuard.BeginWriteScope();
         foreach (var evt in domainEvents)
             _state = eventSourcing.TransitionState(_state, evt);
 
         await OnStateChangedAsync(_state, ct);
-        await PublishCommittedDomainEventsAsync(domainEvents, ct);
+        await PublishCommittedDomainEventsAsync(commitResult, ct);
     }
 
     private IEventSourcingBehavior<TState> EnsureEventSourcingConfigured()
@@ -165,14 +166,17 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     }
 
     private async Task PublishCommittedDomainEventsAsync(
-        IReadOnlyList<IMessage> domainEvents,
+        EventStoreCommitResult commitResult,
         CancellationToken ct)
     {
-        for (var i = 0; i < domainEvents.Count; i++)
+        for (var i = 0; i < commitResult.CommittedEvents.Count; i++)
         {
-            await EventPublisher.PublishAsync(
-                domainEvents[i],
-                EventDirection.Observe,
+            await CommittedStateEventPublisher.PublishAsync(
+                new CommittedStateEventPublished
+                {
+                    StateEvent = commitResult.CommittedEvents[i].Clone(),
+                },
+                ObserverAudience.CommittedFacts,
                 ct,
                 ActiveInboundEnvelope);
         }

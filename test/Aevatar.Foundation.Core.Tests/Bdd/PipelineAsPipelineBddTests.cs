@@ -131,7 +131,7 @@ public class CollectingPublisher : IEventPublisher
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null)

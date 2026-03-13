@@ -33,7 +33,7 @@ public sealed class VoteConsensusModule : IEventModule<IWorkflowExecutionContext
             {
                 StepId = evt.StepId, RunId = evt.RunId, Success = false,
                 Error = "投票步骤没有候选结果",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -44,6 +44,6 @@ public sealed class VoteConsensusModule : IEventModule<IWorkflowExecutionContext
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = evt.StepId, RunId = evt.RunId, Success = true, Output = winner,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

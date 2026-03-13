@@ -112,14 +112,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            await ctx.PublishAsync(new WaitingForSignalEvent
-            {
-                StepId = stepId,
-                SignalName = signalName,
-                Prompt = prompt,
-                TimeoutMs = timeoutMs,
-                RunId = runId,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -152,13 +145,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 stepId,
                 runId,
                 signalName);
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = stepId,
-                RunId = runId,
-                Success = false,
-                Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
 
             state.Pending.Remove(BuildPendingKey(pendingKey));
             await SaveStateAsync(state, ctx, ct);
@@ -174,7 +161,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             if (TryBufferSignal(stateForSignal, signal, signalNowMs, out var bufferedEvent))
             {
                 await SaveStateAsync(stateForSignal, ctx, ct);
-                await ctx.PublishAsync(bufferedEvent, EventDirection.Both, ct);
+                await ctx.PublishAsync(bufferedEvent, TopologyAudience.ParentAndChildren, ct);
                 ctx.Logger.LogInformation(
                     "WaitSignal: signal={Signal} run={RunId} step={StepId} buffered for deferred waiter activation",
                     bufferedEvent.SignalName,
@@ -206,7 +193,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
             RunId = pendingStateForSignal.RunId,
             Success = true,
             Output = string.IsNullOrEmpty(signal.Payload) ? pendingStateForSignal.Input : signal.Payload,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
 
         stateForSignal.Pending.Remove(BuildPendingKey(resolvedKey));
         await SaveStateAsync(stateForSignal, ctx, ct);

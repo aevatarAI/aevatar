@@ -3,6 +3,7 @@
 // Provides RaiseEvent / ConfirmEventsAsync / PersistSnapshotAsync / ReplayAsync.
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
@@ -58,10 +59,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _pending.Add(evt);
 
     /// <inheritdoc />
-    public async Task ConfirmEventsAsync(CancellationToken ct = default)
+    public async Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
     {
         if (_pending.Count == 0)
-            return;
+        {
+            return new EventStoreCommitResult
+            {
+                AgentId = _agentId,
+                LatestVersion = _currentVersion,
+            };
+        }
 
         EnsureNoStateSnapshotEvents();
 
@@ -76,12 +83,13 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             EventType = evt.Descriptor.FullName,
             EventData = Any.Pack(evt),
             AgentId = _agentId,
-        });
+        }).ToArray();
 
         try
         {
-            _currentVersion = await _eventStore.AppendAsync(
+            var commitResult = await _eventStore.AppendAsync(
                 _agentId, stateEvents, _currentVersion, ct);
+            _currentVersion = commitResult.LatestVersion;
             _pending.Clear();
             _logger.LogInformation(
                 "Event sourcing commit completed. agentId={AgentId} eventType={EventType} version={Version} elapsedMs={ElapsedMs} result={Result}",
@@ -90,6 +98,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 _currentVersion,
                 Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
                 "ok");
+            return commitResult;
         }
         catch (Exception ex)
         {

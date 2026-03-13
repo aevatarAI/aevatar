@@ -125,7 +125,7 @@ public sealed class RuntimeWorkflowActorBindingReaderTests
         requestReply.CapturedTimeout.Should().Be(TimeSpan.FromSeconds(5));
         requestReply.CapturedTimeoutMessage.Should().Contain("request_id=req-1");
         requestReply.CapturedEnvelope.Should().NotBeNull();
-        requestReply.CapturedEnvelope!.Route.TargetActorId.Should().Be("actor-1");
+        requestReply.CapturedEnvelope!.Route.GetTargetActorId().Should().Be("actor-1");
         requestReply.CapturedEnvelope.Propagation.CorrelationId.Should().Be("req-1");
     }
 

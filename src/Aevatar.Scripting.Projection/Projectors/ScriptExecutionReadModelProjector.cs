@@ -46,7 +46,11 @@ public sealed class ScriptExecutionReadModelProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        var payload = envelope.Payload;
+        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
+        if (normalized == null)
+            return;
+
+        var payload = normalized.Payload;
         if (payload == null)
             return;
         var typeUrl = payload.TypeUrl;
@@ -54,18 +58,18 @@ public sealed class ScriptExecutionReadModelProjector
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
 
-        var now = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
+        var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
         await _storeDispatcher.MutateAsync(context.RootActorId, readModel =>
         {
             var mutated = false;
             foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(readModel, context, envelope, now);
+                mutated |= reducer.Reduce(readModel, context, normalized, now);
 
             if (!mutated)
                 return;
 
             readModel.UpdatedAt = now;
-            readModel.LastEventId = envelope.Id ?? string.Empty;
+            readModel.LastEventId = normalized.Id ?? string.Empty;
         }, ct);
     }
 

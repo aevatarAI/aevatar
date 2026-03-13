@@ -114,7 +114,7 @@ public sealed class WorkflowExecutionContextAdapterTests
         adapter.Services.Should().BeSameAs(inner.Services);
         adapter.Logger.Should().BeSameAs(inner.Logger);
 
-        await adapter.PublishAsync(new StringValue { Value = "published" }, EventDirection.Self, CancellationToken.None);
+        await adapter.PublishAsync(new StringValue { Value = "published" }, TopologyAudience.Self, CancellationToken.None);
         await adapter.SendToAsync("child-1", new Int32Value { Value = 3 }, CancellationToken.None);
 
         var timeoutLease = await adapter.ScheduleSelfDurableTimeoutAsync(
@@ -145,7 +145,7 @@ public sealed class WorkflowExecutionContextAdapterTests
         await adapter.CancelDurableCallbackAsync(cancelLease, CancellationToken.None);
 
         inner.Published.Should().ContainSingle(x =>
-            x.Direction == EventDirection.Self &&
+            x.Direction == TopologyAudience.Self &&
             x.Event.Unpack<StringValue>().Value == "published");
         inner.Sent.Should().ContainSingle(x =>
             x.TargetActorId == "child-1" &&
@@ -173,7 +173,7 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(Any Event, EventDirection Direction)> Published { get; } = [];
+        public List<(Any Event, TopologyAudience Direction)> Published { get; } = [];
 
         public List<(string TargetActorId, Any Event)> Sent { get; } = [];
 
@@ -185,7 +185,7 @@ public sealed class WorkflowExecutionContextAdapterTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage

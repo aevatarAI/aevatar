@@ -42,6 +42,31 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldPreserveOpaqueActorIdInAcceptedLocationAndPayload()
+    {
+        const string opaqueActorId = "script-runtime:opaque-actor-9";
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt(opaqueActorId, "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput { Prompt = "hello" },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be($"/api/actors/{opaqueActorId}");
+        body.Should().Contain(opaqueActorId);
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldMapStartError_WhenDispatchFails()
     {
         var service = new FakeCommandDispatchService
@@ -332,6 +357,34 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");
+    }
+
+    [Fact]
+    public async Task HandleResume_ShouldTreatActorIdAsOpaqueAndForwardItUnchanged()
+    {
+        const string opaqueActorId = "static-gagent:script-runtime:mixed-shape";
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt(opaqueActorId, "run-1", "cmd-1", "cmd-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = opaqueActorId,
+                RunId = "run-1",
+                StepId = "step-1",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be(opaqueActorId);
     }
 
     [Fact]

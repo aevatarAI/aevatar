@@ -54,7 +54,7 @@ src/
 
 1. **统一消息传输契约**：外部 command、内部 signal、reply、timeout、业务事件等，都以 `EventEnvelope.payload` 形式进入 Actor 消息流。
 2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑；`IActorDispatchPort` 负责 envelope 的定向投递。
-3. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream，`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
+3. **统一路由执行**：`LocalActorPublisher` 对外暴露 `PublishAsync/SendToAsync`；其中 `PublishAsync` 构造 `PublicationRoute.topology(Self/Parent/Children/ParentAndChildren)`，`SendToAsync` 构造 `DirectRoute`。Event Sourcing commit 后的 `PublicationRoute.observer(CommittedFacts)` 由框架内部 `ICommittedStateEventPublisher` 发出，不进入业务 actor 公共能力面；`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
 4. **领域事实显式持久化**：有状态 Actor 只有在显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 后，领域事件才进入 `EventStore` 成为事实源。
 5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
 
@@ -105,7 +105,6 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 `Aevatar.Foundation.Runtime`（通用层）包含：
 
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
-- `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
 - `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
 - `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
@@ -114,7 +113,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
-- `LocalActorPublisher`：按 `EventDirection` 路由事件
+- `LocalActorPublisher`：按 `EnvelopeRoute` 的 `direct/publication(topology|observer)` 变体发布事件
 - `LocalActorTypeProbe`：运行时类型探测
 - `AddAevatarRuntime()`：一键注册本地运行时依赖（含 request/reply client）
 
@@ -136,16 +135,22 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 `Routing` 现在由两部分组成：
 
-- 路由执行：`EventRouter`
-- 层级持久化：`IRouterHierarchyStore` + `InMemoryRouterStore`
+- 拓扑状态：`LocalActor` / `RuntimeActorGrainState` 自身持有 parent/children
+- 消息传播：stream-level forwarding + runtime ingress demux
 
-`EventRouter.RouteAsync(...)` 的核心行为：
+当前拓扑事实已经直接收口到 runtime actor 自身：
 
-1. 检查 `EventEnvelope.Runtime.VisitedActorIds`，如果当前 Actor 已在访问链中则直接跳过（环路保护）
-2. 当前 Actor 先处理事件
-3. 将当前 Actor 追加到 `VisitedActorIds` 后，按 `EventDirection` 转发到父/子节点
+1. Local runtime：`LocalActor` 内存态持有 `parent/children`
+2. Orleans runtime：`RuntimeActorGrainState` 持久态持有 `ParentId/Children`
+3. `LinkAsync/UnlinkAsync` 同时更新拓扑状态和 stream relay binding
 
-这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播 envelope 消息，层级快照则交给 Store 管理。
+实际消息行为已经收敛为：
+
+1. `DirectRoute` 由 runtime 直接投递到目标 actor inbox
+2. `PublicationRoute.topology` 由 stream forwarding / relay binding 负责传播
+3. `PublicationRoute.observer` 只给 projection / live sink / observer，可见但不进业务 actor inbox
+
+也就是说，拓扑状态和 fan-out 已不再通过单独 `EventRouter` 对象承载；真正的 fan-out 仍由 stream forwarding / relay binding 执行。
 
 ## CQRS 与 Projection 落点
 
@@ -233,7 +238,7 @@ await runtime.LinkAsync("parent", "child");
 
 ```csharp
 await ((GAgentBase)parent.Agent).EventPublisher
-    .PublishAsync(new PingEvent { Message = "hello" }, EventDirection.Down);
+    .PublishAsync(new PingEvent { Message = "hello" }, TopologyAudience.Children);
 ```
 
 ## 当前状态说明

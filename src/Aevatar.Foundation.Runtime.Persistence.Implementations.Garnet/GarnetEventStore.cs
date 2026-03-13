@@ -87,7 +87,7 @@ public sealed class GarnetEventStore : IEventStore
         _logger = logger ?? NullLogger<GarnetEventStore>.Instance;
     }
 
-    public async Task<long> AppendAsync(
+    public async Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,
@@ -99,7 +99,13 @@ public sealed class GarnetEventStore : IEventStore
 
         var pendingEvents = events.Select(static evt => evt.Clone()).ToList();
         if (pendingEvents.Count == 0)
-            return await GetVersionAsync(agentId, ct);
+        {
+            return new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = await GetVersionAsync(agentId, ct),
+            };
+        }
 
         ValidateEventVersions(pendingEvents, expectedVersion);
 
@@ -131,7 +137,12 @@ public sealed class GarnetEventStore : IEventStore
             agentId,
             pendingEvents.Count,
             actualVersion);
-        return actualVersion;
+        return new EventStoreCommitResult
+        {
+            AgentId = agentId,
+            LatestVersion = actualVersion,
+            CommittedEvents = { pendingEvents.Select(static evt => evt.Clone()) },
+        };
     }
 
     public async Task<IReadOnlyList<StateEvent>> GetEventsAsync(

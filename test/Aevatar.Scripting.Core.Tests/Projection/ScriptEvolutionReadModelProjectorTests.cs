@@ -168,11 +168,7 @@ public class ScriptEvolutionReadModelProjectorTests
             Id = id,
             Payload = payload,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "projection-test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = id,

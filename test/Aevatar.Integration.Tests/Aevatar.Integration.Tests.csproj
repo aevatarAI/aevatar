@@ -47,6 +47,7 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="Protos/text_normalization_protocol.proto" GrpcServices="None" />
+    <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

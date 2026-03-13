@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
@@ -40,10 +41,7 @@ internal sealed class MassTransitStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(message),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
         await PublishToStreamAsync(_streamId, envelope, ct);
@@ -165,7 +163,7 @@ internal sealed class MassTransitStream : IStream
             SourceStreamId = _streamId,
             TargetStreamId = binding.TargetStreamId,
             ForwardingMode = binding.ForwardingMode,
-            DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+            DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
@@ -20,6 +21,7 @@ public class ScriptDefinitionRuntimeContractTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
         var eventStore = provider.GetRequiredService<IEventStore>();
 
         var definitionActorId = "contract-definition";
@@ -78,16 +80,21 @@ public sealed class ContractScript : IScriptPackageRuntime
                 "hash-contract-1"),
             CancellationToken.None);
 
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                runtimeActorId,
-                "run-contract-1",
-                Any.Pack(new Struct
-                {
-                    Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-A") },
-                }),
-                "rev-contract-1",
-                definitionActorId),
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-contract-1",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-contract-1",
+                    Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-A") },
+                    }),
+                    "rev-contract-1",
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
@@ -108,6 +115,7 @@ public sealed class ContractScript : IScriptPackageRuntime
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "self-contained-definition";
         const string runtimeActorId = "self-contained-runtime";
@@ -166,16 +174,21 @@ public sealed class ReplayScript : IScriptPackageRuntime
                 "hash-self-contained"),
             CancellationToken.None);
 
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                runtimeActorId,
-                "run-self-contained",
-                Any.Pack(new Struct
-                {
-                    Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
-                }),
-                "rev-self-contained",
-                definitionActorId),
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-self-contained",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-self-contained",
+                    Any.Pack(new Struct
+                    {
+                        Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
+                    }),
+                    "rev-self-contained",
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var before = (ScriptRuntimeGAgent)runtimeActor.Agent;
@@ -207,6 +220,7 @@ public sealed class ReplayScript : IScriptPackageRuntime
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "revision-check-definition";
         const string runtimeActorId = "revision-check-runtime";
@@ -265,13 +279,18 @@ public sealed class RevisionScript : IScriptPackageRuntime
                 "hash-revision"),
             CancellationToken.None);
 
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                runtimeActorId,
-                "run-revision-check",
-                Any.Pack(new Struct()),
-                "rev-requested-mismatch",
-                definitionActorId),
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-revision-check",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-revision-check",
+                    Any.Pack(new Struct()),
+                    "rev-requested-mismatch",
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var runtimeState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;

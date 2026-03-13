@@ -22,11 +22,11 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         InboundEnvelope = new EventEnvelope();
     }
 
-    public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+    public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
     public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
     public List<ScheduledCallback> Scheduled { get; } = [];
     public List<CanceledCallback> Canceled { get; } = [];
-    public Action<IMessage, EventDirection>? OnPublish { get; set; }
+    public Action<IMessage, TopologyAudience>? OnPublish { get; set; }
 
     public EventEnvelope InboundEnvelope { get; }
     public string AgentId => Agent.Id;
@@ -127,7 +127,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
@@ -147,7 +147,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     {
         Sent.Add((targetActorId, evt));
         _ = options;
-        return PublishAsync(evt, EventDirection.Self, ct);
+        return PublishAsync(evt, TopologyAudience.Self, ct);
     }
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
@@ -191,11 +191,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(callback.Event),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = publisherId ?? AgentId,
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? AgentId, TopologyAudience.Self),
         };
 
         if (callback.Options?.Propagation != null)

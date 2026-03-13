@@ -21,11 +21,7 @@ public sealed class RuntimeActorGrainStateStoreTests
         var state = new EventEnvelope
         {
             Id = "evt-1",
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "publisher-1",
-                Direction = EventDirection.Both,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-1", TopologyAudience.ParentAndChildren),
             Propagation = new EnvelopePropagation
             {
                 Baggage =
@@ -41,7 +37,7 @@ public sealed class RuntimeActorGrainStateStoreTests
         loaded.Should().NotBeNull();
         loaded!.Id.Should().Be("evt-1");
         loaded.Route!.PublisherActorId.Should().Be("publisher-1");
-        loaded.Route.Direction.Should().Be(EventDirection.Both);
+        loaded.Route.GetTopologyAudience().Should().Be(TopologyAudience.ParentAndChildren);
         loaded.Propagation!.Baggage.Should().ContainKey("k").WhoseValue.Should().Be("v");
         stateProxy.State.AgentStateTypeName.Should().Be(typeof(EventEnvelope).FullName);
         stateProxy.State.AgentStateSnapshot.Should().NotBeNull();

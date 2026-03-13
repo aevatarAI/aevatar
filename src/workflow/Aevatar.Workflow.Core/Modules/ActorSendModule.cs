@@ -58,7 +58,7 @@ public sealed class ActorSendModule : IEventModule<IWorkflowExecutionContext>
         };
         completion.Annotations["actor.target_actor_id"] = sendState.TargetActorId;
         completion.Annotations["actor.payload_type_url"] = sendState.Payload.TypeUrl ?? string.Empty;
-        await ctx.PublishAsync(completion, EventDirection.Self, ct);
+        await ctx.PublishAsync(completion, TopologyAudience.Self, ct);
     }
 
     private static Task PublishFailureAsync(
@@ -74,7 +74,7 @@ public sealed class ActorSendModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Error = error,
             },
-            EventDirection.Self,
+            TopologyAudience.Self,
             ct);
 
     private static IMessage Unpack(Any packed)

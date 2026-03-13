@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-12
 - 适用范围：
@@ -21,9 +21,9 @@
   - `docs/architecture/2026-03-12-gagent-implementation-source-unification-blueprint.md`
   - `docs/architecture/2026-03-11-gagent-centric-cqrs-capability-unification-blueprint.md`
 - 文档定位：
-  - 本文是“协议优先互通蓝图”的工程实施文档。
-  - 本文不再讨论抽象理念本身是否成立，而是回答“基于当前代码，应该如何以最佳实践落地”。
-  - 本文重点覆盖：面向对象边界、设计模式选择、开闭原则、基类继承、范型使用、分阶段改造与门禁。
+  - 本文保留为 `2026-03-12` 当日的总实施方案留痕。
+  - 当前仓库真实落地状态已经由 phase 1-5 文档逐步收口，不再按本文阶段编号推进。
+  - 若需查看当前最终状态，以 `docs/architecture/2026-03-13-gagent-protocol-series-closeout.md` 为总入口；若需查看最后一项收尾验收记录，以 `docs/architecture/2026-03-13-gagent-protocol-host-mainnet-forward-only-validation-task-list.md` 为准。
 
 ## 2. 执行摘要
 

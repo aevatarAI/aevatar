@@ -91,7 +91,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 RunId = runId,
                 Success = false,
                 Error = "workflow run is already active",
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -119,7 +119,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 RunId = runId,
                 Success = false,
                 Error = "无步骤",
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -173,7 +173,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             RunId = runId,
             Success = false,
             Error = $"TIMEOUT after {evt.TimeoutMs}ms",
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
 
         state.TimeoutsByStepId.Remove(stepId);
         state.CurrentStepTimeoutCallbackId = string.Empty;
@@ -291,7 +291,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     RunId = runId,
                     Success = false,
                     Error = evt.Error,
-                }, EventDirection.Both, ct);
+                }, TopologyAudience.ParentAndChildren, ct);
                 return;
             }
 
@@ -312,7 +312,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 RunId = runId,
                 Success = false,
                 Error = evt.Error,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -339,7 +339,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     RunId = runId,
                     Success = false,
                     Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
-                }, EventDirection.Both, ct);
+                }, TopologyAudience.ParentAndChildren, ct);
                 return;
             }
         }
@@ -357,7 +357,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 RunId = runId,
                 Success = true,
                 Output = evt.Output,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -608,7 +608,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         RunId = state.RunId,
                         Success = true,
                         Output = output,
-                    }, EventDirection.Both, ct);
+                    }, TopologyAudience.ParentAndChildren, ct);
                 }
                 else
                 {
@@ -664,7 +664,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 RunId = state.RunId,
                 Success = false,
                 Error = $"step type '{canonicalStepType}' is blocked in closed_world_mode",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -689,7 +689,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await SaveStateAsync(state, ctx, ct);
             }
 
-            await ctx.PublishAsync(request, EventDirection.Self, ct);
+            await ctx.PublishAsync(request, TopologyAudience.Self, ct);
         }
         catch
         {
@@ -982,7 +982,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 }
             }
 
-            await ctx.PublishAsync(request, EventDirection.Self, ct);
+            await ctx.PublishAsync(request, TopologyAudience.Self, ct);
         }
         catch
         {

@@ -72,7 +72,7 @@ public sealed class WorkflowRunControlCommandTests
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
 
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.resume");
-        envelope.Route.TargetActorId.Should().Be("actor-1");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
         resumed.RunId.Should().Be("run-1");
         resumed.StepId.Should().Be("step-1");
@@ -91,7 +91,7 @@ public sealed class WorkflowRunControlCommandTests
         var signal = envelope.Payload.Unpack<SignalReceivedEvent>();
 
         envelope.Route!.PublisherActorId.Should().Be("api.workflow.signal");
-        envelope.Route.TargetActorId.Should().Be("actor-1");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
         envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("approve");

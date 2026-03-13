@@ -348,7 +348,7 @@ public class RoleGAgentReplayContractTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
@@ -371,7 +371,18 @@ public class RoleGAgentReplayContractTests
             where TEvent : IMessage
         {
             _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct, sourceEnvelope, options);
+            return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
+        }
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = audience;
+            return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
     }
 

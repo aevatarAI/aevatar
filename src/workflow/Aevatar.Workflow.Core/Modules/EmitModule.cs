@@ -37,6 +37,6 @@ public sealed class EmitModule : IEventModule<IWorkflowExecutionContext>
         };
         completed.Annotations["emit.event_type"] = eventType;
         completed.Annotations["emit.payload"] = payload;
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.ParentAndChildren, ct);
     }
 }

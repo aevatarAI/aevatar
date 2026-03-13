@@ -213,11 +213,7 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -235,11 +231,7 @@ public class WorkflowIntegrationTests
                 WorkflowName = "research_workflow",
                 RunId = "wf-1-run",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -256,11 +248,7 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -365,11 +353,7 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠",
                 SessionId = "test",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Children),
         };
 
         await actor.HandleEventAsync(envelope);

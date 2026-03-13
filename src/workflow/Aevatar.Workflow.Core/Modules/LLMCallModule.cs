@@ -201,7 +201,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
             },
-            EventDirection.Self,
+            TopologyAudience.Self,
             ct);
         await RemovePendingAsync(sessionId, pending, ctx, ct);
     }
@@ -245,7 +245,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Output = evt.Content ?? string.Empty,
                 WorkerId = ctx.AgentId,
             },
-            EventDirection.Self,
+            TopologyAudience.Self,
             ct);
         await RemovePendingAsync(sessionId, pending, ctx, ct);
     }
@@ -458,7 +458,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             timeoutMs,
             prompt.Length,
             promptPreview);
-        await ctx.PublishAsync(chatRequest, EventDirection.Self, ct, dispatchOptions);
+        await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct, dispatchOptions);
     }
 
     private static Task PublishFailedCompletionAsync(
@@ -491,7 +491,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Error = error,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
             },
-            EventDirection.Self,
+            TopologyAudience.Self,
             ct);
 
     private static string BuildWatchdogCallbackId(string sessionId) =>

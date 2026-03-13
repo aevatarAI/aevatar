@@ -1,4 +1,5 @@
 using System.Globalization;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -143,29 +144,39 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return;
 
         var selfActorId = this.GetPrimaryKeyString();
-        switch (envelope.Route?.Direction ?? EventDirection.Unspecified)
-        {
-            case EventDirection.Self:
-            case EventDirection.Up:
-                break;
-            case EventDirection.Down:
-            case EventDirection.Both:
-                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                {
-                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                        return;
-                    break;
-                }
+        var route = envelope.Route;
+        if (route.IsObserverPublication())
+            return;
 
-                if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
-                {
+        if (route.IsDirect())
+        {
+            if (!string.Equals(route.GetTargetActorId(), selfActorId, StringComparison.Ordinal))
+                return;
+        }
+        else
+        {
+            switch (route.GetTopologyAudience())
+            {
+                case TopologyAudience.Self:
+                case TopologyAudience.Parent:
+                    break;
+                case TopologyAudience.Children:
+                case TopologyAudience.ParentAndChildren:
+                    if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                    {
+                        if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                            return;
+                        break;
+                    }
+
+                    if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                    break;
+                default:
                     return;
-                }
-                break;
-            case EventDirection.Observe:
-                return;
-            default:
-                return;
+            }
         }
 
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
@@ -330,11 +341,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var agentLogger = loggerFactory?.CreateLogger(agent.GetType().Name) ?? NullLogger.Instance;
 
         gAgent.SetId(actorId);
-        gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
+        var publisher = new Actors.OrleansGrainEventPublisher(
             actorId,
             () => _state.State.ParentId,
             _propagationPolicy,
             _streams);
+        gAgent.EventPublisher = publisher;
+        gAgent.CommittedStateEventPublisher = publisher;
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         if (gAgent is IEventSourcingFactoryBinding statefulBinding)
@@ -357,6 +370,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private Task OnSelfStreamEventAsync(EventEnvelope envelope, StreamSequenceToken? token = null)
     {
         _ = token;
+        if (envelope.Route.IsObserverPublication())
+            return Task.CompletedTask;
+
         return HandleEnvelopeAsync(envelope.ToByteArray());
     }
 

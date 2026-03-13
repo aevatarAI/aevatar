@@ -57,6 +57,6 @@ public sealed class RetrieveFactsModule : IEventModule<IWorkflowExecutionContext
             StepId = request.StepId,
             RunId = request.RunId,
             Success = true, Output = output,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

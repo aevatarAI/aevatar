@@ -121,10 +121,7 @@ public class EventRoutingTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = new Any { TypeUrl = $"type.googleapis.com/{typeUrlSuffix}" },
-        Route = new EnvelopeRoute
-        {
-            Direction = EventDirection.Down,
-        },
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
     };
 }
 

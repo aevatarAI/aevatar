@@ -44,7 +44,7 @@ public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
             Output = request.Input ?? "",
             BranchKey = branchKey,
         };
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     /// <summary>

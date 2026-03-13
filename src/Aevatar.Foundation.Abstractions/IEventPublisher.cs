@@ -8,14 +8,15 @@ using Google.Protobuf;
 namespace Aevatar.Foundation.Abstractions;
 
 /// <summary>
-/// Event publishing contract for actor delivery and observer-only committed-event publication.
-/// Publish/send never imply inline execution; `EventDirection.Observe` writes an observer-visible envelope that actor inbox handlers ignore.
+/// Event publishing contract for the unified message plane.
+/// Publish/send never imply inline execution; `PublishAsync` produces a topology publication route,
+/// and `SendToAsync` produces a direct route.
 /// </summary>
 public interface IEventPublisher
 {
-    /// <summary>Publishes an event using the specified route (Up/Down/Both/Self/Observe).</summary>
+    /// <summary>Publishes an event using the specified topology publication route.</summary>
     /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
-    Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
+    Task PublishAsync<TEvent>(TEvent evt, TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
 
@@ -24,4 +25,5 @@ public interface IEventPublisher
     Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
         CancellationToken ct = default, EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null) where TEvent : IMessage;
+
 }

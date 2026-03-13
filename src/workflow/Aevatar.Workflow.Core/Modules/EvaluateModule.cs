@@ -125,7 +125,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 }
                 else
                 {
-                    await ctx.PublishAsync(chatRequest, EventDirection.Self, ct);
+                    await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
                 }
             }
             catch (Exception ex)
@@ -185,7 +185,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         if (!passed && !string.IsNullOrEmpty(evalCtx.OnBelow))
             completed.BranchKey = evalCtx.OnBelow;
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
         stateForCompletion.PendingBySessionId.Remove(sid);
         stateForCompletion.AttemptsByStepId.Remove(BuildAttemptKey(evalCtx.RunId, evalCtx.StepId));

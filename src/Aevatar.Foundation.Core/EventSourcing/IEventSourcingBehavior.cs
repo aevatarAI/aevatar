@@ -3,6 +3,7 @@
 // Stateful agents must persist domain events and replay them for recovery.
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 
 namespace Aevatar.Foundation.Core.EventSourcing;
@@ -19,8 +20,8 @@ public interface IEventSourcingBehavior<TState> where TState : class, IMessage
     /// <summary>Record a pending state-change event.</summary>
     void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage;
 
-    /// <summary>Persist all pending events to IEventStore.</summary>
-    Task ConfirmEventsAsync(CancellationToken ct = default);
+    /// <summary>Persist all pending events to IEventStore and return the committed records.</summary>
+    Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Persist a snapshot for replay optimization.
