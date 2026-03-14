@@ -104,7 +104,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldPreserveSuccess_WhenCleanupFails()
+    public async Task CommandInteractionService_ShouldThrow_WhenCleanupFailsAfterSuccess()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort
@@ -124,15 +124,60 @@ public sealed class WorkflowApplicationLayerTests
             new FakeFinalizeEmitter(),
             new FakeDurableCompletionResolver());
 
-        var result = await service.ExecuteAsync(
+        var act = () => service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
-        result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.WithMessage("Workflow actor cleanup failed.*");
+        exception.Which.InnerExceptions.Should().HaveCount(2);
+        exception.Which.InnerExceptions.Should().AllSatisfy(ex =>
+        {
+            ex.Should().BeOfType<InvalidOperationException>();
+            ex.InnerException.Should().BeOfType<InvalidOperationException>()
+                .Which.Message.Should().Be("cleanup failed");
+        });
         projectionPort.DetachCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task CommandInteractionService_ShouldThrow_WhenDetachedCleanupCannotBeScheduled()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var cleanupScheduler = new FakeDetachedCleanupScheduler
+        {
+            ScheduleException = new InvalidOperationException("schedule failed"),
+        };
+        var target = CreateBoundTarget(
+            projectionPort,
+            actorPort,
+            "actor-1",
+            "direct",
+            "cmd-1",
+            ["definition-1", "actor-1"],
+            cleanupScheduler);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var service = CreateInteractionService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            new FakeEventOutputStream { Events = [BuildEvent("progress")] },
+            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
+            new FakeFinalizeEmitter(),
+            new FakeDurableCompletionResolver());
+
+        var act = () => service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("schedule failed");
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+        actorPort.DestroyCalls.Should().BeEmpty();
+        cleanupScheduler.Requests.Should().ContainSingle();
     }
 
     [Fact]

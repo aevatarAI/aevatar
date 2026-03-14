@@ -988,6 +988,13 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> HasActiveLeaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            lock (_gate)
+                return Task.FromResult(_acquired.Contains((scopeId, sessionId)) && !_released.Contains((scopeId, sessionId)));
+        }
+
         public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

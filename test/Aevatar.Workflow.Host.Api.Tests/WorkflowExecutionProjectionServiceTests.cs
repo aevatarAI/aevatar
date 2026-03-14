@@ -582,7 +582,8 @@ public class WorkflowExecutionProjectionServiceTests
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             dispatchPort,
-            ownershipTypeVerifier);
+            ownershipTypeVerifier,
+            runtimeProvider.GetRequiredService<IEventStore>());
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
@@ -1276,6 +1277,9 @@ public class WorkflowExecutionProjectionServiceTests
             Acquired.Add((scopeId, sessionId));
             return Task.CompletedTask;
         }
+
+        public Task<bool> HasActiveLeaseAsync(string scopeId, string sessionId, CancellationToken ct = default) =>
+            Task.FromResult(Acquired.Contains((scopeId, sessionId)) && !Released.Contains((scopeId, sessionId)));
 
         public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {

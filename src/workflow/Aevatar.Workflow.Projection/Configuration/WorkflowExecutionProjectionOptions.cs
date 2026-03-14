@@ -102,6 +102,11 @@ public sealed class WorkflowExecutionProjectionOptions
     public int DetachedCleanupReleaseAckTimeoutMs { get; set; } = 5000;
 
     /// <summary>
+    /// After this many release-ack timeouts, detached cleanup force-finalizes even if ownership still looks active.
+    /// </summary>
+    public int DetachedCleanupForceFinalizeAfterAckTimeoutAttempts { get; set; } = 3;
+
+    /// <summary>
     /// Base retry delay for failed detached cleanup replay.
     /// </summary>
     public int DetachedCleanupRetryBaseDelayMs { get; set; } = 1000;

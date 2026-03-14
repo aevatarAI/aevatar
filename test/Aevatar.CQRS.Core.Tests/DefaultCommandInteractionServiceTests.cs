@@ -121,7 +121,7 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldPreserveSuccess()
+    public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldThrowCleanupFailure()
     {
         var sink = new EventChannel<string>();
         sink.Push("done:completed");
@@ -140,13 +140,13 @@ public sealed class DefaultCommandInteractionServiceTests
                     Receipt = receipt,
                 })));
 
-        var result = await service.ExecuteAsync(
+        var act = () => service.ExecuteAsync(
             "command-3",
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
-        result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<string>("completed", true));
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("cleanup failed");
     }
 
     [Fact]

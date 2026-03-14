@@ -17,6 +17,12 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     : GAgentBase<WorkflowRunDetachedCleanupOutboxState>
 {
+    private enum ReplayEntryOutcome
+    {
+        Pending = 0,
+        Progressed = 1,
+    }
+
     public const string ActorIdPrefix = "workflow.run.detached.cleanup.outbox";
 
     public static string BuildActorId(string scopeId)
@@ -84,11 +90,17 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             .Where(e => e.CompletedAtUtc == null && IsVisible(e, utcNow))
             .OrderBy(e => e.NextVisibleAtUtc?.ToDateTime() ?? DateTime.UnixEpoch)
             .ThenBy(e => e.EnqueuedAtUtc?.ToDateTime() ?? DateTime.UnixEpoch)
-            .Take(Math.Max(1, batchSize))
             .ToList();
 
+        var remainingBudget = Math.Max(1, batchSize);
         foreach (var entry in dueEntries)
-            await ReplayEntryAsync(entry);
+        {
+            if (remainingBudget <= 0)
+                break;
+
+            if (await ReplayEntryAsync(entry) == ReplayEntryOutcome.Progressed)
+                remainingBudget--;
+        }
     }
 
     protected override WorkflowRunDetachedCleanupOutboxState TransitionState(
@@ -172,8 +184,9 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         return next;
     }
 
-    private async Task ReplayEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    private async Task<ReplayEntryOutcome> ReplayEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
+        var madeProgress = false;
         WorkflowActorSnapshot? snapshot;
         try
         {
@@ -184,52 +197,79 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         catch (Exception ex)
         {
             await ScheduleRetryAsync(entry, ex);
-            return;
+            return ReplayEntryOutcome.Progressed;
         }
 
         if (!HasDispatchAccepted(entry))
         {
             if (!CanConfirmDispatchAccepted(entry, snapshot))
-                return;
+                return ReplayEntryOutcome.Pending;
 
             try
             {
                 entry = await MarkDispatchAcceptedAsync(entry);
+                madeProgress = true;
             }
             catch (Exception ex)
             {
                 await ScheduleRetryAsync(entry, ex);
-                return;
+                return ReplayEntryOutcome.Progressed;
             }
         }
 
         if (!HasTerminalCompletion(snapshot))
-            return;
+            return madeProgress ? ReplayEntryOutcome.Progressed : ReplayEntryOutcome.Pending;
 
         try
         {
             if (RequiresProjectionRelease(snapshot))
             {
-                await Services
-                    .GetRequiredService<IProjectionOwnershipCoordinator>()
-                    .AcquireAsync(entry.ActorId, entry.CommandId, CancellationToken.None);
                 await CompleteReleasedEntryAsync(entry);
             }
             else
             {
                 await CompleteDirectEntryAsync(entry);
             }
+
+            return ReplayEntryOutcome.Progressed;
+        }
+        catch (TimeoutException ex) when (RequiresProjectionRelease(snapshot))
+        {
+            try
+            {
+                if (await TryCompleteReleasedEntryAfterAckTimeoutAsync(entry))
+                    return ReplayEntryOutcome.Progressed;
+            }
+            catch (Exception recoveryEx)
+            {
+                await ScheduleRetryAsync(entry, recoveryEx);
+                return ReplayEntryOutcome.Progressed;
+            }
+
+            await ScheduleRetryAsync(entry, ex);
+            return ReplayEntryOutcome.Progressed;
         }
         catch (Exception ex)
         {
             await ScheduleRetryAsync(entry, ex);
+            return ReplayEntryOutcome.Progressed;
         }
     }
 
     private async Task FinalizeDetachedCleanupAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
+        await FinalizeDetachedCleanupAsync(entry, entry.CommandId);
+    }
+
+    private async Task FinalizeDetachedCleanupAsync(
+        WorkflowRunDetachedCleanupOutboxEntry entry,
+        string ownershipSessionId)
+    {
         var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
         var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
+        var normalizedSessionId = string.IsNullOrWhiteSpace(ownershipSessionId)
+            ? entry.CommandId
+            : ownershipSessionId.Trim();
 
         Exception? firstException = null;
 
@@ -244,7 +284,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         try
         {
-            await ownershipCoordinator.ReleaseAsync(entry.ActorId, entry.CommandId, CancellationToken.None);
+            await ownershipCoordinator.ReleaseAsync(entry.ActorId, normalizedSessionId, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -354,6 +394,27 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             RecordId = entry.RecordId,
             CompletedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+    }
+
+    private async Task<bool> TryCompleteReleasedEntryAfterAckTimeoutAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
+        var options = Services.GetRequiredService<WorkflowExecutionProjectionOptions>();
+
+        if (!await ownershipCoordinator.HasActiveLeaseAsync(entry.ActorId, entry.CommandId, CancellationToken.None))
+        {
+            await CompleteDirectEntryAsync(entry);
+            return true;
+        }
+
+        var forceAfterAttempts = Math.Max(0, options.DetachedCleanupForceFinalizeAfterAckTimeoutAttempts);
+        if (forceAfterAttempts > 0 && entry.AttemptCount + 1 >= forceAfterAttempts)
+        {
+            await CompleteDirectEntryAsync(entry);
+            return true;
+        }
+
+        return false;
     }
 
     private async Task ScheduleRetryAsync(
