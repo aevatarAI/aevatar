@@ -16,6 +16,8 @@
   - `docs/FOUNDATION.md`
   - `docs/CQRS_ARCHITECTURE.md`
   - `docs/SCRIPTING_ARCHITECTURE.md`
+  - `docs/architecture/2026-03-14-gagent-service-phase-1-mvp-blueprint.md`
+  - `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
   - `docs/architecture/2026-03-11-gagent-centric-cqrs-capability-unification-blueprint.md`
   - `docs/architecture/2026-03-13-gagent-platform-entry-and-composition-blueprint.md`
   - `docs/architecture/AEVATAR_MAINNET_ARCHITECTURE.md`

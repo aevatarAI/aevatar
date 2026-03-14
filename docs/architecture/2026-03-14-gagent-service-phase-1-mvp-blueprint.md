@@ -11,6 +11,7 @@
   - `docs/CQRS_ARCHITECTURE.md`
   - `docs/SCRIPTING_ARCHITECTURE.md`
   - `docs/architecture/2026-03-14-gagent-as-a-service-platform-blueprint.md`
+  - `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
   - `docs/architecture/2026-03-13-gagent-platform-entry-and-composition-blueprint.md`
 
 ## 2. 一句话结论

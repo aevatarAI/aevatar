@@ -18,6 +18,7 @@
   - `docs/SCRIPTING_ARCHITECTURE.md`
   - `docs/architecture/2026-03-14-gagent-as-a-service-platform-blueprint.md`
   - `docs/architecture/2026-03-14-gagent-service-phase-1-mvp-blueprint.md`
+  - `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
 - 本文定位：
   - 本文只讨论 `GAgentService Phase 1 MVP` 的详细代码级落地方案。
   - 本文默认以目标态为准，不以兼容层为目标；若实现过程中存在短暂双写或共存，只允许作为分支内临时过渡。
