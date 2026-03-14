@@ -98,7 +98,8 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         parsed.ToString().Should().Contain("eventType");
         ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(ProjectionSessionEventTransportMessage));
         parsed.LegacyPayload.Should().Be("{\"value\":\"payload\"}");
-        var payload = Any.Parser.ParseFrom(parsed.Payload);
+        var parsedPayload = parsed.Payload ?? throw new InvalidOperationException("Parsed payload should not be null.");
+        var payload = Any.Parser.ParseFrom(parsedPayload);
         payload.Is(StringValue.Descriptor).Should().BeTrue();
         payload.Unpack<StringValue>().Value.Should().Be("payload");
 
@@ -107,11 +108,15 @@ public sealed class ProjectionOwnershipProtoCoverageTests
         merged.Should().BeEquivalentTo(msg);
         msg.Equals((object?)null).Should().BeFalse();
 
-        msg.Payload = ByteString.Empty;
-        msg.Payload.Should().NotBeNull();
-        msg.Payload!.IsEmpty.Should().BeTrue();
-        msg.LegacyPayload = string.Empty;
-        msg.LegacyPayload.Should().BeEmpty();
+        var emptyPayloadMessage = new ProjectionSessionEventTransportMessage
+        {
+            Payload = ByteString.Empty,
+            LegacyPayload = string.Empty,
+        };
+        var emptyPayload = emptyPayloadMessage.Payload
+            ?? throw new InvalidOperationException("Payload should not be null.");
+        emptyPayload.IsEmpty.Should().BeTrue();
+        emptyPayloadMessage.LegacyPayload.Should().BeEmpty();
 
         ProjectionSessionEventTransportReflection.Descriptor.Should().NotBeNull();
         ProjectionSessionEventTransportReflection.Descriptor.MessageTypes.Should().ContainSingle(x => x.Name == nameof(ProjectionSessionEventTransportMessage));

@@ -1,5 +1,5 @@
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 
 namespace Aevatar.Scripting.Core.Materialization;

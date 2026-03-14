@@ -1,10 +1,9 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
-using Aevatar.Scripting.Infrastructure.Artifacts;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Queries;
@@ -19,6 +18,41 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 
 public sealed class ScriptReadModelQueryReaderTests
 {
+    [Theory]
+    [InlineData("documentStore")]
+    [InlineData("definitionSnapshotPort")]
+    [InlineData("artifactResolver")]
+    [InlineData("codec")]
+    public void Ctor_ShouldRejectNullDependencies(string parameterName)
+    {
+        Action act = parameterName switch
+        {
+            "documentStore" => () => _ = new ScriptReadModelQueryReader(
+                null!,
+                new ThrowingDefinitionSnapshotPort(),
+                new ThrowingArtifactResolver(),
+                new ProtobufMessageCodec()),
+            "definitionSnapshotPort" => () => _ = new ScriptReadModelQueryReader(
+                new InMemoryReadModelStore(),
+                null!,
+                new ThrowingArtifactResolver(),
+                new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptReadModelQueryReader(
+                new InMemoryReadModelStore(),
+                new ThrowingDefinitionSnapshotPort(),
+                null!,
+                new ProtobufMessageCodec()),
+            "codec" => () => _ = new ScriptReadModelQueryReader(
+                new InMemoryReadModelStore(),
+                new ThrowingDefinitionSnapshotPort(),
+                new ThrowingArtifactResolver(),
+                null!),
+            _ => throw new InvalidOperationException("Unexpected parameter."),
+        };
+
+        act.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be(parameterName);
+    }
+
     [Fact]
     public async Task GetSnapshotAsync_ShouldReturnNull_WhenDocumentDoesNotExist()
     {
@@ -226,6 +260,43 @@ public sealed class ScriptReadModelQueryReaderTests
     }
 
     [Fact]
+    public async Task ExecuteDeclaredQueryAsync_ShouldFallbackToSourceTextPackage_WhenSnapshotPackageIsMissing()
+    {
+        var store = new InMemoryReadModelStore();
+        await store.UpsertAsync(new ScriptReadModelDocument
+        {
+            Id = "runtime-fallback-package",
+            ScriptId = "script-fallback-package",
+            DefinitionActorId = "definition-fallback-package",
+            Revision = "rev-fallback-package",
+            ReadModelTypeUrl = ScriptSources.StructuredProfileReadModelTypeUrl,
+            ReadModelPayload = Any.Pack(new ScriptProfileReadModel { HasValue = true, NormalizedText = "HELLO" }),
+            StateVersion = 1,
+            LastEventId = "evt-fallback-package",
+            UpdatedAt = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero),
+        }, CancellationToken.None);
+        var resolver = new CapturingArtifactResolver(new QueryBehavior());
+        var reader = new ScriptReadModelQueryReader(
+            store,
+            new MissingPackageDefinitionSnapshotPort(
+                "definition-fallback-package",
+                "rev-fallback-package",
+                ScriptSources.StructuredProfileBehavior,
+                ScriptSources.StructuredProfileBehaviorHash),
+            resolver,
+            new ProtobufMessageCodec());
+
+        var result = await reader.ExecuteDeclaredQueryAsync(
+            "runtime-fallback-package",
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-fallback-package" }),
+            CancellationToken.None);
+
+        result.Should().NotBeNull();
+        resolver.LastRequest.Should().NotBeNull();
+        resolver.LastRequest!.Package.CSharpSources.Should().ContainSingle(x => x.Content == ScriptSources.StructuredProfileBehavior);
+    }
+
+    [Fact]
     public async Task ExecuteDeclaredQueryAsync_ShouldReturnNull_WhenBehaviorReturnsNull()
     {
         var store = new InMemoryReadModelStore();
@@ -345,7 +416,128 @@ public sealed class ScriptReadModelQueryReaderTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Script behavior compilation failed*");
+            .WithMessage("*Script artifact resolution failed*");
+    }
+
+    [Fact]
+    public async Task ExecuteDeclaredQueryAsync_ShouldDisposeAsyncDisposableBehavior()
+    {
+        var store = await CreateProfileReadModelStoreAsync("runtime-async-dispose");
+        var behavior = new AsyncDisposableBehavior(new QueryBehavior());
+        var reader = new ScriptReadModelQueryReader(
+            store,
+            new StaticDefinitionSnapshotPort(
+                definitionActorId: "definition-1",
+                revision: "rev-1",
+                sourceText: ScriptSources.StructuredProfileBehavior,
+                sourceHash: ScriptSources.StructuredProfileBehaviorHash),
+            new StaticArtifactResolver(behavior),
+            new ProtobufMessageCodec());
+
+        var result = await reader.ExecuteDeclaredQueryAsync(
+            "runtime-async-dispose",
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-async-dispose" }),
+            CancellationToken.None);
+
+        result.Should().NotBeNull();
+        behavior.DisposeAsyncCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteDeclaredQueryAsync_ShouldDisposeDisposableBehavior()
+    {
+        var store = await CreateProfileReadModelStoreAsync("runtime-dispose");
+        var behavior = new DisposableBehavior(new QueryBehavior());
+        var reader = new ScriptReadModelQueryReader(
+            store,
+            new StaticDefinitionSnapshotPort(
+                definitionActorId: "definition-1",
+                revision: "rev-1",
+                sourceText: ScriptSources.StructuredProfileBehavior,
+                sourceHash: ScriptSources.StructuredProfileBehaviorHash),
+            new StaticArtifactResolver(behavior),
+            new ProtobufMessageCodec());
+
+        var result = await reader.ExecuteDeclaredQueryAsync(
+            "runtime-dispose",
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-dispose" }),
+            CancellationToken.None);
+
+        result.Should().NotBeNull();
+        behavior.DisposeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecuteDeclaredQueryAsync_ShouldReject_WhenDeclaredResultTypeDoesNotMatchReturnedMessage()
+    {
+        var store = await CreateProfileReadModelStoreAsync("runtime-result-type-mismatch");
+        var behavior = new DescriptorOverrideBehavior(
+            new QueryBehavior(),
+            descriptor =>
+            {
+                var registration = descriptor.Queries.Values.Single();
+                var queries = new Dictionary<string, ScriptQueryRegistration>(descriptor.Queries, StringComparer.Ordinal)
+                {
+                    [registration.TypeUrl] = registration with { ResultClrType = typeof(SimpleTextEvent) },
+                };
+                return descriptor with { Queries = queries };
+            });
+        var reader = new ScriptReadModelQueryReader(
+            store,
+            new StaticDefinitionSnapshotPort(
+                definitionActorId: "definition-1",
+                revision: "rev-1",
+                sourceText: ScriptSources.StructuredProfileBehavior,
+                sourceHash: ScriptSources.StructuredProfileBehaviorHash),
+            new StaticArtifactResolver(behavior),
+            new ProtobufMessageCodec());
+
+        var act = () => reader.ExecuteDeclaredQueryAsync(
+            "runtime-result-type-mismatch",
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-result-type-mismatch" }),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*declared result type*");
+    }
+
+    [Fact]
+    public async Task ExecuteDeclaredQueryAsync_ShouldReject_WhenRuntimeSemanticsDeclareDifferentResultType()
+    {
+        var store = await CreateProfileReadModelStoreAsync("runtime-semantics-result-mismatch");
+        var behavior = new DescriptorOverrideBehavior(
+            new QueryBehavior(),
+            descriptor =>
+            {
+                var semantics = descriptor.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
+                semantics.Queries.Clear();
+                semantics.Queries.Add(new ScriptQuerySemanticsSpec
+                {
+                    QueryTypeUrl = ScriptMessageTypes.GetTypeUrl<ScriptProfileQueryRequested>(),
+                    QueryDescriptorFullName = ScriptProfileQueryRequested.Descriptor.FullName,
+                    ResultTypeUrl = ScriptMessageTypes.GetTypeUrl<SimpleTextEvent>(),
+                    ResultDescriptorFullName = SimpleTextEvent.Descriptor.FullName,
+                    ReadModelScope = descriptor.ReadModelDescriptor.FullName,
+                });
+                return descriptor.WithRuntimeSemantics(semantics);
+            });
+        var reader = new ScriptReadModelQueryReader(
+            store,
+            new StaticDefinitionSnapshotPort(
+                definitionActorId: "definition-1",
+                revision: "rev-1",
+                sourceText: ScriptSources.StructuredProfileBehavior,
+                sourceHash: ScriptSources.StructuredProfileBehaviorHash),
+            new StaticArtifactResolver(behavior),
+            new ProtobufMessageCodec());
+
+        var act = () => reader.ExecuteDeclaredQueryAsync(
+            "runtime-semantics-result-mismatch",
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-semantics-result-mismatch" }),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*runtime semantics declare*");
     }
 
     private sealed class StaticDefinitionSnapshotPort(
@@ -368,6 +560,36 @@ public sealed class ScriptReadModelQueryReaderTests
                 SourceText: sourceText,
                 SourceHash: sourceHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
+                StateTypeUrl: ScriptSources.StructuredProfileStateTypeUrl,
+                ReadModelTypeUrl: ScriptSources.StructuredProfileReadModelTypeUrl,
+                ReadModelSchemaVersion: "v1",
+                ReadModelSchemaHash: "schema-hash",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: ScriptProfileState.Descriptor.FullName,
+                ReadModelDescriptorFullName: ScriptProfileReadModel.Descriptor.FullName));
+        }
+    }
+
+    private sealed class MissingPackageDefinitionSnapshotPort(
+        string definitionActorId,
+        string revision,
+        string sourceText,
+        string sourceHash) : IScriptDefinitionSnapshotPort
+    {
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string requestedDefinitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            requestedDefinitionActorId.Should().Be(definitionActorId);
+            requestedRevision.Should().Be(revision);
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                ScriptId: "script-1",
+                Revision: revision,
+                SourceText: sourceText,
+                SourceHash: sourceHash,
+                ScriptPackage: null!,
                 StateTypeUrl: ScriptSources.StructuredProfileStateTypeUrl,
                 ReadModelTypeUrl: ScriptSources.StructuredProfileReadModelTypeUrl,
                 ReadModelSchemaVersion: "v1",
@@ -493,6 +715,23 @@ public sealed class ScriptReadModelQueryReaderTests
         }
     }
 
+    private sealed class CapturingArtifactResolver(IScriptBehaviorBridge behavior) : IScriptBehaviorArtifactResolver
+    {
+        public ScriptBehaviorArtifactRequest? LastRequest { get; private set; }
+
+        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
+        {
+            LastRequest = request;
+            return new ScriptBehaviorArtifact(
+                "script-1",
+                "rev-1",
+                "hash-1",
+                behavior.Descriptor,
+                behavior.Descriptor.ToContract(),
+                () => behavior);
+        }
+    }
+
     private sealed class QueryBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
     {
         protected override void Configure(IScriptBehaviorBuilder<ScriptProfileState, ScriptProfileReadModel> builder)
@@ -581,5 +820,98 @@ public sealed class ScriptReadModelQueryReaderTests
             ScriptTypedReadModelSnapshot snapshot,
             CancellationToken ct) =>
             inner.ExecuteQueryAsync(query, snapshot, ct);
+    }
+
+    private sealed class AsyncDisposableBehavior(IScriptBehaviorBridge inner) : IScriptBehaviorBridge, IAsyncDisposable
+    {
+        public int DisposeAsyncCalls { get; private set; }
+        public ScriptBehaviorDescriptor Descriptor => inner.Descriptor;
+
+        public Task<IReadOnlyList<IMessage>> DispatchAsync(
+            IMessage inbound,
+            ScriptDispatchContext context,
+            CancellationToken ct) =>
+            inner.DispatchAsync(inbound, context, ct);
+
+        public IMessage? ApplyDomainEvent(
+            IMessage? currentState,
+            IMessage domainEvent,
+            ScriptFactContext context) =>
+            inner.ApplyDomainEvent(currentState, domainEvent, context);
+
+        public IMessage? ReduceReadModel(
+            IMessage? currentReadModel,
+            IMessage domainEvent,
+            ScriptFactContext context) =>
+            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+
+        public Task<IMessage?> ExecuteQueryAsync(
+            IMessage query,
+            ScriptTypedReadModelSnapshot snapshot,
+            CancellationToken ct) =>
+            inner.ExecuteQueryAsync(query, snapshot, ct);
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeAsyncCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class DisposableBehavior(IScriptBehaviorBridge inner) : IScriptBehaviorBridge, IDisposable
+    {
+        public int DisposeCalls { get; private set; }
+        public ScriptBehaviorDescriptor Descriptor => inner.Descriptor;
+
+        public Task<IReadOnlyList<IMessage>> DispatchAsync(
+            IMessage inbound,
+            ScriptDispatchContext context,
+            CancellationToken ct) =>
+            inner.DispatchAsync(inbound, context, ct);
+
+        public IMessage? ApplyDomainEvent(
+            IMessage? currentState,
+            IMessage domainEvent,
+            ScriptFactContext context) =>
+            inner.ApplyDomainEvent(currentState, domainEvent, context);
+
+        public IMessage? ReduceReadModel(
+            IMessage? currentReadModel,
+            IMessage domainEvent,
+            ScriptFactContext context) =>
+            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+
+        public Task<IMessage?> ExecuteQueryAsync(
+            IMessage query,
+            ScriptTypedReadModelSnapshot snapshot,
+            CancellationToken ct) =>
+            inner.ExecuteQueryAsync(query, snapshot, ct);
+
+        public void Dispose()
+        {
+            DisposeCalls++;
+        }
+    }
+
+    private static async Task<InMemoryReadModelStore> CreateProfileReadModelStoreAsync(string actorId)
+    {
+        var store = new InMemoryReadModelStore();
+        await store.UpsertAsync(new ScriptReadModelDocument
+        {
+            Id = actorId,
+            ScriptId = "script-1",
+            DefinitionActorId = "definition-1",
+            Revision = "rev-1",
+            ReadModelTypeUrl = ScriptSources.StructuredProfileReadModelTypeUrl,
+            ReadModelPayload = Any.Pack(new ScriptProfileReadModel
+            {
+                HasValue = true,
+                NormalizedText = "HELLO",
+            }),
+            StateVersion = 1,
+            LastEventId = "evt-1",
+            UpdatedAt = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero),
+        }, CancellationToken.None);
+        return store;
     }
 }

@@ -4,21 +4,24 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
-public sealed class RuntimeScriptQueryClient
+public sealed class RuntimeScriptActorQueryClient
 {
     private readonly IStreamProvider _streams;
     private readonly IStreamRequestReplyClient _requestReplyClient;
+    private readonly IActorDispatchPort _dispatchPort;
 
-    public RuntimeScriptQueryClient(
+    public RuntimeScriptActorQueryClient(
         IStreamProvider streams,
-        IStreamRequestReplyClient requestReplyClient)
+        IStreamRequestReplyClient requestReplyClient,
+        IActorDispatchPort dispatchPort)
     {
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
         _requestReplyClient = requestReplyClient ?? throw new ArgumentNullException(nameof(requestReplyClient));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
     public Task<TResponse> QueryActorAsync<TResponse>(
-        IActor actor,
+        string actorId,
         string replyStreamPrefix,
         TimeSpan timeout,
         Func<string, string, EventEnvelope> envelopeFactory,
@@ -27,7 +30,7 @@ public sealed class RuntimeScriptQueryClient
         CancellationToken ct)
         where TResponse : IMessage, new()
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(replyStreamPrefix);
         ArgumentNullException.ThrowIfNull(envelopeFactory);
         ArgumentNullException.ThrowIfNull(isMatch);
@@ -35,7 +38,8 @@ public sealed class RuntimeScriptQueryClient
 
         return _requestReplyClient.QueryActorAsync<TResponse>(
             _streams,
-            actor,
+            actorId,
+            _dispatchPort,
             replyStreamPrefix,
             timeout,
             envelopeFactory,

@@ -5,15 +5,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
+source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
 GARNET_HOST="127.0.0.1"
 GARNET_PORT="6379"
+LOCK_OWNER="orleans_garnet_persistence_smoke"
 
 cleanup() {
   docker compose stop garnet >/dev/null 2>&1 || true
   docker compose rm -f garnet >/dev/null 2>&1 || true
+  release_distributed_smoke_lock
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 wait_garnet() {
   for _ in {1..30}; do
@@ -31,6 +34,8 @@ wait_garnet() {
 }
 
 echo "Starting Garnet..."
+acquire_distributed_smoke_lock "${LOCK_OWNER}"
+ensure_local_tcp_ports_free "${LOCK_OWNER}" "${GARNET_PORT}"
 docker compose up -d garnet
 wait_garnet
 

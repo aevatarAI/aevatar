@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
+source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
 KAFKA_CONTAINER="aevatar-kafka"
 GARNET_HOST="127.0.0.1"
@@ -20,6 +21,7 @@ MIXED_EVENT_PROBE_ENABLED="${MIXED_EVENT_PROBE_ENABLED:-true}"
 HTTP_PORTS=(18081 18082 18083 18084 18085 18086)
 SILO_PORTS=(21111 21112 21113 21114 21115 21116)
 GATEWAY_PORTS=(31000 31001 31002 31003 31004 31005)
+LOCK_OWNER="distributed_mixed_version_smoke"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 cluster_id="aevatar-mainnet-mixed-ci-cluster-${timestamp}"
@@ -30,39 +32,23 @@ mkdir -p "${log_dir}"
 declare -a pids=()
 
 cleanup() {
-  for pid in "${pids[@]}"; do
+  for pid in "${pids[@]-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
     fi
   done
 
   sleep 1
-  for pid in "${pids[@]}"; do
+  for pid in "${pids[@]-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
       kill -9 "${pid}" 2>/dev/null || true
     fi
   done
 
   docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  release_distributed_smoke_lock
 }
-trap cleanup EXIT
-
-wait_kafka() {
-  for _ in {1..30}; do
-    status="$(docker inspect --format='{{.State.Health.Status}}' "${KAFKA_CONTAINER}" || true)"
-    if [[ "${status}" == "healthy" ]]; then
-      echo "Kafka is healthy."
-      return 0
-    fi
-
-    echo "Kafka status: ${status:-unknown}"
-    sleep 2
-  done
-
-  echo "Kafka failed to become healthy."
-  docker logs "${KAFKA_CONTAINER}" || true
-  return 1
-}
+trap cleanup EXIT INT TERM
 
 wait_garnet() {
   for _ in {1..30}; do
@@ -308,8 +294,22 @@ PY
 }
 
 echo "Starting Kafka and Garnet..."
+total_nodes=$((OLD_NODE_COUNT + NEW_NODE_COUNT))
+if (( total_nodes > 6 || total_nodes < 2 )); then
+  echo "Unsupported node count: old(${OLD_NODE_COUNT}) + new(${NEW_NODE_COUNT}) must be between 2 and 6."
+  exit 1
+fi
+
+acquire_distributed_smoke_lock "${LOCK_OWNER}"
+ensure_local_tcp_ports_free \
+  "${LOCK_OWNER}" \
+  9092 \
+  "${GARNET_PORT}" \
+  "${HTTP_PORTS[@]:0:${total_nodes}}" \
+  "${SILO_PORTS[@]:0:${total_nodes}}" \
+  "${GATEWAY_PORTS[@]:0:${total_nodes}}"
 docker compose up -d kafka garnet
-wait_kafka
+wait_kafka_health "${KAFKA_CONTAINER}"
 wait_garnet
 
 dll_spec="$(resolve_app_dlls)"
@@ -321,12 +321,6 @@ echo "New app dll: ${new_app_dll}"
 echo "Starting mixed cluster: old=${OLD_NODE_COUNT}, new=${NEW_NODE_COUNT}"
 if [[ -n "${MIXED_FAIL_EVENT_TYPE_URLS}" ]]; then
   echo "Old-node compatibility failure injection enabled for event types: ${MIXED_FAIL_EVENT_TYPE_URLS}"
-fi
-
-total_nodes=$((OLD_NODE_COUNT + NEW_NODE_COUNT))
-if (( total_nodes > 6 || total_nodes < 2 )); then
-  echo "Unsupported node count: old(${OLD_NODE_COUNT}) + new(${NEW_NODE_COUNT}) must be between 2 and 6."
-  exit 1
 fi
 
 start_node \

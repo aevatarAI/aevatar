@@ -1,6 +1,6 @@
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
@@ -60,11 +60,9 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     [Fact]
-    public async Task CatalogBaselineReader_ShouldReturnFailure_WhenQueryFailsWithoutBaseRevision()
+    public async Task CatalogBaselineReader_ShouldReturnEmptyBaseline_WhenBaseRevisionMissing()
     {
-        var service = new RuntimeScriptCatalogBaselineReader(
-            new RecordingCatalogQueryPort { Exception = new InvalidOperationException("catalog-query-failed") },
-            new StaticAddressResolver());
+        var service = new RuntimeScriptCatalogBaselineReader(new StaticAddressResolver());
 
         var result = await service.ReadAsync(
             new ScriptEvolutionProposal(
@@ -77,17 +75,16 @@ public class ScriptEvolutionExecutionServicesTests
                 Reason: string.Empty),
             CancellationToken.None);
 
-        result.HasFailure.Should().BeTrue();
-        result.FailureReason.Should().Contain("no base revision fallback");
+        result.HasFailure.Should().BeFalse();
+        result.Baseline.Should().BeNull();
+        result.BaselineSource.Should().Be("no_baseline");
         result.CatalogActorId.Should().Be("script-catalog");
     }
 
     [Fact]
-    public async Task CatalogBaselineReader_ShouldFallbackToBaseRevision_WhenQueryFails()
+    public async Task CatalogBaselineReader_ShouldUseProposalBaseRevision_WhenPresent()
     {
-        var service = new RuntimeScriptCatalogBaselineReader(
-            new RecordingCatalogQueryPort { Exception = new InvalidOperationException("catalog-query-failed") },
-            new StaticAddressResolver());
+        var service = new RuntimeScriptCatalogBaselineReader(new StaticAddressResolver());
 
         var result = await service.ReadAsync(
             new ScriptEvolutionProposal(
@@ -101,7 +98,7 @@ public class ScriptEvolutionExecutionServicesTests
             CancellationToken.None);
 
         result.HasFailure.Should().BeFalse();
-        result.BaselineSource.Should().Be("fallback_base_revision_after_query_failure");
+        result.BaselineSource.Should().Be("proposal_base_revision");
         result.Baseline.Should().NotBeNull();
         result.Baseline!.ActiveRevision.Should().Be("rev-1");
     }
@@ -228,26 +225,6 @@ public class ScriptEvolutionExecutionServicesTests
             });
         }
     }
-
-    private sealed class RecordingCatalogQueryPort : IScriptCatalogQueryPort
-    {
-        public Exception? Exception { get; init; }
-
-        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
-            string? catalogActorId,
-            string scriptId,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            ct.ThrowIfCancellationRequested();
-            if (Exception != null)
-                throw Exception;
-
-            return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
-        }
-    }
-
     private sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
         public List<RollbackCall> RollbackCalls { get; } = [];

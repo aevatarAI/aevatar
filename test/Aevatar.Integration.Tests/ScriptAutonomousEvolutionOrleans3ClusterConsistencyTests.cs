@@ -24,6 +24,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
+        var garnetConnectionString = RequireGarnetConnectionString();
         var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
         var serviceId = $"aevatar-script-service-{Guid.NewGuid():N}";
         var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
@@ -44,7 +45,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node1SiloPort,
             node1GatewayPort,
-            null);
+            null,
+            garnetConnectionString);
         var node2 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -52,7 +54,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node2SiloPort,
             node2GatewayPort,
-            primaryEndpoint);
+            primaryEndpoint,
+            garnetConnectionString);
         var node3 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -60,13 +63,14 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node3SiloPort,
             node3GatewayPort,
-            primaryEndpoint);
+            primaryEndpoint,
+            garnetConnectionString);
 
         try
         {
             var definitionPortNode1 = node1.Services.GetRequiredService<IScriptDefinitionCommandPort>();
             var provisioningPortNode1 = node1.Services.GetRequiredService<IScriptRuntimeProvisioningPort>();
-            var commandPortNode1 = node1.Services.GetRequiredService<IScriptRuntimeCommandPort>();
+            var runtimeNode1 = node1.Services.GetRequiredService<IActorRuntime>();
             var executionProjectionNode1 = node1.Services.GetRequiredService<IScriptExecutionProjectionPort>();
             var evolutionServiceNode2 = node2.Services.GetRequiredService<IScriptEvolutionApplicationService>();
             var evolutionServiceNode3 = node3.Services.GetRequiredService<IScriptEvolutionApplicationService>();
@@ -169,29 +173,39 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
 
             try
             {
-                await commandPortNode1.RunRuntimeAsync(
-                    orchestratorRuntimeActorId,
-                    $"run-orleans-{scopeId}",
-                    Any.Pack(new OrleansClusterRequested
-                    {
-                        WorkerADefinitionActorId = workerADefinitionActorId,
-                        WorkerBDefinitionActorId = workerBDefinitionActorId,
-                        NewScriptId = newScriptId,
-                        NewScriptSource = generatedSource,
-                        TempARuntimeId = tempARuntimeId,
-                        TempBRuntimeId = tempBRuntimeId,
-                        GeneratedRuntimeId = generatedRuntimeId,
-                        GeneratedDefinitionActorId = generatedDefinitionActorId,
-                    }),
-                    "rev-orchestrator-1",
-                    orchestratorDefinitionActorId,
-                    "script.orleans.cluster.orchestrate",
+                var orchestratorRuntime = await runtimeNode1.GetAsync(orchestratorRuntimeActorId);
+                orchestratorRuntime.Should().NotBeNull();
+                await orchestratorRuntime!.HandleEventAsync(
+                    ScriptingActorRequestEnvelopeFactory.Create(
+                        orchestratorRuntimeActorId,
+                        $"run-orleans-{scopeId}",
+                        new RunScriptRequestedEvent
+                        {
+                            RunId = $"run-orleans-{scopeId}",
+                            InputPayload = Any.Pack(new OrleansClusterRequested
+                            {
+                                WorkerADefinitionActorId = workerADefinitionActorId,
+                                WorkerBDefinitionActorId = workerBDefinitionActorId,
+                                NewScriptId = newScriptId,
+                                NewScriptSource = generatedSource,
+                                TempARuntimeId = tempARuntimeId,
+                                TempBRuntimeId = tempBRuntimeId,
+                                GeneratedRuntimeId = generatedRuntimeId,
+                                GeneratedDefinitionActorId = generatedDefinitionActorId,
+                            }),
+                            ScriptRevision = "rev-orchestrator-1",
+                            DefinitionActorId = orchestratorDefinitionActorId,
+                            RequestedEventType = "script.orleans.cluster.orchestrate",
+                            CommandId = $"run-orleans-{scopeId}",
+                            CorrelationId = $"run-orleans-{scopeId}",
+                        }),
                     CancellationToken.None);
 
                 var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
                     sink,
                     $"run-orleans-{scopeId}",
-                    CancellationToken.None);
+                    CancellationToken.None,
+                    TimeSpan.FromSeconds(45));
                 committed.DomainEventPayload.Should().NotBeNull();
                 var summary = committed.DomainEventPayload!.Unpack<OrleansClusterCompleted>().Current;
                 summary.GeneratedDefinitionActorId.Should().Be(generatedDefinitionActorId);
@@ -293,7 +307,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         string actorEventNamespace,
         int siloPort,
         int gatewayPort,
-        IPEndPoint? primarySiloEndpoint)
+        IPEndPoint? primarySiloEndpoint,
+        string garnetConnectionString)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -309,7 +324,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
                     options.StreamProviderName = streamProviderName;
                     options.ActorEventNamespace = actorEventNamespace;
-                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
+                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
+                    options.GarnetConnectionString = garnetConnectionString;
                 });
                 siloBuilder.ConfigureServices(services =>
                     services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer()));
@@ -372,4 +388,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             return false;
         }
     }
+
+    private static string RequireGarnetConnectionString() =>
+        Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
+        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 }
