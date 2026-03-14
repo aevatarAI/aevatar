@@ -10,6 +10,7 @@ using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
@@ -17,11 +18,16 @@ namespace Aevatar.Integration.Tests;
 internal static class ClaimIntegrationTestKit
 {
     public static ServiceProvider BuildProvider(Action<IServiceCollection>? configure = null)
+        => BuildProvider(configuration: null, configure);
+
+    public static ServiceProvider BuildProvider(
+        IConfiguration? configuration,
+        Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         configure?.Invoke(services);
-        services.AddScriptCapability();
+        services.AddScriptCapability(configuration);
         return services.BuildServiceProvider();
     }
 
