@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -9,7 +10,7 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionDispatchFailureReporter
     : IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>
 {
-    private const string ProjectionDispatchFailureCode = "PROJECTION_DISPATCH_FAILED";
+    internal const string ProjectionDispatchFailureEventName = "aevatar.projection.dispatch.failure";
     private readonly IProjectionSessionEventHub<WorkflowRunEventEnvelope> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
@@ -38,10 +39,15 @@ public sealed class WorkflowProjectionDispatchFailureReporter
         var evt = new WorkflowRunEventEnvelope
         {
             Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
-            RunError = new WorkflowRunErrorEventPayload
+            Custom = new WorkflowCustomEventPayload
             {
-                Code = ProjectionDispatchFailureCode,
-                Message = $"Projection dispatch failed. eventId={envelope.Id}, payloadType={payloadType}, reason={exception.Message}",
+                Name = ProjectionDispatchFailureEventName,
+                Payload = Any.Pack(new WorkflowProjectionDispatchFailureCustomPayload
+                {
+                    EventId = envelope.Id ?? string.Empty,
+                    PayloadType = payloadType,
+                    Reason = exception.Message ?? string.Empty,
+                }),
             },
         };
 

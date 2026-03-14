@@ -1,0 +1,20 @@
+name: openclaw_group_reply
+description: Route input to OpenClaw and let OpenClaw reply directly in a Telegram group.
+
+roles:
+  - id: openclaw_bridge
+    name: OpenClaw Bridge
+    system_prompt: ""
+    connectors:
+      - openclaw_agent_reply_group
+
+steps:
+  - id: forward_to_openclaw
+    type: connector_call
+    role: openclaw_bridge
+    parameters:
+      connector: openclaw_agent_reply_group
+      timeout_ms: "120000"
+      retry: "1"
+      on_missing: "fail"
+      on_error: "fail"

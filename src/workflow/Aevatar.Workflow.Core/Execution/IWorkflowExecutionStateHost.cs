@@ -10,6 +10,28 @@ internal interface IWorkflowExecutionStateHost
 
     IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates();
 
+    bool TryGetExecutionItem(
+        string itemKey,
+        out object? value)
+    {
+        value = null;
+        return false;
+    }
+
+    void SetExecutionItem(
+        string itemKey,
+        object? value)
+    {
+        _ = itemKey;
+        _ = value;
+    }
+
+    bool RemoveExecutionItem(string itemKey)
+    {
+        _ = itemKey;
+        return false;
+    }
+
     Task UpsertExecutionStateAsync(
         string scopeKey,
         Any state,

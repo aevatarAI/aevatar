@@ -42,14 +42,14 @@ public sealed class WorkflowDefinitionFileLoader
 
                     if (duplicatePolicy == WorkflowDefinitionDuplicatePolicy.Skip)
                     {
-                        logger.LogWarning(
+                        logger.LogInformation(
                             "Skipping duplicate workflow definition '{Name}' from '{File}'.",
                             name,
                             file);
                         continue;
                     }
 
-                    logger.LogWarning(
+                    logger.LogInformation(
                         "Overriding existing workflow definition '{Name}' with file '{File}'.",
                         name,
                         file);

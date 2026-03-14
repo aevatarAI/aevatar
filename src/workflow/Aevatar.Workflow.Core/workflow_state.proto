@@ -158,6 +158,14 @@ message PendingSignalState
 message WaitSignalModuleState
 {
   map<string, PendingSignalState> pending = 1;
+  map<string, BufferedSignalState> buffered = 2;
+}
+
+message BufferedSignalState
+{
+  string payload = 1;
+  int64 received_at_unix_time_ms = 2;
+  int64 expires_at_unix_time_ms = 3;
 }
 
 message PendingHumanInputState
@@ -171,6 +179,30 @@ message PendingHumanInputState
 message HumanInputModuleState
 {
   map<string, PendingHumanInputState> pending = 1;
+}
+
+message PendingSecureInputState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string on_timeout = 4;
+  bool allow_empty = 5;
+  string variable_name = 6;
+  string masked_output = 7;
+}
+
+message CapturedSecureInputState
+{
+  string run_id = 1;
+  string variable_name = 2;
+  string value = 3;
+}
+
+message SecureInputModuleState
+{
+  map<string, PendingSecureInputState> pending = 1;
+  map<string, CapturedSecureInputState> captured = 2;
 }
 
 message PendingApprovalState
@@ -334,6 +366,8 @@ message ReflectState
   int32 max_rounds = 6;
   int32 round = 7;
   ReflectPhaseState phase = 8;
+  string target_actor_id = 9;
+  map<string, string> chat_metadata_parameters = 10;
 }
 
 message ReflectModuleState

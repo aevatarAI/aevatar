@@ -4,6 +4,7 @@
 // 在每次 LLM 调用和 Tool 执行前后调用 Hook Pipeline + Middleware
 // ─────────────────────────────────────────────────────────────
 
+using System.Text.Json;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -106,7 +107,7 @@ public sealed class ToolCallLoop
                 if (toolCallContext.Terminate)
                     messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
                 else
-                    messages.Add(ChatMessage.Tool(call.Id, toolResult));
+                    messages.Add(BuildToolResultMessage(call.Id, toolResult));
 
                 // ─── Hook: Tool Execute End ───
                 toolCtx.ToolResult = toolResult;
@@ -220,6 +221,114 @@ public sealed class ToolCallLoop
         }
     }
 
+    private static ChatMessage BuildToolResultMessage(string callId, string toolResult)
+    {
+        if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
+            return ChatMessage.Tool(callId, toolResult);
+
+        return new ChatMessage
+        {
+            Role = "tool",
+            ToolCallId = callId,
+            Content = text,
+            ContentParts = parts,
+        };
+    }
+
+    private static bool TryExtractToolContentParts(
+        string toolResult,
+        out string text,
+        out IReadOnlyList<ContentPart>? contentParts)
+    {
+        text = toolResult;
+        contentParts = null;
+
+        if (string.IsNullOrWhiteSpace(toolResult))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(toolResult);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            var root = doc.RootElement;
+            var imageBase64 =
+                TryGetStringByKeys(root, "image_base64", "imageBase64", "base64", "data") ??
+                TryGetNestedImageBase64(root);
+            if (string.IsNullOrWhiteSpace(imageBase64))
+                return false;
+
+            var mediaType =
+                TryGetStringByKeys(root, "image_media_type", "imageMediaType", "mime_type", "mimeType", "media_type", "mediaType", "content_type") ??
+                TryGetNestedImageMediaType(root) ??
+                "image/png";
+
+            // Accept data-uri output and normalize into raw base64 + media type.
+            var normalizedBase64 = imageBase64!.Trim();
+            if (normalizedBase64.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                var commaIndex = normalizedBase64.IndexOf(',');
+                if (commaIndex > 5)
+                {
+                    var meta = normalizedBase64[5..commaIndex];
+                    if (meta.EndsWith(";base64", StringComparison.OrdinalIgnoreCase))
+                        meta = meta[..^7];
+                    if (!string.IsNullOrWhiteSpace(meta))
+                        mediaType = meta;
+                    normalizedBase64 = normalizedBase64[(commaIndex + 1)..];
+                }
+            }
+
+            text =
+                TryGetStringByKeys(root, "text", "description", "summary", "observation", "message") ??
+                "[tool image output]";
+            contentParts =
+            [
+                ContentPart.TextPart(text),
+                ContentPart.ImagePart(normalizedBase64, mediaType),
+            ];
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? TryGetNestedImageBase64(JsonElement root)
+    {
+        if (!root.TryGetProperty("image", out var image) || image.ValueKind != JsonValueKind.Object)
+            return null;
+        return TryGetStringByKeys(image, "base64", "image_base64", "data");
+    }
+
+    private static string? TryGetNestedImageMediaType(JsonElement root)
+    {
+        if (!root.TryGetProperty("image", out var image) || image.ValueKind != JsonValueKind.Object)
+            return null;
+        return TryGetStringByKeys(image, "media_type", "mime_type", "mediaType", "mimeType", "content_type");
+    }
+
+    private static string? TryGetStringByKeys(JsonElement element, params string[] keys)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+
+            if (value.ValueKind != JsonValueKind.Null && value.ValueKind != JsonValueKind.Undefined)
+                return value.ToString();
+        }
+
+        return null;
+    }
     private sealed class NullAgentTool(string name) : IAgentTool
     {
         public string Name => name;

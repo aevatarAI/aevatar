@@ -263,6 +263,30 @@ public class AIComponentCoverageTests
         emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
         emptyStreamChunks.Last().IsLast.Should().BeTrue();
 
+        var reasoningOnlyFallbackCalls = 0;
+        var reasoningOnlyClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithReasoningOnly(),
+            OnGetResponse = (_, _, _) =>
+            {
+                reasoningOnlyFallbackCalls++;
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "should-not-run")));
+            },
+        };
+        var reasoningOnlyProvider = new MEAILLMProvider("meai-reasoning-only", reasoningOnlyClient);
+        var reasoningOnlyChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in reasoningOnlyProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "reasoning only" }],
+        }))
+        {
+            reasoningOnlyChunks.Add(chunk);
+        }
+
+        reasoningOnlyFallbackCalls.Should().Be(0);
+        reasoningOnlyChunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-only");
+        reasoningOnlyChunks.Last().IsLast.Should().BeTrue();
+
         var toolStreamClient = new StubChatClient
         {
             OnGetStreamingResponse = static (_, _, _) => StreamWithToolCall(),
@@ -687,6 +711,16 @@ public class AIComponentCoverageTests
     {
         await Task.CompletedTask;
         yield break;
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithReasoningOnly()
+    {
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new TextReasoningContent("thinking-only"),
+            ]);
+        await Task.Yield();
     }
 
     private sealed class StubTool : IAgentTool

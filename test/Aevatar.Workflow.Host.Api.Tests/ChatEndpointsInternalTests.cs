@@ -1,9 +1,7 @@
-using System.Text;
-using System.Text.Json;
 using System.Net.WebSockets;
+using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -26,7 +24,7 @@ public sealed class ChatEndpointsInternalTests
         };
 
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
-            new ChatInput { Prompt = "hello" },
+            new ChatInput { Prompt = "hello", Workflow = "direct" },
             service,
             NullLoggerFactory.Instance,
             CancellationToken.None);
@@ -35,6 +33,8 @@ public sealed class ChatEndpointsInternalTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.WorkflowName.Should().Be("direct");
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         body.Should().Contain("cmd-1");
         body.Should().Contain("corr-1");
@@ -87,6 +87,8 @@ public sealed class ChatEndpointsInternalTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         body.Should().Contain("WORKFLOW_NOT_FOUND");
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.WorkflowName.Should().Be("missing");
     }
 
     [Fact]
@@ -166,7 +168,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _) => Task.FromResult(
+            ResultFactory = (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch)),
         };
@@ -187,7 +189,7 @@ public sealed class ChatEndpointsInternalTests
     {
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
             {
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
@@ -225,7 +227,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _) => throw new InvalidOperationException("boom"),
+            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("boom"),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -245,7 +247,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
             {
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
@@ -340,6 +342,10 @@ public sealed class ChatEndpointsInternalTests
                 CommandId = "cmd-1",
                 Approved = true,
                 UserInput = "approved",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["source"] = "host",
+                },
             },
             service,
             CancellationToken.None);
@@ -355,6 +361,7 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().CommandId.Should().Be("cmd-1");
         service.Commands.Single().Approved.Should().BeTrue();
         service.Commands.Single().UserInput.Should().Be("approved");
+        service.Commands.Single().Metadata.Should().ContainKey("source").WhoseValue.Should().Be("host");
     }
 
     [Fact]
@@ -411,6 +418,33 @@ public sealed class ChatEndpointsInternalTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("run-expected");
         service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleResume_ShouldMapInvalidStepId_FromApplicationLayer()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.InvalidStepId("actor-1", "run-1", " ")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "step-1",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("stepId is required");
     }
 
     [Fact]
@@ -492,6 +526,70 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleSignal_ShouldMapInvalidSignalName_FromApplicationLayer()
+    {
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.InvalidSignalName("actor-1", "run-1", " ")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                SignalName = "approve",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("signalName is required");
+    }
+
+    [Fact]
+    public async Task HandleSignal_ShouldForwardStepId_WhenProvided()
+    {
+        var receipt = new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "signal-cmd-1", "corr-1");
+        var service = new RecordingDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(receipt),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleSignal(
+            new WorkflowSignalInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "wait-approval",
+                SignalName = "approval",
+                Payload = "approved",
+                CommandId = "signal-cmd-1",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().SignalName.Should().Be("approval");
+        service.Commands.Single().Payload.Should().Be("approved");
+        service.Commands.Single().StepId.Should().Be("wait-approval");
+        service.Commands.Single().CommandId.Should().Be("signal-cmd-1");
+        body.Should().Contain("wait-approval");
+    }
+
+    [Fact]
     public async Task HandleSignal_ShouldDispatchCommand_AndGenerateCommandId_WhenMissing()
     {
         var receipt = new WorkflowRunControlAcceptedReceipt(
@@ -526,6 +624,7 @@ public sealed class ChatEndpointsInternalTests
         service.Commands.Single().SignalName.Should().Be("approve");
         service.Commands.Single().Payload.Should().Be("yes");
         service.Commands.Single().CommandId.Should().BeNull();
+        service.Commands.Single().StepId.Should().BeNull();
         body.Should().Contain(receipt.CommandId);
         body.Should().Contain("\"accepted\":true");
     }
@@ -575,7 +674,7 @@ public sealed class ChatEndpointsInternalTests
         http.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _) => throw new InvalidOperationException("boom"),
+            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("boom"),
         };
 
         await WorkflowCapabilityEndpoints.HandleChatWebSocket(
@@ -613,8 +712,8 @@ public sealed class ChatEndpointsInternalTests
     private sealed class FakeCommandInteractionService
         : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
     {
-        public Func<Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
-            (_, _, _) => Task.FromResult(
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+            (_, _, _, _) => Task.FromResult(
                 CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
@@ -622,11 +721,8 @@ public sealed class ChatEndpointsInternalTests
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            return ResultFactory(emitAsync, onAcceptedAsync, ct);
-        }
+            CancellationToken ct = default) =>
+            ResultFactory(request, emitAsync, onAcceptedAsync, ct);
     }
 
     private sealed class FakeCommandDispatchService
@@ -635,13 +731,15 @@ public sealed class ChatEndpointsInternalTests
         public CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> Result { get; set; } =
             CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Failure(
                 WorkflowChatRunStartError.AgentNotFound);
+
         public Exception? DispatchException { get; set; }
+        public WorkflowChatRunRequest? LastCommand { get; private set; }
 
         public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
             WorkflowChatRunRequest command,
             CancellationToken ct = default)
         {
-            _ = command;
+            LastCommand = command;
             ct.ThrowIfCancellationRequested();
             if (DispatchException != null)
                 throw DispatchException;

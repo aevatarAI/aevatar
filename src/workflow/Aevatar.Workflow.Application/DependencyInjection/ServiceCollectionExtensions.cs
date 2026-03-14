@@ -37,9 +37,9 @@ public static class ServiceCollectionExtensions
             if (options.RegisterBuiltInDirectWorkflow)
                 registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
             if (options.RegisterBuiltInAutoWorkflow)
-                registry.Register("auto", WorkflowDefinitionRegistry.BuiltInAutoYaml);
+                registry.Register("auto", WorkflowDefinitionRegistry.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                registry.Register("auto_review", WorkflowDefinitionRegistry.BuiltInAutoReviewYaml);
+                registry.Register("auto_review", WorkflowDefinitionRegistry.CreateBuiltInAutoReviewYaml());
 
             return registry;
         });
@@ -72,10 +72,11 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>()));
         services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
-        services.AddSingleton<DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>();
+        services.TryAddSingleton<IWorkflowRunDetachedCleanupScheduler, MissingWorkflowRunDetachedCleanupScheduler>();
+        services.AddSingleton<WorkflowRunDetachedDispatchService>();
         services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(sp =>
             new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-                sp.GetRequiredService<DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
+                sp.GetRequiredService<WorkflowRunDetachedDispatchService>(),
                 sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>>()));
         services.TryAddSingleton<ICommandTargetDispatcher<WorkflowRunControlCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunControlCommandTarget>>();
@@ -90,6 +91,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowSignalCommand>, WorkflowSignalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<RegistryBackedWorkflowCatalogPort>();
+        services.TryAddSingleton<IWorkflowCatalogPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
+        services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
+            sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         return services;
     }

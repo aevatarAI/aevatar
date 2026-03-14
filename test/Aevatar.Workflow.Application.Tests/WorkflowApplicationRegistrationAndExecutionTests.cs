@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
@@ -182,8 +183,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
-            x.ImplementationType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+            x.ServiceType == typeof(WorkflowRunDetachedDispatchService) &&
+            x.ImplementationType == typeof(WorkflowRunDetachedDispatchService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationFactory != null);
@@ -199,7 +200,22 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldUseSessionIdFromCommand()
+    public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+
+        catalogPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        capabilitiesPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        catalogPort.Should().BeSameAs(capabilitiesPort);
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldMergeHeadersAndCommandMetadata()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -209,8 +225,21 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
-            Headers: new Dictionary<string, string>(StringComparer.Ordinal));
-        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1", SessionId: "session-42");
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
+                ["source"] = "headers",
+            });
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            "direct",
+            "actor-1",
+            SessionId: "session-42",
+            Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
+                [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
+            });
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -221,6 +250,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
+        request.Metadata["source"].Should().Be("headers");
     }
 
     [Fact]

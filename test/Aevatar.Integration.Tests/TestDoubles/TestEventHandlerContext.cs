@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext
+internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext, IWorkflowExecutionItemsContext
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 
@@ -23,6 +23,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     }
 
     public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
+    public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
     public List<ScheduledCallback> Scheduled { get; } = [];
     public List<CanceledCallback> Canceled { get; } = [];
     public Action<IMessage, TopologyAudience>? OnPublish { get; set; }
@@ -93,6 +94,37 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         return host.ClearExecutionStateAsync(scopeKey, ct);
     }
 
+    public bool TryGetItem<TItem>(string itemKey, out TItem? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (Agent is IWorkflowExecutionStateHost host &&
+            host.TryGetExecutionItem(itemKey, out var boxed) &&
+            boxed is TItem typed)
+        {
+            value = typed;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    public void SetItem(string itemKey, object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (Agent is not IWorkflowExecutionStateHost host)
+            throw new InvalidOperationException("Workflow execution items host is required.");
+
+        host.SetExecutionItem(itemKey, value);
+    }
+
+    public bool RemoveItem(string itemKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return Agent is IWorkflowExecutionStateHost host &&
+               host.RemoveExecutionItem(itemKey);
+    }
+
     public Task PublishAsync<TEvent>(
         TEvent evt,
         TopologyAudience direction = TopologyAudience.Children,
@@ -113,7 +145,7 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = targetActorId;
+        Sent.Add((targetActorId, evt));
         _ = options;
         return PublishAsync(evt, TopologyAudience.Self, ct);
     }
@@ -242,6 +274,7 @@ internal sealed record CanceledCallback(
 internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowExecutionStateHost
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
@@ -252,6 +285,15 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         _executionStates.ToList();
+
+    public bool TryGetExecutionItem(string itemKey, out object? value) =>
+        _executionItems.TryGetValue(itemKey, out value);
+
+    public void SetExecutionItem(string itemKey, object? value) =>
+        _executionItems[itemKey] = value;
+
+    public bool RemoveExecutionItem(string itemKey) =>
+        _executionItems.Remove(itemKey);
 
     public Task UpsertExecutionStateAsync(
         string scopeKey,
@@ -287,6 +329,7 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
@@ -297,6 +340,15 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
 
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         _executionStates.ToList();
+
+    public bool TryGetExecutionItem(string itemKey, out object? value) =>
+        _executionItems.TryGetValue(itemKey, out value);
+
+    public void SetExecutionItem(string itemKey, object? value) =>
+        _executionItems[itemKey] = value;
+
+    public bool RemoveExecutionItem(string itemKey) =>
+        _executionItems.Remove(itemKey);
 
     public Task UpsertExecutionStateAsync(
         string scopeKey,

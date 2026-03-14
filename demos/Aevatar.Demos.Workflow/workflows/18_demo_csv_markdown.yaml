@@ -1,8 +1,0 @@
-name: 18_demo_csv_markdown
-description: Use custom demo_csv_markdown module to convert CSV lines into markdown table text.
-steps:
-  - id: csv_to_markdown
-    type: demo_csv_markdown
-    parameters:
-      delimiter: ","
-      has_header: "true"

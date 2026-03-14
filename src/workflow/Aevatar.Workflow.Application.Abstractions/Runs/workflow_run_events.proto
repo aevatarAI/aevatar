@@ -163,6 +163,7 @@ message WorkflowHumanInputRequestCustomPayload {
   string prompt = 4;
   int32 timeout_seconds = 5;
   string variable_name = 6;
+  map<string, string> metadata = 7;
 }
 
 message WorkflowHumanInputResponseCustomPayload {
@@ -178,4 +179,24 @@ message WorkflowWaitingSignalCustomPayload {
   string signal_name = 3;
   string prompt = 4;
   int32 timeout_ms = 5;
+}
+
+message WorkflowSignalBufferedCustomPayload {
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string payload = 4;
+  int64 received_at_unix_time_ms = 5;
+}
+
+message WorkflowProjectionDispatchFailureCustomPayload {
+  string event_id = 1;
+  string payload_type = 2;
+  string reason = 3;
+}
+
+message WorkflowProjectionSinkFailureCustomPayload {
+  string code = 1;
+  string event_type = 2;
+  string reason = 3;
 }

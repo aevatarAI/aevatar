@@ -162,6 +162,23 @@ public class WorkflowAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void SecureValueCapturedEvent_ShouldRoundtrip()
+    {
+        var evt = new SecureValueCapturedEvent
+        {
+            RunId = "run-secure",
+            StepId = "step-secure",
+            Variable = "api_key",
+            Value = "secret-value",
+        };
+
+        var parsed = SecureValueCapturedEvent.Parser.ParseFrom(evt.ToByteArray());
+        parsed.Should().BeEquivalentTo(evt);
+        parsed.Clone().Should().BeEquivalentTo(evt);
+        ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(SecureValueCapturedEvent));
+    }
+
+    [Fact]
     public void SubWorkflowEvents_ShouldRoundtripAndSupportReflection()
     {
         var invoke = new SubWorkflowInvokeRequestedEvent
@@ -218,6 +235,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvokeRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowBindingUpsertedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationRegisteredEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }
 }

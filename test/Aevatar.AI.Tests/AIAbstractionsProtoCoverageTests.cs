@@ -13,10 +13,10 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "hello",
             SessionId = "session-1",
-            RequestMetadata = { ["correlation_id"] = "c-1" },
+            Metadata = { ["correlation_id"] = "c-1" },
             TimeoutMs = 2500,
         }, ChatRequestEvent.Parser);
-        request.RequestMetadata["correlation_id"].Should().Be("c-1");
+        request.Metadata["correlation_id"].Should().Be("c-1");
         request.TimeoutMs.Should().Be(2500);
 
         var response = RoundTrip(new ChatResponseEvent
@@ -176,12 +176,12 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "p1",
             SessionId = "s1",
-            RequestMetadata = { ["k1"] = "v1" },
+            Metadata = { ["k1"] = "v1" },
         });
 
         target.Prompt.Should().Be("p1");
         target.SessionId.Should().Be("s1");
-        target.RequestMetadata["k1"].Should().Be("v1");
+        target.Metadata["k1"].Should().Be("v1");
 
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");

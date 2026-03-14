@@ -13,6 +13,7 @@ internal sealed class WorkflowSignalCommandEnvelopeFactory : ICommandEnvelopeFac
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
+        var signalName = NormalizeRequired(command.SignalName, nameof(command.SignalName));
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -20,7 +21,8 @@ internal sealed class WorkflowSignalCommandEnvelopeFactory : ICommandEnvelopeFac
             Payload = Any.Pack(new SignalReceivedEvent
             {
                 RunId = command.RunId,
-                SignalName = command.SignalName,
+                StepId = NormalizeOptional(command.StepId),
+                SignalName = signalName,
                 Payload = command.Payload ?? string.Empty,
             }),
             Route = EnvelopeRouteSemantics.CreateDirect("api.workflow.signal", context.TargetId),
@@ -29,5 +31,16 @@ internal sealed class WorkflowSignalCommandEnvelopeFactory : ICommandEnvelopeFac
                 CorrelationId = context.CorrelationId,
             },
         };
+    }
+
+    private static string NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private static string NormalizeRequired(string? value, string paramName)
+    {
+        var normalized = NormalizeOptional(value);
+        return normalized.Length == 0
+            ? throw new ArgumentException("Value is required.", paramName)
+            : normalized;
     }
 }

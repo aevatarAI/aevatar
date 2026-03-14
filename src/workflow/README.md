@@ -24,7 +24,7 @@
 - source actor inspection 统一走 workflow 专用 `IWorkflowActorBindingReader`；command path 通过 actor-owned query/reply 读取 binding，不再依赖 `actor.Agent` 具体实例形状，也不再暴露 generic raw-state probing。
 - `/api/workflows/resume` 与 `/api/workflows/signal` 必须指向 run actor id，而不是 definition actor id。
 - run actor 的投影、实时输出、查询默认都以 run actor id 为作用域。
-- 显式传入的 definition actor id 是强约束：若该 actor 不存在，则按该 id 创建；若已存在且是 `WorkflowGAgent`，则原地复用或重绑；若已存在但不是 workflow definition actor，则直接失败，不再静默退化成新的隐藏 definition actor。
+- 显式传入的 definition actor id 是强约束：若该 actor 不存在，则按该 id 创建；若已存在且是 `WorkflowGAgent`，则仅在 workflow name 一致时原地复用或更新 definition payload；若已绑定到不同 workflow name，直接失败；若已存在但不是 workflow definition actor，也直接失败，不再静默退化成新的隐藏 definition actor。
 - 内置模块包提供最小跨 actor 发送模块 `actor_send`，直接复用 `IWorkflowExecutionContext.SendToAsync(...)`，不再在 Foundation 上叠一层公共 messaging port。
 
 补充口径：

@@ -15,6 +15,7 @@
       "src\\workflow\\extensions\\Aevatar.Workflow.Extensions.Hosting\\Aevatar.Workflow.Extensions.Hosting.csproj",
       "src\\workflow\\Aevatar.Workflow.Host.Api\\Aevatar.Workflow.Host.Api.csproj",
       "tools\\Aevatar.Tools.Config\\Aevatar.Tools.Config.csproj",
+      "tools\\Aevatar.Tools.Cli\\Aevatar.Tools.Cli.csproj",
       "test\\Aevatar.Hosting.Tests\\Aevatar.Hosting.Tests.csproj",
       "test\\Aevatar.Foundation.Runtime.Hosting.Tests\\Aevatar.Foundation.Runtime.Hosting.Tests.csproj",
       "test\\Aevatar.Bootstrap.Tests\\Aevatar.Bootstrap.Tests.csproj"

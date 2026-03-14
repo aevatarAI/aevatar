@@ -62,11 +62,53 @@ public sealed class WorkflowRunControlCommandTests
     }
 
     [Fact]
+    public async Task ResumeResolver_ShouldRejectBlankStepId_BeforeRuntimeLookup()
+    {
+        var runtime = new FakeActorRuntime();
+        var resolver = new WorkflowResumeCommandTargetResolver(
+            runtime,
+            new FakeWorkflowActorBindingReader(null));
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowRunControlStartError.InvalidStepId("actor-1", "run-1", " "));
+    }
+
+    [Fact]
+    public async Task SignalResolver_ShouldRejectBlankSignalName_BeforeRuntimeLookup()
+    {
+        var runtime = new FakeActorRuntime();
+        var resolver = new WorkflowSignalCommandTargetResolver(
+            runtime,
+            new FakeWorkflowActorBindingReader(null));
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowRunControlStartError.InvalidSignalName("actor-1", "run-1", " "));
+    }
+
+    [Fact]
     public void ResumeEnvelopeFactory_ShouldPackWorkflowResumedEvent()
     {
         var factory = new WorkflowResumeCommandEnvelopeFactory();
         var envelope = factory.CreateEnvelope(
-            new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, "approved"),
+            new WorkflowResumeCommand(
+                "actor-1",
+                "run-1",
+                "step-1",
+                "cmd-1",
+                true,
+                "approved",
+                new Dictionary<string, string>
+                {
+                    ["source"] = "tests",
+                }),
             new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
 
         var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
@@ -78,6 +120,19 @@ public sealed class WorkflowRunControlCommandTests
         resumed.StepId.Should().Be("step-1");
         resumed.Approved.Should().BeTrue();
         resumed.UserInput.Should().Be("approved");
+        resumed.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("tests");
+    }
+
+    [Fact]
+    public void ResumeEnvelopeFactory_ShouldRejectBlankStepId()
+    {
+        var factory = new WorkflowResumeCommandEnvelopeFactory();
+
+        var act = () => factory.CreateEnvelope(
+            new WorkflowResumeCommand("actor-1", "run-1", " ", "cmd-1", true, "approved"),
+            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+
+        act.Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -96,6 +151,18 @@ public sealed class WorkflowRunControlCommandTests
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("approve");
         signal.Payload.Should().Be("yes");
+    }
+
+    [Fact]
+    public void SignalEnvelopeFactory_ShouldRejectBlankSignalName()
+    {
+        var factory = new WorkflowSignalCommandEnvelopeFactory();
+
+        var act = () => factory.CreateEnvelope(
+            new WorkflowSignalCommand("actor-1", "run-1", " ", "cmd-1", "yes"),
+            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+
+        act.Should().Throw<ArgumentException>();
     }
 
     [Fact]
