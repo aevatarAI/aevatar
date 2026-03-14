@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
@@ -8,9 +9,9 @@ namespace Aevatar.GAgentService.Governance.Projection.Queries;
 
 public sealed class ServiceEndpointCatalogQueryReader : IServiceEndpointCatalogQueryReader
 {
-    private readonly IProjectionDocumentStore<ServiceEndpointCatalogReadModel, string> _documentStore;
+    private readonly IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string> _documentStore;
 
-    public ServiceEndpointCatalogQueryReader(IProjectionDocumentStore<ServiceEndpointCatalogReadModel, string> documentStore)
+    public ServiceEndpointCatalogQueryReader(IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string> documentStore)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
     }

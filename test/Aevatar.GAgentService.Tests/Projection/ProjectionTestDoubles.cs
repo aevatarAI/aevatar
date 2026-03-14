@@ -15,8 +15,8 @@ internal sealed class FixedProjectionClock : IProjectionClock
 }
 
 internal sealed class RecordingDocumentStore<TReadModel> :
-    IProjectionDocumentStore<TReadModel, string>,
-    IProjectionStoreDispatcher<TReadModel, string>
+    IProjectionDocumentReader<TReadModel, string>,
+    IProjectionWriteDispatcher<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly Func<TReadModel, string> _keySelector;
@@ -38,14 +38,6 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         else
             _items.Add(readModel);
 
-        return Task.CompletedTask;
-    }
-
-    public Task MutateAsync(string key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        var item = _items.FirstOrDefault(x => string.Equals(_keySelector(x), key, StringComparison.Ordinal))
-            ?? throw new InvalidOperationException($"Read model '{key}' was not found.");
-        mutate(item);
         return Task.CompletedTask;
     }
 

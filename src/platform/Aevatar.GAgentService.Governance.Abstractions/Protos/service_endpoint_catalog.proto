@@ -50,15 +50,3 @@ message ServiceEndpointCatalogCreatedEvent {
 message ServiceEndpointCatalogUpdatedEvent {
   ServiceEndpointCatalogSpec spec = 1;
 }
-
-message QueryServiceEndpointCatalogRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-}
-
-message ServiceEndpointCatalogRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  ServiceEndpointCatalogState state = 3;
-  string failure_reason = 4;
-}

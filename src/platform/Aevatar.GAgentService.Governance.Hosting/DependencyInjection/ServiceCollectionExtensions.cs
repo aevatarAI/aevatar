@@ -1,7 +1,7 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
@@ -64,17 +64,17 @@ public static class ServiceCollectionExtensions
         {
             services.AddElasticsearchDocumentProjectionStore<ServiceBindingCatalogReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceBindingCatalogReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceBindingCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ServiceEndpointCatalogReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceEndpointCatalogReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceEndpointCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ServicePolicyCatalogReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServicePolicyCatalogReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServicePolicyCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
         }

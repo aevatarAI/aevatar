@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -11,12 +12,12 @@ namespace Aevatar.GAgentService.Projection.Projectors;
 public sealed class ServiceCatalogProjector
     : IProjectionProjector<ServiceCatalogProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ServiceCatalogReadModel, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<ServiceCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceCatalogProjector(
-        IProjectionStoreDispatcher<ServiceCatalogReadModel, string> storeDispatcher,
+        IProjectionWriteDispatcher<ServiceCatalogReadModel> storeDispatcher,
         IProjectionDocumentReader<ServiceCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {

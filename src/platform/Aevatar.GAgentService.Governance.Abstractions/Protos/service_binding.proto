@@ -78,15 +78,3 @@ message ServiceBindingRetiredEvent {
   ServiceIdentity identity = 1;
   string binding_id = 2;
 }
-
-message QueryServiceBindingCatalogRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-}
-
-message ServiceBindingCatalogRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  ServiceBindingCatalogState state = 3;
-  string failure_reason = 4;
-}

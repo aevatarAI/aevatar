@@ -200,10 +200,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IProjectionStoreDispatcher<ServiceCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionStoreDispatcher<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentStore<ServiceCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentStore<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceCatalogReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         using var provider = services.BuildServiceProvider();
 
-        var act = () => provider.GetRequiredService<IProjectionDocumentStore<ServiceCatalogReadModel, string>>();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ServiceCatalogReadModel, string>>();
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Endpoints is empty*");
@@ -243,12 +243,12 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IProjectionStoreDispatcher<ServiceBindingCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionStoreDispatcher<ServiceEndpointCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionStoreDispatcher<ServicePolicyCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentStore<ServiceBindingCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentStore<ServiceEndpointCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentStore<ServicePolicyCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceBindingCatalogReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceEndpointCatalogReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServicePolicyCatalogReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceBindingCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServicePolicyCatalogReadModel, string>>().Should().NotBeNull();
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
         using var provider = services.BuildServiceProvider();
 
-        var act = () => provider.GetRequiredService<IProjectionDocumentStore<ServiceBindingCatalogReadModel, string>>();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ServiceBindingCatalogReadModel, string>>();
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Endpoints is empty*");

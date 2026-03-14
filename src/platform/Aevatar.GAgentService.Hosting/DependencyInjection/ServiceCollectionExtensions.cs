@@ -1,7 +1,7 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Core.Assemblers;
@@ -76,12 +76,12 @@ public static class ServiceCollectionExtensions
         {
             services.AddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceCatalogReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceRevisionCatalogReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
         }

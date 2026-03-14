@@ -2,16 +2,17 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
 public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
 {
-    private readonly IProjectionDocumentStore<ServiceRevisionCatalogReadModel, string> _documentStore;
+    private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentStore;
 
     public ServiceRevisionCatalogQueryReader(
-        IProjectionDocumentStore<ServiceRevisionCatalogReadModel, string> documentStore)
+        IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> documentStore)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
     }

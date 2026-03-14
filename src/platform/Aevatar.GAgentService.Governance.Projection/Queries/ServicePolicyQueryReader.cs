@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
@@ -8,9 +9,9 @@ namespace Aevatar.GAgentService.Governance.Projection.Queries;
 
 public sealed class ServicePolicyQueryReader : IServicePolicyQueryReader
 {
-    private readonly IProjectionDocumentStore<ServicePolicyCatalogReadModel, string> _documentStore;
+    private readonly IProjectionDocumentReader<ServicePolicyCatalogReadModel, string> _documentStore;
 
-    public ServicePolicyQueryReader(IProjectionDocumentStore<ServicePolicyCatalogReadModel, string> documentStore)
+    public ServicePolicyQueryReader(IProjectionDocumentReader<ServicePolicyCatalogReadModel, string> documentStore)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
     }

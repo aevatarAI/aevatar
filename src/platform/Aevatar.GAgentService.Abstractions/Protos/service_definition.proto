@@ -45,15 +45,3 @@ message DefaultServingRevisionChangedEvent {
   ServiceIdentity identity = 1;
   string revision_id = 2;
 }
-
-message QueryServiceDefinitionStateRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-}
-
-message ServiceDefinitionStateRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  ServiceDefinitionState state = 3;
-  string failure_reason = 4;
-}
