@@ -48,9 +48,12 @@ jobs:
               - 'test/**'
               - 'aevatar.slnx'
               - 'aevatar.*.slnf'
+              - '.editorconfig'
+              - 'CodeMetricsConfig.txt'
               - 'Directory.Build.props'
               - 'Directory.Packages.props'
               - 'global.json'
+              - 'tools/Aevatar.Tools.CodeMetrics/**'
               - 'tools/ci/**'
               - '.github/workflows/ci.yml'
             projection_provider:
@@ -107,6 +110,20 @@ jobs:
 
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
+
+  code-metrics-analyzers:
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Code Metrics Analyzer Guard
+        run: bash tools/ci/code_metrics_analyzer_guard.sh
 
   split-test-guards:
     if: |
@@ -242,6 +259,31 @@ jobs:
           COVERAGE_LINE_THRESHOLD: "85"
           COVERAGE_BRANCH_THRESHOLD: "72"
         run: bash tools/ci/coverage_quality_guard.sh
+
+  code-metrics-report:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Generate Code Metrics Reports
+        shell: pwsh
+        run: ./tools/ci/code_metrics_report.ps1
+
+      - name: Upload Code Metrics Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-metrics-reports
+          path: artifacts/code-metrics
+          if-no-files-found: error
 
   distributed-3node-smoke:
     if: |
