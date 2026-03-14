@@ -314,15 +314,16 @@ public sealed class DefaultServiceRuntimeActivatorTests
     {
         public string RuntimeActorId { get; init; } = "script-runtime";
 
-        public List<(string definitionActorId, string revision, string? runtimeActorId)> Calls { get; } = [];
+        public List<(string definitionActorId, string revision, string? runtimeActorId, ScriptDefinitionSnapshot? definitionSnapshot)> Calls { get; } = [];
 
         public Task<string> EnsureRuntimeAsync(
             string definitionActorId,
             string scriptRevision,
             string? runtimeActorId,
-            CancellationToken ct)
+            CancellationToken ct,
+            ScriptDefinitionSnapshot? definitionSnapshot = null)
         {
-            Calls.Add((definitionActorId, scriptRevision, runtimeActorId));
+            Calls.Add((definitionActorId, scriptRevision, runtimeActorId, definitionSnapshot));
             return Task.FromResult(RuntimeActorId);
         }
     }

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -12,13 +13,16 @@ public sealed class ServicePolicyProjector
     : IProjectionProjector<ServicePolicyProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionStoreDispatcher<ServicePolicyCatalogReadModel, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ServicePolicyCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServicePolicyProjector(
         IProjectionStoreDispatcher<ServicePolicyCatalogReadModel, string> storeDispatcher,
+        IProjectionDocumentReader<ServicePolicyCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -76,7 +80,7 @@ public sealed class ServicePolicyProjector
         CancellationToken ct)
     {
         var serviceKey = ServiceKeys.Build(identity);
-        var existing = await _storeDispatcher.GetAsync(serviceKey, ct);
+        var existing = await _documentReader.GetAsync(serviceKey, ct);
         if (existing == null)
         {
             existing = new ServicePolicyCatalogReadModel
@@ -95,21 +99,19 @@ public sealed class ServicePolicyProjector
             return;
         }
 
-        await _storeDispatcher.MutateAsync(serviceKey, readModel =>
+        var existingEntry = existing.Policies.FirstOrDefault(x => string.Equals(x.PolicyId, policyId, StringComparison.Ordinal));
+        if (existingEntry == null)
         {
-            var entry = readModel.Policies.FirstOrDefault(x => string.Equals(x.PolicyId, policyId, StringComparison.Ordinal));
-            if (entry == null)
+            existingEntry = new ServicePolicyReadModel
             {
-                entry = new ServicePolicyReadModel
-                {
-                    PolicyId = policyId ?? string.Empty,
-                };
-                readModel.Policies.Add(entry);
-            }
+                PolicyId = policyId ?? string.Empty,
+            };
+            existing.Policies.Add(existingEntry);
+        }
 
-            mutate(entry);
-            readModel.UpdatedAt = _clock.UtcNow;
-        }, ct);
+        mutate(existingEntry);
+        existing.UpdatedAt = _clock.UtcNow;
+        await _storeDispatcher.UpsertAsync(existing, ct);
     }
 
     private static void ApplySpec(ServicePolicyReadModel entry, ServicePolicySpec spec, bool retired)

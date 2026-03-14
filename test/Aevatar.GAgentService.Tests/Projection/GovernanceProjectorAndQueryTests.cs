@@ -19,7 +19,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task BindingProjectorAndQueryReader_ShouldProjectLifecycleAndMapNullFields()
     {
         var store = new RecordingDocumentStore<ServiceBindingCatalogReadModel>(x => x.Id);
-        var projector = new ServiceBindingProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceBindingProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var reader = new ServiceBindingQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceBindingProjectionContext
@@ -69,7 +69,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task BindingProjector_ShouldRespectCancellation_AndQueryReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceBindingCatalogReadModel>(x => x.Id);
-        var projector = new ServiceBindingProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceBindingProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceBindingQueryReader(store);
         var context = new ServiceBindingProjectionContext
         {
@@ -91,7 +91,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task EndpointCatalogProjectorAndQueryReader_ShouldProjectUpdatesAndFallbackOrdering()
     {
         var store = new RecordingDocumentStore<ServiceEndpointCatalogReadModel>(x => x.Id);
-        var projector = new ServiceEndpointCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceEndpointCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var reader = new ServiceEndpointCatalogQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceEndpointCatalogProjectionContext
@@ -138,7 +138,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task EndpointCatalogProjector_ShouldRespectCancellation_AndQueryReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceEndpointCatalogReadModel>(x => x.Id);
-        var projector = new ServiceEndpointCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceEndpointCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceEndpointCatalogQueryReader(store);
         var context = new ServiceEndpointCatalogProjectionContext
         {
@@ -160,7 +160,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task PolicyProjectorAndQueryReader_ShouldProjectLifecycleAndSortPolicies()
     {
         var store = new RecordingDocumentStore<ServicePolicyCatalogReadModel>(x => x.Id);
-        var projector = new ServicePolicyProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServicePolicyProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var reader = new ServicePolicyQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServicePolicyProjectionContext
@@ -206,7 +206,7 @@ public sealed class GovernanceProjectorAndQueryTests
     public async Task PolicyProjector_ShouldRespectCancellation_AndQueryReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServicePolicyCatalogReadModel>(x => x.Id);
-        var projector = new ServicePolicyProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServicePolicyProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServicePolicyQueryReader(store);
         var context = new ServicePolicyProjectionContext
         {

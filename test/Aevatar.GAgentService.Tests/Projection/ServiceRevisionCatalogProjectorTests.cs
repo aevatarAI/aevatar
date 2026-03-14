@@ -16,7 +16,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldCreateThenPrepareRevisionEntry()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
@@ -55,7 +55,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldApplyFailurePublishAndRetireTransitions()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
@@ -101,7 +101,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedPayload_AndCancellationHooks()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
             ProjectionId = "service-revisions:tenant:app:default:svc",
@@ -127,7 +127,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
             ProjectionId = "service-revisions:tenant:app:default:svc",
@@ -149,7 +149,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldAddEntry_WhenCatalogExistsButRevisionIsMissing()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {

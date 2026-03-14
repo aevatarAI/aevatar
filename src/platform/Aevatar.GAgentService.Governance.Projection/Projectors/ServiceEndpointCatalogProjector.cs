@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -12,13 +13,16 @@ public sealed class ServiceEndpointCatalogProjector
     : IProjectionProjector<ServiceEndpointCatalogProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionStoreDispatcher<ServiceEndpointCatalogReadModel, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceEndpointCatalogProjector(
         IProjectionStoreDispatcher<ServiceEndpointCatalogReadModel, string> storeDispatcher,
+        IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -69,7 +73,7 @@ public sealed class ServiceEndpointCatalogProjector
     {
         var serviceKey = ServiceKeys.Build(identity);
         var items = endpoints.Select(MapEndpoint).ToList();
-        var existing = await _storeDispatcher.GetAsync(serviceKey, ct);
+        var existing = await _documentReader.GetAsync(serviceKey, ct);
         if (existing == null)
         {
             await _storeDispatcher.UpsertAsync(new ServiceEndpointCatalogReadModel
@@ -81,11 +85,9 @@ public sealed class ServiceEndpointCatalogProjector
             return;
         }
 
-        await _storeDispatcher.MutateAsync(serviceKey, readModel =>
-        {
-            readModel.Endpoints = items.Select(x => x.DeepClone()).ToList();
-            readModel.UpdatedAt = _clock.UtcNow;
-        }, ct);
+        existing.Endpoints = items.Select(x => x.DeepClone()).ToList();
+        existing.UpdatedAt = _clock.UtcNow;
+        await _storeDispatcher.UpsertAsync(existing, ct);
     }
 
     private static ServiceEndpointExposureReadModel MapEndpoint(ServiceEndpointExposureSpec endpoint) =>

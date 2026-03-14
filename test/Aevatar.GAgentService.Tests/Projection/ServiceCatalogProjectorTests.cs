@@ -17,7 +17,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldUpsertDefinitionThenMutateDeploymentState()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
@@ -54,7 +54,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
             ProjectionId = "service-catalog:tenant:app:default:svc",
@@ -72,7 +72,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldApplyDefinitionMutations_ForExistingReadModel()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var updatedSpec = GAgentServiceTestKit.CreateDefinitionSpec(
             identity,
@@ -132,7 +132,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task InitializeAndCompleteAsync_ShouldRespectCancellation()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
             ProjectionId = "service-catalog:tenant:app:default:svc",
@@ -152,7 +152,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
             ProjectionId = "service-catalog:tenant:app:default:svc",
@@ -174,7 +174,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldCreateReadModel_WhenDefaultServingChangesBeforeDefinitionProjection()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
@@ -200,7 +200,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldCreateReadModel_WhenHealthEventArrivesFirst()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {

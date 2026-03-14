@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -12,13 +13,16 @@ public sealed class ServiceRevisionCatalogProjector
     : IProjectionProjector<ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionStoreDispatcher<ServiceRevisionCatalogReadModel, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceRevisionCatalogProjector(
         IProjectionStoreDispatcher<ServiceRevisionCatalogReadModel, string> storeDispatcher,
+        IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -120,7 +124,7 @@ public sealed class ServiceRevisionCatalogProjector
         CancellationToken ct)
     {
         var serviceKey = ServiceKeys.Build(identity);
-        var existing = await _storeDispatcher.GetAsync(serviceKey, ct);
+        var existing = await _documentReader.GetAsync(serviceKey, ct);
         if (existing == null)
         {
             existing = new ServiceRevisionCatalogReadModel
@@ -136,22 +140,20 @@ public sealed class ServiceRevisionCatalogProjector
             return;
         }
 
-        await _storeDispatcher.MutateAsync(serviceKey, readModel =>
+        var existingEntry = existing.Revisions.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
+        if (existingEntry == null)
         {
-            var entry = readModel.Revisions.FirstOrDefault(x =>
-                string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
-            if (entry == null)
+            existingEntry = new ServiceRevisionEntryReadModel
             {
-                entry = new ServiceRevisionEntryReadModel
-                {
-                    RevisionId = revisionId ?? string.Empty,
-                };
-                readModel.Revisions.Add(entry);
-            }
+                RevisionId = revisionId ?? string.Empty,
+            };
+            existing.Revisions.Add(existingEntry);
+        }
 
-            mutate(entry);
-            readModel.UpdatedAt = _clock.UtcNow;
-        }, ct);
+        mutate(existingEntry);
+        existing.UpdatedAt = _clock.UtcNow;
+        await _storeDispatcher.UpsertAsync(existing, ct);
     }
 
     private static ServiceCatalogEndpointReadModel MapEndpoint(ServiceEndpointDescriptor endpoint) =>

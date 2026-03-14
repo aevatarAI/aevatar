@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -11,13 +12,16 @@ public sealed class ServiceCatalogProjector
     : IProjectionProjector<ServiceCatalogProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionStoreDispatcher<ServiceCatalogReadModel, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ServiceCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceCatalogProjector(
         IProjectionStoreDispatcher<ServiceCatalogReadModel, string> storeDispatcher,
+        IProjectionDocumentReader<ServiceCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -127,7 +131,7 @@ public sealed class ServiceCatalogProjector
         CancellationToken ct)
     {
         var serviceKey = ServiceKeys.Build(identity);
-        var existing = await _storeDispatcher.GetAsync(serviceKey, ct);
+        var existing = await _documentReader.GetAsync(serviceKey, ct);
         if (existing == null)
         {
             existing = new ServiceCatalogReadModel
@@ -142,11 +146,9 @@ public sealed class ServiceCatalogProjector
             return;
         }
 
-        await _storeDispatcher.MutateAsync(serviceKey, readModel =>
-        {
-            mutate(readModel);
-            readModel.UpdatedAt = _clock.UtcNow;
-        }, ct);
+        mutate(existing);
+        existing.UpdatedAt = _clock.UtcNow;
+        await _storeDispatcher.UpsertAsync(existing, ct);
     }
 
     private static void ApplyIdentity(ServiceCatalogReadModel readModel, ServiceIdentity identity)
