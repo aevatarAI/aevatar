@@ -1,3 +1,5 @@
+using Aevatar.Scripting.Abstractions;
+
 namespace Aevatar.Scripting.Abstractions.Definitions;
 
 public sealed record ScriptPromotionDecision(
@@ -10,7 +12,8 @@ public sealed record ScriptPromotionDecision(
     string FailureReason,
     string DefinitionActorId,
     string CatalogActorId,
-    ScriptEvolutionValidationReport ValidationReport)
+    ScriptEvolutionValidationReport ValidationReport,
+    ScriptDefinitionBindingSpec? DefinitionSnapshot = null)
 {
     public static ScriptPromotionDecision Rejected(
         ScriptEvolutionProposal proposal,
@@ -29,6 +32,7 @@ public sealed record ScriptPromotionDecision(
             FailureReason: failureReason ?? string.Empty,
             DefinitionActorId: string.Empty,
             CatalogActorId: string.Empty,
-            ValidationReport: validation ?? ScriptEvolutionValidationReport.Empty);
+            ValidationReport: validation ?? ScriptEvolutionValidationReport.Empty,
+            DefinitionSnapshot: null);
     }
 }

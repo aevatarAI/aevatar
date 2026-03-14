@@ -1,11 +1,14 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Scripting.Projection.Reducers;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -15,190 +18,189 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public class ClaimReadModelProjectorTests
 {
     [Fact]
-    public async Task Should_route_by_exact_type_url()
+    public async Task Should_reduce_manual_review_decision_into_typed_readmodel()
     {
-        var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
-        var projector = new ScriptExecutionReadModelProjector(
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
-        var context = CreateContext("claim-runtime-route");
-
-        await projector.InitializeAsync(context, CancellationToken.None);
-        await projector.ProjectAsync(
-            context,
-            Wrap(new StringValue { Value = "ScriptRunDomainEventCommitted" }),
-            CancellationToken.None);
-
-        var readModelBefore = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
-        readModelBefore.Should().NotBeNull();
-        readModelBefore!.StateVersion.Should().Be(0);
-
-        await projector.ProjectAsync(
-            context,
-            Wrap(new ScriptRunDomainEventCommitted
-            {
-                RunId = "run-route-1",
-                ScriptRevision = "rev-route-1",
-                DefinitionActorId = "definition-route-1",
-                EventType = "ClaimApprovedEvent",
-                Payload = Any.Pack(new StringValue { Value = "ClaimApprovedEvent" }),
-                ReadModelPayloads =
-                {
-                    ["claim_case"] = Any.Pack(new Struct
-                    {
-                        Fields =
-                        {
-                            ["decision_status"] = Google.Protobuf.WellKnownTypes.Value.ForString("Approved"),
-                        },
-                    }),
-                },
-            }),
-            CancellationToken.None);
-
-        var readModelAfter = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
-        readModelAfter.Should().NotBeNull();
-        readModelAfter!.StateVersion.Should().Be(1);
-        readModelAfter.LastEventType.Should().Be("ClaimApprovedEvent");
-    }
-
-    [Fact]
-    public async Task Should_update_decision_status_on_manual_review()
-    {
-        var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
-        var projector = new ScriptExecutionReadModelProjector(
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
+        var dispatcher = new InMemoryReadModelDispatcher();
+        var projector = CreateProjector(dispatcher);
         var context = CreateContext("claim-runtime-manual");
 
         await projector.InitializeAsync(context, CancellationToken.None);
         await projector.ProjectAsync(
             context,
-            Wrap(new ScriptRunDomainEventCommitted
+            BuildEnvelope(new ScriptDomainFactCommitted
             {
-                RunId = "run-manual-1",
-                ScriptRevision = "rev-manual-1",
-                DefinitionActorId = "definition-manual-1",
-                EventType = "ClaimManualReviewRequestedEvent",
-                Payload = Any.Pack(new StringValue { Value = "ClaimManualReviewRequestedEvent" }),
-                ReadModelPayloads =
+                ActorId = "claim-runtime-manual",
+                DefinitionActorId = "definition-1",
+                ScriptId = "claim_orchestrator",
+                Revision = "rev-claim-1",
+                RunId = "run-case-b",
+                EventType = ClaimDecisionRecorded.Descriptor.FullName,
+                DomainEventPayload = Any.Pack(new ClaimDecisionRecorded
                 {
-                    ["claim_case"] = Any.Pack(new Struct
+                    CommandId = "command-case-b",
+                    Current = new ClaimReadModel
                     {
-                        Fields =
+                        HasValue = true,
+                        CaseId = "Case-B",
+                        PolicyId = "POLICY-B",
+                        DecisionStatus = "ManualReview",
+                        ManualReviewRequired = true,
+                        AiSummary = "high-risk-profile",
+                        Search = new ClaimSearchIndex
                         {
-                            ["decision_status"] = Google.Protobuf.WellKnownTypes.Value.ForString("ManualReview"),
-                            ["manual_review_required"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                            LookupKey = "case-b:policy-b",
+                            DecisionKey = "manualreview",
                         },
-                    }),
-                },
+                        Refs = new ClaimRefs
+                        {
+                            PolicyId = "POLICY-B",
+                            OwnerActorId = "claim-runtime-manual",
+                        },
+                    },
+                }),
+                ReadModelTypeUrl = Any.Pack(new ClaimReadModel()).TypeUrl,
+                StateVersion = 1,
             }),
             CancellationToken.None);
 
-        var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
-        readModel.Should().NotBeNull();
-        readModel!.LastEventType.Should().Be("ClaimManualReviewRequestedEvent");
-        readModel.ReadModelPayloads.Should().ContainKey("claim_case");
-        readModel.ReadModelPayloads["claim_case"].Is(Struct.Descriptor).Should().BeTrue();
-        var claimCase = readModel.ReadModelPayloads["claim_case"].Unpack<Struct>();
-        claimCase.Fields["decision_status"].StringValue.Should().Be("ManualReview");
-        claimCase.Fields["manual_review_required"].BoolValue.Should().BeTrue();
+        var document = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
+        document.Should().NotBeNull();
+        document!.StateVersion.Should().Be(1);
+        document.ReadModelPayload.Should().NotBeNull();
+        var readModel = document.ReadModelPayload!.Unpack<ClaimReadModel>();
+        readModel.DecisionStatus.Should().Be("ManualReview");
+        readModel.ManualReviewRequired.Should().BeTrue();
+        readModel.Search.LookupKey.Should().Be("case-b:policy-b");
+        readModel.Refs.PolicyId.Should().Be("POLICY-B");
     }
 
     [Fact]
-    public async Task Should_noop_for_unmapped_events()
+    public async Task Should_noop_for_unrelated_envelopes()
     {
-        var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
-        var projector = new ScriptExecutionReadModelProjector(
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
+        var dispatcher = new InMemoryReadModelDispatcher();
+        var projector = CreateProjector(dispatcher);
         var context = CreateContext("claim-runtime-noop");
 
         await projector.InitializeAsync(context, CancellationToken.None);
         await projector.ProjectAsync(
             context,
-            Wrap(new RunScriptRequestedEvent
+            new EventEnvelope
             {
-                RunId = "run-noop-1",
-                InputPayload = Any.Pack(new Struct()),
-                ScriptRevision = "rev-noop-1",
-                DefinitionActorId = "definition-noop-1",
-            }),
+                Id = "evt-noop",
+                Payload = Any.Pack(new SimpleTextCommand
+                {
+                    CommandId = "noop",
+                    Value = "not-a-fact",
+                }),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
+            },
             CancellationToken.None);
 
-        var readModel = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
-        readModel.Should().NotBeNull();
-        readModel!.StateVersion.Should().Be(0);
-        readModel.LastEventType.Should().BeEmpty();
+        var document = await dispatcher.GetAsync(context.RootActorId, CancellationToken.None);
+        document.Should().NotBeNull();
+        document!.StateVersion.Should().Be(0);
+        document.ReadModelPayload.Should().BeNull();
     }
 
-    private static ScriptProjectionContext CreateContext(string rootActorId) => new()
+    private static ScriptReadModelProjector CreateProjector(InMemoryReadModelDispatcher dispatcher)
     {
-        ProjectionId = "claim-projection-" + rootActorId,
-        RootActorId = rootActorId,
-        ScriptId = "claim-orchestrator",
-    };
+        return new ScriptReadModelProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)),
+            new StaticDefinitionSnapshotPort(),
+            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
+            new ProtobufMessageCodec());
+    }
 
-    private static EventEnvelope Wrap(IMessage evt) => new()
+    private static ScriptExecutionProjectionContext CreateContext(string rootActorId) =>
+        new()
+        {
+            ProjectionId = rootActorId + ":projection",
+            RootActorId = rootActorId,
+        };
+
+    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
     {
-        Id = Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateTopologyPublication("claim-runtime", TopologyAudience.Self),
-    };
+        return new EventEnvelope
+        {
+            Id = "evt-" + fact.RunId,
+            Payload = Any.Pack(fact),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = fact.CorrelationId,
+            },
+        };
+    }
 
-    private sealed class InMemoryScriptProjectionStoreDispatcher
-        : IProjectionStoreDispatcher<ScriptExecutionReadModel, string>
+    private sealed class StaticDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
-        private readonly Dictionary<string, ScriptExecutionReadModel> _store = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(
-            ScriptExecutionReadModel readModel,
-            CancellationToken ct = default)
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel;
+            definitionActorId.Should().Be("definition-1");
+            requestedRevision.Should().Be("rev-claim-1");
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                ScriptId: "claim_orchestrator",
+                Revision: "rev-claim-1",
+                SourceText: ClaimScriptSources.DecisionBehavior,
+                SourceHash: ClaimScriptSources.DecisionBehaviorHash,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+                StateTypeUrl: Any.Pack(new ClaimState()).TypeUrl,
+                ReadModelTypeUrl: Any.Pack(new ClaimReadModel()).TypeUrl,
+                ReadModelSchemaVersion: "3",
+                ReadModelSchemaHash: "claim-schema-hash",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: ClaimState.Descriptor.FullName,
+                ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
+        }
+    }
+
+    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
+    {
+        private readonly Dictionary<string, ScriptReadModelDocument> _items = new(StringComparer.Ordinal);
+
+        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _items[readModel.Id] = readModel;
             return Task.CompletedTask;
         }
 
-        public Task MutateAsync(
-            string key,
-            Action<ScriptExecutionReadModel> mutate,
-            CancellationToken ct = default)
+        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
+            if (!_items.TryGetValue(key, out var readModel))
             {
-                readModel = new ScriptExecutionReadModel { Id = key };
-                _store[key] = readModel;
+                readModel = new ScriptReadModelDocument { Id = key };
+                _items[key] = readModel;
             }
 
             mutate(readModel);
             return Task.CompletedTask;
         }
 
-        public Task<ScriptExecutionReadModel?> GetAsync(
-            string key,
-            CancellationToken ct = default)
+        public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            _store.TryGetValue(key, out var readModel);
+            _items.TryGetValue(key, out var readModel);
             return Task.FromResult(readModel);
         }
 
-        public Task<IReadOnlyList<ScriptExecutionReadModel>> ListAsync(
-            int take = 50,
-            CancellationToken ct = default)
+        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptExecutionReadModel>>(_store.Values.Take(take).ToArray());
+            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).ToArray());
         }
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
-        public DateTimeOffset UtcNow { get; } = now;
+        public DateTimeOffset UtcNow => now;
     }
 }

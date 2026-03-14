@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Contracts;
@@ -42,47 +41,124 @@ public class ScriptProtoContractsTests
     }
 
     [Fact]
-    public void ScriptRuntimeState_ShouldContainRunFacts()
+    public void ScriptBehaviorState_ShouldContainBindingAndStateRoot()
     {
-        var stateType = typeof(ScriptRuntimeState);
-        var statePayloadsProperty = stateType.GetProperty("StatePayloads");
-        var readModelPayloadsProperty = stateType.GetProperty("ReadModelPayloads");
+        var stateType = typeof(ScriptBehaviorState);
+        var stateRootProperty = stateType.GetProperty("StateRoot");
 
-        statePayloadsProperty.Should().NotBeNull("runtime state must expose keyed state payloads");
-        readModelPayloadsProperty.Should().NotBeNull("runtime state must expose keyed readmodel payloads");
-
-        statePayloadsProperty!.PropertyType.Should().Be(typeof(MapField<string, Any>));
-        readModelPayloadsProperty!.PropertyType.Should().Be(typeof(MapField<string, Any>));
+        stateRootProperty.Should().NotBeNull("behavior state must persist typed state root");
+        stateRootProperty!.PropertyType.Should().Be(typeof(Any));
     }
 
     [Fact]
-    public void ScriptRuntimeState_ShouldSupportStatelessModeByDefault()
+    public void ScriptBehaviorState_ShouldSupportEmptyStateRootByDefault()
     {
-        var state = new ScriptRuntimeState
+        var state = new ScriptBehaviorState
         {
             DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
             Revision = "rev-1",
-            LastAppliedSchemaVersion = "2",
-            LastSchemaHash = "schema-hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
             LastRunId = "run-1",
         };
 
-        var stateType = state.GetType();
-        var statePayloadsProperty = stateType.GetProperty("StatePayloads");
-        var readModelPayloadsProperty = stateType.GetProperty("ReadModelPayloads");
-
-        statePayloadsProperty.Should().NotBeNull();
-        readModelPayloadsProperty.Should().NotBeNull();
-
         state.DefinitionActorId.Should().Be("definition-1");
+        state.ScriptId.Should().Be("script-1");
         state.Revision.Should().Be("rev-1");
-        state.LastAppliedSchemaVersion.Should().Be("2");
-        state.LastSchemaHash.Should().Be("schema-hash-1");
+        state.StateTypeUrl.Should().Be("type.googleapis.com/example.State");
+        state.ReadModelTypeUrl.Should().Be("type.googleapis.com/example.ReadModel");
+        state.ReadModelSchemaVersion.Should().Be("2");
+        state.ReadModelSchemaHash.Should().Be("schema-hash-1");
         state.LastRunId.Should().Be("run-1");
+        state.StateRoot.Should().BeNull();
+    }
 
-        var statePayloads = (MapField<string, Any>)statePayloadsProperty!.GetValue(state)!;
-        var readModelPayloads = (MapField<string, Any>)readModelPayloadsProperty!.GetValue(state)!;
-        statePayloads.Count.Should().Be(0);
-        readModelPayloads.Count.Should().Be(0);
+    [Fact]
+    public void BindScriptBehaviorRequestedEvent_ShouldCarryBindingContractFields()
+    {
+        var bind = new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = "public sealed class Behavior {}",
+            SourceHash = "hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
+            StateDescriptorFullName = "Example.State",
+            ReadModelDescriptorFullName = "Example.ReadModel",
+            RuntimeSemantics = new ScriptRuntimeSemanticsSpec
+            {
+                Queries =
+                {
+                    new ScriptQuerySemanticsSpec
+                    {
+                        QueryTypeUrl = "type.googleapis.com/example.Query",
+                        ResultTypeUrl = "type.googleapis.com/example.Response",
+                    },
+                },
+            },
+        };
+
+        bind.DefinitionActorId.Should().Be("definition-1");
+        bind.ScriptId.Should().Be("script-1");
+        bind.Revision.Should().Be("rev-1");
+        bind.SourceHash.Should().Be("hash-1");
+        bind.ReadModelSchemaVersion.Should().Be("2");
+        bind.StateDescriptorFullName.Should().Be("Example.State");
+        bind.ReadModelDescriptorFullName.Should().Be("Example.ReadModel");
+        bind.RuntimeSemantics.Queries.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ScriptBehaviorBoundEvent_ShouldCarryMaterializedBindingFields()
+    {
+        var bound = new ScriptBehaviorBoundEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = "public sealed class Behavior {}",
+            SourceHash = "hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
+        };
+
+        bound.DefinitionActorId.Should().Be("definition-1");
+        bound.ScriptId.Should().Be("script-1");
+        bound.Revision.Should().Be("rev-1");
+        bound.SourceHash.Should().Be("hash-1");
+        bound.ReadModelSchemaHash.Should().Be("schema-hash-1");
+    }
+
+    [Fact]
+    public void ScriptEvolutionSessionCompletedEvent_ShouldCarryDefinitionBindingSnapshot()
+    {
+        var completed = new ScriptEvolutionSessionCompletedEvent
+        {
+            ProposalId = "proposal-1",
+            Accepted = true,
+            DefinitionActorId = "definition-1",
+            DefinitionSnapshot = new ScriptDefinitionBindingSpec
+            {
+                ScriptId = "script-1",
+                Revision = "rev-1",
+                SourceHash = "hash-1",
+                ReadModelSchemaVersion = "2",
+            },
+        };
+
+        completed.DefinitionSnapshot.Should().NotBeNull();
+        completed.DefinitionSnapshot.ScriptId.Should().Be("script-1");
+        completed.DefinitionSnapshot.Revision.Should().Be("rev-1");
+        completed.DefinitionSnapshot.SourceHash.Should().Be("hash-1");
+        completed.DefinitionSnapshot.ReadModelSchemaVersion.Should().Be("2");
     }
 }

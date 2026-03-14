@@ -1,10 +1,14 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core.Agents;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Integration.Tests.TestDoubles.Protocols;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
@@ -47,7 +51,7 @@ public class WorkflowYamlScriptParityTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
 
         var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-parity-definition-" + Guid.NewGuid().ToString("N")[..8]);
@@ -92,9 +96,7 @@ public class WorkflowYamlScriptParityTests
         await using var subscription = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
             if (envelope.Payload?.Is(WorkflowCompletedEvent.Descriptor) == true)
-            {
                 completedTcs.TrySetResult(envelope.Payload.Unpack<WorkflowCompletedEvent>());
-            }
 
             return Task.CompletedTask;
         });
@@ -124,48 +126,62 @@ public class WorkflowYamlScriptParityTests
 
     private static async Task<string> RunScriptUppercaseAsync(string prompt)
     {
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
-                ScriptId: "parity-uppercase-script",
-                Revision: "rev-1",
-                Source: BuildParityScriptSource()),
-            CancellationToken.None);
+        await using var provider = ClaimIntegrationTestKit.BuildProvider();
+        var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
+        var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
+        var commandPort = provider.GetRequiredService<IScriptRuntimeCommandPort>();
+        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
+        var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        compilation.IsSuccess.Should().BeTrue("script must compile for parity check");
-        compilation.CompiledDefinition.Should().NotBeNull();
-        var definition = compilation.CompiledDefinition!;
-        await using var _ = definition as IAsyncDisposable;
+        const string definitionActorId = "yaml-script-parity-definition";
+        const string runtimeActorId = "yaml-script-parity-runtime";
+        const string revision = "rev-1";
 
-        var payload = Any.Pack(new Struct
+        await definitionPort.UpsertDefinitionAsync(
+            scriptId: "yaml-script-parity",
+            scriptRevision: revision,
+            sourceText: TextNormalizationProtocolSampleActors.Source,
+            sourceHash: TextNormalizationProtocolSampleActors.SourceHash,
+            definitionActorId: definitionActorId,
+            ct: CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
+        lease.Should().NotBeNull();
+        await using var sink = new EventChannel<EventEnvelope>(capacity: 16);
+        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+
+        try
         {
-            Fields =
-            {
-                ["prompt"] = Google.Protobuf.WellKnownTypes.Value.ForString(prompt),
-            },
-        });
+            await commandPort.RunRuntimeAsync(
+                runtimeActorId,
+                "run-parity",
+                Any.Pack(new TextNormalizationRequested
+                {
+                    CommandId = "run-parity",
+                    InputText = prompt,
+                }),
+                revision,
+                definitionActorId,
+                TextNormalizationRequested.Descriptor.FullName,
+                CancellationToken.None);
+            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                "run-parity",
+                CancellationToken.None);
 
-        var decision = await definition.HandleRequestedEventAsync(
-            new ScriptRequestedEventEnvelope(
-                EventType: "chat.requested",
-                Payload: payload,
-                EventId: "evt-parity-1",
-                CorrelationId: "corr-parity-1",
-                CausationId: "cause-parity-1"),
-            new ScriptExecutionContext(
-                ActorId: "runtime-script-parity",
-                ScriptId: "parity-uppercase-script",
-                Revision: "rev-1",
-                RunId: "run-parity-1",
-                CorrelationId: "corr-parity-1",
-                InputPayload: payload),
-            CancellationToken.None);
-
-        var outputEvent = decision.DomainEvents.OfType<StringValue>().Single();
-        return outputEvent.Value;
+            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            snapshot.Should().NotBeNull();
+            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>().NormalizedText;
+        }
+        finally
+        {
+            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
+        }
     }
 
-    private static string BuildParityWorkflowYaml() => """
+    private static string BuildParityWorkflowYaml() =>
+        """
         name: yaml_script_parity
         roles:
           - id: transformer
@@ -176,47 +192,5 @@ public class WorkflowYamlScriptParityTests
             type: transform
             parameters:
               op: uppercase
-        """;
-
-    private static string BuildParityScriptSource() => """
-        using System.Collections.Generic;
-        using System.Threading;
-        using System.Threading.Tasks;
-        using Aevatar.Scripting.Abstractions.Definitions;
-        using Google.Protobuf;
-        using Google.Protobuf.WellKnownTypes;
-
-        public sealed class ParityUppercaseScript : IScriptPackageRuntime
-        {
-            public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-                ScriptRequestedEventEnvelope requestedEvent,
-                ScriptExecutionContext context,
-                CancellationToken ct)
-            {
-                ct.ThrowIfCancellationRequested();
-                var prompt = string.Empty;
-                if (context.InputPayload != null && context.InputPayload.Is(Struct.Descriptor))
-                {
-                    var input = context.InputPayload.Unpack<Struct>();
-                    if (input.Fields.TryGetValue("prompt", out var promptValue))
-                        prompt = promptValue.StringValue ?? string.Empty;
-                }
-
-                return Task.FromResult(new ScriptHandlerResult(
-                    new IMessage[] { new StringValue { Value = prompt.ToUpperInvariant() } }));
-            }
-
-            public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-                IReadOnlyDictionary<string, Any> currentState,
-                ScriptDomainEventEnvelope domainEvent,
-                CancellationToken ct)
-                => ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-            public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-                IReadOnlyDictionary<string, Any> currentReadModel,
-                ScriptDomainEventEnvelope domainEvent,
-                CancellationToken ct)
-                => ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-        }
         """;
 }

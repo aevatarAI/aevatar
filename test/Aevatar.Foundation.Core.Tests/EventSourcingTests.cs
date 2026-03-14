@@ -119,6 +119,30 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenNewEventIsRaisedDuringAppend_ShouldKeepUncommittedSuffix()
+    {
+        var store = new ReentrantAppendEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-reentrant");
+        store.OnFirstAppend = () => behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(1);
+        var firstCommit = await store.GetEventsAsync("agent-reentrant");
+        firstCommit.Count.ShouldBe(1);
+        firstCommit[0].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(1);
+
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(2);
+        var replayed = await behavior.ReplayAsync("agent-reentrant");
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(3);
+    }
+
+    [Fact]
     public async Task PersistSnapshotAsync_WhenSnapshotStrategyMatches_ShouldPersistSnapshot()
     {
         var store = new InMemoryEventStore();
@@ -318,6 +342,41 @@ public class EventSourcingBehaviorTests
             _ = ct;
             throw new InvalidOperationException("snapshot-store-failure");
         }
+    }
+
+    private sealed class ReentrantAppendEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+
+        public Action? OnFirstAppend { get; set; }
+
+        public async Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var result = await _inner.AppendAsync(agentId, events, expectedVersion, ct);
+            var callback = OnFirstAppend;
+            OnFirstAppend = null;
+            callback?.Invoke();
+            return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 }
 

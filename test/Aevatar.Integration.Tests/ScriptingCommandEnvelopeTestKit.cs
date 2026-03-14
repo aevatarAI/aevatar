@@ -1,61 +1,79 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Application;
-using Google.Protobuf.WellKnownTypes;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Aevatar.Integration.Tests;
 
 internal static class ScriptingCommandEnvelopeTestKit
 {
-    public static EventEnvelope CreateUpsertDefinition(
-        string definitionActorId,
-        string scriptId,
-        string revision,
-        string sourceText,
-        string sourceHash)
-    {
-        return ScriptingActorRequestEnvelopeFactory.Create(
-            definitionActorId,
-            revision,
-            new UpsertScriptDefinitionRequestedEvent
+    public static readonly string UppercaseBehaviorSource =
+        """
+        using System;
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Aevatar.Integration.Tests.Protocols;
+        using Aevatar.Scripting.Abstractions;
+        using Aevatar.Scripting.Abstractions.Behaviors;
+
+        public sealed class IntegrationUppercaseBehavior : ScriptBehavior<TextNormalizationReadModel, TextNormalizationReadModel>
+        {
+            protected override void Configure(IScriptBehaviorBuilder<TextNormalizationReadModel, TextNormalizationReadModel> builder)
             {
-                ScriptId = scriptId,
-                ScriptRevision = revision,
-                SourceText = sourceText,
-                SourceHash = sourceHash,
-            });
-    }
+                builder
+                    .OnCommand<TextNormalizationRequested>(HandleAsync)
+                    .OnEvent<TextNormalizationCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current)
+                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+            }
 
-    public static EventEnvelope CreateRunScript(
-        string runtimeActorId,
-        string runId,
-        Any? inputPayload,
-        string scriptRevision,
-        string definitionActorId,
-        string requestedEventType = "")
-    {
-        return ScriptingActorRequestEnvelopeFactory.Create(
-            runtimeActorId,
-            runId,
-            new RunScriptRequestedEvent
+            private static Task HandleAsync(
+                TextNormalizationRequested inbound,
+                ScriptCommandContext<TextNormalizationReadModel> context,
+                CancellationToken ct)
             {
-                RunId = runId,
-                InputPayload = inputPayload?.Clone(),
-                ScriptRevision = scriptRevision,
-                DefinitionActorId = definitionActorId,
-                RequestedEventType = requestedEventType,
-            });
-    }
+                ct.ThrowIfCancellationRequested();
+                context.Emit(new TextNormalizationCompleted
+                {
+                    CommandId = inbound.CommandId ?? string.Empty,
+                    Current = new TextNormalizationReadModel
+                    {
+                        HasValue = true,
+                        LastCommandId = inbound.CommandId ?? string.Empty,
+                        InputText = inbound.InputText ?? string.Empty,
+                        NormalizedText = (inbound.InputText ?? string.Empty).Trim().ToUpperInvariant(),
+                        Lookup = new TextNormalizationLookup
+                        {
+                            Normalized = (inbound.InputText ?? string.Empty).Trim().ToUpperInvariant(),
+                        },
+                        Refs = new TextNormalizationRefs
+                        {
+                            ProfileId = inbound.CommandId ?? string.Empty,
+                        },
+                    },
+                });
+                return Task.CompletedTask;
+            }
 
-    public static EventEnvelope CreateRunScript(
-        string runtimeActorId,
-        RunScriptRequestedEvent requestedEvent)
+            private static Task<TextNormalizationQueryResponded?> HandleQueryAsync(
+                TextNormalizationQueryRequested queryPayload,
+                ScriptQueryContext<TextNormalizationReadModel> snapshot,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<TextNormalizationQueryResponded?>(new TextNormalizationQueryResponded
+                {
+                    RequestId = queryPayload.RequestId ?? string.Empty,
+                    Current = snapshot.CurrentReadModel ?? new TextNormalizationReadModel(),
+                });
+            }
+        }
+        """;
+
+    public static readonly string UppercaseBehaviorHash = ComputeSourceHash(UppercaseBehaviorSource);
+
+    public static string ComputeSourceHash(string source)
     {
-        ArgumentNullException.ThrowIfNull(requestedEvent);
-
-        return ScriptingActorRequestEnvelopeFactory.Create(
-            runtimeActorId,
-            requestedEvent.RunId ?? string.Empty,
-            requestedEvent);
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

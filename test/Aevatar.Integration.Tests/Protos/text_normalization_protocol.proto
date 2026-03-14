@@ -4,29 +4,92 @@ package aevatar.protocols;
 
 option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
 
+import "scripting_schema_options.proto";
+import "scripting_runtime_options.proto";
+
 message TextNormalizationReadModel {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "text_normalization"
+    schema_version: "2"
+    store_kinds: "document"
+    store_kinds: "graph"
+    document_indexes: {
+      name: "idx_last_command"
+      paths: "last_command_id"
+      unique: true
+      provider: "document"
+    }
+    document_indexes: {
+      name: "idx_lookup_normalized"
+      paths: "lookup.normalized"
+      provider: "document"
+    }
+    graph_relations: {
+      name: "rel_profile"
+      source_path: "refs.profile_id"
+      target_schema_id: "profile"
+      target_path: "profile_id"
+      cardinality: "many_to_one"
+      provider: "graph"
+    }
+  };
   bool has_value = 1;
-  string last_command_id = 2;
-  string input_text = 3;
-  string normalized_text = 4;
+  string last_command_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string input_text = 3 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
+  string normalized_text = 4 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
+  TextNormalizationLookup lookup = 5;
+  TextNormalizationRefs refs = 6;
+}
+
+message TextNormalizationLookup {
+  string normalized = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+}
+
+message TextNormalizationRefs {
+  string profile_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
 }
 
 message TextNormalizationRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+  };
   string command_id = 1;
   string input_text = 2;
 }
 
 message TextNormalizationCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
   string command_id = 1;
   TextNormalizationReadModel current = 2;
 }
 
 message TextNormalizationQueryRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
+  option (aevatar.scripting.runtime.scripting_query) = {
+    result_full_name: "aevatar.protocols.TextNormalizationQueryResponded"
+  };
   string request_id = 1;
   string reply_stream_id = 2;
 }
 
 message TextNormalizationQueryResponded {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
   string request_id = 1;
   TextNormalizationReadModel current = 2;
 }

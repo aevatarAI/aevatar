@@ -1,18 +1,93 @@
-using Aevatar.AI.Abstractions;
+using System.Security.Cryptography;
+using System.Text;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Integration.Tests;
 using Aevatar.Integration.Tests.Protocols;
-using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Core;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests.TestDoubles.Protocols;
+
+internal static class TextNormalizationProtocolSampleActors
+{
+    public static readonly string Source =
+        """
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Aevatar.Integration.Tests.Protocols;
+        using Aevatar.Scripting.Abstractions;
+        using Aevatar.Scripting.Abstractions.Behaviors;
+
+        public sealed class TextNormalizationBehavior : ScriptBehavior<TextNormalizationReadModel, TextNormalizationReadModel>
+        {
+            protected override void Configure(IScriptBehaviorBuilder<TextNormalizationReadModel, TextNormalizationReadModel> builder)
+            {
+                builder
+                    .OnCommand<TextNormalizationRequested>(HandleRequestedAsync)
+                    .OnEvent<TextNormalizationCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current)
+                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+            }
+
+            private static Task HandleRequestedAsync(
+                TextNormalizationRequested request,
+                ScriptCommandContext<TextNormalizationReadModel> context,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                context.Emit(new TextNormalizationCompleted
+                {
+                    CommandId = request.CommandId,
+                    Current = new TextNormalizationReadModel
+                    {
+                        HasValue = true,
+                        LastCommandId = request.CommandId,
+                        InputText = request.InputText,
+                        NormalizedText = request.InputText.Trim().ToUpperInvariant(),
+                        Lookup = new TextNormalizationLookup
+                        {
+                            Normalized = request.InputText.Trim().ToUpperInvariant(),
+                        },
+                        Refs = new TextNormalizationRefs
+                        {
+                            ProfileId = request.CommandId,
+                        },
+                    },
+                });
+                return Task.CompletedTask;
+            }
+
+            private static Task<TextNormalizationQueryResponded?> HandleQueryAsync(
+                TextNormalizationQueryRequested request,
+                ScriptQueryContext<TextNormalizationReadModel> snapshot,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<TextNormalizationQueryResponded?>(new TextNormalizationQueryResponded
+                {
+                    RequestId = request.RequestId,
+                    Current = snapshot.CurrentReadModel ?? new TextNormalizationReadModel(),
+                });
+            }
+        }
+        """;
+
+    public static readonly string SourceHash = ComputeSourceHash(Source);
+
+    private static string ComputeSourceHash(string source)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+}
 
 public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalizationReadModel>
 {
@@ -21,23 +96,6 @@ public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalization
     {
         var completed = TextNormalizationProtocolSample.BuildCompleted(evt);
         await PersistDomainEventAsync(completed, CancellationToken.None);
-    }
-
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
-            {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
     }
 
     protected override TextNormalizationReadModel TransitionState(
@@ -53,7 +111,8 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
 {
     private const string WorkflowName = "text_normalization_protocol";
     private const string SendStateKey = "protocol.send";
-    private const string WorkflowYaml = """
+    private const string WorkflowYaml =
+        """
         name: text_normalization_protocol
         roles: []
         steps:
@@ -65,16 +124,13 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
 
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
-    private readonly IStreamRequestReplyClient _requestReplyClient;
 
     public TextNormalizationWorkflowProtocolGAgent(
         IActorRuntime runtime,
-        IStreamProvider streams,
-        IStreamRequestReplyClient requestReplyClient)
+        IStreamProvider streams)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
-        _requestReplyClient = requestReplyClient ?? throw new ArgumentNullException(nameof(requestReplyClient));
     }
 
     [EventHandler]
@@ -125,46 +181,13 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
         if (!result.Success)
             throw new InvalidOperationException($"Workflow protocol sample failed: {result.Error}");
 
-        var queryResponse = await _requestReplyClient.QueryActorAsync<TextNormalizationQueryResponded>(
-            _streams,
-            workerActor,
-            "text-normalization-worker-query",
-            TimeSpan.FromSeconds(5),
-            static (requestId, replyStreamId) => CreateProtocolEnvelope(
-                new TextNormalizationQueryRequested
-                {
-                    RequestId = requestId,
-                    ReplyStreamId = replyStreamId,
-                }),
-            static (response, requestId) => string.Equals(response.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Text normalization worker query timed out. request_id={requestId}",
-            CancellationToken.None);
-        var current = queryResponse.Current?.Clone()
-                      ?? new TextNormalizationReadModel();
+        var workerCompleted = TextNormalizationProtocolSample.BuildCompleted(evt);
 
-        var completed = new TextNormalizationCompleted
+        await PersistDomainEventAsync(new TextNormalizationCompleted
         {
             CommandId = evt.CommandId ?? string.Empty,
-            Current = current,
-        };
-        await PersistDomainEventAsync(completed, CancellationToken.None);
-    }
-
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
-            {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
+            Current = workerCompleted.Current?.Clone() ?? new TextNormalizationReadModel(),
+        }, CancellationToken.None);
     }
 
     protected override TextNormalizationReadModel TransitionState(
@@ -196,7 +219,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
                ?? await _runtime.CreateAsync<WorkflowRunGAgent>(actorId, CancellationToken.None);
     }
 
-    private static EventEnvelope CreateProtocolEnvelope(IMessage payload) =>
+    private static EventEnvelope CreateEnvelope(IMessage payload) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -214,77 +237,62 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
 {
     private const string ScriptId = "text-normalization-protocol-script";
     private const string ScriptRevision = "rev-1";
-    private const string ReadModelPayloadKey = "text_normalization.current";
 
-    private readonly IActorRuntime _runtime;
-    private readonly IStreamProvider _streams;
+    private readonly IScriptRuntimeCommandPort _commandPort;
+    private readonly IScriptReadModelQueryApplicationService _queryService;
+    private readonly IScriptExecutionProjectionPort _projectionPort;
 
     public TextNormalizationScriptingProtocolGAgent(
-        IActorRuntime runtime,
-        IStreamProvider streams)
+        IScriptRuntimeCommandPort commandPort,
+        IScriptReadModelQueryApplicationService queryService,
+        IScriptExecutionProjectionPort projectionPort)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _streams = streams ?? throw new ArgumentNullException(nameof(streams));
+        _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
     [EventHandler]
     public async Task HandleRequested(TextNormalizationRequested evt)
     {
-        var definitionActor = await EnsureDefinitionActorAsync();
-        var runtimeActor = await EnsureRuntimeActorAsync();
+        var definitionActorId = $"{Id}:script-definition";
+        var runtimeActorId = $"{Id}:script-runtime";
         var runId = evt.CommandId ?? string.Empty;
 
-        await definitionActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActor.Id,
-                ScriptId,
+        var lease = await _projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None)
+            ?? throw new InvalidOperationException("Script projection lease is required for text normalization sample.");
+        await using var sink = new EventChannel<EventEnvelope>(capacity: 16);
+        await _projectionPort.AttachLiveSinkAsync(lease, sink, CancellationToken.None);
+
+        try
+        {
+            await _commandPort.RunRuntimeAsync(
+                runtimeActorId,
+                runId,
+                Any.Pack(evt),
                 ScriptRevision,
-                TextNormalizationProtocolSample.ScriptSource,
-                "text-normalization-protocol-hash"),
-            CancellationToken.None);
-        var committedObservation = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            _streams,
-            runtimeActor.Id,
-            runId,
-            () => runtimeActor.HandleEventAsync(
-                ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                    runtimeActor.Id,
-                    runId,
-                    Any.Pack(evt),
-                    ScriptRevision,
-                    definitionActor.Id,
-                    TextNormalizationRequested.Descriptor.FullName),
-                CancellationToken.None),
-            CancellationToken.None);
+                definitionActorId,
+                TextNormalizationRequested.Descriptor.FullName,
+                CancellationToken.None);
+            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                runId,
+                CancellationToken.None);
 
-        if (!committedObservation.Event.ReadModelPayloads.TryGetValue(ReadModelPayloadKey, out var packedReadModel))
-        {
-            throw new InvalidOperationException("Scripting protocol sample did not persist read model payload.");
-        }
+            var snapshot = await _queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None)
+                ?? throw new InvalidOperationException("Text normalization script read model snapshot was not produced.");
 
-        var completed = new TextNormalizationCompleted
-        {
-            CommandId = evt.CommandId ?? string.Empty,
-            Current = packedReadModel.Unpack<TextNormalizationReadModel>(),
-        };
-        await PersistDomainEventAsync(completed, CancellationToken.None);
-    }
-
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
+            await PersistDomainEventAsync(new TextNormalizationCompleted
             {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
+                CommandId = evt.CommandId ?? string.Empty,
+                Current = snapshot.ReadModelPayload?.Unpack<TextNormalizationReadModel>() ?? new TextNormalizationReadModel(),
+            }, CancellationToken.None);
+        }
+        finally
+        {
+            await _projectionPort.DetachLiveSinkAsync(lease, sink, CancellationToken.None);
+            await _projectionPort.ReleaseActorProjectionAsync(lease, CancellationToken.None);
+        }
     }
 
     protected override TextNormalizationReadModel TransitionState(
@@ -294,90 +302,10 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
             .Match(current, evt)
             .On<TextNormalizationCompleted>((_, completed) => completed.Current?.Clone() ?? new TextNormalizationReadModel())
             .OrCurrent();
-
-    private async Task<IActor> EnsureDefinitionActorAsync()
-    {
-        var actorId = $"{Id}:script-definition";
-        return await _runtime.GetAsync(actorId)
-               ?? await _runtime.CreateAsync<ScriptDefinitionGAgent>(actorId, CancellationToken.None);
-    }
-
-    private async Task<IActor> EnsureRuntimeActorAsync()
-    {
-        var actorId = $"{Id}:script-runtime";
-        return await _runtime.GetAsync(actorId)
-               ?? await _runtime.CreateAsync<ScriptRuntimeGAgent>(actorId, CancellationToken.None);
-    }
 }
 
 internal static class TextNormalizationProtocolSample
 {
-    public static readonly string ScriptSource = """
-        using System.Collections.Generic;
-        using System.Threading;
-        using System.Threading.Tasks;
-        using Aevatar.Integration.Tests.Protocols;
-        using Aevatar.Scripting.Abstractions.Definitions;
-        using Google.Protobuf;
-        using Google.Protobuf.WellKnownTypes;
-
-        public sealed class TextNormalizationProtocolScript : IScriptPackageRuntime
-        {
-            public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-                ScriptRequestedEventEnvelope requestedEvent,
-                ScriptExecutionContext context,
-                CancellationToken ct)
-            {
-                ct.ThrowIfCancellationRequested();
-                var request = context.InputPayload != null && context.InputPayload.Is(TextNormalizationRequested.Descriptor)
-                    ? context.InputPayload.Unpack<TextNormalizationRequested>()
-                    : new TextNormalizationRequested();
-                var current = new TextNormalizationReadModel
-                {
-                    HasValue = true,
-                    LastCommandId = request.CommandId ?? string.Empty,
-                    InputText = request.InputText ?? string.Empty,
-                    NormalizedText = Normalize(request.InputText ?? string.Empty),
-                };
-                return Task.FromResult(new ScriptHandlerResult(
-                    new IMessage[]
-                    {
-                        new TextNormalizationCompleted
-                        {
-                            CommandId = request.CommandId ?? string.Empty,
-                            Current = current,
-                        },
-                    }));
-            }
-
-            public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-                IReadOnlyDictionary<string, Any> currentState,
-                ScriptDomainEventEnvelope domainEvent,
-                CancellationToken ct)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (domainEvent.Payload == null || !domainEvent.Payload.Is(TextNormalizationCompleted.Descriptor))
-                    return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-                var completed = domainEvent.Payload.Unpack<TextNormalizationCompleted>();
-                return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-                    new Dictionary<string, Any>
-                    {
-                        ["text_normalization.current"] = Any.Pack(completed.Current ?? new TextNormalizationReadModel()),
-                    });
-            }
-
-            public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-                IReadOnlyDictionary<string, Any> currentReadModel,
-                ScriptDomainEventEnvelope domainEvent,
-                CancellationToken ct)
-                => ApplyDomainEventAsync(currentReadModel, domainEvent, ct);
-
-            private static string Normalize(string input) =>
-                (input ?? string.Empty).Trim().ToUpperInvariant();
-        }
-        """;
-
     public static TextNormalizationCompleted BuildCompleted(TextNormalizationRequested request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -391,6 +319,14 @@ internal static class TextNormalizationProtocolSample
                 LastCommandId = request.CommandId ?? string.Empty,
                 InputText = request.InputText ?? string.Empty,
                 NormalizedText = Normalize(request.InputText ?? string.Empty),
+                Lookup = new TextNormalizationLookup
+                {
+                    Normalized = Normalize(request.InputText ?? string.Empty),
+                },
+                Refs = new TextNormalizationRefs
+                {
+                    ProfileId = request.CommandId ?? string.Empty,
+                },
             },
         };
     }

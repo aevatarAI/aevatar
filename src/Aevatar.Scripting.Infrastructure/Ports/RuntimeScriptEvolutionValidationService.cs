@@ -1,14 +1,14 @@
-using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Abstractions.Definitions;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptEvolutionValidationService : IScriptEvolutionValidationService
 {
-    private readonly IScriptPackageCompiler _compiler;
+    private readonly IScriptBehaviorCompiler _compiler;
 
-    public RuntimeScriptEvolutionValidationService(IScriptPackageCompiler compiler)
+    public RuntimeScriptEvolutionValidationService(IScriptBehaviorCompiler compiler)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
     }
@@ -19,12 +19,12 @@ public sealed class RuntimeScriptEvolutionValidationService : IScriptEvolutionVa
     {
         ArgumentNullException.ThrowIfNull(proposal);
 
-        var compilation = await _compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
+        ct.ThrowIfCancellationRequested();
+        var compilation = _compiler.Compile(
+            ScriptBehaviorCompilationRequest.FromPersistedSource(
                 proposal.ScriptId ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
-                proposal.CandidateSource ?? string.Empty),
-            ct);
+                proposal.CandidateSource ?? string.Empty));
         try
         {
             return new ScriptEvolutionValidationReport(
@@ -33,19 +33,13 @@ public sealed class RuntimeScriptEvolutionValidationService : IScriptEvolutionVa
         }
         finally
         {
-            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            await DisposeCompiledArtifactAsync(compilation.Artifact);
         }
     }
 
-    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
+    private static async Task DisposeCompiledArtifactAsync(Aevatar.Scripting.Core.Runtime.ScriptBehaviorArtifact? artifact)
     {
-        if (definition is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (definition is IDisposable disposable)
-            disposable.Dispose();
+        if (artifact != null)
+            await artifact.DisposeAsync();
     }
 }

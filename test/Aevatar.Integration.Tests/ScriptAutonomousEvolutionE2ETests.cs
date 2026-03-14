@@ -1,9 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Scripting.Application;
+using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,16 +9,12 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.Integration.Tests;
 
 [Trait("Category", "Slow")]
-public class ScriptAutonomousEvolutionE2ETests
+public sealed class ScriptAutonomousEvolutionE2ETests
 {
     [Fact]
     public async Task ScriptOnlyFlow_ShouldSpawnTempAndNewAgents_AndPromoteEvolution()
     {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-
-        using var provider = services.BuildServiceProvider();
+        await using var provider = ScriptEvolutionIntegrationTestKit.BuildProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
 
@@ -28,54 +22,70 @@ public class ScriptAutonomousEvolutionE2ETests
         const string orchestratorDefinitionActorId = "orchestrator-definition";
         const string orchestratorRuntimeActorId = "orchestrator-runtime";
 
-        var workerDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(workerDefinitionActorId);
-        await workerDefinition.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                workerDefinitionActorId,
-                "worker-script",
-                "rev-worker-1",
-                WorkerRuntimeV1Source,
-                "hash-worker-1"),
+        var workerV1Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+            "WorkerScriptV1",
+            "WORKER-V1",
+            "worker_normalization",
+            "1");
+        var workerV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+            "WorkerScriptV2",
+            "WORKER-V2",
+            "worker_normalization",
+            "2");
+        var newRuntimeSource = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+            "NewRuntimeScript",
+            "NEW-V1",
+            "new_runtime_normalization",
+            "1");
+
+        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+            provider,
+            scriptId: "worker-script",
+            revision: "rev-worker-1",
+            sourceText: workerV1Source,
+            definitionActorId: workerDefinitionActorId,
+            ct: CancellationToken.None);
+        await ScriptEvolutionIntegrationTestKit.UpsertDefinitionAsync(
+            provider,
+            scriptId: "orchestrator-script",
+            revision: "rev-orchestrator-1",
+            sourceText: ScriptEvolutionIntegrationSources.ScriptOnlyOrchestratorSource,
+            definitionActorId: orchestratorDefinitionActorId,
+            ct: CancellationToken.None);
+        await ScriptEvolutionIntegrationTestKit.EnsureRuntimeAsync(
+            provider,
+            orchestratorDefinitionActorId,
+            "rev-orchestrator-1",
+            orchestratorRuntimeActorId,
             CancellationToken.None);
 
-        var orchestratorDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(orchestratorDefinitionActorId);
-        await orchestratorDefinition.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                orchestratorDefinitionActorId,
-                "orchestrator-script",
-                "rev-orchestrator-1",
-                ScriptOnlyOrchestratorSource,
-                "hash-orchestrator-1"),
-            CancellationToken.None);
+        var input = new ScriptOnlyEvolutionRequested
+        {
+            NewScriptSource = newRuntimeSource,
+            WorkerV2Source = workerV2Source,
+        };
 
-        var orchestratorRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(orchestratorRuntimeActorId);
-        await orchestratorRuntime.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                orchestratorRuntimeActorId,
-                "run-autonomy-1",
-                Any.Pack(new Struct
-                {
-                    Fields =
-                    {
-                        ["newScriptSource"] = Google.Protobuf.WellKnownTypes.Value.ForString(NewRuntimeSource),
-                        ["workerV2Source"] = Google.Protobuf.WellKnownTypes.Value.ForString(WorkerRuntimeV2Source),
-                    },
-                }),
-                "rev-orchestrator-1",
-                orchestratorDefinitionActorId,
-                "script.autonomous.orchestrate"),
-            CancellationToken.None);
+        var (fact, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
+            provider,
+            runtimeActorId: orchestratorRuntimeActorId,
+            runId: "run-autonomy-1",
+            inputPayload: Any.Pack(input),
+            revision: "rev-orchestrator-1",
+            definitionActorId: orchestratorDefinitionActorId,
+            requestedEventType: "script.autonomous.orchestrate",
+            ct: CancellationToken.None);
 
-        var summary = ((ScriptRuntimeGAgent)orchestratorRuntime.Agent)
-            .State
-            .StatePayloads["summary"]
-            .Unpack<Struct>();
+        fact.DomainEventPayload.Should().NotBeNull();
+        fact.DomainEventPayload!.Is(ScriptOnlyEvolutionCompleted.Descriptor).Should().BeTrue();
 
-        var tempRuntimeId = summary.Fields["temp_runtime_id"].StringValue;
-        var newRuntimeId = summary.Fields["new_runtime_id"].StringValue;
-        var evolvedRuntimeId = summary.Fields["evolved_runtime_id"].StringValue;
-        var newDefinitionActorId = summary.Fields["new_definition_actor_id"].StringValue;
-        var decisionStatus = summary.Fields["decision_status"].StringValue;
+        snapshot.ReadModelPayload.Should().NotBeNull();
+        var summary = snapshot.ReadModelPayload!.Unpack<ScriptOnlyEvolutionState>();
+
+        var tempRuntimeId = summary.TempRuntimeId;
+        var newRuntimeId = summary.NewRuntimeId;
+        var evolvedRuntimeId = summary.EvolvedRuntimeId;
+        var newDefinitionActorId = summary.NewDefinitionActorId;
+        var decisionStatus = summary.DecisionStatus;
 
         decisionStatus.Should().Be("promoted");
         (await runtime.ExistsAsync(tempRuntimeId)).Should().BeTrue();
@@ -83,256 +93,51 @@ public class ScriptAutonomousEvolutionE2ETests
         (await runtime.ExistsAsync(evolvedRuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(newDefinitionActorId)).Should().BeTrue();
 
-        var manager = ((ScriptEvolutionManagerGAgent)(await runtime.GetAsync("script-evolution-manager"))!.Agent);
+        var tempRuntimeSnapshot = await ScriptEvolutionIntegrationTestKit.QueryNormalizationAsync(
+            provider,
+            tempRuntimeId,
+            "temp-query",
+            CancellationToken.None);
+        tempRuntimeSnapshot.NormalizedText.Should().Be("WORKER-V1:TEMP");
+
+        var newRuntimeSnapshot = await ScriptEvolutionIntegrationTestKit.QueryNormalizationAsync(
+            provider,
+            newRuntimeId,
+            "new-query",
+            CancellationToken.None);
+        newRuntimeSnapshot.NormalizedText.Should().Be("NEW-V1:NEW");
+
+        var evolvedRuntimeSnapshot = await ScriptEvolutionIntegrationTestKit.QueryNormalizationAsync(
+            provider,
+            evolvedRuntimeId,
+            "evolved-query",
+            CancellationToken.None);
+        evolvedRuntimeSnapshot.NormalizedText.Should().Be("WORKER-V2:EVOLVED");
+
+        var managerActor = await runtime.GetAsync("script-evolution-manager");
+        managerActor.Should().NotBeNull();
+        var manager = managerActor!.Agent.Should().BeOfType<ScriptEvolutionManagerGAgent>().Subject;
         manager.State.Proposals.Should().ContainKey("proposal-run-autonomy-1");
         manager.State.Proposals["proposal-run-autonomy-1"].Status.Should().Be("promoted");
 
-        var catalog = ((ScriptCatalogGAgent)(await runtime.GetAsync("script-catalog"))!.Agent);
-        catalog.State.Entries.Should().ContainKey("worker-script");
-        catalog.State.Entries["worker-script"].ActiveRevision.Should().Be("rev-worker-2");
-        catalog.State.Entries["worker-script"].ActiveDefinitionActorId.Should().Be("script-definition:worker-script");
+        var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
+            provider,
+            "worker-script",
+            CancellationToken.None,
+            expectedRevision: "rev-worker-2");
+        catalogEntry.Should().NotBeNull();
+        catalogEntry!.ActiveRevision.Should().Be("rev-worker-2");
+        catalogEntry.ActiveDefinitionActorId.Should().Be("script-definition:worker-script");
 
-        var promotedWorkerDefinitionActorId = catalog.State.Entries["worker-script"].ActiveDefinitionActorId;
-        var promotedWorkerDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(promotedWorkerDefinitionActorId))!.Agent;
-        promotedWorkerDefinition.State.Revision.Should().Be("rev-worker-2");
-
-        var evolvedRuntime = (ScriptRuntimeGAgent)(await runtime.GetAsync(evolvedRuntimeId))!.Agent;
-        evolvedRuntime.State.Revision.Should().Be("rev-worker-2");
+        var promotedWorkerDefinition = await ScriptEvolutionIntegrationTestKit.GetDefinitionSnapshotAsync(
+            provider,
+            catalogEntry.ActiveDefinitionActorId,
+            "rev-worker-2",
+            CancellationToken.None);
+        promotedWorkerDefinition.ScriptId.Should().Be("worker-script");
+        promotedWorkerDefinition.Revision.Should().Be("rev-worker-2");
 
         var events = await eventStore.GetEventsAsync(orchestratorRuntimeActorId, ct: CancellationToken.None);
-        events.Should().Contain(x => x.EventData != null && x.EventData.Is(ScriptRunDomainEventCommitted.Descriptor));
+        events.Should().Contain(x => x.EventData != null && x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
     }
-
-    private const string ScriptOnlyOrchestratorSource = """
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class ScriptOnlyOrchestrator : IScriptPackageRuntime
-{
-    public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        var input = requestedEvent.Payload.Unpack<Struct>();
-        var newScriptSource = input.Fields["newScriptSource"].StringValue;
-        var workerV2Source = input.Fields["workerV2Source"].StringValue;
-
-        var tempRuntimeId = await context.Capabilities!.SpawnScriptRuntimeAsync(
-            "worker-definition",
-            "rev-worker-1",
-            "worker-temp-" + context.RunId,
-            ct);
-        await context.Capabilities.RunScriptInstanceAsync(
-            tempRuntimeId,
-            "worker-temp-run-" + context.RunId,
-            Any.Pack(new Struct()),
-            "rev-worker-1",
-            "worker-definition",
-            "worker.temp.run",
-            ct);
-
-        var newDefinitionActorId = await context.Capabilities.UpsertScriptDefinitionAsync(
-            "new-script",
-            "rev-new-1",
-            newScriptSource,
-            "hash-new-1",
-            "new-definition",
-            ct);
-        var newRuntimeId = await context.Capabilities.SpawnScriptRuntimeAsync(
-            newDefinitionActorId,
-            "rev-new-1",
-            "new-runtime-" + context.RunId,
-            ct);
-        await context.Capabilities.RunScriptInstanceAsync(
-            newRuntimeId,
-            "new-run-" + context.RunId,
-            Any.Pack(new Struct()),
-            "rev-new-1",
-            newDefinitionActorId,
-            "new.runtime.run",
-            ct);
-
-        var decision = await context.Capabilities.ProposeScriptEvolutionAsync(
-            new ScriptEvolutionProposal(
-                ProposalId: "proposal-" + context.RunId,
-                ScriptId: "worker-script",
-                BaseRevision: "rev-worker-1",
-                CandidateRevision: "rev-worker-2",
-                CandidateSource: workerV2Source,
-                CandidateSourceHash: "hash-worker-2",
-                Reason: "script-only autonomous promotion"),
-            ct);
-
-        var evolvedRuntimeId = string.Empty;
-        if (decision.Accepted)
-        {
-            evolvedRuntimeId = await context.Capabilities.SpawnScriptRuntimeAsync(
-                decision.DefinitionActorId,
-                decision.CandidateRevision,
-                "worker-evolved-" + context.RunId,
-                ct);
-            await context.Capabilities.RunScriptInstanceAsync(
-                evolvedRuntimeId,
-                "worker-evolved-run-" + context.RunId,
-                Any.Pack(new Struct()),
-                decision.CandidateRevision,
-                decision.DefinitionActorId,
-                "worker.evolved.run",
-                ct);
-        }
-
-        var summary = new Struct
-        {
-            Fields =
-            {
-                ["temp_runtime_id"] = Value.ForString(tempRuntimeId),
-                ["new_runtime_id"] = Value.ForString(newRuntimeId),
-                ["evolved_runtime_id"] = Value.ForString(evolvedRuntimeId),
-                ["new_definition_actor_id"] = Value.ForString(newDefinitionActorId),
-                ["decision_status"] = Value.ForString(decision.Status),
-            },
-        };
-
-        return new ScriptHandlerResult(
-            new IMessage[]
-            {
-                new StringValue { Value = "ScriptOnlyOrchestrationCompleted" },
-            },
-            new Dictionary<string, Any>
-            {
-                ["summary"] = Any.Pack(summary),
-            },
-            new Dictionary<string, Any>
-            {
-                ["summary"] = Any.Pack(summary),
-            });
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-    private const string WorkerRuntimeV1Source = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class WorkerScriptV1 : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "WorkerV1CompletedEvent" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-    private const string WorkerRuntimeV2Source = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class WorkerScriptV2 : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "WorkerV2CompletedEvent" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-    private const string NewRuntimeSource = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class NewRuntimeScript : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "NewScriptCompletedEvent" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
 }

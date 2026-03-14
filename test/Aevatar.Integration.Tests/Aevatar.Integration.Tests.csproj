@@ -8,11 +8,6 @@
     <RootNamespace>Aevatar.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="Orleans3ClusterIntegrationFactAttribute.cs" />
-    <Compile Remove="ScriptAutonomousEvolutionComprehensiveE2ETests.cs" />
-    <Compile Remove="ScriptAutonomousEvolutionE2ETests.cs" />
-    <Compile Remove="ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs" />
-    <Compile Remove="ScriptExternalEvolutionE2ETests.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
@@ -46,8 +41,18 @@
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="Protos/text_normalization_protocol.proto" GrpcServices="None" />
-    <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto" GrpcServices="None" />
+    <Protobuf Include="Protos/claim_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/text_normalization_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/script_evolution_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

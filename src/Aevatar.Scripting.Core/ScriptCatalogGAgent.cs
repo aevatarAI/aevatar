@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -93,51 +94,6 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         });
     }
 
-    [EventHandler]
-    public async Task HandleQueryScriptCatalogEntryRequested(QueryScriptCatalogEntryRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return;
-
-        if (string.IsNullOrWhiteSpace(evt.ScriptId))
-        {
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptCatalogEntryRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                FailureReason = "ScriptId is required.",
-            });
-            return;
-        }
-
-        if (!State.Entries.TryGetValue(evt.ScriptId, out var entry))
-        {
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptCatalogEntryRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                ScriptId = evt.ScriptId,
-                FailureReason = $"Script `{evt.ScriptId}` not found in catalog.",
-            });
-            return;
-        }
-
-        var responded = new ScriptCatalogEntryRespondedEvent
-        {
-            RequestId = evt.RequestId,
-            Found = true,
-            ScriptId = entry.ScriptId ?? string.Empty,
-            ActiveRevision = entry.ActiveRevision ?? string.Empty,
-            ActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty,
-            ActiveSourceHash = entry.ActiveSourceHash ?? string.Empty,
-            PreviousRevision = entry.PreviousRevision ?? string.Empty,
-            LastProposalId = entry.LastProposalId ?? string.Empty,
-        };
-        responded.RevisionHistory.Add(entry.RevisionHistory);
-        await SendQueryResponseAsync(evt.ReplyStreamId, responded);
-    }
-
     protected override ScriptCatalogState TransitionState(ScriptCatalogState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -145,14 +101,6 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             .On<ScriptCatalogRollbackRequestedEvent>(ApplyRollbackRequested)
             .On<ScriptCatalogRolledBackEvent>(ApplyRolledBack)
             .OrCurrent();
-
-    private Task SendQueryResponseAsync(
-        string replyStreamId,
-        ScriptCatalogEntryRespondedEvent response,
-        CancellationToken ct = default)
-    {
-        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
-    }
 
     private static ScriptCatalogState ApplyPromoted(
         ScriptCatalogState state,

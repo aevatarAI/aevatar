@@ -1,8 +1,11 @@
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
@@ -17,14 +20,17 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     private const string SchemaStatusDeclared = "declared";
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
-    private readonly IScriptPackageCompiler _compiler;
+    private readonly IScriptBehaviorCompiler _compiler;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
     public ScriptDefinitionGAgent(
-        IScriptPackageCompiler compiler,
+        IScriptBehaviorCompiler compiler,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _schemaActivationPolicy = schemaActivationPolicy ?? throw new ArgumentNullException(nameof(schemaActivationPolicy));
         InitializeId();
     }
@@ -33,16 +39,23 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     public async Task HandleUpsertScriptDefinitionRequested(UpsertScriptDefinitionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        var sourceText = evt.SourceText ?? string.Empty;
-        var compilation = await _compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(
+        var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(evt.SourceText ?? string.Empty);
+        var scriptPackage = evt.ScriptPackage?.Clone();
+        if (scriptPackage == null || scriptPackage.CsharpSources.Count == 0)
+            scriptPackage = ScriptPackageModel.ToPackageSpec(parsedPackage);
+        var sourceText = ScriptPackageModel.GetEntrySourceText(scriptPackage);
+        var packageHash = string.IsNullOrWhiteSpace(evt.SourceHash)
+            ? ScriptPackageModel.ComputePackageHash(scriptPackage)
+            : evt.SourceHash;
+        var compilation = _compiler.Compile(
+            new ScriptBehaviorCompilationRequest(
                 evt.ScriptId ?? string.Empty,
                 evt.ScriptRevision ?? string.Empty,
-                sourceText),
-            CancellationToken.None);
+                scriptPackage,
+                packageHash));
         try
         {
-            if (!compilation.IsSuccess || compilation.ContractManifest == null)
+            if (!compilation.IsSuccess || compilation.Artifact == null)
                 throw new InvalidOperationException(
                     "Script definition compilation failed: " + string.Join("; ", compilation.Diagnostics));
 
@@ -51,11 +64,15 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             var readModelSchemaVersion = string.Empty;
             IReadOnlyList<string> readModelSchemaStoreKinds = Array.Empty<string>();
             var hasReadModelSchema = false;
-            var extracted = ScriptReadModelDefinitionExtraction.Empty;
-            if (ScriptReadModelDefinitionExtractor.TryExtractFromContract(
-                    compilation.ContractManifest,
+            var extracted = ScriptSchemaDescriptorExtraction.Empty;
+            if (ScriptSchemaDescriptorExtractor.TryExtractFromDescriptor(
+                    compilation.Artifact.Descriptor,
                     out extracted))
             {
+                _ = _materializationCompiler.GetOrCompile(
+                    compilation.Artifact,
+                    extracted.SchemaHash,
+                    extracted.SchemaVersion);
                 hasReadModelSchema = true;
                 readModelSchema = extracted.SchemaPayload.Clone();
                 readModelSchemaHash = extracted.SchemaHash;
@@ -68,11 +85,22 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ScriptId = evt.ScriptId ?? string.Empty,
                 ScriptRevision = evt.ScriptRevision ?? string.Empty,
                 SourceText = sourceText,
-                SourceHash = evt.SourceHash ?? string.Empty,
+                SourceHash = packageHash,
                 ReadModelSchema = readModelSchema,
                 ReadModelSchemaHash = readModelSchemaHash,
                 ReadModelSchemaVersion = readModelSchemaVersion,
                 ReadModelSchemaStoreKinds = { readModelSchemaStoreKinds },
+                StateTypeUrl = compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,
+                ReadModelTypeUrl = compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
+                CommandTypeUrls = { compilation.Artifact.Contract.CommandTypeUrls },
+                DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
+                QueryTypeUrls = { compilation.Artifact.Contract.QueryTypeUrls },
+                InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
+                ScriptPackage = scriptPackage,
+                ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
+                StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
+                ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
+                RuntimeSemantics = compilation.Artifact.Contract.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
             });
 
             if (!hasReadModelSchema)
@@ -89,8 +117,8 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             });
 
             var activation = _schemaActivationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
-                RequiresDocumentStore: extracted.Definition.Fields.Count > 0 || extracted.Definition.Indexes.Count > 0,
-                RequiresGraphStore: extracted.Definition.Relations.Count > 0,
+                RequiresDocumentStore: extracted.RequiresDocumentStore,
+                RequiresGraphStore: extracted.RequiresGraphStore,
                 DeclaredProviderHints: extracted.StoreCapabilities));
             if (activation.IsActivated)
             {
@@ -119,62 +147,8 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         }
         finally
         {
-            await DisposeCompiledDefinitionAsync(compilation.CompiledDefinition);
+            await DisposeCompiledArtifactAsync(compilation.Artifact);
         }
-    }
-
-    [EventHandler]
-    public async Task HandleQueryScriptDefinitionSnapshotRequested(QueryScriptDefinitionSnapshotRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return;
-
-        Logger.LogInformation(
-            "Script definition query received. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision} reply_stream_id={ReplyStreamId}",
-            Id,
-            evt.RequestId,
-            evt.RequestedRevision,
-            State.Revision,
-            evt.ReplyStreamId);
-
-        if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
-            !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
-        {
-            Logger.LogInformation(
-                "Script definition query rejected due to revision mismatch. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision}",
-                Id,
-                evt.RequestId,
-                evt.RequestedRevision,
-                State.Revision);
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                FailureReason = $"Requested revision `{evt.RequestedRevision}` does not match active revision `{State.Revision}`.",
-            });
-            return;
-        }
-
-        Logger.LogInformation(
-            "Script definition query responding. actor_id={ActorId} request_id={RequestId} found={Found} revision={Revision}",
-            Id,
-            evt.RequestId,
-            !string.IsNullOrWhiteSpace(State.SourceText),
-            State.Revision);
-        await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = evt.RequestId,
-            Found = !string.IsNullOrWhiteSpace(State.SourceText),
-            ScriptId = State.ScriptId ?? string.Empty,
-            Revision = State.Revision ?? string.Empty,
-            SourceText = State.SourceText ?? string.Empty,
-            ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
-            ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
-            FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
-                ? "Script source text is empty."
-                : string.Empty,
-        });
     }
 
     protected override ScriptDefinitionState TransitionState(ScriptDefinitionState current, IMessage evt) =>
@@ -186,24 +160,10 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             .On<ScriptReadModelSchemaActivationFailedEvent>(ApplySchemaActivationFailed)
             .OrCurrent();
 
-    private Task SendQueryResponseAsync(
-        string replyStreamId,
-        ScriptDefinitionSnapshotRespondedEvent response,
-        CancellationToken ct = default)
+    private static async Task DisposeCompiledArtifactAsync(ScriptBehaviorArtifact? artifact)
     {
-        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
-    }
-
-    private static async Task DisposeCompiledDefinitionAsync(IScriptPackageDefinition? definition)
-    {
-        if (definition is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-            return;
-        }
-
-        if (definition is IDisposable disposable)
-            disposable.Dispose();
+        if (artifact != null)
+            await artifact.DisposeAsync();
     }
 
     private static ScriptDefinitionState ApplyDefinitionUpserted(
@@ -220,6 +180,21 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty;
         next.ReadModelSchemaStoreKinds.Clear();
         next.ReadModelSchemaStoreKinds.Add(evt.ReadModelSchemaStoreKinds);
+        next.StateTypeUrl = evt.StateTypeUrl ?? string.Empty;
+        next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
+        next.CommandTypeUrls.Clear();
+        next.CommandTypeUrls.Add(evt.CommandTypeUrls);
+        next.DomainEventTypeUrls.Clear();
+        next.DomainEventTypeUrls.Add(evt.DomainEventTypeUrls);
+        next.QueryTypeUrls.Clear();
+        next.QueryTypeUrls.Add(evt.QueryTypeUrls);
+        next.InternalSignalTypeUrls.Clear();
+        next.InternalSignalTypeUrls.Add(evt.InternalSignalTypeUrls);
+        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
+        next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
+        next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
+        next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
+        next.RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
         next.ReadModelSchemaStatus = next.ReadModelSchema == null || next.ReadModelSchema.Is(Empty.Descriptor)
             ? string.Empty
             : SchemaStatusPending;

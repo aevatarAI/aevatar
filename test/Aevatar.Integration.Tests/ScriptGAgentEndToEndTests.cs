@@ -1,206 +1,101 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Core;
+using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
-using Aevatar.Scripting.Projection.Orchestration;
-using Aevatar.Scripting.Projection.Projectors;
-using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Scripting.Projection.Reducers;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
-public class ScriptGAgentEndToEndTests
+public sealed class ScriptGAgentEndToEndTests
 {
     [Fact]
-    public async Task Run_ShouldFlow_DefinitionAndRuntimeEvents_ToProjection()
+    public async Task ProvisionRunAndQuery_ShouldProduceCommittedFactAndReadModel()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
 
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
-        var eventStore = provider.GetRequiredService<IEventStore>();
-        var streams = provider.GetRequiredService<IStreamProvider>();
+        await using var provider = services.BuildServiceProvider();
+        var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
+        var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
+        var commandPort = provider.GetRequiredService<IScriptRuntimeCommandPort>();
+        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
+        var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(
-            "script-definition-" + Guid.NewGuid().ToString("N")[..8]);
-        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(
-            "script-runtime-" + Guid.NewGuid().ToString("N")[..8]);
+        const string definitionActorId = "e2e-script-definition";
+        const string runtimeActorId = "e2e-script-runtime";
+        const string revision = "rev-1";
+        const string runId = "run-1";
 
-        var definitionEnvelope = ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-            definitionActor.Id,
-            "script-1",
-            "rev-1",
-            """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+        await definitionPort.UpsertDefinitionAsync(
+            scriptId: "e2e-script",
+            scriptRevision: revision,
+            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
+            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            definitionActorId: definitionActorId,
+            ct: CancellationToken.None);
 
-public sealed class EndToEndScript : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[] { new StringValue { Value = "script.run.completed" } }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["state"] = Any.Pack(new Struct { Fields = { ["result"] = Google.Protobuf.WellKnownTypes.Value.ForString("ok"), ["event"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(
-            new Dictionary<string, Any>
-            {
-                ["view"] = Any.Pack(new Struct { Fields = { ["decision"] = Google.Protobuf.WellKnownTypes.Value.ForString(domainEvent.EventType) } }),
-            });
-}
-""",
-            "hash-1");
-        await definitionActor.HandleEventAsync(definitionEnvelope, CancellationToken.None);
-
-        var context = new ScriptProjectionContext
-        {
-            ProjectionId = "script-projection-" + Guid.NewGuid().ToString("N")[..8],
-            RootActorId = runtimeActor.Id,
-            ScriptId = "script-1",
-        };
-        var dispatcher = new InMemoryScriptProjectionStoreDispatcher();
-        var projector = new ScriptExecutionReadModelProjector(
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
-            [new ScriptRunDomainEventCommittedReducer()]);
-        await projector.InitializeAsync(context, CancellationToken.None);
-
-        var runEnvelope = ScriptingCommandEnvelopeTestKit.CreateRunScript(
-            runtimeActor.Id,
-            "run-1",
-            Any.Pack(new Struct
-            {
-                Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
-            }),
-            "rev-1",
-            definitionActor.Id);
-        var committedObservation = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
-            streams,
-            runtimeActor.Id,
-            "run-1",
-            () => runtimeActor.HandleEventAsync(runEnvelope, CancellationToken.None),
+        await provisioningPort.EnsureRuntimeAsync(
+            definitionActorId,
+            revision,
+            runtimeActorId,
             CancellationToken.None);
 
-        var persisted = await eventStore.GetEventsAsync(runtimeActor.Id, ct: CancellationToken.None);
-        var committedStateEvent = persisted
-            .LastOrDefault(x => x.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) == true);
-        committedStateEvent.Should().NotBeNull();
-        await projector.ProjectAsync(context, committedObservation.Envelope, CancellationToken.None);
+        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
+        lease.Should().NotBeNull();
+        await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
+        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
-        var committedEvent = committedObservation.Event;
-        var readModel = await dispatcher.GetAsync(runtimeActor.Id, CancellationToken.None);
-
-        committedEvent.RunId.Should().Be("run-1");
-        committedEvent.ScriptRevision.Should().Be("rev-1");
-        committedEvent.DefinitionActorId.Should().Be(definitionActor.Id);
-        committedEvent.EventType.Should().Be("script.run.completed");
-        committedEvent.Payload.Should().NotBeNull();
-        committedEvent.Payload!.TypeUrl.Should().Contain("StringValue");
-        committedEvent.StatePayloads.Should().ContainKey("state");
-        committedEvent.StatePayloads["state"].Is(Struct.Descriptor).Should().BeTrue();
-        committedEvent.StatePayloads["state"].Unpack<Struct>().Fields["result"].StringValue.Should().Be("ok");
-
-        readModel.Should().NotBeNull();
-        readModel!.Id.Should().Be(runtimeActor.Id);
-        readModel.ScriptId.Should().Be("script-1");
-        readModel.DefinitionActorId.Should().Be(definitionActor.Id);
-        readModel.Revision.Should().Be("rev-1");
-        readModel.LastRunId.Should().Be("run-1");
-        readModel.LastEventType.Should().Be("script.run.completed");
-        readModel.StatePayloads.Should().ContainKey("state");
-        readModel.StatePayloads["state"].Is(Struct.Descriptor).Should().BeTrue();
-        readModel.StatePayloads["state"].Unpack<Struct>().Fields["result"].StringValue.Should().Be("ok");
-        readModel.StateVersion.Should().Be(1);
-
-        await runtime.DestroyAsync(definitionActor.Id, CancellationToken.None);
-        await runtime.DestroyAsync(runtimeActor.Id, CancellationToken.None);
-    }
-
-    private sealed class InMemoryScriptProjectionStoreDispatcher
-        : IProjectionStoreDispatcher<ScriptExecutionReadModel, string>
-    {
-        private readonly Dictionary<string, ScriptExecutionReadModel> _items = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(
-            ScriptExecutionReadModel readModel,
-            CancellationToken ct = default)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
+            await commandPort.RunRuntimeAsync(
+                runtimeActorId,
+                runId,
+                Any.Pack(new TextNormalizationRequested
+                {
+                    CommandId = "command-1",
+                    InputText = "  hello ",
+                }),
+                revision,
+                definitionActorId,
+                requestedEventType: "integration.requested",
+                ct: CancellationToken.None);
 
-        public Task MutateAsync(
-            string key,
-            Action<ScriptExecutionReadModel> mutate,
-            CancellationToken ct = default)
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                runId,
+                CancellationToken.None);
+            committed.ActorId.Should().Be(runtimeActorId);
+            committed.DomainEventPayload.Should().NotBeNull();
+            committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current.NormalizedText.Should().Be("HELLO");
+
+            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            snapshot.Should().NotBeNull();
+            snapshot!.ReadModelPayload.Should().NotBeNull();
+            snapshot.ReadModelPayload.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("HELLO");
+
+            var queryResult = await queryService.ExecuteDeclaredQueryAsync(
+                runtimeActorId,
+                Any.Pack(new TextNormalizationQueryRequested
+                {
+                    RequestId = "request-1",
+                    ReplyStreamId = "reply-stream",
+                }),
+                CancellationToken.None);
+            queryResult.Should().NotBeNull();
+            queryResult!.Unpack<TextNormalizationQueryResponded>().Current.NormalizedText.Should().Be("HELLO");
+        }
+        finally
         {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptExecutionReadModel { Id = key };
-                _items[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
+            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
         }
-
-        public Task<ScriptExecutionReadModel?> GetAsync(
-            string key,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
-        }
-
-        public Task<IReadOnlyList<ScriptExecutionReadModel>> ListAsync(
-            int take = 50,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptExecutionReadModel>>(
-                _items.Values.Take(take).ToList());
-        }
-    }
-
-    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
-    {
-        public DateTimeOffset UtcNow { get; } = now;
     }
 }

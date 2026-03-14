@@ -10,6 +10,12 @@ public sealed class Orleans3ClusterIntegrationFactAttribute : FactAttribute
             !string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase))
         {
             Skip = "Set AEVATAR_TEST_ORLEANS_3NODE=1 to run Orleans 3-node cluster integration tests.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")))
+        {
+            Skip = "Set AEVATAR_TEST_GARNET_CONNECTION_STRING to run Orleans 3-node cluster integration tests.";
         }
     }
 }

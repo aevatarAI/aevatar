@@ -6,9 +6,11 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Hosting;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
@@ -22,28 +24,32 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowHostingExtensionsCoverageTests
 {
     [Fact]
-    public void AddWorkflowCapabilityWithAIDefaults_ShouldValidateBuilder()
+    public void AddAevatarPlatform_ShouldValidateBuilder()
     {
-        Action act = () => WorkflowCapabilityHostBuilderExtensions.AddWorkflowCapabilityWithAIDefaults(null!);
+        Action act = () => AevatarPlatformHostBuilderExtensions.AddAevatarPlatform(null!);
 
         act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
-    public async Task AddWorkflowCapabilityWithAIDefaults_ShouldRegisterWorkflowAndAIServices()
+    public async Task AddAevatarPlatform_ShouldRegisterWorkflowScriptingAiAndMakerBundles()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
 
-        builder.AddWorkflowCapabilityWithAIDefaults(options =>
+        builder.AddAevatarPlatform(options =>
         {
-            options.EnableMCPTools = false;
-            options.EnableSkills = false;
-            options.ApiKey = "demo-key";
-            options.DefaultProvider = "openai";
-        }, includeScriptCapability: true);
+            options.EnableMakerExtensions = true;
+            options.ConfigureAIFeatures = aiOptions =>
+            {
+                aiOptions.EnableMCPTools = false;
+                aiOptions.EnableSkills = false;
+                aiOptions.ApiKey = "demo-key";
+                aiOptions.DefaultProvider = "openai";
+            };
+        });
 
         builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
@@ -54,11 +60,13 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .Should()
-            .Contain(x => x.Name == "script");
+            .Contain(x => x.Name == "workflow-bundle")
+            .And.Contain(x => x.Name == "scripting-bundle");
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
         provider.GetService<IProjectionDocumentStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
+        provider.GetServices<IWorkflowModulePack>().Should().ContainSingle(x => x is MakerModulePack);
 
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().NotContain(x => x is MCPAgentToolSource);
@@ -66,21 +74,54 @@ public sealed class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public void AddWorkflowCapabilityWithAIDefaults_WhenScriptCapabilityDisabled_ShouldNotRegisterScriptCapability()
+    public void AddAevatarPlatform_WhenScriptingDisabled_ShouldNotRegisterScriptingBundle()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
         });
 
-        builder.AddWorkflowCapabilityWithAIDefaults(includeScriptCapability: false);
+        builder.AddAevatarPlatform(options =>
+        {
+            options.EnableScriptingCapability = false;
+        });
 
         builder.Services
             .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .Should()
-            .NotContain(x => x.Name == "script");
+            .NotContain(x => x.Name == "scripting-bundle");
+    }
+
+    [Fact]
+    public void AddAevatarPlatform_WhenMakerEnabledWithoutWorkflow_ShouldThrow()
+    {
+        var builder = WebApplication.CreateBuilder();
+
+        var act = () => builder.AddAevatarPlatform(options =>
+        {
+            options.EnableWorkflowCapability = false;
+            options.EnableMakerExtensions = true;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Maker extensions require workflow capability*");
+    }
+
+    [Fact]
+    public void AddAevatarPlatform_WhenWorkflowAIProjectionEnabledWithoutWorkflow_ShouldThrow()
+    {
+        var builder = WebApplication.CreateBuilder();
+
+        var act = () => builder.AddAevatarPlatform(options =>
+        {
+            options.EnableWorkflowCapability = false;
+            options.EnableWorkflowAIProjection = true;
+        });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Workflow AI projection requires workflow capability*");
     }
 
     [Fact]
@@ -232,6 +273,88 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         {
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", previous);
         }
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldUseAspNetCoreEnvironmentVariableForProductionPolicy()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+        var previousDotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        var previousAspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
+
+        try
+        {
+            var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*InMemory document provider is not allowed*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", previousDotnet);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", previousAspnet);
+        }
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldInferElasticsearchProviderFromEndpoints()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldInferNeo4jProviderFromUri()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        services.Any(x => x.ServiceType == typeof(IProjectionGraphStore))
+            .Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public void AddWorkflowProjectionReadModelProviders_ShouldRejectInMemoryDocumentProviderWhenDeniedByPolicy()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Policies:DenyInMemoryDocumentReadStore"] = "true",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*InMemory document provider is not allowed*");
     }
 
     [Fact]

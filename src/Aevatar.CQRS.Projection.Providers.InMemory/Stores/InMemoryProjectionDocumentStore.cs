@@ -166,6 +166,9 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
 
     private TReadModel Clone(TReadModel source)
     {
+        if (source is IProjectionReadModelCloneable<TReadModel> cloneable)
+            return cloneable.DeepClone();
+
         var payload = JsonSerializer.Serialize(source, _jsonOptions);
         var clone = JsonSerializer.Deserialize<TReadModel>(payload, _jsonOptions);
         if (clone == null)

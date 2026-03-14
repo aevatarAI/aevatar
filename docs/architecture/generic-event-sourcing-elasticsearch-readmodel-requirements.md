@@ -107,7 +107,7 @@
 - 当前行为：
   1. `Workflow.Infrastructure` 不再直接依赖或注册 `Providers.*`。
   2. Provider 注册统一下沉到 Host/Extensions 层（`AddWorkflowProjectionReadModelProviders(...)`）。
-  3. `AddWorkflowCapabilityWithAIDefaults(...)` 统一装配 AI + Workflow + Provider 组合。
+  3. `AddAevatarPlatform(...)` 统一装配 AI + Workflow + Scripting + Provider 组合。
 
 ### 6.5 门禁现状（已落地）
 - `tools/ci/architecture_guards.sh` 已覆盖：

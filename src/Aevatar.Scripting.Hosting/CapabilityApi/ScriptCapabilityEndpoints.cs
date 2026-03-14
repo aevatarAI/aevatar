@@ -17,6 +17,7 @@ public static class ScriptCapabilityEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status500InternalServerError);
 
+        app.MapScriptQueryEndpoints();
         return app;
     }
 

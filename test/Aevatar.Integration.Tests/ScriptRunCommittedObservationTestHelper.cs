@@ -1,58 +1,49 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Scripting.Core;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Integration.Tests;
 
 internal static class ScriptRunCommittedObservationTestHelper
 {
-    public static async Task<ScriptRunCommittedObservation> WaitForCommittedAsync(
-        IStreamProvider streams,
-        string actorId,
+    public static async Task<ScriptDomainFactCommitted> WaitForCommittedAsync(
+        IEventSink<EventEnvelope> sink,
         string runId,
-        Func<Task> trigger,
-        CancellationToken ct = default)
+        CancellationToken ct,
+        TimeSpan? timeoutOverride = null)
     {
-        ArgumentNullException.ThrowIfNull(streams);
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
-        ArgumentNullException.ThrowIfNull(trigger);
-
-        var observed = new TaskCompletionSource<ScriptRunCommittedObservation>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = await streams
-            .GetStream(actorId)
-            .SubscribeAsync<EventEnvelope>(envelope =>
-            {
-                if (!envelope.Route.IsObserverPublication())
-                    return Task.CompletedTask;
-
-                if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
-                    return Task.CompletedTask;
-
-                var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
-                if (published.StateEvent?.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) != true)
-                    return Task.CompletedTask;
-
-                var committed = published.StateEvent.EventData.Unpack<ScriptRunDomainEventCommitted>();
-                if (string.Equals(committed.RunId, runId, StringComparison.Ordinal))
-                {
-                    observed.TrySetResult(new ScriptRunCommittedObservation(
-                        envelope,
-                        committed));
-                }
-
-                return Task.CompletedTask;
-            }, ct);
-
-        await trigger();
-
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        return await observed.Task.WaitAsync(timeout.Token);
+        timeout.CancelAfter(timeoutOverride ?? TimeSpan.FromSeconds(10));
+
+        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+        {
+            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
+                continue;
+
+            var fact = envelope.Payload.Unpack<ScriptDomainFactCommitted>();
+            if (string.Equals(fact.RunId, runId, StringComparison.Ordinal))
+                return fact;
+        }
+
+        throw new InvalidOperationException($"Timed out waiting for committed script fact. run_id={runId}");
+    }
+
+    public static async Task<ScriptDomainFactCommitted> WaitForAnyCommittedAsync(
+        IEventSink<EventEnvelope> sink,
+        CancellationToken ct,
+        TimeSpan? timeoutOverride = null)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(timeoutOverride ?? TimeSpan.FromSeconds(10));
+
+        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+        {
+            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
+                continue;
+
+            return envelope.Payload.Unpack<ScriptDomainFactCommitted>();
+        }
+
+        throw new InvalidOperationException("Timed out waiting for committed script fact.");
     }
 }
-
-internal sealed record ScriptRunCommittedObservation(
-    EventEnvelope Envelope,
-    ScriptRunDomainEventCommitted Event);

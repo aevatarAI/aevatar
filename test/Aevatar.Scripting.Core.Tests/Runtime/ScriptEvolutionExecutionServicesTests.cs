@@ -1,9 +1,11 @@
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
@@ -36,10 +38,10 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     [Fact]
-    public async Task ValidationService_ShouldDisposeCompiledDefinition_AndReturnDiagnostics()
+    public async Task ValidationService_ShouldDisposeCompiledArtifact_AndReturnDiagnostics()
     {
-        var definition = new DisposableNoopDefinition();
-        var service = new RuntimeScriptEvolutionValidationService(new DisposableTrackingCompiler(definition, false, ["compile-failed"]));
+        var compiler = new DisposableTrackingCompiler(false, ["compile-failed"]);
+        var service = new RuntimeScriptEvolutionValidationService(compiler);
 
         var result = await service.ValidateAsync(
             new ScriptEvolutionProposal(
@@ -54,15 +56,13 @@ public class ScriptEvolutionExecutionServicesTests
 
         result.IsSuccess.Should().BeFalse();
         result.Diagnostics.Should().ContainSingle(x => x == "compile-failed");
-        definition.IsDisposed.Should().BeTrue();
+        compiler.IsDisposed.Should().BeTrue();
     }
 
     [Fact]
-    public async Task CatalogBaselineReader_ShouldReturnFailure_WhenQueryFailsWithoutBaseRevision()
+    public async Task CatalogBaselineReader_ShouldReturnEmptyBaseline_WhenBaseRevisionMissing()
     {
-        var service = new RuntimeScriptCatalogBaselineReader(
-            new RecordingCatalogQueryPort { Exception = new InvalidOperationException("catalog-query-failed") },
-            new StaticAddressResolver());
+        var service = new RuntimeScriptCatalogBaselineReader(new StaticAddressResolver());
 
         var result = await service.ReadAsync(
             new ScriptEvolutionProposal(
@@ -75,17 +75,16 @@ public class ScriptEvolutionExecutionServicesTests
                 Reason: string.Empty),
             CancellationToken.None);
 
-        result.HasFailure.Should().BeTrue();
-        result.FailureReason.Should().Contain("no base revision fallback");
+        result.HasFailure.Should().BeFalse();
+        result.Baseline.Should().BeNull();
+        result.BaselineSource.Should().Be("no_baseline");
         result.CatalogActorId.Should().Be("script-catalog");
     }
 
     [Fact]
-    public async Task CatalogBaselineReader_ShouldFallbackToBaseRevision_WhenQueryFails()
+    public async Task CatalogBaselineReader_ShouldUseProposalBaseRevision_WhenPresent()
     {
-        var service = new RuntimeScriptCatalogBaselineReader(
-            new RecordingCatalogQueryPort { Exception = new InvalidOperationException("catalog-query-failed") },
-            new StaticAddressResolver());
+        var service = new RuntimeScriptCatalogBaselineReader(new StaticAddressResolver());
 
         var result = await service.ReadAsync(
             new ScriptEvolutionProposal(
@@ -99,7 +98,7 @@ public class ScriptEvolutionExecutionServicesTests
             CancellationToken.None);
 
         result.HasFailure.Should().BeFalse();
-        result.BaselineSource.Should().Be("fallback_base_revision_after_query_failure");
+        result.BaselineSource.Should().Be("proposal_base_revision");
         result.Baseline.Should().NotBeNull();
         result.Baseline!.ActiveRevision.Should().Be("rev-1");
     }
@@ -157,93 +156,75 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     private sealed class DisposableTrackingCompiler(
-        DisposableNoopDefinition definition,
         bool isSuccess,
-        IReadOnlyList<string> diagnostics) : IScriptPackageCompiler
+        IReadOnlyList<string> diagnostics) : IScriptBehaviorCompiler
     {
-        private readonly DisposableNoopDefinition _definition = definition;
-        private readonly bool _isSuccess = isSuccess;
-        private readonly IReadOnlyList<string> _diagnostics = diagnostics;
-
-        public Task<ScriptPackageCompilationResult> CompileAsync(
-            ScriptPackageCompilationRequest request,
-            CancellationToken ct)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPackageCompilationResult(
-                    IsSuccess: _isSuccess,
-                    CompiledDefinition: _definition,
-                    ContractManifest: new ScriptContractManifest("input", [], "state", "readmodel"),
-                    Diagnostics: _diagnostics));
-        }
-    }
-
-    private sealed class DisposableNoopDefinition : IScriptPackageDefinition, IAsyncDisposable
-    {
-        public string ScriptId => "script-1";
-        public string Revision => "rev-2";
-        public ScriptContractManifest ContractManifest { get; } = new("input", [], "state", "readmodel");
         public bool IsDisposed { get; private set; }
 
-        public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-            ScriptRequestedEventEnvelope requestedEvent,
-            ScriptExecutionContext context,
-            CancellationToken ct)
+        public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
         {
-            _ = requestedEvent;
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ScriptHandlerResult([new StringValue { Value = "noop" }]));
-        }
-
-        public ValueTask<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?> ApplyDomainEventAsync(
-            IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> currentState,
-            ScriptDomainEventEnvelope domainEvent,
-            CancellationToken ct)
-        {
-            _ = domainEvent;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?>(currentState);
-        }
-
-        public ValueTask<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?> ReduceReadModelAsync(
-            IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any> currentReadModel,
-            ScriptDomainEventEnvelope domainEvent,
-            CancellationToken ct)
-        {
-            _ = domainEvent;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Google.Protobuf.WellKnownTypes.Any>?>(currentReadModel);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            IsDisposed = true;
-            return ValueTask.CompletedTask;
+            _ = request;
+            return new ScriptBehaviorCompilationResult(
+                IsSuccess: isSuccess,
+                Artifact: new ScriptBehaviorArtifact(
+                    "script-1",
+                    "rev-2",
+                    "hash",
+                    new NoopBehavior().Descriptor,
+                    new NoopBehavior().Descriptor.ToContract(),
+                    static () => new NoopBehavior(),
+                    dispose: () =>
+                    {
+                        IsDisposed = true;
+                        return ValueTask.CompletedTask;
+                    }),
+                Diagnostics: diagnostics);
         }
     }
 
-    private sealed class RecordingCatalogQueryPort : IScriptCatalogQueryPort
+    private sealed class NoopBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
-        public Exception? Exception { get; init; }
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
+        {
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+        }
 
-        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
-            string? catalogActorId,
-            string scriptId,
+        private static Task HandleAsync(
+            SimpleTextCommand command,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
-            _ = catalogActorId;
-            _ = scriptId;
             ct.ThrowIfCancellationRequested();
-            if (Exception != null)
-                throw Exception;
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = command.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = command.Value ?? string.Empty,
+                },
+            });
+            return Task.CompletedTask;
+        }
 
-            return Task.FromResult<ScriptCatalogEntrySnapshot?>(null);
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested query,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+            {
+                RequestId = query.RequestId ?? string.Empty,
+                Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+            });
         }
     }
-
     private sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
         public List<RollbackCall> RollbackCalls { get; } = [];
@@ -299,11 +280,8 @@ public class ScriptEvolutionExecutionServicesTests
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
-
         public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
-
         public string GetCatalogActorId() => "script-catalog";
-
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 }

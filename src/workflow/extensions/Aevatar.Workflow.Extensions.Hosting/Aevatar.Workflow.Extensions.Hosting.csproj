@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Extensions.Bridge\Aevatar.Workflow.Extensions.Bridge.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Extensions.AIProjection\Aevatar.Workflow.Extensions.AIProjection.csproj" />
+    <ProjectReference Include="..\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

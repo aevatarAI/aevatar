@@ -1,59 +1,46 @@
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
-public class ScriptGAgentLifecycleBoundaryTests
+public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
 {
     [Fact]
-    public async Task Lifecycle_ShouldBeRuntimeAuthoritative_NotScopeAuthoritative()
+    public async Task EnsureRuntimeAsync_ShouldReuseExistingActorAndAvoidDuplicateBindingEvent()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
 
-        await using (var scope = provider.CreateAsyncScope())
-        {
-            var scopedRuntime = scope.ServiceProvider.GetRequiredService<IActorRuntime>();
-            var actorId = (await scopedRuntime.CreateAsync<ScriptDefinitionGAgent>("factory-lifecycle-definition")).Id;
+        await using var provider = services.BuildServiceProvider();
+        var eventStore = provider.GetRequiredService<IEventStore>();
+        var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
+        var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
 
-            actorId.Should().Be("factory-lifecycle-definition");
-        }
+        const string definitionActorId = "factory-definition";
+        const string runtimeActorId = "factory-runtime";
+        const string revision = "rev-1";
 
-        (await runtime.ExistsAsync("factory-lifecycle-definition")).Should().BeTrue();
+        await definitionPort.UpsertDefinitionAsync(
+            scriptId: "factory-script",
+            scriptRevision: revision,
+            sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
+            sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
+            definitionActorId: definitionActorId,
+            ct: CancellationToken.None);
 
-        await using (var scope = provider.CreateAsyncScope())
-        {
-            var scopedRuntime = scope.ServiceProvider.GetRequiredService<IActorRuntime>();
-            await scopedRuntime.DestroyAsync("factory-lifecycle-definition", CancellationToken.None);
-        }
+        var first = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        var second = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
 
-        (await runtime.ExistsAsync("factory-lifecycle-definition")).Should().BeFalse();
-    }
+        first.Should().Be(runtimeActorId);
+        second.Should().Be(runtimeActorId);
 
-    [Fact]
-    public async Task LinkAndUnlink_ShouldGoThroughRuntimeLifecyclePort()
-    {
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
-
-        var parentId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("factory-parent")).Id;
-        var childId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("factory-child")).Id;
-
-        await runtime.LinkAsync(parentId, childId, CancellationToken.None);
-        var childActor = await runtime.GetAsync(childId);
-        (await childActor!.GetParentIdAsync()).Should().Be(parentId);
-
-        await runtime.UnlinkAsync(childId, CancellationToken.None);
-        (await childActor.GetParentIdAsync()).Should().BeNull();
+        var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
+        persisted.Count(x => x.EventData.Is(ScriptBehaviorBoundEvent.Descriptor)).Should().Be(1);
     }
 }

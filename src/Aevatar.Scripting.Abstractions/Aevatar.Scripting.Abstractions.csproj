@@ -18,6 +18,12 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="Protos/scripting_schema_options.proto" GrpcServices="None" />
+    <Protobuf Include="Protos/scripting_runtime_options.proto" GrpcServices="None" />
     <Protobuf Include="script_host_messages.proto" GrpcServices="None" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Protos/scripting_schema_options.proto" LogicalName="Aevatar.Scripting.Abstractions.Protos.scripting_schema_options.proto" />
+    <EmbeddedResource Include="Protos/scripting_runtime_options.proto" LogicalName="Aevatar.Scripting.Abstractions.Protos.scripting_runtime_options.proto" />
   </ItemGroup>
 </Project>

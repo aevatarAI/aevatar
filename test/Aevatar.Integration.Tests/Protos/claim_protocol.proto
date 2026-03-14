@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package aevatar.claims;
+
+option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
+
+import "scripting_schema_options.proto";
+import "scripting_runtime_options.proto";
+
+message ClaimSearchIndex {
+  string lookup_key = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string decision_key = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+}
+
+message ClaimRefs {
+  string policy_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string owner_actor_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+}
+
+message ClaimCaseState {
+  string case_id = 1;
+  string policy_id = 2;
+  string decision_status = 3;
+  bool manual_review_required = 4;
+  string ai_summary = 5;
+  double risk_score = 6;
+  bool compliance_passed = 7;
+  string last_command_id = 8;
+}
+
+message ClaimCaseReadModel {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "claim_case"
+    schema_version: "3"
+    store_kinds: "document"
+    store_kinds: "graph"
+    document_indexes: {
+      name: "idx_case_policy"
+      paths: "case_id"
+      paths: "policy_id"
+      unique: true
+      provider: "document"
+    }
+    document_indexes: {
+      name: "idx_decision"
+      paths: "decision_status"
+      provider: "document"
+    }
+    graph_relations: {
+      name: "rel_policy"
+      source_path: "refs.policy_id"
+      target_schema_id: "policy"
+      target_path: "policy_id"
+      cardinality: "many_to_one"
+      provider: "graph"
+    }
+  };
+  bool has_value = 1;
+  string case_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string policy_id = 3 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string decision_status = 4 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  bool manual_review_required = 5 [(aevatar.scripting.schema.scripting_field) = { storage_type: "boolean" }];
+  string ai_summary = 6 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
+  double risk_score = 7;
+  bool compliance_passed = 8;
+  string last_command_id = 9 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  ClaimSearchIndex search = 10;
+  ClaimRefs refs = 11;
+  repeated string trace_steps = 12 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword", nullable: true }];
+}
+
+message ClaimSubmitted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+    aggregate_id_field: "case_id"
+  };
+  string command_id = 1;
+  string case_id = 2;
+  double risk_score = 3;
+  bool compliance_passed = 4;
+  string policy_id = 5;
+}
+
+message ClaimDecisionRecorded {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+    read_model_scope: "aevatar.claims.ClaimCaseReadModel"
+  };
+  string command_id = 1;
+  ClaimCaseReadModel current = 2;
+}
+
+message ClaimQueryRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+    read_model_scope: "aevatar.claims.ClaimCaseReadModel"
+  };
+  option (aevatar.scripting.runtime.scripting_query) = {
+    result_full_name: "aevatar.claims.ClaimQueryResponded"
+  };
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ClaimQueryResponded {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+    read_model_scope: "aevatar.claims.ClaimCaseReadModel"
+  };
+  string request_id = 1;
+  ClaimCaseReadModel current = 2;
+}
+
+message ClaimAnalystReviewRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    aggregate_id_field: "case_id"
+  };
+  string case_id = 1;
+}
+
+message ClaimFraudScoringRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    aggregate_id_field: "case_id"
+  };
+  string case_id = 1;
+}
+
+message ClaimComplianceCheckRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    aggregate_id_field: "case_id"
+  };
+  string case_id = 1;
+}
+
+message ClaimManualReviewRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    aggregate_id_field: "case_id"
+  };
+  string case_id = 1;
+}
+
+message ClaimSinkState {
+  repeated string message_types = 1;
+}

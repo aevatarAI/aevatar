@@ -1,33 +1,23 @@
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.Scripting.Application;
+using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
+using Aevatar.Integration.Tests.Protocols;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Hosting.DependencyInjection;
-using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
-using Xunit.Abstractions;
 
 namespace Aevatar.Integration.Tests;
 
 public class ClaimScriptDocumentDrivenFlexibilityTests
 {
-    private readonly ITestOutputHelper _output;
-
-    public ClaimScriptDocumentDrivenFlexibilityTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
-
     [Fact]
     public void EmbeddedScenario_ShouldDefine_ComplexClaimScenario_WithCaseABAndC()
     {
@@ -51,22 +41,21 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     public async Task EmbeddedScripts_ShouldCompile_AndPersistIntoDefinitionState()
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
 
         foreach (var script in document.Scripts)
         {
-            var compilation = await compiler.CompileAsync(
-                new ScriptPackageCompilationRequest(
+            var compilation = compiler.Compile(
+                new ScriptBehaviorCompilationRequest(
                     script.ScriptId,
                     script.Revision,
-                    script.Source),
-                CancellationToken.None);
+                    script.Source));
 
-            compilation.IsSuccess.Should().BeTrue(
-                $"script `{script.ScriptId}` should compile from script document");
+            compilation.IsSuccess.Should().BeTrue($"script `{script.ScriptId}` should compile from script document");
 
             var definition = new ScriptDefinitionGAgent(
-                new RoslynScriptPackageCompiler(new ScriptSandboxPolicy()),
+                new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()),
+                new ScriptReadModelMaterializationCompiler(),
                 new DefaultScriptReadModelSchemaActivationPolicy())
             {
                 EventSourcingBehaviorFactory =
@@ -93,124 +82,48 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
 
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
-            CancellationToken.None);
+        var compilation = compiler.Compile(
+            new ScriptBehaviorCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source));
         compilation.IsSuccess.Should().BeTrue();
+        compilation.Artifact.Should().NotBeNull();
 
-        var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
-            new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
-                "claim.submitted",
-                Any.Pack(new Struct()),
-                "evt-flex-1",
-                "corr-flex-1",
-                "cause-flex-1"),
-            new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
-                "runtime-1",
-                orchestrator.ScriptId,
-                orchestrator.Revision),
-            CancellationToken.None);
+        await using var artifact = compilation.Artifact!;
+        artifact.Contract.CommandTypeUrls.Should().Contain(Any.Pack(new ClaimSubmitted()).TypeUrl);
+        artifact.Contract.DomainEventTypeUrls.Should().Contain(Any.Pack(new ClaimDecisionRecorded()).TypeUrl);
+        artifact.Contract.QueryTypeUrls.Should().Contain(Any.Pack(new ClaimQueryRequested()).TypeUrl);
+        artifact.Contract.ReadModelDescriptorFullName.Should().Be(ClaimCaseReadModel.Descriptor.FullName);
+        artifact.Contract.ProtocolDescriptorSet.Should().NotBeNull();
+        artifact.Contract.ProtocolDescriptorSet!.IsEmpty.Should().BeFalse();
+        typeof(IScriptBehaviorRuntimeCapabilities).GetMethod("GetRequiredService").Should().BeNull();
 
-        var runtimeWithoutDependencies = new ScriptRuntimeGAgent(
-            new NeverCalledRuntimeExecutionOrchestrator())
-        {
-            EventPublisher = new RecordingEventPublisher(),
-            EventSourcingBehaviorFactory =
-                new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(new InMemoryEventStore()),
-            Services = new ServiceCollection()
-                .AddSingleton<IActorRuntimeCallbackScheduler>(new NoOpCallbackScheduler())
-                .BuildServiceProvider(),
-        };
-        await runtimeWithoutDependencies.HandleRunScriptRequested(new RunScriptRequestedEvent
-        {
-            RunId = "run-snapshot-check",
-            InputPayload = Any.Pack(new Struct
+        await using var provider = ClaimIntegrationTestKit.BuildProvider();
+        const string definitionActorId = "claim-flex-definition";
+        const string runtimeActorId = "claim-flex-runtime";
+        await ClaimIntegrationTestKit.UpsertOrchestratorAsync(provider, definitionActorId, CancellationToken.None);
+        await ClaimIntegrationTestKit.EnsureRuntimeAsync(provider, definitionActorId, orchestrator.Revision, runtimeActorId, CancellationToken.None);
+
+        var result = await ClaimIntegrationTestKit.RunClaimAsync(
+            provider,
+            definitionActorId,
+            runtimeActorId,
+            orchestrator.Revision,
+            "run-flex",
+            new ClaimSubmitted
             {
-                Fields = { ["case"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
-            }),
-            ScriptRevision = orchestrator.Revision,
-            DefinitionActorId = "missing-definition-actor",
-        });
-        await runtimeWithoutDependencies.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = ((RecordingEventPublisher)runtimeWithoutDependencies.EventPublisher).Sent
-                .OfType<QueryScriptDefinitionSnapshotRequestedEvent>()
-                .Single()
-                .RequestId,
-            Found = false,
-            FailureReason = "Definition snapshot not found: missing-definition-actor",
-        });
-        runtimeWithoutDependencies.State.LastRunId.Should().Be("run-snapshot-check");
-        runtimeWithoutDependencies.State.LastEventId.Should().Be("run-snapshot-check");
-
-        var supportsDynamicDecisionEvents = decision.DomainEvents.Count > 0;
-        var enforcesDefinitionSnapshotLookup = true;
-        var hasLegacyRuntimePort = System.Type.GetType(
-                "Aevatar.Foundation.Abstractions.IGAgentRuntimePort, Aevatar.Foundation.Abstractions",
-                throwOnError: false,
-                ignoreCase: false) != null;
-
-        var services = new ServiceCollection();
-        services.AddAevatarRuntime();
-        services.AddScriptCapability();
-        using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<IActorRuntime>();
-        var definitionActorId = "flex-definition";
-        var runtimeActorId = "flex-runtime";
-        var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
-
-        await definitionActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActorId,
-                orchestrator.ScriptId,
-                orchestrator.Revision,
-                orchestrator.Source,
-                orchestrator.SourceHash),
+                CommandId = "run-flex",
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                RiskScore = 0.91d,
+                CompliancePassed = true,
+            },
             CancellationToken.None);
 
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(
-                runtimeActorId,
-                "run-flex",
-                BuildClaimPayload("Case-B", 0.91, true),
-                orchestrator.Revision,
-                definitionActorId),
-            CancellationToken.None);
-
-        var runtimeAgent = (ScriptRuntimeGAgent)runtimeActor.Agent;
-        var pendingRequestId = runtimeAgent.State.PendingDefinitionQueries.Keys.Should().ContainSingle().Subject;
-        var definitionState = ((ScriptDefinitionGAgent)definitionActor.Agent).State;
-        await runtimeAgent.HandleScriptDefinitionSnapshotResponded(new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = pendingRequestId,
-            Found = true,
-            ScriptId = definitionState.ScriptId ?? string.Empty,
-            Revision = definitionState.Revision ?? string.Empty,
-            SourceText = definitionState.SourceText ?? string.Empty,
-            ReadModelSchemaVersion = definitionState.ReadModelSchemaVersion ?? string.Empty,
-            ReadModelSchemaHash = definitionState.ReadModelSchemaHash ?? string.Empty,
-        });
-
-        var runtimeState = runtimeAgent.State;
-        var supportsCustomRuntimeState =
-            runtimeState.StatePayloads.TryGetValue("state", out var statePayload) &&
-            statePayload != null &&
-            statePayload.Is(Struct.Descriptor) &&
-            statePayload.Unpack<Struct>().Fields.TryGetValue("last_event", out var lastEvent) &&
-            string.Equals(
-                lastEvent.StringValue,
-                "ClaimManualReviewRequestedEvent",
-                StringComparison.Ordinal);
-
-        supportsDynamicDecisionEvents.Should().BeTrue();
-        enforcesDefinitionSnapshotLookup.Should().BeTrue();
-        hasLegacyRuntimePort.Should().BeFalse();
-        supportsCustomRuntimeState.Should().BeTrue();
-
-        _output.WriteLine("Flexibility capabilities verified: dynamic decision + snapshot enforcement + no legacy runtime port + dynamic runtime payload.");
+        result.Committed.DomainEventPayload.Should().NotBeNull();
+        result.Committed.DomainEventPayload!.Unpack<ClaimDecisionRecorded>().Current.DecisionStatus.Should().Be("ManualReview");
+        result.Snapshot.ReadModelPayload.Should().NotBeNull();
+        result.Snapshot.ReadModelPayload!.Unpack<ClaimCaseReadModel>().DecisionStatus.Should().Be("ManualReview");
     }
 
     [Fact]
@@ -218,38 +131,44 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
     {
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");
-        var compiler = new RoslynScriptPackageCompiler(new ScriptSandboxPolicy());
-
-        var compilation = await compiler.CompileAsync(
-            new ScriptPackageCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source),
-            CancellationToken.None);
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var compilation = compiler.Compile(
+            new ScriptBehaviorCompilationRequest(orchestrator.ScriptId, orchestrator.Revision, orchestrator.Source));
 
         compilation.IsSuccess.Should().BeTrue();
+        compilation.Artifact.Should().NotBeNull();
 
-        var decision = await compilation.CompiledDefinition!.HandleRequestedEventAsync(
-            new Aevatar.Scripting.Abstractions.Definitions.ScriptRequestedEventEnvelope(
-                EventType: "claim.submitted",
-                Payload: BuildClaimPayload("Case-B", 0.91, true),
-                EventId: "evt-case-b-1",
-                CorrelationId: "corr-case-b",
-                CausationId: "cause-case-b"),
-            new Aevatar.Scripting.Abstractions.Definitions.ScriptExecutionContext(
-                ActorId: "runtime-claim",
+        await using var artifact = compilation.Artifact!;
+        var behavior = artifact.CreateBehavior();
+        var recorded = new RecordingCapabilities();
+        var emitted = await behavior.DispatchAsync(
+            new ClaimSubmitted
+            {
+                CommandId = "case-b",
+                CaseId = "Case-B",
+                PolicyId = "POLICY-B",
+                RiskScore = 0.91d,
+                CompliancePassed = true,
+            },
+            new ScriptDispatchContext(
+                ActorId: "claim-runtime",
                 ScriptId: orchestrator.ScriptId,
                 Revision: orchestrator.Revision,
                 RunId: "run-case-b",
+                MessageType: ClaimSubmitted.Descriptor.FullName,
+                MessageId: "message-case-b",
+                CommandId: "case-b",
                 CorrelationId: "corr-case-b",
-                InputPayload: BuildClaimPayload("Case-B", 0.91, true)),
+                CausationId: "cause-case-b",
+                DefinitionActorId: "definition-1",
+                CurrentState: null,
+                RuntimeCapabilities: recorded),
             CancellationToken.None);
 
-        var eventNames = decision.DomainEvents
-            .Select(x => ((Google.Protobuf.WellKnownTypes.StringValue)x).Value)
-            .ToArray();
-
-        eventNames.Should().Contain("ClaimManualReviewRequestedEvent");
-        eventNames.Should().Contain("ClaimFactsExtractionRequestedEvent");
-        eventNames.Should().Contain("ClaimRiskScoringRequestedEvent");
-        eventNames.Should().Contain("ClaimComplianceValidationRequestedEvent");
+        recorded.SendCalls.Should().Contain(nameof(ClaimManualReviewRequested));
+        emitted.Should().ContainSingle();
+        emitted[0].Should().BeOfType<ClaimDecisionRecorded>()
+            .Which.Current.DecisionStatus.Should().Be("ManualReview");
     }
 
     [Fact]
@@ -260,120 +179,37 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         document.DocumentPath.Should().Be("embedded://claim-anti-fraud");
     }
 
-    private static Any BuildClaimPayload(string caseId, double riskScore, bool compliancePassed)
+    private sealed class RecordingCapabilities : IScriptBehaviorRuntimeCapabilities
     {
-        return Any.Pack(new Struct
+        public List<string> SendCalls { get; } = [];
+
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult("high-risk-profile");
+        public Task PublishAsync(IMessage eventPayload, Aevatar.Foundation.Abstractions.TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
         {
-            Fields =
-            {
-                ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString(caseId),
-                ["riskScore"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(riskScore),
-                ["compliancePassed"] = Google.Protobuf.WellKnownTypes.Value.ForBool(compliancePassed),
-            },
-        });
-    }
-    private sealed class NeverCalledRuntimeExecutionOrchestrator : IScriptRuntimeExecutionOrchestrator
-    {
-        public Task<IReadOnlyList<Google.Protobuf.IMessage>> ExecuteRunAsync(
-            ScriptRuntimeExecutionRequest request,
-            CancellationToken ct)
-        {
-            _ = request;
             ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("Runtime execution should not be called when definition snapshot lookup fails.");
-        }
-    }
-
-    private sealed class RecordingEventPublisher : IEventPublisher
-    {
-        public List<Google.Protobuf.IMessage> Sent { get; } = [];
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            TopologyAudience direction = TopologyAudience.Children,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : Google.Protobuf.IMessage
-        {
-            _ = evt;
-            _ = direction;
-            _ = sourceEnvelope;
-            _ = options;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task SendToAsync<TEvent>(
-            string targetActorId,
-            TEvent evt,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : Google.Protobuf.IMessage
-        {
             _ = targetActorId;
-            _ = sourceEnvelope;
-            _ = options;
-            ct.ThrowIfCancellationRequested();
-            Sent.Add(evt);
+            SendCalls.Add(eventPayload.Descriptor.Name);
             return Task.CompletedTask;
         }
 
-        public Task PublishCommittedStateEventAsync(
-            CommittedStateEventPublished evt,
-            ObserverAudience audience = ObserverAudience.CommittedFacts,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-        {
-            _ = evt;
-            _ = audience;
-            _ = sourceEnvelope;
-            _ = options;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
+        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
+            Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease("runtime", callbackId, 0, Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
 
-    private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler
-    {
-        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
-            RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                Generation: 1,
-                RuntimeCallbackBackend.InMemory));
-        }
-
-        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
-            RuntimeCallbackTimerRequest request,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                Generation: 1,
-                RuntimeCallbackBackend.InMemory));
-        }
-
-        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
-        {
-            _ = lease;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+        public Task CancelDurableCallbackAsync(Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? "created");
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) => Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) => Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) => Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) => Task.CompletedTask;
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) => Task.CompletedTask;
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) => Task.CompletedTask;
     }
 }

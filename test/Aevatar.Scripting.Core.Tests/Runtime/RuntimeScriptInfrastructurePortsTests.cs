@@ -4,14 +4,17 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
-using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Projection.ReadPorts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -40,8 +43,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task SpawnRuntimeAsync_ShouldReturnExistingActorId_WhenRuntimeAlreadyExists()
     {
         var runtime = new TestActorRuntime();
-        runtime.RegisterActor(new TestActor("runtime-existing"));
-        var service = CreateRuntimeProvisioningService(runtime);
+        var service = CreateRuntimeProvisioningService(runtime, "runtime-existing");
 
         var actorId = await service.EnsureRuntimeAsync(
             definitionActorId: "definition-1",
@@ -62,7 +64,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: string.Empty,
             runId: "run-1",
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -80,7 +86,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
             runId: string.Empty,
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -98,7 +108,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-missing",
             runId: "run-1",
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -124,7 +138,11 @@ public class RuntimeScriptInfrastructurePortsTests
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
             runId: "run-1",
-            inputPayload: Any.Pack(new StringValue { Value = "input" }),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -141,106 +159,102 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task DefinitionSnapshotPort_ShouldThrow_WhenDefinitionActorMissing()
     {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, _ => throw new InvalidOperationException("should-not-handle"));
+        var eventStore = new TestEventStore();
+        var port = CreateDefinitionSnapshotPort(eventStore);
 
         var act = () => port.GetRequiredAsync("definition-missing", "rev-1", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*definition actor not found*definition-missing*");
+            .WithMessage("*snapshot not found*definition-missing*");
     }
 
     [Fact]
-    public async Task DefinitionSnapshotPort_ShouldThrowFailureReason_WhenSnapshotQueryReturnsNotFound()
+    public async Task DefinitionSnapshotPort_ShouldThrow_WhenCommittedDefinitionIsMissing()
     {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, request =>
-            new ScriptDefinitionSnapshotRespondedEvent
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "definition-1",
+            new ScriptReadModelSchemaDeclaredEvent
             {
-                RequestId = request.RequestId,
-                Found = false,
-                FailureReason = "definition-not-ready",
-            });
-
-        var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*definition-not-ready*");
-    }
-
-    [Fact]
-    public async Task DefinitionSnapshotPort_ShouldThrowDefaultMessage_WhenNotFoundReasonIsEmpty()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, request =>
-            new ScriptDefinitionSnapshotRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = false,
-                FailureReason = string.Empty,
-            });
-
-        var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*snapshot not found*definition-1*");
-    }
-
-    [Fact]
-    public async Task DefinitionSnapshotPort_ShouldThrow_WhenSourceTextIsEmpty()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, request =>
-            new ScriptDefinitionSnapshotRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = true,
                 ScriptId = "script-1",
-                Revision = "rev-1",
-                SourceText = string.Empty,
+                ScriptRevision = "rev-1",
+                ReadModelSchemaVersion = "v1",
             });
+        var port = CreateDefinitionSnapshotPort(eventStore);
 
         var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*source_text is empty*definition-1*");
+            .WithMessage("*script_package is empty*definition-1*");
+    }
+
+    [Fact]
+    public async Task DefinitionSnapshotPort_ShouldThrow_WhenScriptPackageIsEmpty()
+    {
+        var port = new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
+        {
+            _ = definitionActorId;
+            _ = requestedRevision;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ScriptDefinitionSnapshot?>(new ScriptDefinitionSnapshot(
+                "script-1",
+                "rev-1",
+                string.Empty,
+                string.Empty,
+                new ScriptPackageSpec(),
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                ByteString.Empty,
+                string.Empty,
+                string.Empty,
+                new ScriptRuntimeSemanticsSpec()));
+        });
+
+        var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*script_package is empty*definition-1*");
     }
 
     [Fact]
     public async Task DefinitionSnapshotPort_ShouldThrow_WhenRequestedRevisionDoesNotMatchSnapshot()
     {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, request =>
-            new ScriptDefinitionSnapshotRespondedEvent
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "definition-1",
+            new ScriptDefinitionUpsertedEvent
             {
-                RequestId = request.RequestId,
-                Found = true,
                 ScriptId = "script-1",
-                Revision = "rev-actual",
+                ScriptRevision = "rev-actual",
                 SourceText = "public sealed class RuntimeScript {}",
             });
+        var port = CreateDefinitionSnapshotPort(eventStore);
 
         var act = () => port.GetRequiredAsync("definition-1", "rev-requested", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*rev-requested*rev-actual*");
+            .WithMessage("*snapshot not found*definition-1*rev-requested*");
     }
 
     [Fact]
     public async Task DefinitionSnapshotPort_ShouldReturnSnapshot_WhenResponseIsValid()
     {
-        var runtime = new TestActorRuntime();
-        var port = CreateDefinitionSnapshotPort(runtime, request =>
-            new ScriptDefinitionSnapshotRespondedEvent
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "definition-1",
+            new ScriptDefinitionUpsertedEvent
             {
-                RequestId = request.RequestId,
-                Found = true,
                 ScriptId = "script-1",
-                Revision = "rev-1",
+                ScriptRevision = "rev-1",
                 SourceText = "public sealed class RuntimeScript {}",
+                SourceHash = "hash-1",
                 ReadModelSchemaVersion = "v1",
                 ReadModelSchemaHash = "hash-v1",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("public sealed class RuntimeScript {}"),
             });
+        var port = CreateDefinitionSnapshotPort(eventStore);
 
         var snapshot = await port.GetRequiredAsync("definition-1", string.Empty, CancellationToken.None);
 
@@ -249,6 +263,37 @@ public class RuntimeScriptInfrastructurePortsTests
         snapshot.SourceText.Should().Contain("RuntimeScript");
         snapshot.ReadModelSchemaVersion.Should().Be("v1");
         snapshot.ReadModelSchemaHash.Should().Be("hash-v1");
+    }
+
+    [Fact]
+    public async Task DefinitionSnapshotPort_ShouldUseLatestCommittedDefinitionSnapshot()
+    {
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "definition-1",
+            new ScriptDefinitionUpsertedEvent
+            {
+                ScriptId = "script-1",
+                ScriptRevision = "rev-1",
+                SourceText = "old-source",
+                SourceHash = "hash-old",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("old-source"),
+            },
+            new ScriptDefinitionUpsertedEvent
+            {
+                ScriptId = "script-1",
+                ScriptRevision = "rev-2",
+                SourceText = "new-source",
+                SourceHash = "hash-new",
+                ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("new-source"),
+            });
+        var port = CreateDefinitionSnapshotPort(eventStore);
+
+        var snapshot = await port.GetRequiredAsync("definition-1", "rev-2", CancellationToken.None);
+
+        snapshot.ScriptId.Should().Be("script-1");
+        snapshot.Revision.Should().Be("rev-2");
+        snapshot.SourceHash.Should().Be("hash-new");
     }
 
     [Fact]
@@ -315,7 +360,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenScriptIdMissing()
     {
-        var service = CreateCatalogQueryService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestEventStore());
 
         var entry = await service.GetCatalogEntryAsync(null, string.Empty, CancellationToken.None);
 
@@ -325,7 +370,7 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogActorMissing()
     {
-        var service = CreateCatalogQueryService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestEventStore());
 
         var entry = await service.GetCatalogEntryAsync(null, "script-1", CancellationToken.None);
 
@@ -333,17 +378,17 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenQueryRespondsNotFound()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogFactsDoNotContainScript()
     {
-        var runtime = new TestActorRuntime();
-        var service = CreateCatalogQueryService(
-            runtime,
-            request => new ScriptCatalogEntryRespondedEvent
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "catalog-1",
+            new ScriptCatalogRevisionPromotedEvent
             {
-                RequestId = request.RequestId,
-                Found = false,
-                ScriptId = request.ScriptId,
+                ScriptId = "script-other",
+                Revision = "rev-1",
             });
+        var service = CreateCatalogQueryService(eventStore);
 
         var entry = await service.GetCatalogEntryAsync("catalog-1", "script-1", CancellationToken.None);
 
@@ -353,21 +398,26 @@ public class RuntimeScriptInfrastructurePortsTests
     [Fact]
     public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldMapSnapshot_WhenFound()
     {
-        var runtime = new TestActorRuntime();
-        var service = CreateCatalogQueryService(
-            runtime,
-            request => new ScriptCatalogEntryRespondedEvent
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "catalog-1",
+            new ScriptCatalogRevisionPromotedEvent
             {
-                RequestId = request.RequestId,
-                Found = true,
-                ScriptId = request.ScriptId,
-                ActiveRevision = "rev-2",
-                ActiveDefinitionActorId = "definition-2",
-                ActiveSourceHash = "hash-2",
-                PreviousRevision = "rev-1",
-                RevisionHistory = { "rev-1", "rev-2" },
-                LastProposalId = "proposal-2",
+                ScriptId = "script-1",
+                Revision = "rev-1",
+                DefinitionActorId = "definition-1",
+                SourceHash = "hash-1",
+                ProposalId = "proposal-1",
+            },
+            new ScriptCatalogRevisionPromotedEvent
+            {
+                ScriptId = "script-1",
+                Revision = "rev-2",
+                DefinitionActorId = "definition-2",
+                SourceHash = "hash-2",
+                ProposalId = "proposal-2",
             });
+        var service = CreateCatalogQueryService(eventStore);
 
         var entry = await service.GetCatalogEntryAsync("catalog-1", "script-1", CancellationToken.None);
 
@@ -376,6 +426,48 @@ public class RuntimeScriptInfrastructurePortsTests
         entry.ActiveRevision.Should().Be("rev-2");
         entry.RevisionHistory.Should().Contain("rev-1");
         entry.RevisionHistory.Should().Contain("rev-2");
+    }
+
+    [Fact]
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReplayRollbackFacts()
+    {
+        var eventStore = new TestEventStore();
+        eventStore.Seed(
+            "catalog-1",
+            new ScriptCatalogRevisionPromotedEvent
+            {
+                ScriptId = "script-1",
+                Revision = "rev-1",
+                DefinitionActorId = "definition-1",
+                SourceHash = "hash-1",
+                ProposalId = "proposal-1",
+            },
+            new ScriptCatalogRevisionPromotedEvent
+            {
+                ScriptId = "script-1",
+                Revision = "rev-2",
+                DefinitionActorId = "definition-2",
+                SourceHash = "hash-2",
+                ProposalId = "proposal-2",
+            },
+            new ScriptCatalogRolledBackEvent
+            {
+                ScriptId = "script-1",
+                TargetRevision = "rev-1",
+                PreviousRevision = "rev-2",
+                ProposalId = "proposal-rollback",
+            });
+        var service = CreateCatalogQueryService(eventStore);
+
+        var entry = await service.GetCatalogEntryAsync("catalog-1", "script-1", CancellationToken.None);
+
+        entry.Should().NotBeNull();
+        entry!.ActiveRevision.Should().Be("rev-1");
+        entry.PreviousRevision.Should().Be("rev-2");
+        entry.ActiveDefinitionActorId.Should().BeEmpty();
+        entry.ActiveSourceHash.Should().BeEmpty();
+        entry.LastProposalId.Should().Be("proposal-rollback");
+        entry.RevisionHistory.Should().Equal("rev-1", "rev-2");
     }
 
     [Fact]
@@ -551,51 +643,26 @@ public class RuntimeScriptInfrastructurePortsTests
         projectionPort.ReleaseCount.Should().Be(0);
     }
 
-    private static RuntimeScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
-        TestActorRuntime runtime,
-        Func<QueryScriptDefinitionSnapshotRequestedEvent, ScriptDefinitionSnapshotRespondedEvent> responseFactory)
+    private static ProjectionScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
+        TestEventStore eventStore)
     {
-        var streams = new InMemoryStreamProvider();
-        runtime.RegisterActor(new TestActor("definition-1", async (envelope, ct) =>
+        return new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
         {
-            var request = envelope.Payload.Unpack<QueryScriptDefinitionSnapshotRequestedEvent>();
-            var response = responseFactory(request);
-            await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-        }));
-        return new RuntimeScriptDefinitionSnapshotPort(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
-            new ScriptingQueryTimeoutOptions { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                eventStore.BuildDefinitionSnapshotResponse(definitionActorId, requestedRevision));
+        });
     }
 
-    private static RuntimeScriptCatalogQueryService CreateCatalogQueryService(
-        TestActorRuntime runtime,
-        Func<QueryScriptCatalogEntryRequestedEvent, ScriptCatalogEntryRespondedEvent>? responseFactory = null)
+    private static ProjectionScriptCatalogQueryPort CreateCatalogQueryService(
+        TestEventStore eventStore)
     {
-        var streams = new InMemoryStreamProvider();
-        runtime.CreateActor = actorId => new TestActor(actorId, async (envelope, ct) =>
+        return new ProjectionScriptCatalogQueryPort((catalogActorId, scriptId, ct) =>
         {
-            if (responseFactory != null && envelope.Payload.Is(QueryScriptCatalogEntryRequestedEvent.Descriptor))
-            {
-                var request = envelope.Payload.Unpack<QueryScriptCatalogEntryRequestedEvent>();
-                var response = responseFactory(request);
-                await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-            }
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                eventStore.BuildCatalogEntryResponse(catalogActorId, scriptId));
         });
-
-        if (responseFactory != null)
-            runtime.RegisterActor(new TestActor("catalog-1", async (envelope, ct) =>
-            {
-                var request = envelope.Payload.Unpack<QueryScriptCatalogEntryRequestedEvent>();
-                var response = responseFactory(request);
-                await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-            }));
-
-        return new RuntimeScriptCatalogQueryService(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
-            new StaticAddressResolver(),
-            new ScriptingQueryTimeoutOptions { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
@@ -655,9 +722,39 @@ public class RuntimeScriptInfrastructurePortsTests
         return new RuntimeScriptEvolutionInteractionService(interactionService);
     }
 
-    private static RuntimeScriptProvisioningService CreateRuntimeProvisioningService(TestActorRuntime runtime)
+    private static RuntimeScriptProvisioningService CreateRuntimeProvisioningService(
+        TestActorRuntime runtime,
+        params string[] existingActorIds)
     {
-        return new RuntimeScriptProvisioningService(new RuntimeScriptActorAccessor(runtime));
+        TestActor CreateBindingAwareActor(string actorId) => new(actorId, async (envelope, ct) =>
+        {
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+        });
+
+        foreach (var existingActorId in existingActorIds.Where(static x => !string.IsNullOrWhiteSpace(x)))
+            runtime.RegisterActor(CreateBindingAwareActor(existingActorId));
+
+        runtime.CreateActor = CreateBindingAwareActor;
+
+        return new RuntimeScriptProvisioningService(
+            CreateDispatchService(
+                runtime,
+                new ProvisionScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
+                new ProvisionScriptRuntimeCommandEnvelopeFactory()),
+            new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptDefinitionSnapshot?>(new ScriptDefinitionSnapshot(
+                    "script-" + definitionActorId,
+                    string.IsNullOrWhiteSpace(requestedRevision) ? "latest" : requestedRevision,
+                    ScriptSources.UppercaseBehavior,
+                    ScriptSources.UppercaseBehaviorHash,
+                    ScriptSources.UppercaseStateTypeUrl,
+                    ScriptSources.UppercaseReadModelTypeUrl,
+                    "1",
+                    "schema-hash"));
+            }));
     }
 
     private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
@@ -683,7 +780,10 @@ public class RuntimeScriptInfrastructurePortsTests
                 new RollbackScriptCatalogRevisionCommandTargetResolver(
                     new RuntimeScriptActorAccessor(runtime),
                     new StaticAddressResolver()),
-                new RollbackScriptCatalogRevisionCommandEnvelopeFactory()));
+                new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
+            new StaticAddressResolver(),
+            new RuntimeScriptActorAccessor(runtime),
+            new NoOpAuthorityProjectionPrimingPort());
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
@@ -707,8 +807,10 @@ public class RuntimeScriptInfrastructurePortsTests
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
 
         public List<string> CreateRequests { get; } = [];
+        public List<string> DispatchRequests { get; } = [];
 
         public Func<string, IActor>? CreateActor { get; set; }
+        public Func<string, EventEnvelope, CancellationToken, Task>? DispatchOverride { get; set; }
 
         public void RegisterActor(IActor actor)
         {
@@ -752,6 +854,13 @@ public class RuntimeScriptInfrastructurePortsTests
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            DispatchRequests.Add(actorId);
+            if (DispatchOverride != null)
+            {
+                await DispatchOverride(actorId, envelope, ct);
+                return;
+            }
+
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
         }
@@ -777,6 +886,217 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpAuthorityProjectionPrimingPort : IScriptAuthorityProjectionPrimingPort
+    {
+        public Task PrimeAsync(string actorId, CancellationToken ct)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TestEventStore
+    {
+        private readonly Dictionary<string, List<IMessage>> _streams = new(StringComparer.Ordinal);
+
+        public void Seed(string agentId, params IMessage[] events)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+
+            if (!_streams.TryGetValue(agentId, out var stream))
+            {
+                stream = [];
+                _streams[agentId] = stream;
+            }
+
+            stream.AddRange(events);
+        }
+
+        public ScriptDefinitionSnapshot? BuildDefinitionSnapshotResponse(
+            string definitionActorId,
+            string requestedRevision)
+        {
+            if (!_streams.TryGetValue(definitionActorId, out var stream))
+                return null;
+
+            var state = new DefinitionSnapshotState();
+            foreach (var evt in stream)
+            {
+                switch (evt)
+                {
+                    case ScriptDefinitionUpsertedEvent upserted:
+                        state.ScriptId = upserted.ScriptId ?? string.Empty;
+                        state.Revision = upserted.ScriptRevision ?? string.Empty;
+                        state.SourceText = upserted.SourceText ?? string.Empty;
+                        state.SourceHash = upserted.SourceHash ?? string.Empty;
+                        state.ReadModelSchemaVersion = upserted.ReadModelSchemaVersion ?? string.Empty;
+                        state.ReadModelSchemaHash = upserted.ReadModelSchemaHash ?? string.Empty;
+                        state.StateTypeUrl = upserted.StateTypeUrl ?? string.Empty;
+                        state.ReadModelTypeUrl = upserted.ReadModelTypeUrl ?? string.Empty;
+                        state.ScriptPackage = upserted.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
+                        state.ProtocolDescriptorSet = upserted.ProtocolDescriptorSet;
+                        state.StateDescriptorFullName = upserted.StateDescriptorFullName ?? string.Empty;
+                        state.ReadModelDescriptorFullName = upserted.ReadModelDescriptorFullName ?? string.Empty;
+                        state.RuntimeSemantics = upserted.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
+                        break;
+                    case ScriptReadModelSchemaDeclaredEvent schemaDeclared:
+                        state.ScriptId = schemaDeclared.ScriptId ?? state.ScriptId;
+                        state.Revision = schemaDeclared.ScriptRevision ?? state.Revision;
+                        state.ReadModelSchemaVersion = schemaDeclared.ReadModelSchemaVersion ?? string.Empty;
+                        state.ReadModelSchemaHash = schemaDeclared.ReadModelSchemaHash ?? string.Empty;
+                        break;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(state.Revision))
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(requestedRevision) &&
+                !string.Equals(requestedRevision, state.Revision, StringComparison.Ordinal))
+                return null;
+
+            return new ScriptDefinitionSnapshot(
+                state.ScriptId,
+                state.Revision,
+                state.SourceText,
+                state.SourceHash,
+                state.ScriptPackage.Clone(),
+                state.StateTypeUrl,
+                state.ReadModelTypeUrl,
+                state.ReadModelSchemaVersion,
+                state.ReadModelSchemaHash,
+                state.ProtocolDescriptorSet,
+                state.StateDescriptorFullName,
+                state.ReadModelDescriptorFullName,
+                state.RuntimeSemantics.Clone());
+        }
+
+        public ScriptCatalogEntrySnapshot? BuildCatalogEntryResponse(
+            string? catalogActorId,
+            string scriptId)
+        {
+            var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
+                ? "script-catalog"
+                : catalogActorId;
+            if (string.IsNullOrWhiteSpace(scriptId))
+                return null;
+
+            if (!_streams.TryGetValue(resolvedCatalogActorId, out var stream))
+                return null;
+
+            var entries = new Dictionary<string, CatalogEntryState>(StringComparer.Ordinal);
+            foreach (var evt in stream)
+            {
+                switch (evt)
+                {
+                    case ScriptCatalogRevisionPromotedEvent promoted:
+                        ApplyPromoted(entries, promoted);
+                        break;
+                    case ScriptCatalogRolledBackEvent rolledBack:
+                        ApplyRolledBack(entries, rolledBack);
+                        break;
+                }
+            }
+
+            if (!entries.TryGetValue(scriptId, out var entry))
+                return null;
+
+            return new ScriptCatalogEntrySnapshot(
+                entry.ScriptId,
+                entry.ActiveRevision,
+                entry.ActiveDefinitionActorId,
+                entry.ActiveSourceHash,
+                entry.PreviousRevision,
+                entry.RevisionHistory.ToArray(),
+                entry.LastProposalId);
+        }
+
+        private static void ApplyPromoted(
+            Dictionary<string, CatalogEntryState> entries,
+            ScriptCatalogRevisionPromotedEvent evt)
+        {
+            var scriptId = evt.ScriptId ?? string.Empty;
+            if (!entries.TryGetValue(scriptId, out var entry))
+            {
+                entry = new CatalogEntryState { ScriptId = scriptId };
+                entries[scriptId] = entry;
+            }
+
+            entry.PreviousRevision = entry.ActiveRevision;
+            entry.ActiveRevision = evt.Revision ?? string.Empty;
+            entry.ActiveDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
+            entry.ActiveSourceHash = evt.SourceHash ?? string.Empty;
+            entry.LastProposalId = evt.ProposalId ?? string.Empty;
+            if (!entry.RevisionHistory.Contains(entry.ActiveRevision, StringComparer.Ordinal))
+                entry.RevisionHistory.Add(entry.ActiveRevision);
+        }
+
+        private static void ApplyRolledBack(
+            Dictionary<string, CatalogEntryState> entries,
+            ScriptCatalogRolledBackEvent evt)
+        {
+            var scriptId = evt.ScriptId ?? string.Empty;
+            if (!entries.TryGetValue(scriptId, out var entry))
+            {
+                entry = new CatalogEntryState { ScriptId = scriptId };
+                entries[scriptId] = entry;
+            }
+
+            var targetRevision = evt.TargetRevision ?? string.Empty;
+            var previouslyActiveRevision = entry.ActiveRevision;
+            var previouslyActiveDefinitionActorId = entry.ActiveDefinitionActorId;
+            var previouslyActiveSourceHash = entry.ActiveSourceHash;
+
+            entry.PreviousRevision = string.IsNullOrWhiteSpace(evt.PreviousRevision)
+                ? previouslyActiveRevision
+                : evt.PreviousRevision;
+            entry.ActiveRevision = targetRevision;
+            if (string.Equals(targetRevision, previouslyActiveRevision, StringComparison.Ordinal))
+            {
+                entry.ActiveDefinitionActorId = previouslyActiveDefinitionActorId;
+                entry.ActiveSourceHash = previouslyActiveSourceHash;
+            }
+            else
+            {
+                entry.ActiveDefinitionActorId = string.Empty;
+                entry.ActiveSourceHash = string.Empty;
+            }
+
+            entry.LastProposalId = evt.ProposalId ?? string.Empty;
+            if (!entry.RevisionHistory.Contains(targetRevision, StringComparer.Ordinal))
+                entry.RevisionHistory.Add(targetRevision);
+        }
+
+        private sealed class DefinitionSnapshotState
+        {
+            public string ScriptId { get; set; } = string.Empty;
+            public string Revision { get; set; } = string.Empty;
+            public string SourceText { get; set; } = string.Empty;
+            public string SourceHash { get; set; } = string.Empty;
+            public string ReadModelSchemaVersion { get; set; } = string.Empty;
+            public string ReadModelSchemaHash { get; set; } = string.Empty;
+            public string StateTypeUrl { get; set; } = string.Empty;
+            public string ReadModelTypeUrl { get; set; } = string.Empty;
+            public ScriptPackageSpec ScriptPackage { get; set; } = new();
+            public ByteString ProtocolDescriptorSet { get; set; } = ByteString.Empty;
+            public string StateDescriptorFullName { get; set; } = string.Empty;
+            public string ReadModelDescriptorFullName { get; set; } = string.Empty;
+            public ScriptRuntimeSemanticsSpec RuntimeSemantics { get; set; } = new();
+        }
+
+        private sealed class CatalogEntryState
+        {
+            public string ScriptId { get; set; } = string.Empty;
+            public string ActiveRevision { get; set; } = string.Empty;
+            public string ActiveDefinitionActorId { get; set; } = string.Empty;
+            public string ActiveSourceHash { get; set; } = string.Empty;
+            public string PreviousRevision { get; set; } = string.Empty;
+            public List<string> RevisionHistory { get; } = [];
+            public string LastProposalId { get; set; } = string.Empty;
         }
     }
 
@@ -945,4 +1265,45 @@ public class RuntimeScriptInfrastructurePortsTests
                 sink.Push(evt);
         }
     }
+
+    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    {
+        public bool ProjectionEnabled => true;
+
+        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
+        }
+
+        public Task AttachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptExecutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
 }

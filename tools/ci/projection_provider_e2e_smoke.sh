@@ -23,6 +23,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+run_provider_integration_tests() {
+  local project="$1"
+  local log_file="$2"
+
+  dotnet test "${project}" \
+    --nologo \
+    --filter "Category=ProviderIntegration" \
+    --logger "trx;LogFileName=${log_file}" \
+    --results-directory "${RESULTS_DIR}"
+}
+
 wait_elasticsearch() {
   for _ in {1..90}; do
     status="$(curl --max-time 2 -s "${ELASTICSEARCH_ENDPOINT}/_cluster/health" | rg -o "\"status\":\"[^\"]+\"" || true)"
@@ -62,36 +73,50 @@ wait_neo4j
 
 echo "Running projection provider integration tests..."
 RESULTS_DIR="$(mktemp -d)"
-RESULTS_FILE="${RESULTS_DIR}/projection-provider-e2e.trx"
-AEVATAR_TEST_ELASTICSEARCH_ENDPOINT="${ELASTICSEARCH_ENDPOINT}" \
-AEVATAR_TEST_NEO4J_URI="${NEO4J_URI}" \
-AEVATAR_TEST_NEO4J_USERNAME="${NEO4J_USERNAME}" \
-AEVATAR_TEST_NEO4J_PASSWORD="${NEO4J_PASSWORD}" \
-dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj \
-  --nologo \
-  --filter "FullyQualifiedName~ProjectionProviderE2EIntegrationTests" \
-  --logger "trx;LogFileName=projection-provider-e2e.trx" \
-  --results-directory "${RESULTS_DIR}"
+RESULTS_FILE_CORE="${RESULTS_DIR}/projection-provider-core-e2e.trx"
+RESULTS_FILE_SCRIPTING="${RESULTS_DIR}/projection-provider-scripting-e2e.trx"
+export AEVATAR_TEST_ELASTICSEARCH_ENDPOINT="${ELASTICSEARCH_ENDPOINT}"
+export AEVATAR_TEST_NEO4J_URI="${NEO4J_URI}"
+export AEVATAR_TEST_NEO4J_USERNAME="${NEO4J_USERNAME}"
+export AEVATAR_TEST_NEO4J_PASSWORD="${NEO4J_PASSWORD}"
 
-if [ ! -f "${RESULTS_FILE}" ]; then
-  echo "Projection provider e2e trx result is missing: ${RESULTS_FILE}"
-  exit 1
-fi
+run_provider_integration_tests \
+  "test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj" \
+  "projection-provider-core-e2e.trx"
+run_provider_integration_tests \
+  "test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj" \
+  "projection-provider-scripting-e2e.trx"
 
-total="$(grep -o 'total=\"[0-9]*\"' "${RESULTS_FILE}" | head -n1 | awk -F'"' '{print $2}')"
-executed="$(grep -o 'executed=\"[0-9]*\"' "${RESULTS_FILE}" | head -n1 | awk -F'"' '{print $2}')"
-not_executed="$(grep -o 'notExecuted=\"[0-9]*\"' "${RESULTS_FILE}" | head -n1 | awk -F'"' '{print $2}')"
+validate_trx() {
+  local file="$1"
+  local label="$2"
 
-if [ -z "${total}" ] || [ -z "${executed}" ] || [ -z "${not_executed}" ]; then
-  echo "Failed to parse test counters from ${RESULTS_FILE}."
-  exit 1
-fi
+  if [ ! -f "${file}" ]; then
+    echo "${label} trx result is missing: ${file}"
+    exit 1
+  fi
 
-if [ "${not_executed}" -ne 0 ] || [ "${executed}" -ne "${total}" ]; then
-  echo "Projection provider e2e tests were not fully executed. total=${total} executed=${executed} notExecuted=${not_executed}"
-  exit 1
-fi
+  local total
+  local executed
+  local not_executed
+  total="$(grep -o 'total=\"[0-9]*\"' "${file}" | head -n1 | awk -F'"' '{print $2}')"
+  executed="$(grep -o 'executed=\"[0-9]*\"' "${file}" | head -n1 | awk -F'"' '{print $2}')"
+  not_executed="$(grep -o 'notExecuted=\"[0-9]*\"' "${file}" | head -n1 | awk -F'"' '{print $2}')"
 
-echo "Projection provider e2e tests executed fully. total=${total} executed=${executed}."
+  if [ -z "${total}" ] || [ -z "${executed}" ] || [ -z "${not_executed}" ]; then
+    echo "Failed to parse test counters from ${file}."
+    exit 1
+  fi
+
+  if [ "${not_executed}" -ne 0 ] || [ "${executed}" -ne "${total}" ]; then
+    echo "${label} tests were not fully executed. total=${total} executed=${executed} notExecuted=${not_executed}"
+    exit 1
+  fi
+
+  echo "${label} tests executed fully. total=${total} executed=${executed}."
+}
+
+validate_trx "${RESULTS_FILE_CORE}" "Projection provider core e2e"
+validate_trx "${RESULTS_FILE_SCRIPTING}" "Projection provider scripting e2e"
 
 echo "Projection provider e2e smoke test passed."

@@ -2,8 +2,8 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Core.Agents;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -27,9 +27,11 @@ public sealed class HybridServiceUpgradeContinuityTests
         services.AddScriptCapability();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
-        using var provider = services.BuildServiceProvider();
+        await using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<Aevatar.Foundation.Abstractions.Persistence.IEventStore>();
+        var definitionPort = provider.GetRequiredService<Aevatar.Scripting.Core.Ports.IScriptDefinitionCommandPort>();
+        var provisioningPort = provider.GetRequiredService<Aevatar.Scripting.Core.Ports.IScriptRuntimeProvisioningPort>();
 
         var workflowActor = await runtime.CreateAsync<TextNormalizationWorkflowProtocolGAgent>(
             "hybrid-workflow-" + Guid.NewGuid().ToString("N")[..8],
@@ -44,6 +46,9 @@ public sealed class HybridServiceUpgradeContinuityTests
             "hybrid-service-" + Guid.NewGuid().ToString("N")[..8],
             CancellationToken.None);
 
+        await PrepareScriptingProtocolRuntimeAsync(provider, scriptingActorV1.Id, definitionPort, provisioningPort, CancellationToken.None);
+        await PrepareScriptingProtocolRuntimeAsync(provider, scriptingActorV2.Id, definitionPort, provisioningPort, CancellationToken.None);
+
         await serviceActor.HandleEventAsync(CreateEnvelope(new ConfigureHybridServiceRequested
         {
             WorkflowActorId = workflowActor.Id,
@@ -56,7 +61,7 @@ public sealed class HybridServiceUpgradeContinuityTests
             InputText = "  Mixed Case  ",
         }), CancellationToken.None);
 
-        var firstSnapshot = await QueryServiceAsync(provider, serviceActor.Id, CancellationToken.None);
+        var firstSnapshot = ReadSnapshot(serviceActor);
         firstSnapshot.ProcessedCount.Should().Be(1);
         firstSnapshot.WorkflowActorId.Should().Be(workflowActor.Id);
         firstSnapshot.ScriptingActorId.Should().Be(scriptingActorV1.Id);
@@ -79,7 +84,7 @@ public sealed class HybridServiceUpgradeContinuityTests
             InputText = " next-value ",
         }), CancellationToken.None);
 
-        var secondSnapshot = await QueryServiceAsync(provider, serviceActor.Id, CancellationToken.None);
+        var secondSnapshot = ReadSnapshot(serviceActor);
         secondSnapshot.ProcessedCount.Should().Be(2);
         secondSnapshot.WorkflowActorId.Should().Be(workflowActor.Id);
         secondSnapshot.ScriptingActorId.Should().Be(scriptingActorV2.Id);
@@ -97,57 +102,32 @@ public sealed class HybridServiceUpgradeContinuityTests
         persistedEvents.Count(x => x.EventData?.Is(HybridServiceProcessed.Descriptor) == true).Should().Be(2);
     }
 
-    private static Task<HybridServiceSnapshot> QueryServiceAsync(
+    private static HybridServiceSnapshot ReadSnapshot(IActor actor) =>
+        ((HybridServiceStateGAgent)actor.Agent).State.Clone();
+
+    private static async Task PrepareScriptingProtocolRuntimeAsync(
         IServiceProvider provider,
-        string actorId,
+        string scriptingActorId,
+        Aevatar.Scripting.Core.Ports.IScriptDefinitionCommandPort definitionPort,
+        Aevatar.Scripting.Core.Ports.IScriptRuntimeProvisioningPort provisioningPort,
         CancellationToken ct)
     {
-        var streams = provider.GetRequiredService<IStreamProvider>();
-        var requestReplyClient = provider.GetRequiredService<IStreamRequestReplyClient>();
-        var dispatchPort = provider.GetRequiredService<IActorDispatchPort>();
+        _ = provider;
+        var definitionActorId = $"{scriptingActorId}:script-definition";
+        var runtimeActorId = $"{scriptingActorId}:script-runtime";
 
-        return QueryAsync<HybridServiceQueryResponded, HybridServiceSnapshot>(
-            requestReplyClient,
-            streams,
-            actorId,
-            dispatchPort,
-            "hybrid-service-query",
-            static (requestId, replyStreamId) => CreateEnvelope(new HybridServiceQueryRequested
-            {
-                RequestId = requestId,
-                ReplyStreamId = replyStreamId,
-            }),
-            static (response, requestId) => string.Equals(response.RequestId, requestId, StringComparison.Ordinal),
-            static response => response.Current?.Clone() ?? new HybridServiceSnapshot(),
-            static requestId => $"Hybrid service query timed out. request_id={requestId}",
+        await definitionPort.UpsertDefinitionAsync(
+            "text-normalization-protocol-script",
+            "rev-1",
+            TextNormalizationProtocolSampleActors.Source,
+            TextNormalizationProtocolSampleActors.SourceHash,
+            definitionActorId,
             ct);
-    }
-
-    private static async Task<TProjection> QueryAsync<TResponse, TProjection>(
-        IStreamRequestReplyClient requestReplyClient,
-        IStreamProvider streams,
-        string actorId,
-        IActorDispatchPort dispatchPort,
-        string replyStreamPrefix,
-        Func<string, string, EventEnvelope> envelopeFactory,
-        Func<TResponse, string, bool> isMatch,
-        Func<TResponse, TProjection> map,
-        Func<string, string> timeoutMessageFactory,
-        CancellationToken ct)
-        where TResponse : IMessage, new()
-    {
-        var response = await requestReplyClient.QueryActorAsync(
-            streams,
-            actorId,
-            dispatchPort,
-            replyStreamPrefix,
-            TimeSpan.FromSeconds(5),
-            envelopeFactory,
-            isMatch,
-            timeoutMessageFactory,
+        await provisioningPort.EnsureRuntimeAsync(
+            definitionActorId,
+            "rev-1",
+            runtimeActorId,
             ct);
-
-        return map(response);
     }
 
     private static EventEnvelope CreateEnvelope(IMessage payload) =>
@@ -164,13 +144,11 @@ public sealed class HybridServiceUpgradeContinuityTests
         };
 
     private sealed class HybridServiceStateGAgent(
-        IStreamProvider streams,
-        IStreamRequestReplyClient requestReplyClient,
+        IActorRuntime runtime,
         IActorDispatchPort dispatchPort)
         : GAgentBase<HybridServiceSnapshot>
     {
-        private readonly IStreamProvider _streams = streams ?? throw new ArgumentNullException(nameof(streams));
-        private readonly IStreamRequestReplyClient _requestReplyClient = requestReplyClient ?? throw new ArgumentNullException(nameof(requestReplyClient));
+        private readonly IActorRuntime _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         private readonly IActorDispatchPort _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
 
         [EventHandler]
@@ -225,23 +203,6 @@ public sealed class HybridServiceUpgradeContinuityTests
             }, CancellationToken.None);
         }
 
-        [EventHandler]
-        public Task HandleQueryRequested(HybridServiceQueryRequested evt)
-        {
-            if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-                return Task.CompletedTask;
-
-            return EventPublisher.SendToAsync(
-                evt.ReplyStreamId,
-                new HybridServiceQueryResponded
-                {
-                    RequestId = evt.RequestId,
-                    Current = State.Clone(),
-                },
-                CancellationToken.None,
-                sourceEnvelope: null);
-        }
-
         protected override HybridServiceSnapshot TransitionState(HybridServiceSnapshot current, IMessage evt)
         {
             var next = current?.Clone() ?? new HybridServiceSnapshot();
@@ -277,21 +238,16 @@ public sealed class HybridServiceUpgradeContinuityTests
                 }),
                 ct);
 
-            return await QueryAsync<TextNormalizationQueryResponded, TextNormalizationReadModel>(
-                _requestReplyClient,
-                _streams,
-                actorId,
-                _dispatchPort,
-                "hybrid-normalization-query",
-                static (requestId, replyStreamId) => CreateEnvelope(new TextNormalizationQueryRequested
-                {
-                    RequestId = requestId,
-                    ReplyStreamId = replyStreamId,
-                }),
-                static (response, requestId) => string.Equals(response.RequestId, requestId, StringComparison.Ordinal),
-                static response => response.Current?.Clone() ?? new TextNormalizationReadModel(),
-                static requestId => $"Hybrid normalization query timed out. request_id={requestId}",
-                ct);
+            var actor = await _runtime.GetAsync(actorId)
+                ?? throw new InvalidOperationException($"Hybrid normalization actor `{actorId}` was not found.");
+
+            return actor.Agent switch
+            {
+                TextNormalizationWorkflowProtocolGAgent workflow => workflow.State.Clone(),
+                TextNormalizationScriptingProtocolGAgent scripting => scripting.State.Clone(),
+                _ => throw new InvalidOperationException(
+                    $"Hybrid normalization actor `{actorId}` does not expose a supported protocol state."),
+            };
         }
 
         private static void EnsureConfigured(HybridServiceSnapshot state)

@@ -1,11 +1,12 @@
 using System.Net;
 using System.Net.Sockets;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
@@ -14,7 +15,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Serialization;
-using PbValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Integration.Tests;
 
@@ -24,6 +24,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
+        var garnetConnectionString = RequireGarnetConnectionString();
         var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
         var serviceId = $"aevatar-script-service-{Guid.NewGuid():N}";
         var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
@@ -44,7 +45,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node1SiloPort,
             node1GatewayPort,
-            primarySiloEndpoint: null);
+            null,
+            garnetConnectionString);
         var node2 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -52,7 +54,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node2SiloPort,
             node2GatewayPort,
-            primarySiloEndpoint: primaryEndpoint);
+            primaryEndpoint,
+            garnetConnectionString);
         var node3 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -60,13 +63,15 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             actorEventNamespace,
             node3SiloPort,
             node3GatewayPort,
-            primarySiloEndpoint: primaryEndpoint);
+            primaryEndpoint,
+            garnetConnectionString);
 
         try
         {
+            var definitionPortNode1 = node1.Services.GetRequiredService<IScriptDefinitionCommandPort>();
+            var provisioningPortNode1 = node1.Services.GetRequiredService<IScriptRuntimeProvisioningPort>();
             var runtimeNode1 = node1.Services.GetRequiredService<IActorRuntime>();
-            var runtimeNode2 = node2.Services.GetRequiredService<IActorRuntime>();
-            var runtimeNode3 = node3.Services.GetRequiredService<IActorRuntime>();
+            var executionProjectionNode1 = node1.Services.GetRequiredService<IScriptExecutionProjectionPort>();
             var evolutionServiceNode2 = node2.Services.GetRequiredService<IScriptEvolutionApplicationService>();
             var evolutionServiceNode3 = node3.Services.GetRequiredService<IScriptEvolutionApplicationService>();
             var catalogQueryPortNode1 = node1.Services.GetRequiredService<IScriptCatalogQueryPort>();
@@ -86,85 +91,131 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             var tempBRuntimeId = $"temp-b-{scopeId}";
             var generatedRuntimeId = $"generated-runtime-{scopeId}";
             var generatedDefinitionActorId = $"generated-definition-{scopeId}";
-            var workerAV2Source = BuildSimpleRuntimeSource("OrleansWorkerARev2Runtime", "OrleansWorkerARev2CompletedEvent");
-            var workerBV2Source = BuildSimpleRuntimeSource("OrleansWorkerBRev2Runtime", "OrleansWorkerBRev2CompletedEvent");
-            var generatedSource = BuildSimpleRuntimeSource("OrleansGeneratedRuntime", "OrleansGeneratedCompletedEvent");
-            var convergenceProbeActorId = $"orleans-convergence-probe-{scopeId}";
+            var workerAV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "OrleansWorkerARev2Runtime",
+                "ORLEANS-A-V2",
+                "orleans_worker_a",
+                "2");
+            var workerBV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "OrleansWorkerBRev2Runtime",
+                "ORLEANS-B-V2",
+                "orleans_worker_b",
+                "2");
+            var generatedSource = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "OrleansGeneratedRuntime",
+                "ORLEANS-GENERATED",
+                "orleans_generated",
+                "1");
 
-            _ = await runtimeNode1.CreateAsync<ScriptCatalogGAgent>(convergenceProbeActorId);
-            (await EventuallyAsync(() => runtimeNode2.ExistsAsync(convergenceProbeActorId))).Should().BeTrue();
-            (await EventuallyAsync(() => runtimeNode3.ExistsAsync(convergenceProbeActorId))).Should().BeTrue();
-
-            await UpsertDefinitionAsync(
-                runtimeNode1,
-                workerADefinitionActorId,
+            await definitionPortNode1.UpsertDefinitionAsync(
                 workerAScriptId,
                 "rev-a-1",
-                BuildSimpleRuntimeSource("OrleansWorkerARev1Runtime", "OrleansWorkerARev1CompletedEvent"));
-            await UpsertDefinitionAsync(
-                runtimeNode1,
-                workerBDefinitionActorId,
+                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                    "OrleansWorkerARev1Runtime",
+                    "ORLEANS-A-V1",
+                    "orleans_worker_a",
+                    "1"),
+                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                    "OrleansWorkerARev1Runtime",
+                    "ORLEANS-A-V1",
+                    "orleans_worker_a",
+                    "1")),
+                workerADefinitionActorId,
+                CancellationToken.None);
+            await definitionPortNode1.UpsertDefinitionAsync(
                 workerBScriptId,
                 "rev-b-1",
-                BuildSimpleRuntimeSource("OrleansWorkerBRev1Runtime", "OrleansWorkerBRev1CompletedEvent"));
-            await UpsertDefinitionAsync(
-                runtimeNode1,
-                orchestratorDefinitionActorId,
+                ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                    "OrleansWorkerBRev1Runtime",
+                    "ORLEANS-B-V1",
+                    "orleans_worker_b",
+                    "1"),
+                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                    "OrleansWorkerBRev1Runtime",
+                    "ORLEANS-B-V1",
+                    "orleans_worker_b",
+                    "1")),
+                workerBDefinitionActorId,
+                CancellationToken.None);
+            await definitionPortNode1.UpsertDefinitionAsync(
                 $"orleans-orchestrator-script-{scopeId}",
                 "rev-orchestrator-1",
-                OrleansClusterOrchestratorSource);
+                ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource,
+                ScriptingCommandEnvelopeTestKit.ComputeSourceHash(ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource),
+                orchestratorDefinitionActorId,
+                CancellationToken.None);
 
-            (await EventuallyAsync(() =>
-                DefinitionSnapshotExistsAsync(
-                    definitionSnapshotPortNode2,
-                    workerADefinitionActorId,
-                    "rev-a-1"))).Should().BeTrue();
-            (await EventuallyAsync(() =>
-                DefinitionSnapshotExistsAsync(
-                    definitionSnapshotPortNode3,
-                    workerBDefinitionActorId,
-                    "rev-b-1"))).Should().BeTrue();
-            (await EventuallyAsync(() =>
-                DefinitionSnapshotExistsAsync(
-                    definitionSnapshotPortNode2,
-                    orchestratorDefinitionActorId,
-                    "rev-orchestrator-1"))).Should().BeTrue();
+            (await EventuallyAsync(() => DefinitionSnapshotExistsAsync(
+                definitionSnapshotPortNode2,
+                workerADefinitionActorId,
+                "rev-a-1"))).Should().BeTrue();
+            (await EventuallyAsync(() => DefinitionSnapshotExistsAsync(
+                definitionSnapshotPortNode3,
+                workerBDefinitionActorId,
+                "rev-b-1"))).Should().BeTrue();
+            (await EventuallyAsync(() => DefinitionSnapshotExistsAsync(
+                definitionSnapshotPortNode2,
+                orchestratorDefinitionActorId,
+                "rev-orchestrator-1"))).Should().BeTrue();
 
-            var orchestratorRuntime = await runtimeNode1.CreateAsync<ScriptRuntimeGAgent>(orchestratorRuntimeActorId);
-            await RunScriptAsync(
-                orchestratorRuntime,
+            await provisioningPortNode1.EnsureRuntimeAsync(
+                orchestratorDefinitionActorId,
+                "rev-orchestrator-1",
                 orchestratorRuntimeActorId,
-                new RunScriptRequestedEvent
-                {
-                    RunId = $"run-orleans-{scopeId}",
-                    InputPayload = Any.Pack(new Struct
-                    {
-                        Fields =
-                        {
-                            ["worker_a_definition_actor_id"] = PbValue.ForString(workerADefinitionActorId),
-                            ["worker_b_definition_actor_id"] = PbValue.ForString(workerBDefinitionActorId),
-                            ["worker_a_script_id"] = PbValue.ForString(workerAScriptId),
-                            ["worker_b_script_id"] = PbValue.ForString(workerBScriptId),
-                            ["new_script_id"] = PbValue.ForString(newScriptId),
-                            ["worker_a_v2_source"] = PbValue.ForString(workerAV2Source),
-                            ["worker_b_v2_source"] = PbValue.ForString(workerBV2Source),
-                            ["new_script_source"] = PbValue.ForString(generatedSource),
-                            ["temp_a_runtime_id"] = PbValue.ForString(tempARuntimeId),
-                            ["temp_b_runtime_id"] = PbValue.ForString(tempBRuntimeId),
-                            ["generated_runtime_id"] = PbValue.ForString(generatedRuntimeId),
-                            ["generated_definition_actor_id"] = PbValue.ForString(generatedDefinitionActorId),
-                        },
-                    }),
-                    ScriptRevision = "rev-orchestrator-1",
-                    DefinitionActorId = orchestratorDefinitionActorId,
-                    RequestedEventType = "script.orleans.cluster.orchestrate",
-                });
+                CancellationToken.None);
 
-            _ = tempARuntimeId;
-            _ = tempBRuntimeId;
-            _ = generatedRuntimeId;
-            _ = generatedDefinitionActorId;
-            _ = orchestratorRuntimeActorId;
+            var lease = await executionProjectionNode1.EnsureActorProjectionAsync(
+                orchestratorRuntimeActorId,
+                CancellationToken.None);
+            lease.Should().NotBeNull();
+            await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
+            await executionProjectionNode1.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+
+            try
+            {
+                var orchestratorRuntime = await runtimeNode1.GetAsync(orchestratorRuntimeActorId);
+                orchestratorRuntime.Should().NotBeNull();
+                await orchestratorRuntime!.HandleEventAsync(
+                    ScriptingActorRequestEnvelopeFactory.Create(
+                        orchestratorRuntimeActorId,
+                        $"run-orleans-{scopeId}",
+                        new RunScriptRequestedEvent
+                        {
+                            RunId = $"run-orleans-{scopeId}",
+                            InputPayload = Any.Pack(new OrleansClusterRequested
+                            {
+                                WorkerADefinitionActorId = workerADefinitionActorId,
+                                WorkerBDefinitionActorId = workerBDefinitionActorId,
+                                NewScriptId = newScriptId,
+                                NewScriptSource = generatedSource,
+                                TempARuntimeId = tempARuntimeId,
+                                TempBRuntimeId = tempBRuntimeId,
+                                GeneratedRuntimeId = generatedRuntimeId,
+                                GeneratedDefinitionActorId = generatedDefinitionActorId,
+                            }),
+                            ScriptRevision = "rev-orchestrator-1",
+                            DefinitionActorId = orchestratorDefinitionActorId,
+                            RequestedEventType = "script.orleans.cluster.orchestrate",
+                            CommandId = $"run-orleans-{scopeId}",
+                            CorrelationId = $"run-orleans-{scopeId}",
+                        }),
+                    CancellationToken.None);
+
+                var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                    sink,
+                    $"run-orleans-{scopeId}",
+                    CancellationToken.None,
+                    TimeSpan.FromSeconds(45));
+                committed.DomainEventPayload.Should().NotBeNull();
+                var summary = committed.DomainEventPayload!.Unpack<OrleansClusterCompleted>().Current;
+                summary.GeneratedDefinitionActorId.Should().Be(generatedDefinitionActorId);
+                summary.GeneratedRuntimeId.Should().Be(generatedRuntimeId);
+            }
+            finally
+            {
+                await executionProjectionNode1.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+                await executionProjectionNode1.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
+            }
 
             (await EventuallyAsync(async () =>
             {
@@ -214,89 +265,32 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             ScriptCatalogEntrySnapshot? workerBCatalogEntry = null;
             (await EventuallyAsync(async () =>
             {
-                var entry = await catalogQueryPortNode1.GetCatalogEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
-                return entry != null && string.Equals(entry.ActiveRevision, "rev-a-2", StringComparison.Ordinal);
+                workerACatalogEntry = await catalogQueryPortNode1.GetCatalogEntryAsync(null, workerAScriptId, CancellationToken.None);
+                return workerACatalogEntry != null &&
+                       string.Equals(workerACatalogEntry.ActiveRevision, "rev-a-2", StringComparison.Ordinal);
             })).Should().BeTrue();
             (await EventuallyAsync(async () =>
             {
-                var entry = await catalogQueryPortNode1.GetCatalogEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
-                return entry != null && string.Equals(entry.ActiveRevision, "rev-b-2", StringComparison.Ordinal);
-            })).Should().BeTrue();
-            (await EventuallyAsync(async () =>
-            {
-                workerACatalogEntry = await catalogQueryPortNode3.GetCatalogEntryAsync("script-catalog", workerAScriptId, CancellationToken.None);
-                return workerACatalogEntry != null && string.Equals(workerACatalogEntry.ActiveRevision, "rev-a-2", StringComparison.Ordinal);
-            })).Should().BeTrue();
-            (await EventuallyAsync(async () =>
-            {
-                workerBCatalogEntry = await catalogQueryPortNode3.GetCatalogEntryAsync("script-catalog", workerBScriptId, CancellationToken.None);
-                return workerBCatalogEntry != null && string.Equals(workerBCatalogEntry.ActiveRevision, "rev-b-2", StringComparison.Ordinal);
+                workerBCatalogEntry = await catalogQueryPortNode3.GetCatalogEntryAsync(null, workerBScriptId, CancellationToken.None);
+                return workerBCatalogEntry != null &&
+                       string.Equals(workerBCatalogEntry.ActiveRevision, "rev-b-2", StringComparison.Ordinal);
             })).Should().BeTrue();
 
             workerACatalogEntry.Should().NotBeNull();
             workerBCatalogEntry.Should().NotBeNull();
-            workerACatalogEntry!.ActiveRevision.Should().Be("rev-a-2");
-            workerBCatalogEntry!.ActiveRevision.Should().Be("rev-b-2");
-            workerACatalogEntry.ActiveDefinitionActorId.Should().Be(decisionA.DefinitionActorId);
-            workerBCatalogEntry.ActiveDefinitionActorId.Should().Be(decisionB.DefinitionActorId);
+            workerACatalogEntry!.ActiveDefinitionActorId.Should().Be(decisionA.DefinitionActorId);
+            workerBCatalogEntry!.ActiveDefinitionActorId.Should().Be(decisionB.DefinitionActorId);
             workerACatalogEntry.RevisionHistory.Should().Contain("rev-a-2");
             workerBCatalogEntry.RevisionHistory.Should().Contain("rev-b-2");
 
-            ScriptDefinitionSnapshot? workerADefinitionSnapshot = null;
-            ScriptDefinitionSnapshot? workerBDefinitionSnapshot = null;
-            ScriptDefinitionSnapshot? generatedDefinitionSnapshot = null;
-            (await EventuallyAsync(async () =>
-            {
-                try
-                {
-                    workerADefinitionSnapshot = await definitionSnapshotPortNode2.GetRequiredAsync(
-                        decisionA.DefinitionActorId,
-                        "rev-a-2",
-                        CancellationToken.None);
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-            })).Should().BeTrue();
-            (await EventuallyAsync(async () =>
-            {
-                try
-                {
-                    workerBDefinitionSnapshot = await definitionSnapshotPortNode3.GetRequiredAsync(
-                        decisionB.DefinitionActorId,
-                        "rev-b-2",
-                        CancellationToken.None);
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-            })).Should().BeTrue();
-            (await EventuallyAsync(async () =>
-            {
-                try
-                {
-                    generatedDefinitionSnapshot = await definitionSnapshotPortNode3.GetRequiredAsync(
-                        generatedDefinitionActorId,
-                        "rev-new-1",
-                        CancellationToken.None);
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-            })).Should().BeTrue();
-
-            workerADefinitionSnapshot!.ScriptId.Should().Be(workerAScriptId);
-            workerADefinitionSnapshot.Revision.Should().Be("rev-a-2");
-            workerBDefinitionSnapshot!.ScriptId.Should().Be(workerBScriptId);
-            workerBDefinitionSnapshot.Revision.Should().Be("rev-b-2");
-            generatedDefinitionSnapshot!.ScriptId.Should().Be(newScriptId);
-            generatedDefinitionSnapshot.Revision.Should().Be("rev-new-1");
+            (await EventuallyAsync(() => DefinitionSnapshotExistsAsync(
+                definitionSnapshotPortNode2,
+                decisionA.DefinitionActorId,
+                "rev-a-2"))).Should().BeTrue();
+            (await EventuallyAsync(() => DefinitionSnapshotExistsAsync(
+                definitionSnapshotPortNode3,
+                decisionB.DefinitionActorId,
+                "rev-b-2"))).Should().BeTrue();
         }
         finally
         {
@@ -313,23 +307,25 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         string actorEventNamespace,
         int siloPort,
         int gatewayPort,
-        IPEndPoint? primarySiloEndpoint)
+        IPEndPoint? primarySiloEndpoint,
+        string garnetConnectionString)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
-                    siloPort: siloPort,
-                    gatewayPort: gatewayPort,
-                    primarySiloEndpoint: primarySiloEndpoint,
-                    serviceId: serviceId,
-                    clusterId: clusterId);
+                    siloPort,
+                    gatewayPort,
+                    primarySiloEndpoint,
+                    serviceId,
+                    clusterId);
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
                     options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
                     options.StreamProviderName = streamProviderName;
                     options.ActorEventNamespace = actorEventNamespace;
-                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory;
+                    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
+                    options.GarnetConnectionString = garnetConnectionString;
                 });
                 siloBuilder.ConfigureServices(services =>
                     services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer()));
@@ -377,34 +373,6 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         return false;
     }
 
-    private static async Task UpsertDefinitionAsync(
-        IActorRuntime runtime,
-        string definitionActorId,
-        string scriptId,
-        string revision,
-        string source)
-    {
-        var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        await actor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
-                definitionActorId,
-                scriptId,
-                revision,
-                source,
-                $"hash-{scriptId}-{revision}"),
-            CancellationToken.None);
-    }
-
-    private static async Task RunScriptAsync(
-        IActor runtimeActor,
-        string runtimeActorId,
-        RunScriptRequestedEvent command)
-    {
-        await runtimeActor.HandleEventAsync(
-            ScriptingCommandEnvelopeTestKit.CreateRunScript(runtimeActorId, command),
-            CancellationToken.None);
-    }
-
     private static async Task<bool> DefinitionSnapshotExistsAsync(
         IScriptDefinitionSnapshotPort snapshotPort,
         string definitionActorId,
@@ -421,161 +389,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         }
     }
 
-    private static string BuildSimpleRuntimeSource(string className, string completedEventType) =>
-        $$"""
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class {{className}} : IScriptPackageRuntime
-{
-    public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        _ = requestedEvent;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(new ScriptHandlerResult(
-            new IMessage[]
-            {
-                new StringValue { Value = "{{completedEventType}}" },
-            }));
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
-
-    private const string OrleansClusterOrchestratorSource = """
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-
-public sealed class OrleansClusterScriptOrchestrator : IScriptPackageRuntime
-{
-    public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
-        ScriptRequestedEventEnvelope requestedEvent,
-        ScriptExecutionContext context,
-        CancellationToken ct)
-    {
-        var input = requestedEvent.Payload.Unpack<Struct>();
-        var workerADefinitionActorId = input.Fields["worker_a_definition_actor_id"].StringValue;
-        var workerBDefinitionActorId = input.Fields["worker_b_definition_actor_id"].StringValue;
-        var workerAScriptId = input.Fields["worker_a_script_id"].StringValue;
-        var workerBScriptId = input.Fields["worker_b_script_id"].StringValue;
-        var newScriptId = input.Fields["new_script_id"].StringValue;
-        var workerAV2Source = input.Fields["worker_a_v2_source"].StringValue;
-        var workerBV2Source = input.Fields["worker_b_v2_source"].StringValue;
-        var newScriptSource = input.Fields["new_script_source"].StringValue;
-        var tempARuntimeId = input.Fields["temp_a_runtime_id"].StringValue;
-        var tempBRuntimeId = input.Fields["temp_b_runtime_id"].StringValue;
-        var generatedRuntimeId = input.Fields["generated_runtime_id"].StringValue;
-        var generatedDefinitionActorId = input.Fields["generated_definition_actor_id"].StringValue;
-
-        tempARuntimeId = await context.Capabilities!.SpawnScriptRuntimeAsync(
-            workerADefinitionActorId,
-            "rev-a-1",
-            tempARuntimeId,
-            ct);
-        await context.Capabilities.RunScriptInstanceAsync(
-            tempARuntimeId,
-            "temp-a-run-" + context.RunId,
-            Any.Pack(new Struct()),
-            "rev-a-1",
-            workerADefinitionActorId,
-            "temp.a.run",
-            ct);
-
-        tempBRuntimeId = await context.Capabilities.SpawnScriptRuntimeAsync(
-            workerBDefinitionActorId,
-            "rev-b-1",
-            tempBRuntimeId,
-            ct);
-        await context.Capabilities.RunScriptInstanceAsync(
-            tempBRuntimeId,
-            "temp-b-run-" + context.RunId,
-            Any.Pack(new Struct()),
-            "rev-b-1",
-            workerBDefinitionActorId,
-            "temp.b.run",
-            ct);
-
-        generatedDefinitionActorId = await context.Capabilities.UpsertScriptDefinitionAsync(
-            newScriptId,
-            "rev-new-1",
-            newScriptSource,
-            "hash-new-1",
-            generatedDefinitionActorId,
-            ct);
-        generatedRuntimeId = await context.Capabilities.SpawnScriptRuntimeAsync(
-            generatedDefinitionActorId,
-            "rev-new-1",
-            generatedRuntimeId,
-            ct);
-        await context.Capabilities.RunScriptInstanceAsync(
-            generatedRuntimeId,
-            "generated-run-" + context.RunId,
-            Any.Pack(new Struct()),
-            "rev-new-1",
-            generatedDefinitionActorId,
-            "generated.run",
-            ct);
-
-        var summary = new Struct
-        {
-            Fields =
-            {
-                ["temp_a_runtime_id"] = Value.ForString(tempARuntimeId),
-                ["temp_b_runtime_id"] = Value.ForString(tempBRuntimeId),
-                ["generated_runtime_id"] = Value.ForString(generatedRuntimeId),
-                ["generated_definition_actor_id"] = Value.ForString(generatedDefinitionActorId),
-            },
-        };
-
-        return new ScriptHandlerResult(
-            new IMessage[]
-            {
-                new StringValue { Value = "OrleansClusterOrchestrationCompletedEvent" },
-            },
-            new Dictionary<string, Any>
-            {
-                ["summary"] = Any.Pack(summary),
-            },
-            new Dictionary<string, Any>
-            {
-                ["summary"] = Any.Pack(summary),
-            });
-    }
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-        IReadOnlyDictionary<string, Any> currentState,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
-
-    public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-        IReadOnlyDictionary<string, Any> currentReadModel,
-        ScriptDomainEventEnvelope domainEvent,
-        CancellationToken ct) =>
-        ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
-}
-""";
+    private static string RequireGarnetConnectionString() =>
+        Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
+        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 }

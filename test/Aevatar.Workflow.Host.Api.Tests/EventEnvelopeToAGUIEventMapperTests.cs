@@ -38,6 +38,22 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void StartWorkflowEvent_WhenPublisherMissing_ShouldFallbackToWorkflowName()
+    {
+        var envelope = Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "fallback-workflow",
+            Input = "hello",
+        });
+        envelope.Route = null;
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle();
+        events[0].RunStarted.ThreadId.Should().Be("fallback-workflow");
+    }
+
+    [Fact]
     public void StepRequestEvent_ShouldMapToStepStartedAndCustomPayload()
     {
         var events = CreateMapper().Map(Wrap(new StepRequestEvent
@@ -60,32 +76,41 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void StepCompletedEvent_ShouldExposeTypedFieldsWithoutMetadataMirror()
+    public void StepCompletedEvent_ShouldMapStepFinishedAndExposeTypedFields()
     {
         var events = CreateMapper().Map(Wrap(new StepCompletedEvent
         {
-            RunId = "run-1",
-            StepId = "branch",
+            RunId = "run-2",
+            StepId = "evaluate",
             Success = true,
-            Output = "done",
-            NextStepId = "publish",
-            BranchKey = "approved",
-            AssignedVariable = "result",
-            AssignedValue = "done",
+            Output = "approved",
+            Error = "",
+            NextStepId = "archive",
+            BranchKey = "pass",
+            AssignedVariable = "decision",
+            AssignedValue = "approved",
             Annotations =
             {
+                ["reason"] = "score-high",
                 ["source"] = "tests",
             },
         }));
 
         events.Should().HaveCount(2);
+        events[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StepFinished);
+        events[0].StepFinished.StepName.Should().Be("evaluate");
+        events[1].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
         events[1].Custom.Name.Should().Be("aevatar.step.completed");
         var payload = events[1].Custom.Payload.Unpack<WorkflowStepCompletedCustomPayload>();
+        payload.RunId.Should().Be("run-2");
+        payload.StepId.Should().Be("evaluate");
+        payload.Success.Should().BeTrue();
+        payload.NextStepId.Should().Be("archive");
+        payload.BranchKey.Should().Be("pass");
+        payload.AssignedVariable.Should().Be("decision");
+        payload.AssignedValue.Should().Be("approved");
+        payload.Annotations.Should().ContainKey("reason").WhoseValue.Should().Be("score-high");
         payload.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("tests");
-        payload.NextStepId.Should().Be("publish");
-        payload.BranchKey.Should().Be("approved");
-        payload.AssignedVariable.Should().Be("result");
-        payload.AssignedValue.Should().Be("done");
     }
 
     [Fact]
@@ -108,6 +133,36 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void TextStreamEvents_ShouldMapStartContentAndEnd_WithEnvelopeIdFallback()
+    {
+        var mapper = CreateMapper();
+        var startEnvelope = Wrap(new TextMessageStartEvent());
+        var contentEnvelope = Wrap(new TextMessageContentEvent
+        {
+            Delta = "chunk",
+        });
+        var endEnvelope = Wrap(new TextMessageEndEvent());
+
+        var startEvents = mapper.Map(startEnvelope);
+        var contentEvents = mapper.Map(contentEnvelope);
+        var endEvents = mapper.Map(endEnvelope);
+
+        startEvents.Should().ContainSingle();
+        startEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageStart);
+        startEvents[0].TextMessageStart.MessageId.Should().Be($"msg:{startEnvelope.Id}");
+        startEvents[0].TextMessageStart.Role.Should().Be("assistant");
+
+        contentEvents.Should().ContainSingle();
+        contentEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageContent);
+        contentEvents[0].TextMessageContent.MessageId.Should().Be($"msg:{contentEnvelope.Id}");
+        contentEvents[0].TextMessageContent.Delta.Should().Be("chunk");
+
+        endEvents.Should().ContainSingle();
+        endEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageEnd);
+        endEvents[0].TextMessageEnd.MessageId.Should().Be($"msg:{endEnvelope.Id}");
+    }
+
+    [Fact]
     public void TextMessageReasoningEvent_ShouldMapToCustomReasoningPayload()
     {
         var envelope = Wrap(new TextMessageReasoningEvent
@@ -126,6 +181,22 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         payload.SessionId.Should().Be("reasoning-session");
         payload.Delta.Should().Be("thinking chunk");
         payload.Role.Should().Be("planner");
+    }
+
+    [Fact]
+    public void TextMessageReasoningEvent_WhenPublisherMissing_ShouldFallbackToAssistant()
+    {
+        var envelope = Wrap(new TextMessageReasoningEvent
+        {
+            SessionId = "reasoning-session",
+            Delta = "thinking chunk",
+        });
+        envelope.Route = null;
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle();
+        events[0].Custom.Payload.Unpack<WorkflowReasoningCustomPayload>().Role.Should().Be("assistant");
     }
 
     [Fact]
@@ -188,6 +259,25 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WaitingForSignalEvent_WhenRunIdMissing_ShouldFallbackToCorrelationId()
+    {
+        var envelope = Wrap(new WaitingForSignalEvent
+        {
+            StepId = "wait_gate",
+            SignalName = "ops_window_open",
+        });
+        envelope.Propagation = new EnvelopePropagation
+        {
+            CorrelationId = "corr-wait",
+        };
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle();
+        events[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().Be("corr-wait");
+    }
+
+    [Fact]
     public void WorkflowSignalBufferedEvent_ProjectsTo_CustomBufferedSignalEvent()
     {
         var envelope = Wrap(new WorkflowSignalBufferedEvent
@@ -209,6 +299,118 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         payload.StepId.Should().Be("wait-b");
         payload.SignalName.Should().Be("reply_ready");
         payload.Payload.Should().Be("payload");
+        payload.ReceivedAtUnixTimeMs.Should().Be(123);
+    }
+
+    [Fact]
+    public void ToolCallAndResultEvents_ShouldMapToToolLifecycle()
+    {
+        var mapper = CreateMapper();
+        var startEvents = mapper.Map(Wrap(new ToolCallEvent
+        {
+            CallId = "call-1",
+            ToolName = "search",
+        }));
+        var endEvents = mapper.Map(Wrap(new ToolResultEvent
+        {
+            CallId = "call-1",
+            ResultJson = "{\"ok\":true}",
+        }));
+
+        startEvents.Should().ContainSingle();
+        startEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallStart);
+        startEvents[0].ToolCallStart.ToolCallId.Should().Be("call-1");
+        startEvents[0].ToolCallStart.ToolName.Should().Be("search");
+
+        endEvents.Should().ContainSingle();
+        endEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallEnd);
+        endEvents[0].ToolCallEnd.ToolCallId.Should().Be("call-1");
+        endEvents[0].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+    }
+
+    [Fact]
+    public void IndividualHandlers_ShouldReturnFalse_ForUnsupportedEnvelopes()
+    {
+        var unsupported = Wrap(new ParentChangedEvent
+        {
+            OldParent = "a",
+            NewParent = "b",
+        });
+        var noPayload = new EventEnvelope
+        {
+            Id = "no-payload",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+
+        new StartWorkflowRunEventEnvelopeMappingHandler().TryMap(unsupported, out var startEvents).Should().BeFalse();
+        startEvents.Should().BeEmpty();
+
+        new StepRequestRunEventEnvelopeMappingHandler().TryMap(unsupported, out var requestEvents).Should().BeFalse();
+        requestEvents.Should().BeEmpty();
+
+        new StepCompletedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var completedEvents).Should().BeFalse();
+        completedEvents.Should().BeEmpty();
+
+        new AITextStreamRunEventEnvelopeMappingHandler().TryMap(noPayload, out var textEvents).Should().BeFalse();
+        textEvents.Should().BeEmpty();
+
+        new AIReasoningRunEventEnvelopeMappingHandler().TryMap(unsupported, out var reasoningEvents).Should().BeFalse();
+        reasoningEvents.Should().BeEmpty();
+
+        new WorkflowCompletedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var workflowCompletedEvents).Should().BeFalse();
+        workflowCompletedEvents.Should().BeEmpty();
+
+        new ToolCallRunEventEnvelopeMappingHandler().TryMap(noPayload, out var toolEvents).Should().BeFalse();
+        toolEvents.Should().BeEmpty();
+
+        new WorkflowSuspendedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var suspendedEvents).Should().BeFalse();
+        suspendedEvents.Should().BeEmpty();
+
+        new WorkflowWaitingSignalRunEventEnvelopeMappingHandler().TryMap(unsupported, out var waitingEvents).Should().BeFalse();
+        waitingEvents.Should().BeEmpty();
+
+        new WorkflowSignalBufferedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var bufferedEvents).Should().BeFalse();
+        bufferedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void PublicMappingPaths_ShouldCoverHelperFallbackBranches()
+    {
+        var startEnvelope = new EventEnvelope
+        {
+            Id = "start-no-ts",
+            Payload = Any.Pack(new StartWorkflowEvent
+            {
+                WorkflowName = "fallback-thread",
+            }),
+        };
+        var startEvents = CreateMapper().Map(startEnvelope);
+        startEvents.Should().ContainSingle();
+        startEvents[0].Timestamp.Should().BeNull();
+        startEvents[0].RunStarted.ThreadId.Should().Be("fallback-thread");
+
+        var waitingEnvelope = new EventEnvelope
+        {
+            Id = "wait-no-corr",
+            Payload = Any.Pack(new WaitingForSignalEvent
+            {
+                StepId = "wait_gate",
+                SignalName = "ops_window_open",
+            }),
+        };
+        var waitingEvents = CreateMapper().Map(waitingEnvelope);
+        waitingEvents.Should().ContainSingle();
+        waitingEvents[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().BeEmpty();
+
+        var reasoningEnvelope = Wrap(new TextMessageReasoningEvent
+        {
+            SessionId = "reasoning-session",
+            Delta = "thinking chunk",
+        });
+        reasoningEnvelope.EnsureRoute().PublisherActorId = " reviewer ";
+        var reasoningEvents = CreateMapper().Map(reasoningEnvelope);
+        reasoningEvents.Should().ContainSingle();
+        reasoningEvents[0].Custom.Payload.Unpack<WorkflowReasoningCustomPayload>().Role.Should().Be("reviewer");
     }
 
     [Fact]

@@ -6,7 +6,7 @@
 
 - `builder.AddAevatarDefaultHost(...)`
 - `builder.AddMainnetDistributedOrleansHost()`（当 `ActorRuntime:Provider=Orleans` 时启用 Orleans Silo）
-- `builder.AddWorkflowCapabilityWithAIDefaults()`
+- `builder.AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })`
 - `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 
 ## 分布式模式（Orleans + TM + Kafka）

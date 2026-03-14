@@ -1,319 +1,157 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
-using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
-public class ScriptRuntimeExecutionOrchestratorTests
+public sealed class ScriptRuntimeExecutionOrchestratorTests
 {
     [Fact]
-    public async Task ExecuteRunAsync_ShouldDisposeCompiledDefinition_WhenDefinitionImplementsDisposableOnly()
+    public async Task DispatchAsync_ShouldDisposeBehavior_WhenBehaviorImplementsAsyncDisposable()
     {
-        var definition = new DisposableOnlyDefinition();
-        var orchestrator = new ScriptRuntimeExecutionOrchestrator(
-            new DisposableOnlyCompiler(definition),
-            new NoopCapabilityComposer());
+        var tracker = new AsyncDisposableTracker();
+        var behavior = new AsyncDisposableBehavior(tracker);
+        var dispatcher = new ScriptBehaviorDispatcher(
+            new StaticResolver(new ScriptBehaviorArtifact(
+                "script-1",
+                "rev-1",
+                "hash-1",
+                behavior.Descriptor,
+                behavior.Descriptor.ToContract(),
+                () => new AsyncDisposableBehavior(tracker))),
+            new ProtobufMessageCodec());
 
-        var result = await orchestrator.ExecuteRunAsync(
-            new ScriptRuntimeExecutionRequest(
-                RuntimeActorId: "runtime-1",
-                CurrentState: null,
-                CurrentReadModel: null,
-                RunEvent: new RunScriptRequestedEvent
-                {
-                    RunId = "run-1",
-                    InputPayload = Any.Pack(new Struct()),
-                    ScriptRevision = "rev-1",
-                    DefinitionActorId = "definition-1",
-                    RequestedEventType = "script.run.requested",
-                },
+        var facts = await dispatcher.DispatchAsync(
+            new ScriptBehaviorDispatchRequest(
+                ActorId: "runtime-1",
+                DefinitionActorId: "definition-1",
                 ScriptId: "script-1",
-                ScriptRevision: "rev-1",
+                Revision: "rev-1",
                 SourceText: "source",
-                ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "hash-v1",
-                MessageContext: new ScriptExecutionMessageContext(new NullEventPublisher(), null)),
+                SourceHash: "hash-1",
+                ScriptPackage: new ScriptPackageSpec(),
+                StateTypeUrl: string.Empty,
+                ReadModelTypeUrl: string.Empty,
+                CurrentStateRoot: null,
+                CurrentStateVersion: 0,
+                Envelope: new EventEnvelope
+                {
+                    Id = "command-1",
+                    Payload = Any.Pack(new RunScriptRequestedEvent
+                    {
+                        RunId = "run-1",
+                        DefinitionActorId = "definition-1",
+                        ScriptRevision = "rev-1",
+                        RequestedEventType = "integration.requested",
+                        InputPayload = Any.Pack(new SimpleTextCommand
+                        {
+                            CommandId = "command-1",
+                            Value = "hello",
+                        }),
+                    }),
+                    Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+                },
+                Capabilities: new NoOpCapabilities()),
             CancellationToken.None);
 
-        result.Should().ContainSingle();
-        definition.IsDisposed.Should().BeTrue();
+        facts.Should().ContainSingle();
+        tracker.DisposeCalls.Should().Be(1);
     }
 
-    private sealed class DisposableOnlyCompiler(DisposableOnlyDefinition definition) : IScriptPackageCompiler
+    private sealed class StaticResolver(ScriptBehaviorArtifact artifact) : IScriptBehaviorArtifactResolver
     {
-        private readonly DisposableOnlyDefinition _definition = definition;
-
-        public Task<ScriptPackageCompilationResult> CompileAsync(
-            ScriptPackageCompilationRequest request,
-            CancellationToken ct)
+        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
         {
             _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPackageCompilationResult(
-                    IsSuccess: true,
-                    CompiledDefinition: _definition,
-                    ContractManifest: _definition.ContractManifest,
-                    Diagnostics: Array.Empty<string>()));
+            return artifact;
         }
     }
 
-    private sealed class DisposableOnlyDefinition : IScriptPackageDefinition, IDisposable
+    private sealed class AsyncDisposableTracker
     {
-        public bool IsDisposed { get; private set; }
-        public string ScriptId => "script-1";
-        public string Revision => "rev-1";
-        public ScriptContractManifest ContractManifest { get; } =
-            new("input", [], "state", "readmodel");
+        public int DisposeCalls { get; private set; }
 
-        public Task<ScriptHandlerResult> HandleRequestedEventAsync(
-            ScriptRequestedEventEnvelope requestedEvent,
-            ScriptExecutionContext context,
-            CancellationToken ct)
+        public void MarkDisposed() => DisposeCalls++;
+    }
+
+    private sealed class AsyncDisposableBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>, IAsyncDisposable
+    {
+        private readonly AsyncDisposableTracker _tracker;
+
+        public AsyncDisposableBehavior(AsyncDisposableTracker tracker)
         {
-            _ = requestedEvent;
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptHandlerResult([new StringValue { Value = "ScriptCompleted" }]));
+            _tracker = tracker;
         }
 
-        public ValueTask<IReadOnlyDictionary<string, Any>?> ApplyDomainEventAsync(
-            IReadOnlyDictionary<string, Any> currentState,
-            ScriptDomainEventEnvelope domainEvent,
-            CancellationToken ct)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            _ = domainEvent;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentState);
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current);
         }
 
-        public ValueTask<IReadOnlyDictionary<string, Any>?> ReduceReadModelAsync(
-            IReadOnlyDictionary<string, Any> currentReadModel,
-            ScriptDomainEventEnvelope domainEvent,
+        private static Task HandleAsync(
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
-            _ = domainEvent;
             ct.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IReadOnlyDictionary<string, Any>?>(currentReadModel);
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = inbound.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = inbound.Value ?? string.Empty,
+                },
+            });
+            return Task.CompletedTask;
         }
 
-        public void Dispose()
+        public ValueTask DisposeAsync()
         {
-            IsDisposed = true;
+            _tracker.MarkDisposed();
+            return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class NoopCapabilityComposer : IScriptRuntimeCapabilityComposer
+    private sealed class NoOpCapabilities : IScriptBehaviorRuntimeCapabilities
     {
-        private static readonly IScriptRuntimeCapabilities Capabilities = new NoopRuntimeCapabilities();
-
-        public IScriptRuntimeCapabilities Compose(ScriptRuntimeCapabilityContext context)
-        {
-            _ = context;
-            return Capabilities;
-        }
-    }
-
-    private sealed class NoopRuntimeCapabilities : IScriptRuntimeCapabilities
-    {
-        public Task<string> AskAIAsync(string prompt, CancellationToken ct)
-        {
-            _ = prompt;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(string.Empty);
-        }
-
-        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct)
-        {
-            _ = eventPayload;
-            _ = direction;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
-        {
-            _ = targetActorId;
-            _ = eventPayload;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<string> CreateAgentAsync(
-            string agentTypeAssemblyQualifiedName,
-            string? actorId,
-            CancellationToken ct)
-        {
-            _ = agentTypeAssemblyQualifiedName;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(actorId ?? string.Empty);
-        }
-
-        public Task DestroyAgentAsync(string actorId, CancellationToken ct)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct)
-        {
-            _ = parentActorId;
-            _ = childActorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct)
-        {
-            _ = childActorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
-            ScriptEvolutionProposal proposal,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                new ScriptPromotionDecision(
-                    Accepted: false,
-                    ProposalId: proposal.ProposalId ?? string.Empty,
-                    ScriptId: proposal.ScriptId ?? string.Empty,
-                    BaseRevision: proposal.BaseRevision ?? string.Empty,
-                    CandidateRevision: proposal.CandidateRevision ?? string.Empty,
-                    Status: ScriptEvolutionStatuses.Rejected,
-                    FailureReason: "noop",
-                    DefinitionActorId: string.Empty,
-                    CatalogActorId: string.Empty,
-                    ValidationReport: ScriptEvolutionValidationReport.Empty));
-        }
-
-        public Task<string> UpsertScriptDefinitionAsync(
-            string scriptId,
-            string scriptRevision,
-            string sourceText,
-            string sourceHash,
-            string? definitionActorId,
-            CancellationToken ct)
-        {
-            _ = scriptId;
-            _ = scriptRevision;
-            _ = sourceText;
-            _ = sourceHash;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(definitionActorId ?? string.Empty);
-        }
-
-        public Task<string> SpawnScriptRuntimeAsync(
-            string definitionActorId,
-            string scriptRevision,
-            string? runtimeActorId,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = scriptRevision;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(runtimeActorId ?? string.Empty);
-        }
-
-        public Task RunScriptInstanceAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct)
-        {
-            _ = runtimeActorId;
-            _ = runId;
-            _ = inputPayload;
-            _ = scriptRevision;
-            _ = definitionActorId;
-            _ = requestedEventType;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task PromoteRevisionAsync(
-            string catalogActorId,
-            string scriptId,
-            string revision,
-            string definitionActorId,
-            string sourceHash,
-            string proposalId,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            _ = revision;
-            _ = definitionActorId;
-            _ = sourceHash;
-            _ = proposalId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task RollbackRevisionAsync(
-            string catalogActorId,
-            string scriptId,
-            string targetRevision,
-            string reason,
-            string proposalId,
-            CancellationToken ct)
-        {
-            _ = catalogActorId;
-            _ = scriptId;
-            _ = targetRevision;
-            _ = reason;
-            _ = proposalId;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class NullEventPublisher : IEventPublisher
-    {
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            TopologyAudience direction = TopologyAudience.Children,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
+        public Task<string> AskAIAsync(string prompt, CancellationToken ct) => Task.FromResult(string.Empty);
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct) => Task.CompletedTask;
+        public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task PublishToSelfAsync(IMessage eventPayload, CancellationToken ct) => Task.CompletedTask;
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableSignalAsync(string callbackId, TimeSpan dueTime, IMessage eventPayload, CancellationToken ct) =>
+            Task.FromResult(new RuntimeCallbackLease("runtime-1", callbackId, 0, RuntimeCallbackBackend.InMemory));
+        public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct) => Task.CompletedTask;
+        public Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct) => Task.FromResult(actorId ?? string.Empty);
+        public Task DestroyAgentAsync(string actorId, CancellationToken ct) => Task.CompletedTask;
+        public Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) => Task.CompletedTask;
+        public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) => Task.FromResult<ScriptReadModelSnapshot?>(null);
+        public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) => Task.FromResult<Any?>(null);
+        public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct) =>
+            Task.FromResult(new ScriptPromotionDecision(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, new ScriptEvolutionValidationReport(false, [])));
+        public Task<string> UpsertScriptDefinitionAsync(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, CancellationToken ct) =>
+            Task.FromResult(definitionActorId ?? string.Empty);
+        public Task<string> SpawnScriptRuntimeAsync(string definitionActorId, string scriptRevision, string? runtimeActorId, CancellationToken ct) =>
+            Task.FromResult(runtimeActorId ?? string.Empty);
+        public Task RunScriptInstanceAsync(string runtimeActorId, string runId, Any? inputPayload, string scriptRevision, string definitionActorId, string requestedEventType, CancellationToken ct) =>
             Task.CompletedTask;
-
-        public Task SendToAsync<TEvent>(
-            string targetActorId,
-            TEvent evt,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
+        public Task PromoteRevisionAsync(string catalogActorId, string scriptId, string revision, string definitionActorId, string sourceHash, string proposalId, CancellationToken ct) =>
             Task.CompletedTask;
-
-        public Task PublishCommittedStateEventAsync(
-            CommittedStateEventPublished evt,
-            ObserverAudience audience = ObserverAudience.CommittedFacts,
-            CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null,
-            EventEnvelopePublishOptions? options = null)
-        {
-            _ = evt;
-            _ = audience;
-            _ = sourceEnvelope;
-            _ = options;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+        public Task RollbackRevisionAsync(string catalogActorId, string scriptId, string targetRevision, string reason, string proposalId, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 }
