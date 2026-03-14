@@ -347,6 +347,31 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
+    public async Task DetachedCommandDispatchService_ShouldCompleteAcceptanceHandoff_WhenCallerCancelsAfterDispatch()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var scheduler = new FakeDetachedCleanupScheduler();
+        using var cts = new CancellationTokenSource();
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline
+            {
+                Result = Success(target, receipt),
+                AfterDispatchPrepared = () => cts.Cancel(),
+            },
+            scheduler);
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null), cts.Token);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(receipt);
+        scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DetachedCommandDispatchService_ShouldReturnFailure_WhenDurableCleanupCannotBeScheduled()
     {
         var projectionPort = new FakeProjectionPort();
@@ -515,6 +540,7 @@ public sealed class WorkflowApplicationLayerTests
         public Exception? PrepareException { get; set; }
         public Exception? DispatchPreparedException { get; set; }
         public bool CleanupOnDispatchPreparedFailure { get; set; } = true;
+        public Action? AfterDispatchPrepared { get; set; }
         public int PrepareCalls { get; private set; }
         public int DispatchPreparedCalls { get; private set; }
         public int DispatchCalls { get; private set; }
@@ -540,7 +566,10 @@ public sealed class WorkflowApplicationLayerTests
             ct.ThrowIfCancellationRequested();
             DispatchPreparedCalls++;
             if (DispatchPreparedException == null)
+            {
+                AfterDispatchPrepared?.Invoke();
                 return;
+            }
 
             if (CleanupOnDispatchPreparedFailure && execution.Target is ICommandDispatchCleanupAware cleanupAware)
                 await cleanupAware.CleanupAfterDispatchFailureAsync(CancellationToken.None);

@@ -60,8 +60,8 @@ internal sealed class WorkflowRunDetachedDispatchService
             throw;
         }
 
-        await TryMarkDetachedCleanupAcceptedAsync(execution.Receipt, ct);
-        await DetachLiveObservationAsync(execution.Target, execution.Receipt, ct);
+        await TryMarkDetachedCleanupAcceptedAsync(execution.Receipt, CancellationToken.None);
+        await DetachLiveObservationAsync(execution.Target, execution.Receipt, CancellationToken.None);
         await ReleaseDetachedSessionOwnershipAsync(execution.Target, execution.Receipt);
         return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(execution.Receipt);
     }

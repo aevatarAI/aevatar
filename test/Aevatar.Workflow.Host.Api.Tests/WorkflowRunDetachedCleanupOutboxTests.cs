@@ -208,7 +208,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotIsMissing_ShouldLeaveEntryPending()
+    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotIsMissing_ShouldScheduleRetry()
     {
         var lifecycle = new RecordingLifecycleService();
         var readModelUpdater = new RecordingReadModelUpdater();
@@ -223,7 +223,11 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1"]));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
-        agent.State.Entries.Should().ContainKey("actor-1::cmd-1");
+        var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
+        entry.DispatchAcceptedAtUtc.Should().BeNull();
+        entry.AttemptCount.Should().Be(1);
+        entry.LastError.Should().Contain("waiting for a workflow snapshot");
+        entry.NextVisibleAtUtc.Should().NotBeNull();
         lifecycle.StopCalls.Should().BeEmpty();
         readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
@@ -232,7 +236,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotMatchesCommand_ShouldMarkAcceptedAndWaitForTerminal()
+    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotHasOnlyStartupMetadata_ShouldScheduleRetry()
     {
         var queryPort = new RecordingQueryPort
         {
@@ -244,6 +248,44 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 CompletionStatus = WorkflowRunCompletionStatus.Unknown,
                 StateVersion = 0,
                 LastEventId = string.Empty,
+                LastUpdatedAt = DateTimeOffset.UtcNow,
+            },
+        };
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownershipCoordinator = new RecordingOwnershipCoordinator();
+        var actorPort = new RecordingActorPort();
+        var agent = CreateAgent(CreateAgentServices(
+            queryPort: queryPort,
+            readModelUpdater: readModelUpdater,
+            ownershipCoordinator: ownershipCoordinator,
+            actorPort: actorPort));
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]));
+        await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+
+        var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
+        entry.DispatchAcceptedAtUtc.Should().BeNull();
+        entry.AttemptCount.Should().Be(1);
+        entry.LastError.Should().Contain("waiting for projected workflow events");
+        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        ownershipCoordinator.AcquireCalls.Should().BeEmpty();
+        ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
+        actorPort.DestroyCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotHasProjectedEventEvidence_ShouldMarkAcceptedAndWaitForTerminal()
+    {
+        var queryPort = new RecordingQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "actor-1",
+                WorkflowName = "direct",
+                LastCommandId = "cmd-1",
+                CompletionStatus = WorkflowRunCompletionStatus.Running,
+                StateVersion = 1,
+                LastEventId = "evt-1",
                 LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -409,7 +451,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenReleaseAckTimesOutWithoutListener_ShouldForceFinalizeAfterConfiguredThreshold()
+    public async Task HandleTriggerReplay_WhenReleaseAckTimesOutWhileOwnershipIsStillActive_ShouldScheduleRetry()
     {
         var queryPort = new RecordingQueryPort
         {
@@ -430,7 +472,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             DetachedCleanupRetryBaseDelayMs = 0,
             DetachedCleanupRetryMaxDelayMs = 0,
             DetachedCleanupReleaseAckTimeoutMs = 50,
-            DetachedCleanupForceFinalizeAfterAckTimeoutAttempts = 1,
         };
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
@@ -449,10 +490,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
-        agent.State.Entries.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
-        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+        var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
+        entry.AttemptCount.Should().Be(1);
+        entry.LastError.Should().Contain("timed out");
+        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
