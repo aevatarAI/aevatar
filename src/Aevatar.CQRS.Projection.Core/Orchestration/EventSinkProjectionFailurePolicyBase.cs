@@ -36,15 +36,36 @@ public abstract class EventSinkProjectionFailurePolicyBase<TLease, TEvent>
         {
             case EventSinkBackpressureException backpressureException:
                 await DetachSinkAsync(lease, sink);
-                await OnBackpressureAsync(lease, sink, sourceEvent, backpressureException, CancellationToken.None);
+                try
+                {
+                    await OnBackpressureAsync(lease, sink, sourceEvent, backpressureException, CancellationToken.None);
+                }
+                finally
+                {
+                    TryCompleteCurrentSink(sink);
+                }
                 return true;
             case EventSinkCompletedException completedException:
                 await DetachSinkAsync(lease, sink);
-                await OnCompletedAsync(lease, sink, sourceEvent, completedException, CancellationToken.None);
+                try
+                {
+                    await OnCompletedAsync(lease, sink, sourceEvent, completedException, CancellationToken.None);
+                }
+                finally
+                {
+                    TryCompleteCurrentSink(sink);
+                }
                 return true;
             case InvalidOperationException invalidOperationException:
                 await DetachSinkAsync(lease, sink);
-                await OnInvalidOperationAsync(lease, sink, sourceEvent, invalidOperationException, CancellationToken.None);
+                try
+                {
+                    await OnInvalidOperationAsync(lease, sink, sourceEvent, invalidOperationException, CancellationToken.None);
+                }
+                finally
+                {
+                    TryCompleteCurrentSink(sink);
+                }
                 return true;
             default:
                 return await OnUnhandledExceptionAsync(lease, sink, sourceEvent, exception, CancellationToken.None);
@@ -78,6 +99,18 @@ public abstract class EventSinkProjectionFailurePolicyBase<TLease, TEvent>
         TEvent sourceEvent,
         Exception exception,
         CancellationToken ct) => ValueTask.FromResult(false);
+
+    private static void TryCompleteCurrentSink(IEventSink<TEvent> sink)
+    {
+        try
+        {
+            sink.Complete();
+        }
+        catch
+        {
+            // Completing the current sink is best-effort cleanup; detachment already happened.
+        }
+    }
 
     private Task DetachSinkAsync(TLease lease, IEventSink<TEvent> sink) =>
         _sinkSubscriptionManager.DetachAsync(lease, sink, CancellationToken.None);

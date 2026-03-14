@@ -106,6 +106,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
         state.Variables["input"] = evt.Input ?? string.Empty;
+        MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
         var entry = _workflow.Steps.FirstOrDefault();
@@ -629,7 +630,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
                 state.RetryAttemptsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, ct);
-                await DispatchStepAsync(fallback, evt.Output ?? string.Empty, state, ctx, ct);
+                var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
+                    ? evt.Error ?? string.Empty
+                    : evt.Output;
+                await DispatchStepAsync(fallback, fallbackInput, state, ctx, ct);
                 return true;
             }
             default:
@@ -858,6 +862,24 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         string.IsNullOrWhiteSpace(runId)
             ? string.Empty
             : WorkflowRunIdNormalizer.Normalize(runId);
+
+    private static void MergeStartParametersIntoVariables(
+        IDictionary<string, string> variables,
+        Google.Protobuf.Collections.MapField<string, string> parameters)
+    {
+        if (parameters == null || parameters.Count == 0)
+            return;
+
+        foreach (var (key, value) in parameters)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            variables[normalizedKey] = normalizedValue;
+        }
+    }
 
     private StepRequestEvent BuildStepRequest(
         StepDefinition step,

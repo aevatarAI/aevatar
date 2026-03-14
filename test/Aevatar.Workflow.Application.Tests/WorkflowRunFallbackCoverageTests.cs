@@ -75,8 +75,30 @@ public sealed class WorkflowRunFallbackCoverageTests
         fallback.WorkflowName.Should().Be(WorkflowRunBehaviorOptions.DirectWorkflowName);
         fallback.WorkflowYamls.Should().BeNull();
         fallback.Prompt.Should().Be(request.Prompt);
-        fallback.ActorId.Should().Be(request.ActorId);
+        fallback.ActorId.Should().BeNull();
         fallback.SessionId.Should().Be(request.SessionId);
+    }
+
+    [Fact]
+    public void WorkflowDirectFallbackPolicy_ShouldUseEffectiveWorkflow_WhenRequestOmitsWorkflowName()
+    {
+        var options = new WorkflowRunBehaviorOptions
+        {
+            EnableDirectFallback = true,
+            UseAutoAsDefaultWhenWorkflowUnspecified = true,
+        };
+        options.DirectFallbackWorkflowWhitelist.Clear();
+        options.DirectFallbackWorkflowWhitelist.Add(WorkflowRunBehaviorOptions.AutoWorkflowName);
+        options.DirectFallbackExceptionWhitelist.Clear();
+        options.DirectFallbackExceptionWhitelist.Add(typeof(WorkflowDirectFallbackTriggerException));
+
+        var policy = new WorkflowDirectFallbackPolicy(options);
+
+        var shouldFallback = policy.ShouldFallback(
+            new WorkflowChatRunRequest("hello", WorkflowName: null, ActorId: "actor-1"),
+            new WorkflowDirectFallbackTriggerException("fallback"));
+
+        shouldFallback.Should().BeTrue();
     }
 
     [Fact]
@@ -88,14 +110,15 @@ public sealed class WorkflowRunFallbackCoverageTests
         var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
         var pipeline = new SequencedDispatchPipeline();
         pipeline.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
-        pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
-            new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
-            {
-                Target = target,
-                Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
-                Envelope = new EventEnvelope { Id = "evt-1" },
-                Receipt = receipt,
-            }));
+        pipeline.EnqueueResult(
+            CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+                new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
+                    Envelope = new EventEnvelope { Id = "evt-1" },
+                    Receipt = receipt,
+                }));
 
         var service = new FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
             new DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
@@ -121,12 +144,13 @@ public sealed class WorkflowRunFallbackCoverageTests
             logger: null);
 
         var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "auto", null),
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
+        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -138,47 +162,38 @@ public sealed class WorkflowRunFallbackCoverageTests
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
         var pipeline = new SequencedDispatchPipeline();
+        var cleanupScheduler = new RecordingDetachedCleanupScheduler();
         pipeline.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
-        pipeline.EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
-            new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
-            {
-                Target = target,
-                Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
-                Envelope = new EventEnvelope { Id = "evt-1" },
-                Receipt = receipt,
-            }));
-        var outputStream = new FakeEventOutputStream
-        {
-            Events =
-            [
-                new WorkflowRunEventEnvelope
+        pipeline.EnqueueResult(
+            CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+                new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
                 {
-                    RunFinished = new WorkflowRunFinishedEventPayload
-                    {
-                        ThreadId = receipt.ActorId,
-                        Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
-                    },
-                },
-            ],
-        };
+                    Target = target,
+                    Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
+                    Envelope = new EventEnvelope { Id = "evt-1" },
+                    Receipt = receipt,
+                }));
+
         var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-            new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
+            new WorkflowRunDetachedDispatchService(
                 pipeline,
-                outputStream,
-                new FakeWorkflowRunCompletionPolicy(),
-                new FakeDurableCompletionResolver(),
+                cleanupScheduler,
                 logger: null),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
         var result = await service.DispatchAsync(
-            new WorkflowChatRunRequest("hello", "auto", null),
+            new WorkflowChatRunRequest("hello", "auto", "actor-requested"),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
-        await actorPort.Destroyed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
+        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
+        cleanupScheduler.Requests.Should().ContainSingle();
+        cleanupScheduler.Requests.Single().ActorId.Should().Be("actor-1");
+        cleanupScheduler.Requests.Single().WorkflowName.Should().Be("direct");
+        cleanupScheduler.Requests.Single().CommandId.Should().Be("cmd-1");
+        cleanupScheduler.Requests.Single().CreatedActorIds.Should().Equal("actor-1");
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
@@ -186,14 +201,15 @@ public sealed class WorkflowRunFallbackCoverageTests
         FakeWorkflowRunActorPort actorPort,
         string actorId,
         string workflowName,
-        string commandId) 
+        string commandId)
     {
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
             workflowName,
             [actorId],
             projectionPort,
-            actorPort);
+            actorPort,
+            new RecordingDetachedCleanupScheduler());
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
@@ -204,16 +220,50 @@ public sealed class WorkflowRunFallbackCoverageTests
         private readonly Queue<object> _results = new();
 
         public List<WorkflowChatRunRequest> Requests { get; } = [];
+        public List<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>> PreparedDispatches { get; } = [];
 
         public void EnqueueException(Exception ex) => _results.Enqueue(ex);
 
         public void EnqueueResult(CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> result) =>
             _results.Enqueue(result);
 
-        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareAsync(
             WorkflowChatRunRequest command,
+            CancellationToken ct = default) =>
+            PrepareCoreAsync(command, ct);
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
             CancellationToken ct = default)
         {
+            ArgumentNullException.ThrowIfNull(execution);
+            ct.ThrowIfCancellationRequested();
+            PreparedDispatches.Add(execution);
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsyncCore(
+            WorkflowChatRunRequest command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareCoreAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
+        }
+
+        private Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareCoreAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
             Requests.Add(command);
             var next = _results.Dequeue();
             if (next is Exception ex)
@@ -276,13 +326,58 @@ public sealed class WorkflowRunFallbackCoverageTests
     private sealed class FakeDurableCompletionResolver
         : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
     {
+        private readonly CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus> _observation;
+
+        public FakeDurableCompletionResolver(
+            CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>? observation = null)
+        {
+            _observation = observation ?? CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete;
+        }
+
         public Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
             WorkflowChatRunAcceptedReceipt receipt,
             CancellationToken ct = default)
         {
             _ = receipt;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete);
+            return Task.FromResult(_observation);
+        }
+    }
+
+    private sealed class RecordingDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
+    {
+        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
+
+        public Task ScheduleAsync(
+            WorkflowRunDetachedCleanupRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DispatchAcceptedRequests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task DiscardAsync(
+            WorkflowRunDetachedCleanupDiscardRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DiscardRequests.Add(request);
+            return Task.CompletedTask;
         }
     }
 

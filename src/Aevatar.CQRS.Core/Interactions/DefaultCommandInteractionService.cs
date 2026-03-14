@@ -122,7 +122,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                         durableCompletion),
                     CancellationToken.None);
             }
-            catch (Exception ex) when (interactionResult != null || executionException != null)
+            catch (Exception ex) when (executionException != null)
             {
                 _logger.LogWarning(
                     ex,

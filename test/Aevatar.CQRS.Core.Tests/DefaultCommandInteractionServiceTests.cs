@@ -121,7 +121,7 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldPreserveSuccess()
+    public async Task ExecuteAsync_WhenCleanupFailsAfterSuccess_ShouldThrowCleanupFailure()
     {
         var sink = new EventChannel<string>();
         sink.Push("done:completed");
@@ -140,13 +140,13 @@ public sealed class DefaultCommandInteractionServiceTests
                     Receipt = receipt,
                 })));
 
-        var result = await service.ExecuteAsync(
+        var act = () => service.ExecuteAsync(
             "command-3",
             static (_, _) => ValueTask.CompletedTask,
             ct: CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
-        result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<string>("completed", true));
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("cleanup failed");
     }
 
     [Fact]
@@ -224,13 +224,39 @@ public sealed class DefaultCommandInteractionServiceTests
         CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result)
         : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
     {
-        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
             string command,
             CancellationToken ct = default)
         {
             _ = command;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);
+        }
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<TestTarget, TestReceipt> execution,
+            CancellationToken ct = default)
+        {
+            _ = execution;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsyncCore(
+            string command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
         }
     }
 

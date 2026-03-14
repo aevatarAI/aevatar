@@ -220,7 +220,7 @@ public sealed class WorkflowParser
     }
 
     private static bool ShouldLiftTimeoutMsToParameter(string canonicalType) =>
-        canonicalType is "wait_signal" or "connector_call" or "llm_call" or "human_input" or "human_approval";
+        canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
 
     private static void AddIfMissing(
         IDictionary<string, string> parameters,
@@ -371,7 +371,7 @@ public sealed class WorkflowParser
         e == null ? null : new StepErrorPolicy
         {
             Strategy = e.Strategy ?? "fail",
-            FallbackStep = e.FallbackStep,
+            FallbackStep = string.IsNullOrWhiteSpace(e.FallbackStep) ? e.Fallback : e.FallbackStep,
             DefaultOutput = e.DefaultOutput,
         };
 
@@ -433,7 +433,14 @@ public sealed class WorkflowParser
         public int? TimeoutMs { get; set; }
     }
     private sealed class RawRetry { public int? MaxAttempts { get; set; } public string? Backoff { get; set; } public int? DelayMs { get; set; } }
-    private sealed class RawOnError { public string? Strategy { get; set; } public string? FallbackStep { get; set; } public string? DefaultOutput { get; set; } }
+    private sealed class RawOnError
+    {
+        public string? Strategy { get; set; }
+        public string? FallbackStep { get; set; }
+        // Backward-compatible alias for LLM-generated YAML that used on_error.fallback.
+        public string? Fallback { get; set; }
+        public string? DefaultOutput { get; set; }
+    }
     private sealed class RawConfiguration { public bool? ClosedWorldMode { get; set; } }
     private sealed class RawRoleExtensions { public string? EventModules { get; set; } public string? EventRoutes { get; set; } }
 }

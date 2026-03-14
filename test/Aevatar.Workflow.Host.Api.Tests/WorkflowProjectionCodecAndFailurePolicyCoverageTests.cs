@@ -133,7 +133,7 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
 public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 {
     [Fact]
-    public async Task TryHandleAsync_WhenInvalidOperation_ShouldDetachAndPublishRunError()
+    public async Task TryHandleAsync_WhenInvalidOperation_ShouldNotifyCurrentSink_CompleteIt_AndPublishCustomFailure()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -141,24 +141,30 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             sinkManager,
             runEventHub,
             new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
 
         var handled = await policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
+            sink,
             BuildStepStarted("step-1"),
             new InvalidOperationException("sink write failed"));
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents.Single().evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
-        var runError = runEventHub.PublishedEvents.Single().evt.RunError;
-        runError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
-        runError.Message.Should().Contain("eventType=STEP_STARTED");
+        runEventHub.PublishedEvents.Single().evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        runEventHub.PublishedEvents.Single().evt.Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        var payload = runEventHub.PublishedEvents.Single().evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>();
+        payload.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        payload.EventType.Should().Be(WorkflowRunEventTypes.StepStarted);
+        payload.Reason.Should().Contain("sink write failed");
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenLeaseIdsMissing_ShouldDetachWithoutPublishing()
+    public async Task TryHandleAsync_WhenLeaseIdsMissing_ShouldStillNotifyCurrentSink_ButSkipHubPublish()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -166,20 +172,54 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             sinkManager,
             runEventHub,
             new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
 
         var handled = await policy.TryHandleAsync(
             CreateLease(string.Empty, "   "),
-            new NoopRunEventSink(),
+            sink,
             BuildRunStarted("thread-1"),
             new EventSinkBackpressureException());
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
+        sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenRunErrorPublishFails_ShouldSwallowAndReturnTrue()
+    public async Task TryHandleAsync_WhenSinkCompleted_ShouldPublishCustomFailureAndCompleteCurrentSink()
+    {
+        var sinkManager = new RecordingSinkSubscriptionManager();
+        var runEventHub = new RecordingRunEventHub();
+        var policy = new WorkflowProjectionSinkFailurePolicy(
+            sinkManager,
+            runEventHub,
+            new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
+
+        var handled = await policy.TryHandleAsync(
+            CreateLease("actor-1", "cmd-1"),
+            sink,
+            BuildRunStarted("thread-1"),
+            new EventSinkCompletedException());
+
+        handled.Should().BeTrue();
+        sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        sink.CompleteCalls.Should().Be(1);
+        runEventHub.PublishedEvents.Should().ContainSingle();
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+    }
+
+    [Fact]
+    public async Task TryHandleAsync_WhenCustomFailurePublishFails_ShouldSwallowAndReturnTrue()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub
@@ -193,7 +233,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         var handled = await policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
+            new RecordingRunEventSink(),
             BuildRunStarted("thread-1"),
             new EventSinkBackpressureException());
 
@@ -214,7 +254,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         Func<Task> act = () => policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
+            new RecordingRunEventSink(),
             BuildRunStarted("thread-1"),
             new InvalidOperationException("write failed"),
             cts.Token).AsTask();
@@ -321,23 +361,21 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class NoopRunEventSink : IEventSink<WorkflowRunEventEnvelope>
+    private sealed class RecordingRunEventSink : IEventSink<WorkflowRunEventEnvelope>
     {
-        public void Push(WorkflowRunEventEnvelope evt)
-        {
-            _ = evt;
-        }
+        public List<WorkflowRunEventEnvelope> PushedEvents { get; } = [];
+        public int CompleteCalls { get; private set; }
+
+        public void Push(WorkflowRunEventEnvelope evt) => PushedEvents.Add(evt);
 
         public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
-            _ = evt;
             ct.ThrowIfCancellationRequested();
+            PushedEvents.Add(evt);
             return ValueTask.CompletedTask;
         }
 
-        public void Complete()
-        {
-        }
+        public void Complete() => CompleteCalls++;
 
         public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

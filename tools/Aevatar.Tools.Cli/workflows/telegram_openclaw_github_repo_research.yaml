@@ -1,0 +1,114 @@
+name: telegram_openclaw_github_repo_research
+description: |
+  Human-in-the-loop workflow:
+  1) ask GitHub repository URL,
+  then send a research+report task to OpenClaw over Telegram and wait for reply.
+  OpenClaw writes reports to ~/.openclaw/workspace automatically.
+
+roles: []
+
+steps:
+  - id: bootstrap_telegram_login
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      timeout_ms: "30000"
+      prompt_prefix: "Ensure Telegram user session is ready."
+    on_error:
+      strategy: fallback
+      fallback_step: send_step_failed
+    next: collect_repo_url
+
+  - id: collect_repo_url
+    type: human_input
+    parameters:
+      prompt: "请输入要调研的 GitHub Repo URL（例如：https://github.com/owner/repo）。"
+      variable: "repo_url"
+      timeout: "900"
+      on_timeout: "fail"
+    next: clear_input_before_send
+
+  - id: clear_input_before_send
+    type: assign
+    parameters:
+      target: "bridge_payload_tail"
+      value: ""
+    next: send_research_task_to_openclaw
+
+  - id: send_research_task_to_openclaw
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      telegram.timeout_ms: "15000"
+      timeout_ms: "30000"
+      prompt_prefix: |
+        @${telegram.openclaw_bot_username}
+        请帮我调研一个 GitHub 仓库并产出调研报告。
+        你可以按自然格式回复，不需要严格 JSON。
+
+        任务目标：
+        1) 快速说明项目定位、核心能力、目录结构、依赖与运行方式（尽量可执行）。
+        2) 给出技术风险/维护风险与机会点。
+        3) 给出对市场运营同学友好的摘要（可用于周会展示）。
+        4) 尽量把调研报告写入文件。
+
+        Repo URL：
+        ${collect_repo_url}
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    on_error:
+      strategy: fallback
+      fallback_step: send_step_failed
+    next: wait_openclaw_research_feedback
+
+  - id: wait_openclaw_research_feedback
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      collect_all_replies: "true"
+      settle_polls_after_match: "3"
+      wait_timeout_ms: "300000"
+      poll_timeout_sec: "8"
+      start_from_latest: "true"
+      timeout_ms: "310000"
+      prompt_prefix: "Waiting OpenClaw GitHub research report reply."
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+    next: finalize_feedback
+
+  - id: finalize_feedback
+    type: transform
+    parameters:
+      op: trim
+    next: persist_feedback
+
+  - id: persist_feedback
+    type: assign
+    parameters:
+      target: openclaw_repo_research_feedback
+      value: "$input"
+
+  - id: timeout_fallback
+    type: assign
+    parameters:
+      target: openclaw_timeout
+      value: "$input"
+
+  - id: send_step_failed
+    type: assign
+    parameters:
+      target: openclaw_send_error
+      value: "$input"

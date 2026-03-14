@@ -80,4 +80,39 @@ public sealed class WorkflowExecutionProjectionOptions
     /// Max retry delay for failed compensation replay.
     /// </summary>
     public int DispatchCompensationReplayMaxDelayMs { get; set; } = 60_000;
+
+    /// <summary>
+    /// Enables durable replay for detached workflow cleanup.
+    /// </summary>
+    public bool EnableDetachedCleanupReplay { get; set; } = true;
+
+    /// <summary>
+    /// Poll interval for detached cleanup replay worker.
+    /// </summary>
+    public int DetachedCleanupReplayPollIntervalMs { get; set; } = 1000;
+
+    /// <summary>
+    /// Max detached cleanup records replayed in one polling cycle.
+    /// </summary>
+    public int DetachedCleanupReplayBatchSize { get; set; } = 20;
+
+    /// <summary>
+    /// Max time to wait for projection release completion acknowledgement before retrying detached cleanup.
+    /// </summary>
+    public int DetachedCleanupReleaseAckTimeoutMs { get; set; } = 5000;
+
+    /// <summary>
+    /// After this many release-ack timeouts, detached cleanup force-finalizes even if ownership still looks active.
+    /// </summary>
+    public int DetachedCleanupForceFinalizeAfterAckTimeoutAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// Base retry delay for failed detached cleanup replay.
+    /// </summary>
+    public int DetachedCleanupRetryBaseDelayMs { get; set; } = 1000;
+
+    /// <summary>
+    /// Max retry delay for failed detached cleanup replay.
+    /// </summary>
+    public int DetachedCleanupRetryMaxDelayMs { get; set; } = 60_000;
 }

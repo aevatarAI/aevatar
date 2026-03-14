@@ -745,15 +745,15 @@
 
   async function loadAgentsList() {
     try {
-      const res = await fetch("/api/agents");
+      const res = await fetch("/api/workflows");
       const json = await res.json().catch(() => null);
       if (!json || json.ok !== true) {
-        setAgentsMsg("Failed to load agents.", "err");
+        setAgentsMsg("Failed to load workflows.", "err");
         return;
       }
-      state.agents = json.agents || [];
+      state.agents = json.workflows || json.agents || [];
       renderAgentsList();
-      setAgentsMsg(json.exists ? `Found ${state.agents.length} agent file(s).` : "Directory does not exist yet.", "ok");
+      setAgentsMsg(json.exists ? `Found ${state.agents.length} workflow file(s).` : "Directory does not exist yet.", "ok");
     } catch (e) {
       setAgentsMsg(e && e.message ? e.message : String(e), "err");
     }
@@ -767,7 +767,7 @@
     if (state.agents.length === 0) {
       const placeholder = document.createElement("div");
       placeholder.className = "item placeholder";
-      placeholder.innerHTML = '<div class="item-main"><div class="item-desc">No agent files found. Click + New to create one.</div></div>';
+      placeholder.innerHTML = '<div class="item-main"><div class="item-desc">No workflow files found. Click + New to create one.</div></div>';
       list.appendChild(placeholder);
       return;
     }
@@ -800,25 +800,22 @@
       $("agentDeleteBtn").style.display = "";
       await loadAgentContent(filename);
     } else {
-      $("agentEditTitle").textContent = "New Agent";
+      $("agentEditTitle").textContent = "New Workflow";
       $("agentFilenameInput").value = "";
       $("agentFilenameInput").readOnly = false;
-      $("agentYamlInput").value = `id: my-agent
-name: My Agent
-provider: default
-model: null
-temperature: 0.7
-
-persona:
-  role: "Assistant"
-  expertise: []
-  style: "helpful"
-
-tools: []
-skills: []
-
-system_prompt: |
-  You are a helpful assistant.
+      $("agentYamlInput").value = `name: my-workflow
+description: Workflow created from aevatar config tool
+configuration:
+  closed_world_mode: true
+roles:
+  - id: coordinator
+    name: Coordinator
+    system_prompt: Coordinate this workflow.
+steps:
+  - id: start
+    type: emit
+    parameters:
+      event_name: workflow_started
 `;
       $("agentDeleteBtn").style.display = "none";
     }
@@ -826,10 +823,10 @@ system_prompt: |
 
   async function loadAgentContent(filename) {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`);
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`);
       const json = await res.json().catch(() => null);
       if (!json || json.ok !== true) {
-        setAgentEditMsg("Failed to load agent file.", "err");
+        setAgentEditMsg("Failed to load workflow file.", "err");
         return;
       }
       $("agentYamlInput").value = json.content || "";
@@ -854,7 +851,7 @@ system_prompt: |
     }
 
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
@@ -880,7 +877,7 @@ system_prompt: |
     if (!confirm(`Delete ${filename}?`)) return;
 
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`, {
         method: "DELETE",
       });
       const json = await res.json().catch(() => null);

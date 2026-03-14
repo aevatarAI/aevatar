@@ -12,6 +12,7 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.WorkflowNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.AgentTypeNotSupported, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.ProjectionDisabled, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(WorkflowChatRunStartError.DetachedCleanupUnavailable, StatusCodes.Status503ServiceUnavailable)]
     [InlineData(WorkflowChatRunStartError.WorkflowBindingMismatch, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
@@ -49,5 +50,14 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("INVALID_WORKFLOW_YAML");
         mapped.Message.Should().Be("Workflow YAML is invalid.");
+    }
+
+    [Fact]
+    public void ToCommandError_DetachedCleanupUnavailable_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.DetachedCleanupUnavailable);
+
+        mapped.Code.Should().Be("DETACHED_CLEANUP_UNAVAILABLE");
+        mapped.Message.Should().Be("Detached cleanup pipeline is unavailable.");
     }
 }

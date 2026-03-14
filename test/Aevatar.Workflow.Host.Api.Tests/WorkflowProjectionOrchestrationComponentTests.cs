@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -66,6 +67,233 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task ActivationService_WhenPostStartRefreshFails_ShouldStopStartedProjectionAndReleaseOwnership()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var ownership = new TrackingOwnershipCoordinator();
+        var readModelUpdater = new RecordingReadModelUpdater
+        {
+            RefreshMetadataException = new InvalidOperationException("refresh failed"),
+        };
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            ownership,
+            readModelUpdater);
+
+        var act = async () => await activationService.EnsureAsync(
+            "actor-refresh-fail",
+            "direct",
+            "hello",
+            "cmd-refresh-fail",
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("refresh failed");
+        lifecycle.StartedContexts.Should().ContainSingle();
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-refresh-fail", "cmd-refresh-fail"));
+        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-refresh-fail", "cmd-refresh-fail"));
+    }
+
+    [Fact]
+    public async Task ActivationService_ShouldWaitForProjectionReleaseListenerReadinessBeforeReturningLease()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownership = new TrackingOwnershipCoordinator();
+        var projectionControlHub = new BlockingProjectionControlHub();
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            ownership,
+            readModelUpdater,
+            projectionControlHub: projectionControlHub);
+
+        var ensureTask = activationService.EnsureAsync(
+            "actor-ready",
+            "direct",
+            "hello",
+            "cmd-ready",
+            CancellationToken.None);
+
+        await projectionControlHub.SubscribeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        ensureTask.IsCompleted.Should().BeFalse();
+
+        projectionControlHub.AllowSubscribe.TrySetResult(true);
+        var lease = await ensureTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        lease.ActorId.Should().Be("actor-ready");
+        lease.CommandId.Should().Be("cmd-ready");
+        await lease.StopProjectionReleaseListenerAsync();
+        await lease.StopOwnershipHeartbeatAsync();
+    }
+
+    [Fact]
+    public async Task ActivationAndReleaseServices_ShouldRenewOwnershipLease_AndStopHeartbeatBeforeRelease()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownership = new TrackingOwnershipCoordinator();
+        var ownershipOptions = new ProjectionOwnershipCoordinatorOptions
+        {
+            LeaseTtlMs = ProjectionOwnershipCoordinatorOptions.MinimumLeaseTtlMs,
+        };
+        var activationService = new WorkflowProjectionActivationService(
+            lifecycle,
+            new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
+            new DefaultWorkflowExecutionProjectionContextFactory(),
+            ownership,
+            readModelUpdater,
+            ownershipOptions);
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            readModelUpdater,
+            ownership);
+
+        var lease = await activationService.EnsureAsync(
+            "actor-heartbeat",
+            "direct",
+            "hello",
+            "cmd-heartbeat",
+            CancellationToken.None);
+        await ownership.WaitForAcquireCountAsync(2, TimeSpan.FromSeconds(3));
+
+        await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
+
+        ownership.Acquired.Count.Should().BeGreaterThanOrEqualTo(2);
+        ownership.Released.Should().ContainSingle().Which.Should().Be(("actor-heartbeat", "cmd-heartbeat"));
+        ownership.Operations[^1].Should().Be(("release", "actor-heartbeat", "cmd-heartbeat"));
+    }
+
+    [Fact]
+    public async Task RuntimeLease_ShouldIgnoreNonMatchingControlEvents_AndStopOnlyOnceForMatchingRelease()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var projectionControlHub = new RecordingProjectionControlHub();
+        var lease = CreateLease("actor-release", "cmd-release", lifecycle, projectionControlHub);
+
+        await lease.WaitForProjectionReleaseListenerReadyAsync();
+        await projectionControlHub.PublishAsync(
+            "actor-release",
+            "cmd-release",
+            new WorkflowProjectionControlEvent(),
+            CancellationToken.None);
+        await projectionControlHub.PublishAsync(
+            "actor-release",
+            "cmd-release",
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = "other-actor",
+                    CommandId = "cmd-release",
+                },
+            },
+            CancellationToken.None);
+        await projectionControlHub.PublishAsync(
+            "actor-release",
+            "cmd-release",
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = "actor-release",
+                    CommandId = "cmd-release",
+                },
+            },
+            CancellationToken.None);
+        await projectionControlHub.PublishAsync(
+            "actor-release",
+            "cmd-release",
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = "actor-release",
+                    CommandId = "cmd-release",
+                },
+            },
+            CancellationToken.None);
+
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        lifecycle.StoppedContexts.Single().RootActorId.Should().Be("actor-release");
+        await lease.StopProjectionReleaseListenerAsync();
+    }
+
+    [Fact]
+    public async Task RuntimeLease_WhenLifecycleStopFails_ShouldAllowRetryOnNextReleaseRequest()
+    {
+        var lifecycle = new RetryableStopLifecycleService();
+        var projectionControlHub = new RecordingProjectionControlHub();
+        var lease = CreateLease("actor-retry", "cmd-retry", lifecycle, projectionControlHub);
+
+        await lease.WaitForProjectionReleaseListenerReadyAsync();
+        await projectionControlHub.PublishAsync(
+            "actor-retry",
+            "cmd-retry",
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = "actor-retry",
+                    CommandId = "cmd-retry",
+                },
+            },
+            CancellationToken.None);
+        await projectionControlHub.PublishAsync(
+            "actor-retry",
+            "cmd-retry",
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseRequested = new WorkflowProjectionReleaseRequestedEvent
+                {
+                    ActorId = "actor-retry",
+                    CommandId = "cmd-retry",
+                },
+            },
+            CancellationToken.None);
+
+        lifecycle.StopAttempts.Should().Be(2);
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        await lease.StopProjectionReleaseListenerAsync();
+    }
+
+    [Fact]
+    public async Task ReleaseService_ShouldReleaseOwnership_WhenMarkStoppedThrows()
+    {
+        var lifecycle = new RecordingLifecycleService();
+        var readModelUpdater = new RecordingReadModelUpdater
+        {
+            MarkStoppedException = new InvalidOperationException("mark stopped failed"),
+        };
+        var ownership = new TrackingOwnershipCoordinator();
+        var releaseService = new WorkflowProjectionReleaseService(
+            lifecycle,
+            readModelUpdater,
+            ownership);
+        var lease = new WorkflowExecutionRuntimeLease(
+            new WorkflowExecutionProjectionContext
+            {
+                ProjectionId = "projection-release-fail",
+                RootActorId = "actor-release-fail",
+                CommandId = "cmd-release-fail",
+                WorkflowName = "direct",
+                StartedAt = new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero),
+                Input = "hello",
+            });
+
+        var act = async () => await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("mark stopped failed");
+        lifecycle.StoppedContexts.Should().ContainSingle();
+        ownership.Released.Should().ContainSingle()
+            .Which.Should().Be(("actor-release-fail", "cmd-release-fail"));
+    }
+
+    [Fact]
     public async Task ReadModelUpdater_ShouldRefreshMetadataAndMarkStopped()
     {
         var startedAt = new DateTimeOffset(2026, 2, 21, 12, 0, 0, TimeSpan.Zero);
@@ -118,6 +346,41 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         report.EndedAt.Should().Be(stoppedAt);
         report.DurationMs.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task ReadModelUpdater_ShouldMarkUnknownStatusAsStopped()
+    {
+        var startedAt = new DateTimeOffset(2026, 2, 21, 12, 0, 0, TimeSpan.Zero);
+        var stoppedAt = startedAt.AddMinutes(1);
+        var store = CreateStore();
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "actor-unknown",
+            CommandId = "cmd-unknown",
+            WorkflowName = "workflow",
+            Input = "input",
+            StartedAt = startedAt,
+            CompletionStatus = WorkflowExecutionCompletionStatus.Unknown,
+        });
+        var relationStore = new InMemoryProjectionGraphStore();
+        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
+            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+            {
+                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+            });
+        var updater = new WorkflowProjectionReadModelUpdater(
+            dispatcher,
+            new FixedClock(stoppedAt));
+
+        await updater.MarkStoppedAsync("actor-unknown");
+
+        var report = await store.GetAsync("actor-unknown");
+        report.Should().NotBeNull();
+        report!.RootActorId.Should().Be("actor-unknown");
+        report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
+        report.EndedAt.Should().Be(stoppedAt);
     }
 
     [Fact]
@@ -524,9 +787,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         handledBackpressure.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        runEventHub.PublishedEvents[0].evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
-        var backpressureError = runEventHub.PublishedEvents[0].evt.RunError;
-        backpressureError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
+        runEventHub.PublishedEvents[0].evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        runEventHub.PublishedEvents[0].evt.Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
 
         runEventHub.PublishedEvents.Clear();
         var handledCompleted = await policy.TryHandleAsync(
@@ -537,7 +801,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         handledCompleted.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(2);
-        runEventHub.PublishedEvents.Should().BeEmpty();
+        runEventHub.PublishedEvents.Should().ContainSingle();
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
 
         var handledUnknown = await policy.TryHandleAsync(
             lease,
@@ -637,7 +903,13 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);
 
-    private static WorkflowExecutionRuntimeLease CreateLease(string actorId, string commandId) => new(
+    private static WorkflowExecutionRuntimeLease CreateLease(
+        string actorId,
+        string commandId,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
+        IProjectionOwnershipCoordinator? ownershipCoordinator = null,
+        IWorkflowProjectionReadModelUpdater? readModelUpdater = null) => new(
         new WorkflowExecutionProjectionContext
         {
             ProjectionId = actorId,
@@ -646,7 +918,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             WorkflowName = "direct",
             Input = "hello",
             StartedAt = DateTimeOffset.UtcNow,
-        });
+        },
+        ownershipCoordinator: ownershipCoordinator,
+        lifecycle: lifecycle,
+        projectionControlHub: projectionControlHub,
+        readModelUpdater: readModelUpdater);
 
     private static WorkflowRunEventEnvelope BuildRunStartedEvent(string threadId) =>
         new()
@@ -659,21 +935,91 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
     private sealed class TrackingOwnershipCoordinator : IProjectionOwnershipCoordinator
     {
-        public List<(string ScopeId, string SessionId)> Acquired { get; } = [];
-        public List<(string ScopeId, string SessionId)> Released { get; } = [];
+        private readonly object _gate = new();
+        private readonly List<(string ScopeId, string SessionId)> _acquired = [];
+        private readonly List<(string ScopeId, string SessionId)> _released = [];
+        private readonly List<(string Kind, string ScopeId, string SessionId)> _operations = [];
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _acquireCountWaiters = [];
+
+        public IReadOnlyList<(string ScopeId, string SessionId)> Acquired
+        {
+            get
+            {
+                lock (_gate)
+                    return _acquired.ToArray();
+            }
+        }
+
+        public IReadOnlyList<(string ScopeId, string SessionId)> Released
+        {
+            get
+            {
+                lock (_gate)
+                    return _released.ToArray();
+            }
+        }
+
+        public IReadOnlyList<(string Kind, string ScopeId, string SessionId)> Operations
+        {
+            get
+            {
+                lock (_gate)
+                    return _operations.ToArray();
+            }
+        }
 
         public Task AcquireAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Acquired.Add((scopeId, sessionId));
+            lock (_gate)
+            {
+                _acquired.Add((scopeId, sessionId));
+                _operations.Add(("acquire", scopeId, sessionId));
+                for (var i = _acquireCountWaiters.Count - 1; i >= 0; i--)
+                {
+                    var waiter = _acquireCountWaiters[i];
+                    if (_acquired.Count < waiter.Count)
+                        continue;
+
+                    _acquireCountWaiters.RemoveAt(i);
+                    waiter.Signal.TrySetResult(true);
+                }
+            }
             return Task.CompletedTask;
+        }
+
+        public Task<bool> HasActiveLeaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            lock (_gate)
+                return Task.FromResult(_acquired.Contains((scopeId, sessionId)) && !_released.Contains((scopeId, sessionId)));
         }
 
         public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Released.Add((scopeId, sessionId));
+            lock (_gate)
+            {
+                _released.Add((scopeId, sessionId));
+                _operations.Add(("release", scopeId, sessionId));
+            }
             return Task.CompletedTask;
+        }
+
+        public Task WaitForAcquireCountAsync(int expectedCount, TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                if (_acquired.Count >= expectedCount)
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _acquireCountWaiters.Add((expectedCount, waiter));
+                waitTask = waiter.Task;
+            }
+
+            return waitTask.WaitAsync(timeout);
         }
     }
 
@@ -723,6 +1069,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         public List<(string ActorId, WorkflowExecutionProjectionContext Context)> Refreshed { get; } = [];
         public List<string> MarkStoppedActorIds { get; } = [];
+        public Exception? RefreshMetadataException { get; set; }
+        public Exception? MarkStoppedException { get; set; }
 
         public Task RefreshMetadataAsync(
             string actorId,
@@ -731,6 +1079,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             ct.ThrowIfCancellationRequested();
             Refreshed.Add((actorId, context));
+            if (RefreshMetadataException != null)
+                throw RefreshMetadataException;
             return Task.CompletedTask;
         }
 
@@ -738,6 +1088,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         {
             ct.ThrowIfCancellationRequested();
             MarkStoppedActorIds.Add(actorId);
+            if (MarkStoppedException != null)
+                throw MarkStoppedException;
             return Task.CompletedTask;
         }
     }
@@ -769,6 +1121,53 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            StoppedContexts.Add(context);
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteAsync(
+            WorkflowExecutionProjectionContext context,
+            IReadOnlyList<WorkflowExecutionTopologyEdge> completion,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RetryableStopLifecycleService
+        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+    {
+        public int StopAttempts { get; private set; }
+        public List<WorkflowExecutionProjectionContext> StoppedContexts { get; } = [];
+
+        public Task StartAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        {
+            _ = context;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ProjectAsync(
+            WorkflowExecutionProjectionContext context,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StopAttempts++;
+            if (StopAttempts == 1)
+                throw new InvalidOperationException("stop failed");
+
             StoppedContexts.Add(context);
             return Task.CompletedTask;
         }
@@ -919,6 +1318,107 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         }
     }
 
+    private sealed class BlockingProjectionControlHub : IProjectionSessionEventHub<WorkflowProjectionControlEvent>
+    {
+        public TaskCompletionSource<bool> SubscribeEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> AllowSubscribe { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task PublishAsync(
+            string scopeId,
+            string sessionId,
+            WorkflowProjectionControlEvent evt,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = sessionId;
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public async Task<IAsyncDisposable> SubscribeAsync(
+            string scopeId,
+            string sessionId,
+            Func<WorkflowProjectionControlEvent, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = sessionId;
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
+            SubscribeEntered.TrySetResult(true);
+            await AllowSubscribe.Task.WaitAsync(ct);
+            return new TrackingSubscription();
+        }
+    }
+
+    private sealed class RecordingProjectionControlHub : IProjectionSessionEventHub<WorkflowProjectionControlEvent>
+    {
+        private readonly Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> _handlers = new();
+
+        public Task PublishAsync(
+            string scopeId,
+            string sessionId,
+            WorkflowProjectionControlEvent evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!_handlers.TryGetValue((scopeId, sessionId), out var handlers))
+                return Task.CompletedTask;
+
+            return PublishCoreAsync(handlers.ToArray(), evt, ct);
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string scopeId,
+            string sessionId,
+            Func<WorkflowProjectionControlEvent, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var key = (scopeId, sessionId);
+            if (!_handlers.TryGetValue(key, out var handlers))
+            {
+                handlers = [];
+                _handlers[key] = handlers;
+            }
+
+            handlers.Add(handler);
+            return Task.FromResult<IAsyncDisposable>(new ProjectionControlSubscription(_handlers, key, handler));
+        }
+
+        private static async Task PublishCoreAsync(
+            IReadOnlyList<Func<WorkflowProjectionControlEvent, ValueTask>> handlers,
+            WorkflowProjectionControlEvent evt,
+            CancellationToken ct)
+        {
+            foreach (var handler in handlers)
+            {
+                ct.ThrowIfCancellationRequested();
+                await handler(evt);
+            }
+        }
+    }
+
+    private sealed class ProjectionControlSubscription(
+        Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> handlers,
+        (string ScopeId, string SessionId) key,
+        Func<WorkflowProjectionControlEvent, ValueTask> handler)
+        : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            if (handlers.TryGetValue(key, out var registered))
+            {
+                registered.Remove(handler);
+                if (registered.Count == 0)
+                    handlers.Remove(key);
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class TrackingSubscription : IAsyncDisposable
     {
         public bool Disposed { get; private set; }
@@ -957,4 +1457,5 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+
 }

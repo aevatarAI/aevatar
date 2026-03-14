@@ -1,0 +1,13 @@
+name: subworkflow_level2
+description: Level 2 sub-workflow calls level 3, then deduplicates lines.
+
+steps:
+  - id: call_level3
+    type: workflow_call
+    parameters:
+      workflow: "subworkflow_level3"
+
+  - id: distinct_level2
+    type: transform
+    parameters:
+      op: "distinct"

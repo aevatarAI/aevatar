@@ -1,0 +1,7 @@
+name: demo_json_pick
+description: Use custom demo_json_pick module to extract a nested value from JSON input.
+steps:
+  - id: extract_owner_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"
