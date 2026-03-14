@@ -6,7 +6,6 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,7 +66,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         entry.AttemptCount.Should().Be(0);
         entry.CompletedAtUtc.Should().BeNull();
         entry.ReadModel.Should().NotBeNull();
-        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
+        entry.ReadModel!.Is(WorkflowExecutionReport.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -324,7 +323,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         entry.FailedStore.Should().Be("Graph");
         entry.Operation.Should().Be("mutate");
         entry.ReadModel.Should().NotBeNull();
-        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
+        entry.ReadModel!.Is(WorkflowExecutionReport.Descriptor).Should().BeTrue();
     }
 
     [Fact]

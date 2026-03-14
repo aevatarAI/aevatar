@@ -24,7 +24,8 @@ public sealed class ScriptEvolutionValidatedEventReducer
             ? ScriptEvolutionStatuses.Validated
             : ScriptEvolutionStatuses.ValidationFailed;
         readModel.Diagnostics.Clear();
-        readModel.Diagnostics.AddRange(evt.Diagnostics);
+        foreach (var diagnostic in evt.Diagnostics)
+            readModel.Diagnostics.Add(diagnostic);
         readModel.LastEventId = envelope.Id ?? string.Empty;
         readModel.UpdatedAt = now;
         return true;

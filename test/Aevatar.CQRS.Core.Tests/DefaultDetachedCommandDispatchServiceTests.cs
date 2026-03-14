@@ -88,13 +88,39 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string> result)
         : ICommandDispatchPipeline<string, DetachedTestTarget, DetachedReceipt, string>
     {
-        public Task<CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>> DispatchAsync(
+        public Task<CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>> PrepareAsync(
             string command,
             CancellationToken ct = default)
         {
             _ = command;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(result);
+        }
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<DetachedTestTarget, DetachedReceipt> execution,
+            CancellationToken ct = default)
+        {
+            _ = execution;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>> DispatchAsyncCore(
+            string command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
         }
     }
 

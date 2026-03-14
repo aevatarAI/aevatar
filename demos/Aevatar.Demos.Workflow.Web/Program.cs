@@ -32,7 +32,6 @@ using Aevatar.Workflow.Infrastructure.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using ChatMessage = Aevatar.AI.Abstractions.LLMProviders.ChatMessage;
 
 var port = 5280;
 const int AutoResumeDelayMs = 50;
@@ -173,38 +172,38 @@ app.MapWorkflowChatInteractionEndpoints();
 
 var deterministicWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
-    "01_transform", "02_guard", "03_conditional", "04_switch",
-    "05_assign", "06_retrieve_facts", "07_pipeline",
-    "17_demo_template", "18_demo_csv_markdown", "19_demo_json_pick",
-    "20_role_event_module_template", "21_role_event_module_csv_markdown", "22_role_event_module_json_pick",
-    "23_role_event_module_multiplex_template", "24_role_event_module_multiplex_csv", "25_role_event_module_multiplex_json",
-    "26_role_event_module_multi_role_chain",
-    "27_role_event_module_extensions_template", "28_role_event_module_extensions_csv",
-    "29_role_event_module_top_level_overrides_extensions",
-    "30_role_event_module_extensions_multi_role_chain",
-    "31_role_event_module_extensions_multiplex_json",
-    "32_role_event_module_top_level_overrides_extensions_multiplex",
-    "33_role_event_module_no_routes_template",
-    "34_role_event_module_route_dsl_csv",
-    "35_role_event_module_unknown_ignored_template",
-    "36_mixed_step_json_pick_then_role_template",
-    "37_mixed_step_csv_markdown_then_role_template",
-    "38_mixed_step_template_then_role_csv_markdown",
-    "39_human_input_basic_auto_resume",
-    "40_human_approval_approved_auto_resume",
-    "41_human_approval_rejected_fail_auto_resume",
-    "42_human_approval_rejected_skip_auto_resume",
-    "43_human_input_manual_triage",
-    "44_wait_signal_manual_success",
-    "45_wait_signal_timeout_failure",
-    "46_human_approval_release_gate",
-    "47_mixed_human_approval_wait_signal",
-    "50_connector_cli_demo",
-    "51_cli_call_alias",
-    "54_emit_publish_demo",
-    "55_tool_call_fallback_demo",
-    "56_delay_checkpoint_demo",
-    "49_workflow_call_multilevel",
+    "transform", "guard", "conditional", "switch",
+    "assign", "retrieve_facts", "pipeline",
+    "demo_template", "demo_csv_markdown", "demo_json_pick",
+    "role_event_module_template", "role_event_module_csv_markdown", "role_event_module_json_pick",
+    "role_event_module_multiplex_template", "role_event_module_multiplex_csv", "role_event_module_multiplex_json",
+    "role_event_module_multi_role_chain",
+    "role_event_module_extensions_template", "role_event_module_extensions_csv",
+    "role_event_module_top_level_overrides_extensions",
+    "role_event_module_extensions_multi_role_chain",
+    "role_event_module_extensions_multiplex_json",
+    "role_event_module_top_level_overrides_extensions_multiplex",
+    "role_event_module_no_routes_template",
+    "role_event_module_route_dsl_csv",
+    "role_event_module_unknown_ignored_template",
+    "mixed_step_json_pick_then_role_template",
+    "mixed_step_csv_markdown_then_role_template",
+    "mixed_step_template_then_role_csv_markdown",
+    "human_input_basic_auto_resume",
+    "human_approval_approved_auto_resume",
+    "human_approval_rejected_fail_auto_resume",
+    "human_approval_rejected_skip_auto_resume",
+    "human_input_manual_triage",
+    "wait_signal_manual_success",
+    "wait_signal_timeout_failure",
+    "human_approval_release_gate",
+    "mixed_human_approval_wait_signal",
+    "connector_cli_demo",
+    "cli_call_alias",
+    "emit_publish_demo",
+    "tool_call_fallback_demo",
+    "delay_checkpoint_demo",
+    "workflow_call_multilevel",
 };
 var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
@@ -216,61 +215,61 @@ var turingWorkflows = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 
 var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
-    ["01_transform"] = "Line one: hello world\nLine two: foo bar\nLine three: baz qux\nLine four: the quick brown fox\nLine five: jumps over the lazy dog",
-    ["02_guard"] = """{"name": "Alice", "email": "alice@example.com", "age": 30}""",
-    ["03_conditional"] = "URGENT: Server is down, all requests failing with 502 errors.",
-    ["04_switch"] = "bug: Login button does not respond on mobile Safari",
-    ["05_assign"] = "The answer to the ultimate question is 42.",
-    ["06_retrieve_facts"] = "Earth orbits the Sun at about 150 million km\nWater boils at 100 degrees Celsius at sea level\nThe speed of light is approximately 300000 km per second\nMount Everest is 8849 meters tall",
-    ["07_pipeline"] = "Earth orbits the Sun at about 150 million km\nThe speed of light is approximately 300000 km per second\nWater boils at 100 degrees Celsius at sea level\nPython was created by Guido van Rossum\nLight travels faster than sound",
-    ["08_llm_call"] = "Explain the concept of event sourcing in 3 sentences.",
-    ["09_llm_chain"] = "Distributed systems face challenges in maintaining consistency across nodes.",
-    ["10_parallel"] = "What are the benefits of using microservices architecture?",
-    ["11_race"] = "Give a one-sentence definition of functional programming.",
-    ["12_map_reduce"] = "Topic: Benefits of remote work\n---\nTopic: Challenges of remote work\n---\nTopic: Future of remote work",
-    ["13_foreach"] = "Kubernetes\n---\nDocker\n---\nTerraform",
-    ["14_evaluate"] = "Write a haiku about programming.",
-    ["15_reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
-    ["16_cache"] = "What is the difference between SQL and NoSQL databases?",
-    ["17_demo_template"] = "payment_api_timeout",
-    ["18_demo_csv_markdown"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
-    ["19_demo_json_pick"] = """{"incident":{"id":"INC-2026-001","owner":{"team":"sre","user":"alice"}},"severity":"high"}""",
-    ["20_role_event_module_template"] = "checkout_db_latency_spike",
-    ["21_role_event_module_csv_markdown"] = "service,error_rate,latency_ms\nauth,0.8,180\nbilling,1.4,260",
-    ["22_role_event_module_json_pick"] = """{"incident":{"id":"INC-2026-007","owner":{"team":"platform","user":"bob"}},"severity":"critical"}""",
-    ["23_role_event_module_multiplex_template"] = "order_service_high_latency",
-    ["24_role_event_module_multiplex_csv"] = "service,error_rate,latency_ms\napi,1.1,240\nworker,0.5,170",
-    ["25_role_event_module_multiplex_json"] = """{"incident":{"id":"INC-2026-011","owner":{"team":"infra","user":"charlie"}},"severity":"high"}""",
-    ["26_role_event_module_multi_role_chain"] = "checkout_timeout_spike",
-    ["27_role_event_module_extensions_template"] = "payments_retry_exhausted",
-    ["28_role_event_module_extensions_csv"] = "service,error_rate,latency_ms\nsearch,0.6,150\nrecommendation,1.3,280",
-    ["29_role_event_module_top_level_overrides_extensions"] = """{"incident":{"id":"INC-2026-023","owner":{"team":"runtime","user":"eve"}},"severity":"critical"}""",
-    ["30_role_event_module_extensions_multi_role_chain"] = "payment_timeout_burst",
-    ["31_role_event_module_extensions_multiplex_json"] = """{"incident":{"id":"INC-2026-033","owner":{"team":"gateway","user":"gina"}},"severity":"high"}""",
-    ["32_role_event_module_top_level_overrides_extensions_multiplex"] = "service,error_rate,latency_ms\nedge,1.0,210\npayment,1.8,320",
-    ["33_role_event_module_no_routes_template"] = "inventory_sync_lag",
-    ["34_role_event_module_route_dsl_csv"] = "service,error_rate,latency_ms\ncatalog,0.4,140\ncheckout,1.6,300",
-    ["35_role_event_module_unknown_ignored_template"] = "payments_duplicate_callback",
-    ["36_mixed_step_json_pick_then_role_template"] = """{"incident":{"id":"INC-2026-041","owner":{"team":"data","user":"harry"}},"severity":"high"}""",
-    ["37_mixed_step_csv_markdown_then_role_template"] = "service,error_rate,latency_ms\nsearch,0.7,160\nfeed,1.4,295",
-    ["38_mixed_step_template_then_role_csv_markdown"] = "1.3",
-    ["39_human_input_basic_auto_resume"] = "checkout request missing approver and rollback plan",
-    ["40_human_approval_approved_auto_resume"] = "deploy release v1.2.3 to production",
-    ["41_human_approval_rejected_fail_auto_resume"] = "delete production database",
-    ["42_human_approval_rejected_skip_auto_resume"] = "restart read replica cluster",
-    ["43_human_input_manual_triage"] = "api gateway latency spikes in us-east-1",
-    ["44_wait_signal_manual_success"] = "release candidate v2.4.0 passed smoke checks",
-    ["45_wait_signal_timeout_failure"] = "database migration waiting for DBA ack",
-    ["46_human_approval_release_gate"] = "change request CR-2026-021",
-    ["47_mixed_human_approval_wait_signal"] = "deploy cache cluster patch-7",
-    ["49_workflow_call_multilevel"] = "apple\nbanana\napple\ncarrot",
-    ["50_connector_cli_demo"] = "Run connector demo (local CLI): execute dotnet --version through connector_call.",
-    ["51_cli_call_alias"] = "Run cli_call alias demo using local dotnet connector.",
-    ["52_foreach_llm_alias"] = "Kubernetes\n---\nDocker\n---\nTerraform",
-    ["53_map_reduce_llm_alias"] = "Topic: Caching strategy\n---\nTopic: Retry policy\n---\nTopic: Observability basics",
-    ["54_emit_publish_demo"] = "workflow event payload demo",
-    ["55_tool_call_fallback_demo"] = "tool_call fallback demo input",
-    ["56_delay_checkpoint_demo"] = "delay + checkpoint demo input",
+    ["transform"] = "Line one: hello world\nLine two: foo bar\nLine three: baz qux\nLine four: the quick brown fox\nLine five: jumps over the lazy dog",
+    ["guard"] = """{"name": "Alice", "email": "alice@example.com", "age": 30}""",
+    ["conditional"] = "URGENT: Server is down, all requests failing with 502 errors.",
+    ["switch"] = "bug: Login button does not respond on mobile Safari",
+    ["assign"] = "The answer to the ultimate question is 42.",
+    ["retrieve_facts"] = "Earth orbits the Sun at about 150 million km\nWater boils at 100 degrees Celsius at sea level\nThe speed of light is approximately 300000 km per second\nMount Everest is 8849 meters tall",
+    ["pipeline"] = "Earth orbits the Sun at about 150 million km\nThe speed of light is approximately 300000 km per second\nWater boils at 100 degrees Celsius at sea level\nPython was created by Guido van Rossum\nLight travels faster than sound",
+    ["llm_call"] = "Explain the concept of event sourcing in 3 sentences.",
+    ["llm_chain"] = "Distributed systems face challenges in maintaining consistency across nodes.",
+    ["parallel"] = "What are the benefits of using microservices architecture?",
+    ["race"] = "Give a one-sentence definition of functional programming.",
+    ["map_reduce"] = "Topic: Benefits of remote work\n---\nTopic: Challenges of remote work\n---\nTopic: Future of remote work",
+    ["foreach"] = "Kubernetes\n---\nDocker\n---\nTerraform",
+    ["evaluate"] = "Write a haiku about programming.",
+    ["reflect"] = "Write a concise explanation of the CAP theorem suitable for a junior developer.",
+    ["cache"] = "What is the difference between SQL and NoSQL databases?",
+    ["demo_template"] = "payment_api_timeout",
+    ["demo_csv_markdown"] = "service,error_rate,latency_ms\ngateway,1.2,210\ncheckout,0.3,120",
+    ["demo_json_pick"] = """{"incident":{"id":"INC-2026-001","owner":{"team":"sre","user":"alice"}},"severity":"high"}""",
+    ["role_event_module_template"] = "checkout_db_latency_spike",
+    ["role_event_module_csv_markdown"] = "service,error_rate,latency_ms\nauth,0.8,180\nbilling,1.4,260",
+    ["role_event_module_json_pick"] = """{"incident":{"id":"INC-2026-007","owner":{"team":"platform","user":"bob"}},"severity":"critical"}""",
+    ["role_event_module_multiplex_template"] = "order_service_high_latency",
+    ["role_event_module_multiplex_csv"] = "service,error_rate,latency_ms\napi,1.1,240\nworker,0.5,170",
+    ["role_event_module_multiplex_json"] = """{"incident":{"id":"INC-2026-011","owner":{"team":"infra","user":"charlie"}},"severity":"high"}""",
+    ["role_event_module_multi_role_chain"] = "checkout_timeout_spike",
+    ["role_event_module_extensions_template"] = "payments_retry_exhausted",
+    ["role_event_module_extensions_csv"] = "service,error_rate,latency_ms\nsearch,0.6,150\nrecommendation,1.3,280",
+    ["role_event_module_top_level_overrides_extensions"] = """{"incident":{"id":"INC-2026-023","owner":{"team":"runtime","user":"eve"}},"severity":"critical"}""",
+    ["role_event_module_extensions_multi_role_chain"] = "payment_timeout_burst",
+    ["role_event_module_extensions_multiplex_json"] = """{"incident":{"id":"INC-2026-033","owner":{"team":"gateway","user":"gina"}},"severity":"high"}""",
+    ["role_event_module_top_level_overrides_extensions_multiplex"] = "service,error_rate,latency_ms\nedge,1.0,210\npayment,1.8,320",
+    ["role_event_module_no_routes_template"] = "inventory_sync_lag",
+    ["role_event_module_route_dsl_csv"] = "service,error_rate,latency_ms\ncatalog,0.4,140\ncheckout,1.6,300",
+    ["role_event_module_unknown_ignored_template"] = "payments_duplicate_callback",
+    ["mixed_step_json_pick_then_role_template"] = """{"incident":{"id":"INC-2026-041","owner":{"team":"data","user":"harry"}},"severity":"high"}""",
+    ["mixed_step_csv_markdown_then_role_template"] = "service,error_rate,latency_ms\nsearch,0.7,160\nfeed,1.4,295",
+    ["mixed_step_template_then_role_csv_markdown"] = "1.3",
+    ["human_input_basic_auto_resume"] = "checkout request missing approver and rollback plan",
+    ["human_approval_approved_auto_resume"] = "deploy release v1.2.3 to production",
+    ["human_approval_rejected_fail_auto_resume"] = "delete production database",
+    ["human_approval_rejected_skip_auto_resume"] = "restart read replica cluster",
+    ["human_input_manual_triage"] = "api gateway latency spikes in us-east-1",
+    ["wait_signal_manual_success"] = "release candidate v2.4.0 passed smoke checks",
+    ["wait_signal_timeout_failure"] = "database migration waiting for DBA ack",
+    ["human_approval_release_gate"] = "change request CR-2026-021",
+    ["mixed_human_approval_wait_signal"] = "deploy cache cluster patch-7",
+    ["workflow_call_multilevel"] = "apple\nbanana\napple\ncarrot",
+    ["connector_cli_demo"] = "Run connector demo (local CLI): execute dotnet --version through connector_call.",
+    ["cli_call_alias"] = "Run cli_call alias demo using local dotnet connector.",
+    ["foreach_llm_alias"] = "Kubernetes\n---\nDocker\n---\nTerraform",
+    ["map_reduce_llm_alias"] = "Topic: Caching strategy\n---\nTopic: Retry policy\n---\nTopic: Observability basics",
+    ["emit_publish_demo"] = "workflow event payload demo",
+    ["tool_call_fallback_demo"] = "tool_call fallback demo input",
+    ["delay_checkpoint_demo"] = "delay + checkpoint demo input",
     ["counter-addition"] = "Run the closed-world two-counter addition demo.",
     ["minsky-inc-dec-jz"] = "Run the closed-world INC/DEC/JZ transfer demo.",
     ["counter_addition"] = "Run the closed-world two-counter addition demo.",
@@ -279,8 +278,7 @@ var demoInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase
 
 var parser = new WorkflowParser();
 
-// GET /api/workflows — list all workflows
-app.MapGet("/api/workflows", () =>
+IResult BuildWorkflowCatalogResponse()
 {
     var workflowFiles = DiscoverWorkflowFiles(workflowSources);
     var workflows = new List<object>();
@@ -301,6 +299,9 @@ app.MapGet("/api/workflows", () =>
                 group = listMeta.Group,
                 groupLabel = listMeta.GroupLabel,
                 sortOrder = listMeta.SortOrder,
+                source = workflowFile.SourceKind,
+                sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+                requiresLlmProvider = WorkflowLlmRuntimePolicy.RequiresLlmProvider(def),
                 primitives,
                 defaultInput = demoInputs.GetValueOrDefault(name, "Hello, world!"),
             });
@@ -315,13 +316,22 @@ app.MapGet("/api/workflows", () =>
                 group = listMeta.Group,
                 groupLabel = listMeta.GroupLabel,
                 sortOrder = listMeta.SortOrder,
+                source = workflowFile.SourceKind,
+                sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+                requiresLlmProvider = false,
                 primitives = new List<string>(),
                 defaultInput = "",
             });
         }
     }
     return Results.Json(workflows);
-});
+}
+
+// GET /api/workflows — list all workflows
+app.MapGet("/api/workflows", BuildWorkflowCatalogResponse);
+
+// GET /api/workflow-catalog — richer workflow catalog for the app UI
+app.MapGet("/api/workflow-catalog", BuildWorkflowCatalogResponse);
 
 // GET /api/workflows/{name} — workflow definition with edges
 app.MapGet("/api/workflows/{name}", (string name) =>
@@ -331,6 +341,7 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 
     var yaml = File.ReadAllText(workflowFile.FilePath);
     var def = parser.Parse(yaml);
+    var listMeta = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows);
 
     var steps = def.Steps.Select(s => new
     {
@@ -347,6 +358,19 @@ app.MapGet("/api/workflows/{name}", (string name) =>
 
     return Results.Json(new
     {
+        catalog = new
+        {
+            name,
+            description = def.Description,
+            category = listMeta.Category,
+            group = listMeta.Group,
+            groupLabel = listMeta.GroupLabel,
+            sortOrder = listMeta.SortOrder,
+            source = workflowFile.SourceKind,
+            sourceLabel = DescribeWorkflowSource(workflowFile.SourceKind),
+            requiresLlmProvider = WorkflowLlmRuntimePolicy.RequiresLlmProvider(def),
+            primitives = def.Steps.Select(s => s.Type).Distinct().ToList(),
+        },
         yaml,
         definition = new
         {
@@ -373,15 +397,6 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
         return;
     }
 
-    var workflowCategory = ClassifyWorkflowForList(name, workflowFile.SourceKind, deterministicWorkflows, turingWorkflows).Category;
-
-    if (string.Equals(workflowCategory, "llm", StringComparison.OrdinalIgnoreCase) && !llmAvailable)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
-        return;
-    }
-
     ctx.Response.Headers["Content-Type"] = "text/event-stream";
     ctx.Response.Headers["Cache-Control"] = "no-cache";
     ctx.Response.Headers["Connection"] = "keep-alive";
@@ -396,6 +411,13 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     {
         ctx.Response.StatusCode = 400;
         await ctx.Response.WriteAsync($"Invalid workflow YAML: {ex.Message}");
+        return;
+    }
+
+    if (WorkflowLlmRuntimePolicy.RequiresLlmProvider(parsedDefinition) && !llmAvailable)
+    {
+        ctx.Response.StatusCode = 400;
+        await ctx.Response.WriteAsync("LLM not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY.");
         return;
     }
 
@@ -912,76 +934,6 @@ static object[] BuildPrimitivesCatalog()
     ];
 }
 
-// POST /api/playground/chat — streaming LLM chat for workflow authoring
-app.MapPost("/api/playground/chat", async (HttpContext ctx, CancellationToken ct) =>
-{
-    if (!llmAvailable)
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("LLM not configured");
-        return;
-    }
-
-    var body = await JsonSerializer.DeserializeAsync<PlaygroundChatRequest>(ctx.Request.Body, new JsonSerializerOptions
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    }, ct);
-
-    if (body?.Messages is not { Count: > 0 })
-    {
-        ctx.Response.StatusCode = 400;
-        await ctx.Response.WriteAsync("messages required");
-        return;
-    }
-
-    ctx.Response.Headers["Content-Type"] = "text/event-stream";
-    ctx.Response.Headers["Cache-Control"] = "no-cache";
-    ctx.Response.Headers["Connection"] = "keep-alive";
-
-    var factory = ctx.RequestServices.GetRequiredService<ILLMProviderFactory>();
-    var provider = factory.GetDefault();
-    var playgroundSystemPrompt = BuildPlaygroundSystemPrompt(factory.GetAvailableProviders(), provider.Name);
-
-    var llmMessages = new List<ChatMessage>
-    {
-        ChatMessage.System(playgroundSystemPrompt),
-    };
-    foreach (var m in body.Messages)
-        llmMessages.Add(new ChatMessage { Role = m.Role, Content = m.Content });
-
-    var request = new LLMRequest { Messages = llmMessages, Temperature = 0.3 };
-    var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-    try
-    {
-        await foreach (var chunk in provider.ChatStreamAsync(request, ct))
-        {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-            {
-                var json = JsonSerializer.Serialize(new { delta = chunk.DeltaContent }, jsonOpts);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
-                await ctx.Response.Body.FlushAsync(ct);
-            }
-        }
-    }
-    catch (OperationCanceledException) { }
-    catch (Exception ex)
-    {
-        if (!ct.IsCancellationRequested)
-        {
-            var json = JsonSerializer.Serialize(new { error = ex.Message }, jsonOpts);
-            await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
-            await ctx.Response.Body.FlushAsync(ct);
-        }
-    }
-
-    if (!ct.IsCancellationRequested)
-    {
-        await ctx.Response.WriteAsync("data: [DONE]\n\n", ct);
-        await ctx.Response.Body.FlushAsync(ct);
-    }
-});
-
 // POST /api/playground/parse — parse YAML and return steps + edges for graph
 app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
 {
@@ -1045,6 +997,103 @@ app.MapPost("/api/playground/parse", async (HttpContext ctx) =>
     {
         await ctx.Response.WriteAsJsonAsync(new { valid = false, error = ex.Message });
     }
+});
+
+// POST /api/playground/workflows — validate and save YAML to ~/.aevatar/workflows
+app.MapPost("/api/playground/workflows", async (HttpContext ctx) =>
+{
+    PlaygroundWorkflowSaveRequest? request;
+    try
+    {
+        request = await JsonSerializer.DeserializeAsync<PlaygroundWorkflowSaveRequest>(
+            ctx.Request.Body,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase },
+            ctx.RequestAborted);
+    }
+    catch (JsonException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "invalid json body" });
+        return;
+    }
+
+    if (request == null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "request body is required" });
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Yaml))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = "workflow yaml is required" });
+        return;
+    }
+
+    WorkflowDefinition parsedDefinition;
+    List<string> validationErrors;
+    try
+    {
+        parsedDefinition = parser.Parse(request.Yaml);
+        validationErrors = ValidateWorkflowDefinitionForRuntime(parsedDefinition, ctx.RequestServices);
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
+        return;
+    }
+
+    if (validationErrors.Count > 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error = string.Join("; ", validationErrors),
+            errors = validationErrors,
+        });
+        return;
+    }
+
+    string filename;
+    try
+    {
+        filename = NormalizeWorkflowSaveFilename(request.Filename, parsedDefinition.Name);
+    }
+    catch (Exception ex)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(new { error = ex.Message });
+        return;
+    }
+
+    Directory.CreateDirectory(AevatarPaths.Workflows);
+    var path = Path.Combine(AevatarPaths.Workflows, filename);
+    var existed = File.Exists(path);
+    if (existed && !request.Overwrite)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            error = $"Workflow '{filename}' already exists.",
+            filename,
+            path,
+        });
+        return;
+    }
+
+    var content = NormalizeWorkflowContentForSave(request.Yaml);
+    await File.WriteAllTextAsync(path, content, Encoding.UTF8, ctx.RequestAborted);
+
+    await ctx.Response.WriteAsJsonAsync(new
+    {
+        saved = true,
+        filename,
+        path,
+        workflowName = parsedDefinition.Name,
+        overwritten = existed,
+    });
 });
 
 app.MapFallbackToFile("index.html");
@@ -1396,150 +1445,55 @@ static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefiniti
     }
 }
 
+static string NormalizeWorkflowSaveFilename(string? requestedFilename, string workflowName)
+{
+    var candidate = string.IsNullOrWhiteSpace(requestedFilename)
+        ? workflowName
+        : requestedFilename.Trim();
+    if (string.IsNullOrWhiteSpace(candidate))
+        throw new InvalidOperationException("workflow filename is required");
+
+    var fileNameOnly = Path.GetFileName(candidate);
+    if (!string.Equals(fileNameOnly, candidate, StringComparison.Ordinal))
+        throw new InvalidOperationException("workflow filename must not include directory segments");
+
+    var stem = Path.GetFileNameWithoutExtension(fileNameOnly);
+    if (string.IsNullOrWhiteSpace(stem))
+        throw new InvalidOperationException("workflow filename is invalid");
+
+    var sanitizedChars = stem
+        .Trim()
+        .Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+        .ToArray();
+    var sanitizedStem = new string(sanitizedChars)
+        .Trim('_');
+    while (sanitizedStem.Contains("__", StringComparison.Ordinal))
+        sanitizedStem = sanitizedStem.Replace("__", "_", StringComparison.Ordinal);
+
+    if (string.IsNullOrWhiteSpace(sanitizedStem))
+        throw new InvalidOperationException("workflow filename must contain letters or digits");
+
+    return sanitizedStem + ".yaml";
+}
+
+static string NormalizeWorkflowContentForSave(string yaml) =>
+    (yaml ?? string.Empty).Trim() + Environment.NewLine;
+
 static int? TryParseWorkflowIndex(string workflowName)
 {
-    if (string.IsNullOrWhiteSpace(workflowName))
-        return null;
-
-    var span = workflowName.AsSpan().Trim();
-    var i = 0;
-    while (i < span.Length && char.IsDigit(span[i]))
-        i++;
-
-    if (i == 0 || i >= span.Length || span[i] != '_')
-        return null;
-
-    return int.TryParse(span[..i], out var value) ? value : null;
+    return WorkflowLibraryClassifier.TryGetWorkflowIndex(workflowName);
 }
 
-static string BuildPlaygroundSystemPrompt(IReadOnlyList<string> availableProviders, string? defaultProvider)
-{
-    var providerList = FormatProviderList(availableProviders);
-    var defaultProviderLabel = string.IsNullOrWhiteSpace(defaultProvider) ? "not-set" : defaultProvider.Trim();
-
-    return """
-You are an expert Aevatar Workflow YAML author. You help users design workflows by writing valid YAML.
-
-## YAML Schema (snake_case)
-```
-name: string            # required
-description: string     # optional
-configuration:          # optional
-  closed_world_mode: bool # optional, default false
-roles:                  # optional — LLM persona definitions
-  - id: string          # required (or name)
-    name: string        # required (or id)
-    system_prompt: |    # optional
-      ...
-    provider: string    # optional
-    model: string       # optional
-    temperature: number # optional
-    max_tokens: int     # optional
-    max_tool_rounds: int # optional
-    max_history_messages: int # optional
-    stream_buffer_capacity: int # optional
-    event_modules: string # optional, comma-separated module names
-    event_routes: string  # optional, route DSL/YAML list
-    connectors: [string]  # optional
-    extensions:           # optional compatibility container
-      event_modules: string
-      event_routes: string
-steps:                  # ordered step list
-  - id: string          # required — unique
-    type: string        # default "llm_call"
-    target_role: string # optional (alias: role)
-    parameters: {}      # Dict<string, string>
-    next: string        # explicit next step id
-    branches: {}        # key → step_id ("_default" for fallback)
-    children: []        # nested sub-steps (recursive)
-    retry: { max_attempts: 3, backoff: "fixed"|"exponential", delay_ms: 1000 }
-    on_error: { strategy: "fail"|"skip"|"fallback", fallback_step: "...", default_output: "..." }
-    timeout_ms: int
-```
-
-## Role Customization Guidance
-- You can and should design custom roles based on the user's domain and task.
-- Each role should have a stable `id` (snake_case) and a clear `system_prompt`.
-- For multi-stage workflows, prefer specialized roles (e.g. researcher, reviewer, writer) over one generic role.
-- All role-referenced steps must point to existing role ids (`target_role` or `role`).
-- Runtime tuning fields are optional: `temperature`, `max_tokens`, `max_tool_rounds`,
-  `max_history_messages`, `stream_buffer_capacity`, `event_modules`,
-  `event_routes`, `connectors`.
-- Prefer not to set `provider` and `model` unless the user explicitly asks.
-- If user explicitly wants a single-role workflow, keep exactly one role.
-- If workflow is purely deterministic and has no role-driven AI steps, roles can be omitted.
-
-## Step Types
-| Type | Category | Purpose |
-|------|----------|---------|
-| transform | data | Text ops: op= identity/uppercase/lowercase/trim/count/count_words/take/take_last/join/split/distinct/reverse_lines; n, separator |
-| assign | data | Set variable: target, value ("$input" = current input) |
-| retrieve_facts | data | Keyword search: query, top_k |
-| cache | data | Cache child step: cache_key, ttl_seconds, child_step_type, child_target_role |
-| guard | control | Validation gate: check= not_empty/json_valid/regex/max_length/contains; on_fail= fail/skip/branch; pattern, max, keyword, branch_target |
-| conditional | control | Binary branch: condition (keyword to search in input) |
-| switch | control | Multi-way branch: branch.{key} in parameters + branches in step definition |
-| while | control | Loop: max_iterations, step (sub-step type) |
-| delay | control | Pause: duration_ms (0–300000) |
-| wait_signal | control | Block: signal_name, timeout_ms |
-| checkpoint | control | Save state: name |
-| llm_call | ai | LLM prompt: prompt_prefix. Requires target_role with system_prompt |
-| tool_call | ai | Invoke tool: tool (name) |
-| evaluate | ai | LLM-as-judge: criteria, scale, threshold, on_below. Requires judge role |
-| reflect | ai | Self-improvement loop: max_rounds (1–10), criteria |
-| foreach | composition | Iterate: delimiter, sub_step_type, sub_target_role |
-| parallel | composition | Fan-out: workers (comma-separated role IDs), parallel_count |
-| race | composition | First-wins: workers, count |
-| map_reduce | composition | Split→map→reduce: delimiter, map_step_type, map_target_role, reduce_step_type, reduce_target_role, reduce_prompt_prefix |
-| workflow_call | composition | Sub-workflow: workflow (name) |
-| vote_consensus | composition | Aggregate votes (no params) |
-| connector_call | integration | External call: connector, operation, retry, timeout_ms, on_error= fail/continue |
-| emit | integration | Publish event: event_type, payload |
-| human_input | human | Wait for input: prompt, variable, timeout, on_timeout |
-| human_approval | human | Wait for approval: prompt, timeout, on_reject |
-
-## Rules
-- All parameter values are strings (even numbers: "3" not 3).
-- type defaults to "llm_call" when omitted.
-- target_role and role are aliases; target_role takes precedence.
-- Role fields `event_modules/event_routes` support both top-level and `extensions.*`; top-level has higher priority.
-- For workflows using `llm_call` / `evaluate` / `reflect`, always provide matching roles.
-- When user customizes roles, preserve requested role names/ids and wire all related steps correctly.
-- Steps flow: next → explicit jump; branches → conditional routing; neither → sequential (list order).
-- For switch: both parameters.branch.* AND branches: must be set.
-- Each branch target should have next: pointing to a merge step.
-- "_default" is the reserved fallback branch key.
-
-## Response Format
-- Always wrap workflow YAML in a ```yaml code block.
-- Explain your design choices briefly.
-- If the user's request is ambiguous, ask clarifying questions.
-- Generate complete, valid, parseable YAML.
-- Return a full workflow YAML (including roles) unless the user explicitly asks for a partial snippet.
-""" + $"""
-
-## Runtime Provider Constraints (dynamic)
-- Configured providers in this runtime: {providerList}
-- Default provider: {defaultProviderLabel}
-- Prefer omitting `provider` and `model` in generated roles so runtime default is used.
-- Only set `provider` when user explicitly requests it, and it must be one of the configured providers above.
-- Never invent provider names or models.
-""";
-}
-
-static string FormatProviderList(IReadOnlyList<string>? providers)
-{
-    if (providers is not { Count: > 0 })
-        return "<none>";
-
-    var names = providers
-        .Where(name => !string.IsNullOrWhiteSpace(name))
-        .Select(name => name.Trim())
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
-
-    return names.Count == 0 ? "<none>" : string.Join(", ", names);
-}
+static string DescribeWorkflowSource(string sourceKind) =>
+    (sourceKind ?? string.Empty).ToLowerInvariant() switch
+    {
+        "home" => "Saved",
+        "cwd" => "Workspace",
+        "repo" => "Starter",
+        "demo" => "Demo",
+        "turing" => "Advanced",
+        _ => "Workflow",
+    };
 
 static IReadOnlyList<string> LoadNamedConnectors(IServiceProvider services)
 {
@@ -1692,8 +1646,7 @@ static (string Model, string? Endpoint) InferProviderDefaults(string? providerHi
     return (config["Models:OpenAIModel"] ?? config["Models:DefaultModel"] ?? "gpt-4o-mini", null);
 }
 
-sealed record PlaygroundChatMessage(string Role, string Content);
-sealed record PlaygroundChatRequest(List<PlaygroundChatMessage> Messages);
+sealed record PlaygroundWorkflowSaveRequest(string Yaml, string? Filename, bool Overwrite);
 sealed record WorkflowYamlSource(string Kind, string DirectoryPath);
 sealed record WorkflowFileEntry(string Name, string FilePath, string SourceKind);
 sealed record WorkflowListClassification(string Category, string Group, string GroupLabel, int SortOrder);

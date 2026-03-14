@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package aevatar.workflow.queries;
+
+option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Queries";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+message WorkflowActorSnapshot {
+  string actor_id = 1;
+  string workflow_name = 2;
+  string last_command_id = 3;
+  int32 completion_status_value = 4;
+  int64 state_version = 5;
+  string last_event_id = 6;
+  google.protobuf.Timestamp last_updated_at_utc = 7;
+  google.protobuf.BoolValue last_success_wrapper = 8;
+  string last_output = 9;
+  string last_error = 10;
+  int32 total_steps = 11;
+  int32 requested_steps = 12;
+  int32 completed_steps = 13;
+  int32 role_reply_count = 14;
+}
+
+message WorkflowActorTimelineItem {
+  google.protobuf.Timestamp timestamp_utc = 1;
+  string stage = 2;
+  string message = 3;
+  string agent_id = 4;
+  string step_id = 5;
+  string step_type = 6;
+  string event_type = 7;
+  map<string, string> data = 8;
+}
+
+message WorkflowActorGraphNode {
+  string node_id = 1;
+  string node_type = 2;
+  google.protobuf.Timestamp updated_at_utc = 3;
+  map<string, string> properties = 4;
+}
+
+message WorkflowActorGraphEdge {
+  string edge_id = 1;
+  string from_node_id = 2;
+  string to_node_id = 3;
+  string edge_type = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+  map<string, string> properties = 6;
+}
+
+message WorkflowActorGraphSubgraph {
+  string root_node_id = 1;
+  repeated WorkflowActorGraphNode nodes = 2;
+  repeated WorkflowActorGraphEdge edges = 3;
+}
+
+message WorkflowActorGraphEnrichedSnapshot {
+  WorkflowActorSnapshot snapshot = 1;
+  WorkflowActorGraphSubgraph subgraph = 2;
+}

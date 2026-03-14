@@ -10,6 +10,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/solution_split_guards.sh`: split build guard.
 - `tools/ci/solution_split_test_guards.sh`: split test guard.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
+- `tools/ci/playground_asset_drift_guard.sh`: playground static asset drift guard between CLI and demo web UI.
 - `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
 - `tools/ci/event_sourcing_regression.sh`: EventSourcing regression entry (core tests + Orleans/Garnet + architecture guards).
 

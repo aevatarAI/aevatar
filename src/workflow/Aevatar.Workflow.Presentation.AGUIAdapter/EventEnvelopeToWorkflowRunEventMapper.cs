@@ -225,6 +225,40 @@ public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEve
         {
             var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageEndEvent>();
             var msgId = AGUIEventEnvelopeMappingHelpers.ResolveMessageId(evt.SessionId, envelope.Id);
+            if (string.IsNullOrWhiteSpace(evt.SessionId) && !string.IsNullOrWhiteSpace(evt.Content))
+            {
+                events =
+                [
+                    new WorkflowRunEventEnvelope
+                    {
+                        Timestamp = ts,
+                        TextMessageStart = new WorkflowTextMessageStartEventPayload
+                        {
+                            MessageId = msgId,
+                            Role = "assistant",
+                        },
+                    },
+                    new WorkflowRunEventEnvelope
+                    {
+                        Timestamp = ts,
+                        TextMessageContent = new WorkflowTextMessageContentEventPayload
+                        {
+                            MessageId = msgId,
+                            Delta = evt.Content,
+                        },
+                    },
+                    new WorkflowRunEventEnvelope
+                    {
+                        Timestamp = ts,
+                        TextMessageEnd = new WorkflowTextMessageEndEventPayload
+                        {
+                            MessageId = msgId,
+                        },
+                    },
+                ];
+                return true;
+            }
+
             events =
             [
                 new WorkflowRunEventEnvelope
@@ -432,6 +466,9 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
 
         var evt = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
         var ts = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp);
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in evt.Metadata)
+            metadata[key] = value;
 
         events =
         [
@@ -449,6 +486,7 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                         Prompt = evt.Prompt,
                         TimeoutSeconds = evt.TimeoutSeconds,
                         VariableName = evt.VariableName,
+                        Metadata = { metadata },
                     }),
                 },
             },
@@ -490,6 +528,42 @@ public sealed class WorkflowWaitingSignalRunEventEnvelopeMappingHandler : IWorkf
                         SignalName = evt.SignalName,
                         Prompt = evt.Prompt,
                         TimeoutMs = evt.TimeoutMs,
+                    }),
+                },
+            },
+        ];
+        return true;
+    }
+}
+
+public sealed class WorkflowSignalBufferedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => 47;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        if (envelope.Payload?.Is(WorkflowSignalBufferedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        var evt = envelope.Payload.Unpack<WorkflowSignalBufferedEvent>();
+        events =
+        [
+            new WorkflowRunEventEnvelope
+            {
+                Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = "aevatar.workflow.signal.buffered",
+                    Payload = Any.Pack(new WorkflowSignalBufferedCustomPayload
+                    {
+                        RunId = evt.RunId,
+                        StepId = evt.StepId,
+                        SignalName = evt.SignalName,
+                        Payload = evt.Payload,
+                        ReceivedAtUnixTimeMs = evt.ReceivedAtUnixTimeMs,
                     }),
                 },
             },

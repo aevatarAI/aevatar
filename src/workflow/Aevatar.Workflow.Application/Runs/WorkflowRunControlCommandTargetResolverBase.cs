@@ -39,6 +39,13 @@ internal abstract class WorkflowRunControlCommandTargetResolverBase<TCommand>
                 WorkflowRunControlStartError.InvalidRunId(actorId, runId));
         }
 
+        var validationError = ValidateCommand(command, actorId, runId);
+        if (validationError != null)
+        {
+            return CommandTargetResolution<WorkflowRunControlCommandTarget, WorkflowRunControlStartError>.Failure(
+                validationError);
+        }
+
         var actor = await _runtime.GetAsync(actorId);
         if (actor == null)
         {
@@ -68,5 +75,16 @@ internal abstract class WorkflowRunControlCommandTargetResolverBase<TCommand>
 
         return CommandTargetResolution<WorkflowRunControlCommandTarget, WorkflowRunControlStartError>.Success(
             new WorkflowRunControlCommandTarget(actor, boundRunId));
+    }
+
+    protected virtual WorkflowRunControlStartError? ValidateCommand(
+        TCommand command,
+        string actorId,
+        string runId)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        _ = actorId;
+        _ = runId;
+        return null;
     }
 }

@@ -6,7 +6,8 @@ public sealed record WorkflowChatRunRequest(
     string? ActorId,
     string? SessionId = null,
     // Inline workflow YAML bundle; first item is the entry workflow.
-    IReadOnlyList<string>? WorkflowYamls = null);
+    IReadOnlyList<string>? WorkflowYamls = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -19,6 +20,7 @@ public enum WorkflowChatRunStartError
     AgentWorkflowNotConfigured = 6,
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
+    DetachedCleanupUnavailable = 9,
 }
 
 public enum WorkflowProjectionCompletionStatus

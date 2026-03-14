@@ -26,6 +26,7 @@ public sealed class WorkflowRunGAgent
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
+    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
@@ -100,6 +101,28 @@ public sealed class WorkflowRunGAgent
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         State.ExecutionStates.ToList();
 
+    public bool TryGetExecutionItem(
+        string itemKey,
+        out object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return _executionItems.TryGetValue(itemKey, out value);
+    }
+
+    public void SetExecutionItem(
+        string itemKey,
+        object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        _executionItems[itemKey] = value;
+    }
+
+    public bool RemoveExecutionItem(string itemKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return _executionItems.Remove(itemKey);
+    }
+
     public Task UpsertExecutionStateAsync(
         string scopeKey,
         Any state,
@@ -173,10 +196,6 @@ public sealed class WorkflowRunGAgent
             request.WorkflowName,
             request.InlineWorkflowYamls,
             request.RunId);
-
-    [EventHandler]
-    public Task HandleQueryWorkflowActorBindingRequested(QueryWorkflowActorBindingRequestedEvent request) =>
-        RespondWorkflowActorBindingAsync(request);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -301,6 +320,7 @@ public sealed class WorkflowRunGAgent
         await PersistDomainEventAsync(evt);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
+        _executionItems.Clear();
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -562,30 +582,6 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
-    private Task RespondWorkflowActorBindingAsync(
-        QueryWorkflowActorBindingRequestedEvent request,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.RequestId) || string.IsNullOrWhiteSpace(request.ReplyStreamId))
-            return Task.CompletedTask;
-
-        var response = new WorkflowActorBindingRespondedEvent
-        {
-            RequestId = request.RequestId,
-            ActorId = Id,
-            ActorKind = "run",
-            DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            RunId = State.RunId ?? string.Empty,
-            WorkflowName = State.WorkflowName ?? string.Empty,
-            WorkflowYaml = State.WorkflowYaml ?? string.Empty,
-        };
-        foreach (var (key, value) in State.InlineWorkflowYamls)
-            response.InlineWorkflowYamls[key] = value;
-
-        return EventPublisher.SendToAsync(request.ReplyStreamId, response, ct, sourceEnvelope: null);
-    }
-
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
     {
         if (string.IsNullOrWhiteSpace(yaml))
@@ -730,6 +726,7 @@ public sealed class WorkflowRunGAgent
         IReadOnlyCollection<string> childActorIds,
         CancellationToken ct)
     {
+        _executionItems.Clear();
         foreach (var childActorId in childActorIds)
         {
             await _runtime.UnlinkAsync(childActorId, ct);

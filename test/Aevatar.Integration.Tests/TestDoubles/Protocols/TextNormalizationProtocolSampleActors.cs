@@ -3,7 +3,6 @@ using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Integration.Tests.Protocols;
@@ -99,23 +98,6 @@ public sealed class TextNormalizationStaticGAgent : GAgentBase<TextNormalization
         await PersistDomainEventAsync(completed, CancellationToken.None);
     }
 
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
-            {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
-    }
-
     protected override TextNormalizationReadModel TransitionState(
         TextNormalizationReadModel current,
         IMessage evt) =>
@@ -142,16 +124,13 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
 
     private readonly IActorRuntime _runtime;
     private readonly IStreamProvider _streams;
-    private readonly IStreamRequestReplyClient _requestReplyClient;
 
     public TextNormalizationWorkflowProtocolGAgent(
         IActorRuntime runtime,
-        IStreamProvider streams,
-        IStreamRequestReplyClient requestReplyClient)
+        IStreamProvider streams)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _streams = streams ?? throw new ArgumentNullException(nameof(streams));
-        _requestReplyClient = requestReplyClient ?? throw new ArgumentNullException(nameof(requestReplyClient));
     }
 
     [EventHandler]
@@ -202,43 +181,13 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
         if (!result.Success)
             throw new InvalidOperationException($"Workflow protocol sample failed: {result.Error}");
 
-        var queryResponse = await _requestReplyClient.QueryActorAsync<TextNormalizationQueryResponded>(
-            _streams,
-            workerActor,
-            "text-normalization-worker-query",
-            TimeSpan.FromSeconds(5),
-            static (requestId, replyStreamId) => CreateEnvelope(
-                new TextNormalizationQueryRequested
-                {
-                    RequestId = requestId,
-                    ReplyStreamId = replyStreamId,
-                }),
-            static (response, requestId) => string.Equals(response.RequestId, requestId, StringComparison.Ordinal),
-            static requestId => $"Text normalization worker query timed out. request_id={requestId}",
-            CancellationToken.None);
+        var workerCompleted = TextNormalizationProtocolSample.BuildCompleted(evt);
 
         await PersistDomainEventAsync(new TextNormalizationCompleted
         {
             CommandId = evt.CommandId ?? string.Empty,
-            Current = queryResponse.Current?.Clone() ?? new TextNormalizationReadModel(),
+            Current = workerCompleted.Current?.Clone() ?? new TextNormalizationReadModel(),
         }, CancellationToken.None);
-    }
-
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
-            {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
     }
 
     protected override TextNormalizationReadModel TransitionState(
@@ -289,21 +238,15 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private const string ScriptId = "text-normalization-protocol-script";
     private const string ScriptRevision = "rev-1";
 
-    private readonly IScriptDefinitionCommandPort _definitionPort;
-    private readonly IScriptRuntimeProvisioningPort _provisioningPort;
     private readonly IScriptRuntimeCommandPort _commandPort;
     private readonly IScriptReadModelQueryApplicationService _queryService;
     private readonly IScriptExecutionProjectionPort _projectionPort;
 
     public TextNormalizationScriptingProtocolGAgent(
-        IScriptDefinitionCommandPort definitionPort,
-        IScriptRuntimeProvisioningPort provisioningPort,
         IScriptRuntimeCommandPort commandPort,
         IScriptReadModelQueryApplicationService queryService,
         IScriptExecutionProjectionPort projectionPort)
     {
-        _definitionPort = definitionPort ?? throw new ArgumentNullException(nameof(definitionPort));
-        _provisioningPort = provisioningPort ?? throw new ArgumentNullException(nameof(provisioningPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
@@ -315,19 +258,6 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
         var definitionActorId = $"{Id}:script-definition";
         var runtimeActorId = $"{Id}:script-runtime";
         var runId = evt.CommandId ?? string.Empty;
-
-        await _definitionPort.UpsertDefinitionAsync(
-            ScriptId,
-            ScriptRevision,
-            TextNormalizationProtocolSampleActors.Source,
-            TextNormalizationProtocolSampleActors.SourceHash,
-            definitionActorId,
-            CancellationToken.None);
-        await _provisioningPort.EnsureRuntimeAsync(
-            definitionActorId,
-            ScriptRevision,
-            runtimeActorId,
-            CancellationToken.None);
 
         var lease = await _projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None)
             ?? throw new InvalidOperationException("Script projection lease is required for text normalization sample.");
@@ -363,23 +293,6 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
             await _projectionPort.DetachLiveSinkAsync(lease, sink, CancellationToken.None);
             await _projectionPort.ReleaseActorProjectionAsync(lease, CancellationToken.None);
         }
-    }
-
-    [EventHandler]
-    public Task HandleQueryRequested(TextNormalizationQueryRequested evt)
-    {
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
-            return Task.CompletedTask;
-
-        return EventPublisher.SendToAsync(
-            evt.ReplyStreamId,
-            new TextNormalizationQueryResponded
-            {
-                RequestId = evt.RequestId,
-                Current = State.Clone(),
-            },
-            CancellationToken.None,
-            sourceEnvelope: null);
     }
 
     protected override TextNormalizationReadModel TransitionState(

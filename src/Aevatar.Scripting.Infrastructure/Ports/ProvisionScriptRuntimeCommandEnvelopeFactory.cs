@@ -18,11 +18,22 @@ public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
         return ScriptingActorRequestEnvelopeFactory.Create(
             context.TargetId,
             context.CorrelationId,
-            new ProvisionScriptBehaviorRequestedEvent
+            new BindScriptBehaviorRequestedEvent
             {
                 DefinitionActorId = command.DefinitionActorId ?? string.Empty,
-                RequestedRevision = command.ScriptRevision ?? string.Empty,
-                RequestId = context.CommandId ?? string.Empty,
+                ScriptId = command.DefinitionSnapshot.ScriptId,
+                Revision = command.DefinitionSnapshot.Revision,
+                SourceText = command.DefinitionSnapshot.SourceText,
+                SourceHash = command.DefinitionSnapshot.SourceHash,
+                StateTypeUrl = command.DefinitionSnapshot.StateTypeUrl,
+                ReadModelTypeUrl = command.DefinitionSnapshot.ReadModelTypeUrl,
+                ReadModelSchemaVersion = command.DefinitionSnapshot.ReadModelSchemaVersion,
+                ReadModelSchemaHash = command.DefinitionSnapshot.ReadModelSchemaHash,
+                ScriptPackage = command.DefinitionSnapshot.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+                ProtocolDescriptorSet = command.DefinitionSnapshot.ProtocolDescriptorSet,
+                StateDescriptorFullName = command.DefinitionSnapshot.StateDescriptorFullName,
+                ReadModelDescriptorFullName = command.DefinitionSnapshot.ReadModelDescriptorFullName,
+                RuntimeSemantics = command.DefinitionSnapshot.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
             });
     }
 }

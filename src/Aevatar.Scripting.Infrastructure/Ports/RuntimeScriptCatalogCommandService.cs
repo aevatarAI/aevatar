@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
@@ -8,13 +9,22 @@ public sealed class RuntimeScriptCatalogCommandService
 {
     private readonly ICommandDispatchService<PromoteScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _promoteDispatchService;
     private readonly ICommandDispatchService<RollbackScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _rollbackDispatchService;
+    private readonly IScriptingActorAddressResolver _addressResolver;
+    private readonly RuntimeScriptActorAccessor _actorAccessor;
+    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
 
     public RuntimeScriptCatalogCommandService(
         ICommandDispatchService<PromoteScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> promoteDispatchService,
-        ICommandDispatchService<RollbackScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> rollbackDispatchService)
+        ICommandDispatchService<RollbackScriptCatalogRevisionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> rollbackDispatchService,
+        IScriptingActorAddressResolver addressResolver,
+        RuntimeScriptActorAccessor actorAccessor,
+        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
     {
         _promoteDispatchService = promoteDispatchService ?? throw new ArgumentNullException(nameof(promoteDispatchService));
         _rollbackDispatchService = rollbackDispatchService ?? throw new ArgumentNullException(nameof(rollbackDispatchService));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
+        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
+        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
     }
 
     public async Task PromoteCatalogRevisionAsync(
@@ -27,9 +37,18 @@ public sealed class RuntimeScriptCatalogCommandService
         string proposalId,
         CancellationToken ct)
     {
+        var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
+            ? _addressResolver.GetCatalogActorId()
+            : catalogActorId;
+        _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
+            resolvedCatalogActorId,
+            "Script catalog actor not found",
+            ct);
+        await _authorityProjectionPrimingPort.PrimeAsync(resolvedCatalogActorId, ct);
+
         var result = await _promoteDispatchService.DispatchAsync(
             new PromoteScriptCatalogRevisionCommand(
-                catalogActorId,
+                resolvedCatalogActorId,
                 scriptId,
                 expectedBaseRevision,
                 revision,
@@ -50,9 +69,18 @@ public sealed class RuntimeScriptCatalogCommandService
         string expectedCurrentRevision,
         CancellationToken ct)
     {
+        var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
+            ? _addressResolver.GetCatalogActorId()
+            : catalogActorId;
+        _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
+            resolvedCatalogActorId,
+            "Script catalog actor not found",
+            ct);
+        await _authorityProjectionPrimingPort.PrimeAsync(resolvedCatalogActorId, ct);
+
         var result = await _rollbackDispatchService.DispatchAsync(
             new RollbackScriptCatalogRevisionCommand(
-                catalogActorId,
+                resolvedCatalogActorId,
                 scriptId,
                 targetRevision,
                 reason,

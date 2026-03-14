@@ -20,6 +20,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionReadModelProjectorTests
 {
+    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+
     private static IEventDeduplicator CreateDeduplicator() => new TestEventDeduplicator();
     private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
@@ -32,7 +34,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
         {
             new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(graphStore),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(graphStore, GraphMaterializer),
         };
         return new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
     }
@@ -74,6 +76,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -142,6 +145,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -176,6 +180,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -216,6 +221,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -263,6 +269,7 @@ public class WorkflowExecutionReadModelProjectorTests
         ];
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             reducers);
@@ -299,6 +306,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         var projector = new WorkflowExecutionReadModelProjector(
             CreateDispatcher(store),
+            store,
             CreateDeduplicator(),
             new SystemProjectionClock(),
             BuildReducers());
@@ -358,11 +366,23 @@ public class WorkflowExecutionReadModelProjectorTests
     }
 
     [Fact]
-    public async Task Store_MutateMissingRun_ShouldThrow()
+    public async Task Store_GetMissingRun_ShouldReturnNull_AndAllowUpsert()
     {
         var store = CreateStore();
-        Func<Task> act = () => store.MutateAsync("missing", _ => { });
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        var missing = await store.GetAsync("missing");
+        missing.Should().BeNull();
+
+        await store.UpsertAsync(new WorkflowExecutionReport
+        {
+            RootActorId = "missing",
+            StartedAt = DateTimeOffset.UtcNow,
+            EndedAt = DateTimeOffset.UtcNow,
+            Summary = new WorkflowExecutionSummary(),
+        });
+
+        var persisted = await store.GetAsync("missing");
+        persisted.Should().NotBeNull();
+        persisted!.RootActorId.Should().Be("missing");
     }
 
     private sealed class TestEventDeduplicator : IEventDeduplicator

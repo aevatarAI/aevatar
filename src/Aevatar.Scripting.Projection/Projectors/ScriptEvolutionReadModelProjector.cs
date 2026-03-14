@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -9,16 +10,19 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptEvolutionReadModelProjector
     : IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptEvolutionReadModel, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ScriptEvolutionReadModel, string> _documentReader;
+    private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel, string> _writeDispatcher;
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>>> _reducersByType;
 
     public ScriptEvolutionReadModelProjector(
-        IProjectionStoreDispatcher<ScriptEvolutionReadModel, string> storeDispatcher,
+        IProjectionDocumentReader<ScriptEvolutionReadModel, string> documentReader,
+        IProjectionWriteDispatcher<ScriptEvolutionReadModel, string> writeDispatcher,
         IProjectionClock clock,
         IEnumerable<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>> reducers)
     {
-        _storeDispatcher = storeDispatcher;
+        _documentReader = documentReader;
+        _writeDispatcher = writeDispatcher;
         _clock = clock;
         _reducersByType = reducers
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
@@ -58,21 +62,24 @@ public sealed class ScriptEvolutionReadModelProjector
             return;
 
         var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
-        await _storeDispatcher.MutateAsync(readModelId, readModel =>
-        {
-            if (string.IsNullOrWhiteSpace(readModel.Id))
-                readModel.Id = readModelId;
+        var readModel = (await _documentReader.GetAsync(readModelId, ct))?.DeepClone()
+                        ?? new ScriptEvolutionReadModel
+                        {
+                            Id = readModelId,
+                        };
+        if (string.IsNullOrWhiteSpace(readModel.Id))
+            readModel.Id = readModelId;
 
-            var mutated = false;
-            foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(readModel, context, normalized, now);
+        var mutated = false;
+        foreach (var reducer in reducers)
+            mutated |= reducer.Reduce(readModel, context, normalized, now);
 
-            if (!mutated)
-                return;
+        if (!mutated)
+            return;
 
-            readModel.LastEventId = normalized.Id ?? string.Empty;
-            readModel.UpdatedAt = now;
-        }, ct);
+        readModel.LastEventId = normalized.Id ?? string.Empty;
+        readModel.UpdatedAt = now;
+        await _writeDispatcher.UpsertAsync(readModel, ct);
     }
 
     public ValueTask CompleteAsync(

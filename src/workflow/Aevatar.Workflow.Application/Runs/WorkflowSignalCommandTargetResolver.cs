@@ -12,4 +12,15 @@ internal sealed class WorkflowSignalCommandTargetResolver
         : base(runtime, bindingReader)
     {
     }
+
+    protected override WorkflowRunControlStartError? ValidateCommand(
+        WorkflowSignalCommand command,
+        string actorId,
+        string runId)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return string.IsNullOrWhiteSpace(command.SignalName)
+            ? WorkflowRunControlStartError.InvalidSignalName(actorId, runId, command.SignalName ?? string.Empty)
+            : null;
+    }
 }

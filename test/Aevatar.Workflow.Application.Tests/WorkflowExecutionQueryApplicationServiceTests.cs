@@ -14,7 +14,9 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var projectionPort = new FakeProjectionQueryPort { EnableActorQueryEndpoints = false };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry(["direct", "auto"]),
-            projectionPort);
+            projectionPort,
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
 
         service.ActorQueryEnabled.Should().BeFalse();
         (await service.ListAgentsAsync()).Should().BeEmpty();
@@ -34,7 +36,9 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var projectionPort = new FakeProjectionQueryPort { EnableActorQueryEndpoints = true };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry([]),
-            projectionPort);
+            projectionPort,
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
 
         (await service.ListActorGraphEdgesAsync(" ")).Should().BeEmpty();
         (await service.GetActorGraphSubgraphAsync(" ")).RootNodeId.Should().Be(" ");
@@ -70,8 +74,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var subgraph = new WorkflowActorGraphSubgraph
         {
             RootNodeId = "actor-1",
-            Nodes = [new WorkflowActorGraphNode { NodeId = "actor-1" }],
-            Edges = [new WorkflowActorGraphEdge { EdgeId = "edge-2" }],
+            Nodes = { new WorkflowActorGraphNode { NodeId = "actor-1" } },
+            Edges = { new WorkflowActorGraphEdge { EdgeId = "edge-2" } },
         };
         var enriched = new WorkflowActorGraphEnrichedSnapshot
         {
@@ -95,7 +99,9 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry(["direct"]),
-            projectionPort);
+            projectionPort,
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
 
         var agents = await service.ListAgentsAsync();
         var actorSnapshot = await service.GetActorSnapshotAsync("actor-1");
@@ -124,7 +130,9 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     {
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry([]),
-            new FakeProjectionQueryPort { EnableActorQueryEndpoints = false });
+            new FakeProjectionQueryPort { EnableActorQueryEndpoints = false },
+            new StaticWorkflowCatalogPort(),
+            new StaticWorkflowCapabilitiesPort());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -142,6 +150,18 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         public string? GetYaml(string name) => null;
 
         public IReadOnlyList<string> GetNames() => names;
+    }
+
+    private sealed class StaticWorkflowCatalogPort : IWorkflowCatalogPort
+    {
+        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => [];
+
+        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) => null;
+    }
+
+    private sealed class StaticWorkflowCapabilitiesPort : IWorkflowCapabilitiesPort
+    {
+        public WorkflowCapabilitiesDocument GetCapabilities() => new();
     }
 
     private sealed class FakeProjectionQueryPort : IWorkflowExecutionProjectionQueryPort

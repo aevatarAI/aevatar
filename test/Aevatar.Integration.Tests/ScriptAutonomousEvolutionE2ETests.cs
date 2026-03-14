@@ -123,7 +123,8 @@ public sealed class ScriptAutonomousEvolutionE2ETests
         var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "worker-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-worker-2");
         catalogEntry.Should().NotBeNull();
         catalogEntry!.ActiveRevision.Should().Be("rev-worker-2");
         catalogEntry.ActiveDefinitionActorId.Should().Be("script-definition:worker-script");

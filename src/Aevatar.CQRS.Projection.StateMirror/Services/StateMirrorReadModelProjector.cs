@@ -10,14 +10,17 @@ public sealed class StateMirrorReadModelProjector<TState, TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly IStateMirrorProjection<TState, TReadModel> _projection;
-    private readonly IProjectionStoreDispatcher<TReadModel, TKey> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<TReadModel, TKey> _writeDispatcher;
+    private readonly IProjectionDocumentReader<TReadModel, TKey> _documentReader;
 
     public StateMirrorReadModelProjector(
         IStateMirrorProjection<TState, TReadModel> projection,
-        IProjectionStoreDispatcher<TReadModel, TKey> storeDispatcher)
+        IProjectionWriteDispatcher<TReadModel, TKey> writeDispatcher,
+        IProjectionDocumentReader<TReadModel, TKey> documentReader)
     {
         _projection = projection;
-        _storeDispatcher = storeDispatcher;
+        _writeDispatcher = writeDispatcher;
+        _documentReader = documentReader;
     }
 
     public TReadModel Project(TState state)
@@ -28,22 +31,17 @@ public sealed class StateMirrorReadModelProjector<TState, TReadModel, TKey>
     public async Task<TReadModel> ProjectAndUpsertAsync(TState state, CancellationToken ct = default)
     {
         var readModel = Project(state);
-        await _storeDispatcher.UpsertAsync(readModel, ct);
+        await _writeDispatcher.UpsertAsync(readModel, ct);
         return readModel;
-    }
-
-    public Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        return _storeDispatcher.MutateAsync(key, mutate, ct);
     }
 
     public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
-        return _storeDispatcher.GetAsync(key, ct);
+        return _documentReader.GetAsync(key, ct);
     }
 
     public Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
     {
-        return _storeDispatcher.ListAsync(take, ct);
+        return _documentReader.ListAsync(take, ct);
     }
 }

@@ -1,0 +1,21 @@
+name: reflect
+description: |
+  Demonstrates the `reflect` primitive — self-reflection loop.
+  The assistant drafts an explanation, then iteratively critiques and improves it
+  until the critique says "PASS" or max 3 rounds are reached.
+
+roles:
+  - id: thinker
+    name: Thinker
+    system_prompt: |
+      You are a patient technical writer. When asked to improve content,
+      incorporate the feedback. When asked to review, respond with "PASS"
+      if the content is clear and accurate, or explain what needs fixing.
+
+steps:
+  - id: self_improve
+    type: reflect
+    role: thinker
+    parameters:
+      max_rounds: "3"
+      criteria: "clarity, accuracy, and beginner-friendliness"

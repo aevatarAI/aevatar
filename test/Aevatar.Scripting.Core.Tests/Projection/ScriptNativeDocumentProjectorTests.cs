@@ -73,7 +73,6 @@ public sealed class ScriptNativeDocumentProjectorTests
         nativeDocument.Fields["tags"].As<IReadOnlyList<object?>>().Should().BeEquivalentTo(["gold", "vip"]);
         nativeDocument.Fields["search"].Should().BeAssignableTo<IDictionary<string, object?>>();
         nativeDocument.Fields["search"].As<IDictionary<string, object?>>()["lookup_key"].Should().Be("actor-1:policy-1");
-        nativeDocument.DocumentMetadata.IndexName.Should().Be(nativeDocument.DocumentIndexScope);
     }
 
     private static ScriptProfileReadModel BuildProfileReadModel()
@@ -138,7 +137,7 @@ public sealed class ScriptNativeDocumentProjectorTests
         }
     }
 
-    private sealed class RecordingNativeDocumentDispatcher : IProjectionStoreDispatcher<ScriptNativeDocumentReadModel, string>
+    private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel, string>
     {
         public ScriptNativeDocumentReadModel? LastUpsert { get; private set; }
 
@@ -148,14 +147,5 @@ public sealed class ScriptNativeDocumentProjectorTests
             LastUpsert = readModel.DeepClone();
             return Task.CompletedTask;
         }
-
-        public Task MutateAsync(string key, Action<ScriptNativeDocumentReadModel> mutate, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<ScriptNativeDocumentReadModel?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<ScriptNativeDocumentReadModel?>(null);
-
-        public Task<IReadOnlyList<ScriptNativeDocumentReadModel>> ListAsync(int take = 50, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScriptNativeDocumentReadModel>>([]);
     }
 }

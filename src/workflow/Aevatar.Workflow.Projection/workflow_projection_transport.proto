@@ -1,87 +1,87 @@
 syntax = "proto3";
 
-option csharp_namespace = "Aevatar.Workflow.Projection.Transport";
+option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 
-message WorkflowExecutionReportSnapshot {
+message WorkflowExecutionReport {
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;
-  google.protobuf.Timestamp created_at_utc = 4;
-  google.protobuf.Timestamp updated_at_utc = 5;
+  google.protobuf.Timestamp created_at_utc_value = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
   string root_actor_id = 6;
   string command_id = 7;
   string report_version = 8;
-  int32 projection_scope = 9;
-  int32 topology_source = 10;
-  int32 completion_status = 11;
+  int32 projection_scope_value = 9;
+  int32 topology_source_value = 10;
+  int32 completion_status_value = 11;
   string workflow_name = 12;
-  google.protobuf.Timestamp started_at_utc = 13;
-  google.protobuf.Timestamp ended_at_utc = 14;
+  google.protobuf.Timestamp started_at_utc_value = 13;
+  google.protobuf.Timestamp ended_at_utc_value = 14;
   double duration_ms = 15;
-  google.protobuf.BoolValue success = 16;
+  google.protobuf.BoolValue success_wrapper = 16;
   string input = 17;
   string final_output = 18;
   string final_error = 19;
-  repeated WorkflowExecutionTopologyEdgeSnapshot topology = 20;
-  repeated WorkflowExecutionStepTraceSnapshot steps = 21;
-  repeated WorkflowExecutionRoleReplySnapshot role_replies = 22;
-  repeated WorkflowExecutionTimelineEventSnapshot timeline = 23;
-  WorkflowExecutionSummarySnapshot summary = 24;
+  repeated WorkflowExecutionTopologyEdge topology_entries = 20;
+  repeated WorkflowExecutionStepTrace step_entries = 21;
+  repeated WorkflowExecutionRoleReply role_reply_entries = 22;
+  repeated WorkflowExecutionTimelineEvent timeline_entries = 23;
+  WorkflowExecutionSummary summary_value = 24;
 }
 
-message WorkflowExecutionTopologyEdgeSnapshot {
+message WorkflowExecutionTopologyEdge {
   string parent = 1;
   string child = 2;
 }
 
-message WorkflowExecutionStepTraceSnapshot {
+message WorkflowExecutionStepTrace {
   string step_id = 1;
   string step_type = 2;
   string target_role = 3;
-  google.protobuf.Timestamp requested_at_utc = 4;
-  google.protobuf.Timestamp completed_at_utc = 5;
-  google.protobuf.BoolValue success = 6;
+  google.protobuf.Timestamp requested_at_utc_value = 4;
+  google.protobuf.Timestamp completed_at_utc_value = 5;
+  google.protobuf.BoolValue success_wrapper = 6;
   string worker_id = 7;
   string output_preview = 8;
   string error = 9;
-  map<string, string> request_parameters = 10;
-  map<string, string> completion_annotations = 11;
+  map<string, string> request_parameters_map = 10;
+  map<string, string> completion_annotations_map = 11;
   string next_step_id = 12;
   string branch_key = 13;
   string assigned_variable = 14;
   string assigned_value = 15;
   string suspension_type = 16;
   string suspension_prompt = 17;
-  int32 suspension_timeout_seconds = 18;
+  int32 suspension_timeout_seconds_value = 18;
   string requested_variable_name = 19;
 }
 
-message WorkflowExecutionRoleReplySnapshot {
-  google.protobuf.Timestamp timestamp_utc = 1;
+message WorkflowExecutionRoleReply {
+  google.protobuf.Timestamp timestamp_utc_value = 1;
   string role_id = 2;
   string session_id = 3;
   string content = 4;
   int32 content_length = 5;
 }
 
-message WorkflowExecutionTimelineEventSnapshot {
-  google.protobuf.Timestamp timestamp_utc = 1;
+message WorkflowExecutionTimelineEvent {
+  google.protobuf.Timestamp timestamp_utc_value = 1;
   string stage = 2;
   string message = 3;
   string agent_id = 4;
   string step_id = 5;
   string step_type = 6;
   string event_type = 7;
-  map<string, string> data = 8;
+  map<string, string> data_map = 8;
 }
 
-message WorkflowExecutionSummarySnapshot {
+message WorkflowExecutionSummary {
   int32 total_steps = 1;
   int32 requested_steps = 2;
   int32 completed_steps = 3;
   int32 role_reply_count = 4;
-  map<string, int32> step_type_counts = 5;
+  map<string, int32> step_type_counts_map = 5;
 }

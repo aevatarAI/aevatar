@@ -149,4 +149,34 @@ public class WorkflowDefinitionRegistryTests
             Directory.Delete(tmpDir, true);
         }
     }
+
+    [Fact]
+    public void BuiltInAutoYaml_ShouldContainFewShotWorkflowExamples()
+    {
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("Example valid workflow YAML (simple deterministic flow):");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("name: normalize_text");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("name: review_summary");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("Do not invent extra fields.");
+    }
+
+    [Fact]
+    public void BuiltInAutoYaml_ShouldUseRouteTokenSwitchWithoutSubstringHeuristics()
+    {
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("id: classify_route");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("id: route_intent");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("type: switch");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("\"workflow\": prepare_workflow_request");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("\"direct\": prepare_direct_response");
+        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().NotContain("condition: \"```y\"");
+    }
+
+    [Fact]
+    public void CreateBuiltInAutoYaml_ShouldKeepRouteTokenFlow()
+    {
+        var autoYaml = WorkflowDefinitionRegistry.CreateBuiltInAutoYaml();
+
+        autoYaml.Should().Contain("id: classify_route");
+        autoYaml.Should().Contain("next: route_intent");
+        autoYaml.Should().NotContain("condition: \"```y\"");
+    }
 }

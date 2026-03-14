@@ -1,4 +1,5 @@
 using Aevatar.Demos.CaseProjection.Reducers;
+using Aevatar.Demos.CaseProjection.Stores;
 
 namespace Aevatar.Demos.CaseProjection.Projectors;
 
@@ -48,17 +49,7 @@ public sealed class CaseReadModelProjector
             return ValueTask.CompletedTask;
 
         var now = ResolveEventTimestamp(envelope);
-        return new ValueTask(_store.MutateAsync(context.RunId, report =>
-        {
-            var mutated = false;
-            foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(report, context, envelope, now);
-
-            if (!mutated)
-                return;
-
-            CaseProjectionMutations.RefreshDerivedFields(report);
-        }, ct));
+        return new ValueTask(ProjectCoreAsync(context, envelope, reducers, now, ct));
     }
 
     public ValueTask CompleteAsync(
@@ -66,17 +57,49 @@ public sealed class CaseReadModelProjector
         IReadOnlyList<CaseTopologyEdge> topology,
         CancellationToken ct = default)
     {
-        return new ValueTask(_store.MutateAsync(context.RunId, report =>
-        {
-            report.Topology = topology
-                .Select(x => new CaseTopologyEdge(x.Parent, x.Child))
-                .ToList();
+        return new ValueTask(CompleteCoreAsync(context, topology, ct));
+    }
 
-            if (report.EndedAt < report.StartedAt)
-                report.EndedAt = DateTimeOffset.UtcNow;
+    private async Task ProjectCoreAsync(
+        CaseProjectionContext context,
+        EventEnvelope envelope,
+        IReadOnlyList<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>> reducers,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var report = await _store.GetAsync(context.RunId, ct);
+        if (report == null)
+            throw new CaseReadModelNotFoundException(context.RunId);
 
-            CaseProjectionMutations.RefreshDerivedFields(report);
-        }, ct));
+        var mutated = false;
+        foreach (var reducer in reducers)
+            mutated |= reducer.Reduce(report, context, envelope, now);
+
+        if (!mutated)
+            return;
+
+        CaseProjectionMutations.RefreshDerivedFields(report);
+        await _store.UpsertAsync(report, ct);
+    }
+
+    private async Task CompleteCoreAsync(
+        CaseProjectionContext context,
+        IReadOnlyList<CaseTopologyEdge> topology,
+        CancellationToken ct)
+    {
+        var report = await _store.GetAsync(context.RunId, ct);
+        if (report == null)
+            throw new CaseReadModelNotFoundException(context.RunId);
+
+        report.Topology = topology
+            .Select(x => new CaseTopologyEdge(x.Parent, x.Child))
+            .ToList();
+
+        if (report.EndedAt < report.StartedAt)
+            report.EndedAt = DateTimeOffset.UtcNow;
+
+        CaseProjectionMutations.RefreshDerivedFields(report);
+        await _store.UpsertAsync(report, ct);
     }
 
     private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope)

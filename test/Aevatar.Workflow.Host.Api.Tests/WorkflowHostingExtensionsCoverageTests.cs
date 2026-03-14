@@ -55,6 +55,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowActorBindingDocument, string>)).Should().BeTrue();
         builder.Services
             .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
             .Select(x => x.ImplementationInstance)
@@ -66,6 +67,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
         provider.GetService<IProjectionDocumentStore<WorkflowExecutionReport, string>>().Should().NotBeNull();
+        provider.GetService<IProjectionDocumentStore<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         provider.GetServices<IWorkflowModulePack>().Should().ContainSingle(x => x is MakerModulePack);
 
         var toolSources = provider.GetServices<IAgentToolSource>().ToList();
@@ -317,6 +319,9 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowExecutionReport, string>))
             .Should()
             .BeTrue();
+        services.Any(x => x.ServiceType == typeof(IProjectionDocumentStore<WorkflowActorBindingDocument, string>))
+            .Should()
+            .BeTrue();
     }
 
     [Fact]
@@ -369,5 +374,22 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.Count(x => x.ServiceType.Name.Contains("WorkflowProjectionProviderRegistrationsMarker", StringComparison.Ordinal))
             .Should()
             .Be(1);
+    }
+
+    [Fact]
+    public async Task AddWorkflowProjectionReadModelProviders_ShouldResolveWorkflowActorBindingDocumentStore()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        await using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>()
+            .Should()
+            .NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentStore<WorkflowActorBindingDocument, string>>()
+            .Should()
+            .NotBeNull();
     }
 }

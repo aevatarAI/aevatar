@@ -1,0 +1,9 @@
+name: demo_template
+description: Use custom demo_template module to render a parameterized template.
+steps:
+  - id: render_message
+    type: demo_template
+    parameters:
+      template: "Incident {{input}} is owned by {{param.owner}} with priority {{param.priority}}."
+      owner: "SRE"
+      priority: "P1"

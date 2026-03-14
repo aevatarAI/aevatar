@@ -1,0 +1,28 @@
+name: map_reduce
+description: |
+  Demonstrates the `map_reduce` primitive — split, map each item through LLM, then reduce.
+  Maps: Each topic gets 3 bullet points from the mapper.
+  Reduce: The reducer synthesizes all bullet points into a cohesive summary.
+
+roles:
+  - id: mapper
+    name: Mapper
+    system_prompt: |
+      Given a topic, write exactly 3 concise bullet points about it.
+
+  - id: reducer
+    name: Reducer
+    system_prompt: |
+      Synthesize the following bullet points into a single cohesive paragraph.
+      Keep it under 100 words.
+
+steps:
+  - id: analyze_topics
+    type: map_reduce
+    parameters:
+      delimiter: "\n---\n"
+      map_step_type: "llm_call"
+      map_target_role: "mapper"
+      reduce_step_type: "llm_call"
+      reduce_target_role: "reducer"
+      reduce_prompt_prefix: "Synthesize these points into one paragraph:"

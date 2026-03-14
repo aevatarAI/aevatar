@@ -10,6 +10,11 @@ public interface IProjectionOwnershipCoordinator
         string sessionId,
         CancellationToken ct = default);
 
+    Task<bool> HasActiveLeaseAsync(
+        string scopeId,
+        string sessionId,
+        CancellationToken ct = default);
+
     Task ReleaseAsync(
         string scopeId,
         string sessionId,

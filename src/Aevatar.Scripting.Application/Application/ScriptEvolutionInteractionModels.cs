@@ -1,3 +1,4 @@
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 
 namespace Aevatar.Scripting.Application;
@@ -21,7 +22,8 @@ public sealed record ScriptEvolutionInteractionCompletion(
     string FailureReason,
     string DefinitionActorId,
     string CatalogActorId,
-    ScriptEvolutionValidationReport ValidationReport)
+    ScriptEvolutionValidationReport ValidationReport,
+    ScriptDefinitionBindingSpec? DefinitionSnapshot = null)
 {
     public static ScriptEvolutionInteractionCompletion Pending { get; } = new(
         Accepted: false,
@@ -30,7 +32,8 @@ public sealed record ScriptEvolutionInteractionCompletion(
         FailureReason: string.Empty,
         DefinitionActorId: string.Empty,
         CatalogActorId: string.Empty,
-        ValidationReport: ScriptEvolutionValidationReport.Empty);
+        ValidationReport: ScriptEvolutionValidationReport.Empty,
+        DefinitionSnapshot: null);
 
     public ScriptPromotionDecision ToPromotionDecision(ScriptEvolutionProposal proposal)
     {
@@ -46,7 +49,8 @@ public sealed record ScriptEvolutionInteractionCompletion(
             FailureReason: FailureReason ?? string.Empty,
             DefinitionActorId: DefinitionActorId ?? string.Empty,
             CatalogActorId: CatalogActorId ?? string.Empty,
-            ValidationReport: ValidationReport ?? ScriptEvolutionValidationReport.Empty);
+            ValidationReport: ValidationReport ?? ScriptEvolutionValidationReport.Empty,
+            DefinitionSnapshot: DefinitionSnapshot?.Clone());
     }
 
     public static ScriptEvolutionInteractionCompletion FromDecision(ScriptPromotionDecision decision)
@@ -60,6 +64,7 @@ public sealed record ScriptEvolutionInteractionCompletion(
             FailureReason: decision.FailureReason ?? string.Empty,
             DefinitionActorId: decision.DefinitionActorId ?? string.Empty,
             CatalogActorId: decision.CatalogActorId ?? string.Empty,
-            ValidationReport: decision.ValidationReport ?? ScriptEvolutionValidationReport.Empty);
+            ValidationReport: decision.ValidationReport ?? ScriptEvolutionValidationReport.Empty,
+            DefinitionSnapshot: decision.DefinitionSnapshot?.Clone());
     }
 }

@@ -1,6 +1,5 @@
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -142,60 +141,60 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
         var report = new WorkflowExecutionReport
         {
             Id = "report-2",
-            LastEventId = null!,
-            RootActorId = null!,
-            CommandId = null!,
-            ReportVersion = null!,
-            WorkflowName = null!,
-            Input = null!,
-            FinalOutput = null!,
-            FinalError = null!,
-            Topology = null!,
+            LastEventId = string.Empty,
+            RootActorId = string.Empty,
+            CommandId = string.Empty,
+            ReportVersion = string.Empty,
+            WorkflowName = string.Empty,
+            Input = string.Empty,
+            FinalOutput = string.Empty,
+            FinalError = string.Empty,
+            Topology = [],
             Steps =
             [
                 new WorkflowExecutionStepTrace
                 {
-                    StepId = null!,
-                    StepType = null!,
-                    TargetRole = null!,
-                    WorkerId = null!,
-                    OutputPreview = null!,
-                    Error = null!,
-                    RequestParameters = null!,
-                    CompletionAnnotations = null!,
-                    NextStepId = null!,
-                    BranchKey = null!,
-                    AssignedVariable = null!,
-                    AssignedValue = null!,
-                    SuspensionType = null!,
-                    SuspensionPrompt = null!,
+                    StepId = string.Empty,
+                    StepType = string.Empty,
+                    TargetRole = string.Empty,
+                    WorkerId = string.Empty,
+                    OutputPreview = string.Empty,
+                    Error = string.Empty,
+                    RequestParameters = new Dictionary<string, string>(StringComparer.Ordinal),
+                    CompletionAnnotations = new Dictionary<string, string>(StringComparer.Ordinal),
+                    NextStepId = string.Empty,
+                    BranchKey = string.Empty,
+                    AssignedVariable = string.Empty,
+                    AssignedValue = string.Empty,
+                    SuspensionType = string.Empty,
+                    SuspensionPrompt = string.Empty,
                     SuspensionTimeoutSeconds = 0,
-                    RequestedVariableName = null!,
+                    RequestedVariableName = string.Empty,
                 },
             ],
             RoleReplies =
             [
                 new WorkflowExecutionRoleReply
                 {
-                    RoleId = null!,
-                    SessionId = null!,
-                    Content = null!,
+                    RoleId = string.Empty,
+                    SessionId = string.Empty,
+                    Content = string.Empty,
                 },
             ],
             Timeline =
             [
                 new WorkflowExecutionTimelineEvent
                 {
-                    Stage = null!,
-                    Message = null!,
-                    AgentId = null!,
-                    StepId = null!,
-                    StepType = null!,
-                    EventType = null!,
-                    Data = null!,
+                    Stage = string.Empty,
+                    Message = string.Empty,
+                    AgentId = string.Empty,
+                    StepId = string.Empty,
+                    StepType = string.Empty,
+                    EventType = string.Empty,
+                    Data = new Dictionary<string, string>(StringComparer.Ordinal),
                 },
             ],
-            Summary = null!,
+            Summary = new WorkflowExecutionSummary(),
         };
 
         var payload = WorkflowExecutionReportSnapshotMapper.Pack(report);
@@ -241,7 +240,7 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
 
         var corrupted = new Any
         {
-            TypeUrl = $"type.googleapis.com/{WorkflowExecutionReportSnapshot.Descriptor.FullName}",
+            TypeUrl = $"type.googleapis.com/{WorkflowExecutionReport.Descriptor.FullName}",
             Value = ByteString.CopyFromUtf8("not-a-valid-protobuf"),
         };
         WorkflowExecutionReportSnapshotMapper.TryUnpack(corrupted, out report).Should().BeFalse();

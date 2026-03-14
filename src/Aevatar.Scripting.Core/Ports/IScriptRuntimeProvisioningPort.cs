@@ -6,5 +6,6 @@ public interface IScriptRuntimeProvisioningPort
         string definitionActorId,
         string scriptRevision,
         string? runtimeActorId,
-        CancellationToken ct);
+        CancellationToken ct,
+        ScriptDefinitionSnapshot? definitionSnapshot = null);
 }

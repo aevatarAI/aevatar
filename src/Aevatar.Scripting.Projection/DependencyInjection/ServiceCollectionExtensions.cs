@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -39,11 +40,19 @@ public static class ServiceCollectionExtensions
             IReadOnlyList<string>,
             ScriptExecutionRuntimeLease,
             EventEnvelope>();
+        services.AddEventSinkProjectionRuntimeCore<
+            ScriptAuthorityProjectionContext,
+            IReadOnlyList<string>,
+            ScriptAuthorityRuntimeLease,
+            EventEnvelope>();
         services.TryAddSingleton<IProjectionPortActivationService<ScriptExecutionRuntimeLease>, ScriptExecutionProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<ScriptExecutionRuntimeLease>, ScriptExecutionProjectionReleaseService>();
         services.TryAddSingleton<ScriptExecutionProjectionPortService>();
         services.TryAddSingleton<IScriptExecutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptExecutionProjectionPortService>());
+        services.TryAddSingleton<IProjectionPortActivationService<ScriptAuthorityRuntimeLease>, ScriptAuthorityProjectionActivationService>();
+        services.TryAddSingleton<IProjectionPortReleaseService<ScriptAuthorityRuntimeLease>, ScriptAuthorityProjectionReleaseService>();
+        services.TryAddSingleton<ScriptAuthorityProjectionPortService>();
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
         services.AddEventSinkProjectionRuntimeCore<
@@ -59,9 +68,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<IScriptReadModelQueryReader, ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort, ScriptReadModelQueryService>();
+        services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
+        services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
+        services.TryAddSingleton<IScriptAuthorityProjectionPrimingPort, ProjectionScriptAuthorityProjectionPrimingPort>();
         services.TryAddSingleton<IScriptReadModelMaterializationCompiler, ScriptReadModelMaterializationCompiler>();
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
-        services.TryAddSingleton<IScriptNativeGraphMaterializer, ScriptNativeGraphMaterializer>();
+        services.TryAddSingleton<ScriptNativeGraphMaterializer>();
+        services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>
+            sp.GetRequiredService<ScriptNativeGraphMaterializer>());
+        services.TryAddSingleton<IProjectionGraphMaterializer<ScriptNativeGraphReadModel>>(sp =>
+            sp.GetRequiredService<ScriptNativeGraphMaterializer>());
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptDefinitionSnapshotDocument>, ScriptDefinitionSnapshotDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptCatalogEntryDocument>, ScriptCatalogEntryDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptReadModelDocument>, ScriptReadModelDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>, ScriptEvolutionReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>, ScriptNativeDocumentReadModelMetadataProvider>();
@@ -94,6 +112,12 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
             ScriptExecutionSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>,
+            ScriptDefinitionSnapshotProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>,
+            ScriptCatalogEntryProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>,
             ScriptEvolutionReadModelProjector>());

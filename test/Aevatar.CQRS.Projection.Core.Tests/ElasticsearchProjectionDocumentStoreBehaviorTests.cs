@@ -77,41 +77,6 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task MutateAsync_WhenOptimisticConflictOccurs_ShouldRetryWithLatestSeqNoAndPrimaryTerm()
-    {
-        var handler = new ScriptedHttpMessageHandler();
-        handler.EnqueueResponse(_ => CreateJsonResponse(
-            HttpStatusCode.OK,
-            """{"_seq_no":7,"_primary_term":1,"found":true,"_source":{"Id":"actor-1","Value":"v1"}}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(
-            HttpStatusCode.Conflict,
-            """{"error":{"type":"version_conflict_engine_exception"},"status":409}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(
-            HttpStatusCode.OK,
-            """{"_seq_no":8,"_primary_term":1,"found":true,"_source":{"Id":"actor-1","Value":"v1"}}"""));
-        handler.EnqueueResponse(_ => CreateJsonResponse(
-            HttpStatusCode.OK,
-            """{"result":"updated"}"""));
-
-        using var store = CreateStore(
-            new ElasticsearchProjectionDocumentStoreOptions
-            {
-                AutoCreateIndex = false,
-                MutateMaxRetryCount = 1,
-            },
-            handler);
-
-        await store.MutateAsync("actor-1", model => model.Value = "v2");
-
-        handler.CapturedRequests.Should().HaveCount(4);
-        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
-        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=1");
-        handler.CapturedRequests[3].PathAndQuery.Should().Contain("if_seq_no=8");
-        handler.CapturedRequests[3].PathAndQuery.Should().Contain("if_primary_term=1");
-        handler.CapturedRequests[3].Body.Should().Contain("\"Value\":\"v2\"");
-    }
-
-    [Fact]
     public async Task UpsertAsync_WhenMetadataContainsStructuredObjects_ShouldSendStructuredIndexInitializationPayload()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -202,27 +167,18 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
                 Aliases: new Dictionary<string, object?>()),
             keySelector: model => model.Id,
             keyFormatter: key => key,
+            indexScopeSelector: model => model.DocumentIndexScope,
             httpMessageHandler: handler);
 
         await store.UpsertAsync(new DynamicStoreReadModel
         {
             Id = "actor-1",
             DocumentIndexScope = "dynamic-alpha",
-            DocumentMetadata = new DocumentIndexMetadata(
-                IndexName: "dynamic-alpha",
-                Mappings: new Dictionary<string, object?> { ["dynamic"] = false },
-                Settings: new Dictionary<string, object?>(),
-                Aliases: new Dictionary<string, object?>()),
         });
         await store.UpsertAsync(new DynamicStoreReadModel
         {
             Id = "actor-2",
             DocumentIndexScope = "dynamic-beta",
-            DocumentMetadata = new DocumentIndexMetadata(
-                IndexName: "dynamic-beta",
-                Mappings: new Dictionary<string, object?> { ["dynamic"] = false },
-                Settings: new Dictionary<string, object?>(),
-                Aliases: new Dictionary<string, object?>()),
         });
 
         handler.CapturedRequests.Should().HaveCount(4);
@@ -250,6 +206,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
                 Aliases: new Dictionary<string, object?>()),
             keySelector: model => model.Id,
             keyFormatter: key => key,
+            indexScopeSelector: model => model.DocumentIndexScope,
             httpMessageHandler: new ScriptedHttpMessageHandler());
 
         Func<Task> act = () => store.GetAsync("actor-1");
@@ -326,16 +283,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         public string Value { get; set; } = "";
     }
 
-    private sealed class DynamicStoreReadModel : IDynamicDocumentIndexedReadModel
+    private sealed class DynamicStoreReadModel : IProjectionReadModel
     {
         public string Id { get; set; } = string.Empty;
 
         public string DocumentIndexScope { get; set; } = string.Empty;
-
-        public DocumentIndexMetadata DocumentMetadata { get; set; } = new(
-            IndexName: "script-native-read-models",
-            Mappings: new Dictionary<string, object?>(),
-            Settings: new Dictionary<string, object?>(),
-            Aliases: new Dictionary<string, object?>());
     }
 }

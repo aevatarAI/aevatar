@@ -10,15 +10,18 @@ internal sealed class WorkflowRunCommandTargetResolver
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
     {
-        _actorResolver = actorResolver;
-        _projectionPort = projectionPort;
-        _actorPort = actorPort;
+        _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
 
     public async Task<CommandTargetResolution<WorkflowRunCommandTarget, WorkflowChatRunStartError>> ResolveAsync(
@@ -41,6 +44,7 @@ internal sealed class WorkflowRunCommandTargetResolver
                 actorResolution.WorkflowNameForRun,
                 actorResolution.CreatedActorIds,
                 _projectionPort,
-                _actorPort));
+                _actorPort,
+                _cleanupScheduler));
     }
 }

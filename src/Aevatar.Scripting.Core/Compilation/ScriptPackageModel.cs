@@ -72,6 +72,17 @@ public static class ScriptPackageModel
         return package;
     }
 
+    public static ScriptPackageSpec ResolveDeclaredPackage(
+        ScriptPackageSpec? package,
+        string sourceText,
+        string entryBehaviorTypeName = "")
+    {
+        if ((package?.CsharpSources.Count ?? 0) > 0)
+            return package!.Clone();
+
+        return CreateSingleSourcePackage(sourceText, entryBehaviorTypeName);
+    }
+
     public static string GetEntrySourceText(ScriptPackageSpec? package)
     {
         if (package == null)

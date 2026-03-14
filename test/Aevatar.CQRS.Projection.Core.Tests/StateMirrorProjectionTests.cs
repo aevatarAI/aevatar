@@ -86,7 +86,13 @@ public class StateMirrorProjectionTests
     public async Task AddJsonStateMirrorReadModelProjector_ShouldProjectAndDispatchToStore()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<ProjectionReadModel, string>, InMemoryProjectionReadModelStore>();
+        services.AddSingleton<InMemoryProjectionReadModelStore>();
+        services.AddSingleton<IProjectionDocumentStore<ProjectionReadModel, string>>(sp =>
+            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
+        services.AddSingleton<IProjectionDocumentReader<ProjectionReadModel, string>>(sp =>
+            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
+        services.AddSingleton<IProjectionWriteDispatcher<ProjectionReadModel, string>>(sp =>
+            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
         services.AddProjectionReadModelRuntime();
         services.AddJsonStateMirrorReadModelProjector<SampleState, ProjectionReadModel>(options =>
         {
@@ -109,13 +115,8 @@ public class StateMirrorProjectionTests
         stored!.Count.Should().Be(8);
         stored.InternalNote.Should().Be("memo");
 
-        await projector.MutateAsync("actor-4", model => model.Count = 10);
-        var mutated = await projector.GetAsync("actor-4");
-        mutated.Should().NotBeNull();
-        mutated!.Count.Should().Be(10);
-
         var items = await projector.ListAsync();
-        items.Should().ContainSingle(x => x.Id == "actor-4" && x.Count == 10);
+        items.Should().ContainSingle(x => x.Id == "actor-4" && x.Count == 8);
     }
 
     public sealed class SampleState
@@ -155,7 +156,8 @@ public class StateMirrorProjectionTests
     }
 
     private sealed class InMemoryProjectionReadModelStore
-        : IProjectionDocumentStore<ProjectionReadModel, string>
+        : IProjectionDocumentStore<ProjectionReadModel, string>,
+          IProjectionWriteDispatcher<ProjectionReadModel, string>
     {
         private readonly Dictionary<string, ProjectionReadModel> _items = new(StringComparer.Ordinal);
 
@@ -163,16 +165,6 @@ public class StateMirrorProjectionTests
         {
             ct.ThrowIfCancellationRequested();
             _items[readModel.Id] = Clone(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ProjectionReadModel> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var model))
-                throw new InvalidOperationException($"Read model '{key}' was not found.");
-
-            mutate(model);
             return Task.CompletedTask;
         }
 

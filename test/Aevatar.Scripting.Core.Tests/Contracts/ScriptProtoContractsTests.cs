@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Contracts;
@@ -48,7 +47,6 @@ public class ScriptProtoContractsTests
         var stateRootProperty = stateType.GetProperty("StateRoot");
 
         stateRootProperty.Should().NotBeNull("behavior state must persist typed state root");
-
         stateRootProperty!.PropertyType.Should().Be(typeof(Any));
     }
 
@@ -79,7 +77,7 @@ public class ScriptProtoContractsTests
     }
 
     [Fact]
-    public void ScriptBehaviorBindingMessages_ShouldCarryBindingContractFields()
+    public void BindScriptBehaviorRequestedEvent_ShouldCarryBindingContractFields()
     {
         var bind = new BindScriptBehaviorRequestedEvent
         {
@@ -92,19 +90,19 @@ public class ScriptProtoContractsTests
             ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
             ReadModelSchemaVersion = "2",
             ReadModelSchemaHash = "schema-hash-1",
-        };
-        var response = new ScriptBehaviorBindingRespondedEvent
-        {
-            RequestId = "request-1",
-            Found = true,
-            DefinitionActorId = bind.DefinitionActorId,
-            ScriptId = bind.ScriptId,
-            Revision = bind.Revision,
-            SourceHash = bind.SourceHash,
-            StateTypeUrl = bind.StateTypeUrl,
-            ReadModelTypeUrl = bind.ReadModelTypeUrl,
-            ReadModelSchemaVersion = bind.ReadModelSchemaVersion,
-            ReadModelSchemaHash = bind.ReadModelSchemaHash,
+            StateDescriptorFullName = "Example.State",
+            ReadModelDescriptorFullName = "Example.ReadModel",
+            RuntimeSemantics = new ScriptRuntimeSemanticsSpec
+            {
+                Queries =
+                {
+                    new ScriptQuerySemanticsSpec
+                    {
+                        QueryTypeUrl = "type.googleapis.com/example.Query",
+                        ResultTypeUrl = "type.googleapis.com/example.Response",
+                    },
+                },
+            },
         };
 
         bind.DefinitionActorId.Should().Be("definition-1");
@@ -112,21 +110,55 @@ public class ScriptProtoContractsTests
         bind.Revision.Should().Be("rev-1");
         bind.SourceHash.Should().Be("hash-1");
         bind.ReadModelSchemaVersion.Should().Be("2");
-        response.RequestId.Should().Be("request-1");
-        response.Found.Should().BeTrue();
-        response.ReadModelSchemaHash.Should().Be("schema-hash-1");
+        bind.StateDescriptorFullName.Should().Be("Example.State");
+        bind.ReadModelDescriptorFullName.Should().Be("Example.ReadModel");
+        bind.RuntimeSemantics.Queries.Should().ContainSingle();
     }
 
     [Fact]
-    public void QueryScriptBehaviorBindingRequestedEvent_ShouldCarryRequestAndReplyStream()
+    public void ScriptBehaviorBoundEvent_ShouldCarryMaterializedBindingFields()
     {
-        var query = new QueryScriptBehaviorBindingRequestedEvent
+        var bound = new ScriptBehaviorBoundEvent
         {
-            RequestId = "request-1",
-            ReplyStreamId = "reply-stream",
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = "public sealed class Behavior {}",
+            SourceHash = "hash-1",
+            StateTypeUrl = "type.googleapis.com/example.State",
+            ReadModelTypeUrl = "type.googleapis.com/example.ReadModel",
+            ReadModelSchemaVersion = "2",
+            ReadModelSchemaHash = "schema-hash-1",
         };
 
-        query.RequestId.Should().Be("request-1");
-        query.ReplyStreamId.Should().Be("reply-stream");
+        bound.DefinitionActorId.Should().Be("definition-1");
+        bound.ScriptId.Should().Be("script-1");
+        bound.Revision.Should().Be("rev-1");
+        bound.SourceHash.Should().Be("hash-1");
+        bound.ReadModelSchemaHash.Should().Be("schema-hash-1");
+    }
+
+    [Fact]
+    public void ScriptEvolutionSessionCompletedEvent_ShouldCarryDefinitionBindingSnapshot()
+    {
+        var completed = new ScriptEvolutionSessionCompletedEvent
+        {
+            ProposalId = "proposal-1",
+            Accepted = true,
+            DefinitionActorId = "definition-1",
+            DefinitionSnapshot = new ScriptDefinitionBindingSpec
+            {
+                ScriptId = "script-1",
+                Revision = "rev-1",
+                SourceHash = "hash-1",
+                ReadModelSchemaVersion = "2",
+            },
+        };
+
+        completed.DefinitionSnapshot.Should().NotBeNull();
+        completed.DefinitionSnapshot.ScriptId.Should().Be("script-1");
+        completed.DefinitionSnapshot.Revision.Should().Be("rev-1");
+        completed.DefinitionSnapshot.SourceHash.Should().Be("hash-1");
+        completed.DefinitionSnapshot.ReadModelSchemaVersion.Should().Be("2");
     }
 }

@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public class WorkflowProjectionDispatchFailureReporterTests
 {
     [Fact]
-    public async Task ReportAsync_ShouldPublishRunErrorEventToSessionStream()
+    public async Task ReportAsync_ShouldPublishCustomFailureEventToSessionStream()
     {
         var hub = new CapturingRunEventHub();
         var clock = new FixedProjectionClock(new DateTimeOffset(2026, 2, 21, 0, 0, 0, TimeSpan.Zero));
@@ -27,11 +27,12 @@ public class WorkflowProjectionDispatchFailureReporterTests
         hub.Published.Should().ContainSingle();
         hub.Published[0].ScopeId.Should().Be(context.RootActorId);
         hub.Published[0].SessionId.Should().Be(context.CommandId);
-        hub.Published[0].Event.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
-        var errorEvent = hub.Published[0].Event.RunError;
-        errorEvent.Code.Should().Be("PROJECTION_DISPATCH_FAILED");
-        errorEvent.Message.Should().Contain("eventId=evt-1");
-        errorEvent.Message.Should().Contain("reason=boom");
+        hub.Published[0].Event.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        hub.Published[0].Event.Custom.Name.Should().Be(WorkflowProjectionDispatchFailureReporter.ProjectionDispatchFailureEventName);
+        var payload = hub.Published[0].Event.Custom.Payload.Unpack<WorkflowProjectionDispatchFailureCustomPayload>();
+        payload.EventId.Should().Be("evt-1");
+        payload.PayloadType.Should().Contain("google.protobuf.StringValue");
+        payload.Reason.Should().Be("boom");
         hub.Published[0].Event.Timestamp.Should().Be(clock.UtcNow.ToUnixTimeMilliseconds());
     }
 

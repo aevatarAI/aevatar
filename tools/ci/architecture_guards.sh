@@ -466,6 +466,9 @@ bash tools/ci/workflow_runid_guard.sh
 echo "Running workflow binding boundary guard..."
 bash tools/ci/workflow_binding_boundary_guard.sh
 
+echo "Running playground asset drift guard..."
+bash tools/ci/playground_asset_drift_guard.sh
+
 echo "Running script inheritance guard..."
 bash tools/ci/script_inheritance_guard.sh
 
@@ -828,6 +831,9 @@ check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs" \
   190 \
   10
+
+echo "Running CQRS/EventSourcing boundary guard..."
+bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh

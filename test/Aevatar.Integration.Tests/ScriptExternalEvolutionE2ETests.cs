@@ -50,7 +50,8 @@ public sealed class ScriptExternalEvolutionE2ETests
         var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "external-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-1");
         catalogEntry.Should().NotBeNull();
         catalogEntry!.ActiveRevision.Should().Be("rev-1");
         catalogEntry.ActiveDefinitionActorId.Should().Be("script-definition:external-script");

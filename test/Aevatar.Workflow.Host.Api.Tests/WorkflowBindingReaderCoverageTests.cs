@@ -1,130 +1,153 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Abstractions.TypeSystem;
-using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Infrastructure.Runs;
+using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Projectors;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
-using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowBindingReaderCoverageTests
+public sealed class WorkflowActorBindingProjectorTests
 {
     [Fact]
-    public async Task GetAsync_ShouldReturnBinding_WhenWorkflowActorReplies()
+    public async Task ProjectAsync_ShouldCaptureDefinitionBinding()
     {
-        var streams = new InMemoryStreamProvider();
-        var dispatchPort = new RecordingDispatchPort(
-            streams,
-            (_, envelope) =>
-            {
-                var request = envelope.Payload.Unpack<QueryWorkflowActorBindingRequestedEvent>();
-                return new WorkflowActorBindingRespondedEvent
-                {
-                    RequestId = request.RequestId,
-                    ActorId = "actor-1",
-                    ActorKind = "run",
-                    DefinitionActorId = "definition-1",
-                    RunId = "run-1",
-                    WorkflowName = "auto",
-                    WorkflowYaml = "name: auto",
-                };
-            });
-        var reader = CreateReader(
-            streams,
-            dispatchPort,
-            new FakeAgentTypeVerifier(("actor-1", typeof(WorkflowRunGAgent), true)));
-
-        var binding = await reader.GetAsync("actor-1");
-
-        binding.Should().NotBeNull();
-        binding!.ActorKind.Should().Be(WorkflowActorKind.Run);
-        binding.ActorId.Should().Be("actor-1");
-        binding.DefinitionActorId.Should().Be("definition-1");
-        binding.RunId.Should().Be("run-1");
-        binding.WorkflowName.Should().Be("auto");
-        dispatchPort.DispatchCalls.Should().ContainSingle().Which.Should().Be("actor-1");
-    }
-
-    [Fact]
-    public async Task GetAsync_ShouldReturnUnsupported_WhenTypeVerifierRejectsAndNoReplyArrives()
-    {
-        var streams = new InMemoryStreamProvider();
-        var dispatchPort = new RecordingDispatchPort(streams, static (_, _) => null);
-        var reader = CreateReader(
-            streams,
-            dispatchPort,
-            new FakeAgentTypeVerifier());
-
-        var binding = await reader.GetAsync("actor-unsupported");
-
-        binding.Should().NotBeNull();
-        binding!.ActorKind.Should().Be(WorkflowActorKind.Unsupported);
-        binding.ActorId.Should().Be("actor-unsupported");
-        binding.IsWorkflowCapable.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task GetAsync_ShouldReturnNull_WhenDispatchReportsActorMissing()
-    {
-        var streams = new InMemoryStreamProvider();
-        var dispatchPort = new RecordingDispatchPort(
-            streams,
-            static (_, _) => throw new InvalidOperationException("Actor actor-missing not found."));
-        var reader = CreateReader(
-            streams,
-            dispatchPort,
-            new FakeAgentTypeVerifier());
-
-        var binding = await reader.GetAsync("actor-missing");
-
-        binding.Should().BeNull();
-    }
-
-    private static RuntimeWorkflowActorBindingReader CreateReader(
-        InMemoryStreamProvider streams,
-        IActorDispatchPort dispatchPort,
-        IAgentTypeVerifier agentTypeVerifier) =>
-        new(
-            new RuntimeWorkflowQueryClient(
-                streams,
-                new RuntimeStreamRequestReplyClient(),
-                dispatchPort),
-            agentTypeVerifier);
-
-    private sealed class RecordingDispatchPort(
-        IStreamProvider streams,
-        Func<string, EventEnvelope, WorkflowActorBindingRespondedEvent?> responder) : IActorDispatchPort
-    {
-        public List<string> DispatchCalls { get; } = [];
-
-        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        var dispatcher = new FakeStoreDispatcher();
+        var projector = new WorkflowActorBindingProjector(
+            dispatcher,
+            dispatcher,
+            new StaticClock(new DateTimeOffset(2026, 3, 14, 12, 0, 0, TimeSpan.Zero)));
+        var context = new WorkflowBindingProjectionContext
         {
-            DispatchCalls.Add(actorId);
-            var response = responder(actorId, envelope);
-            if (response == null)
-                return;
+            ProjectionId = "actor-1:binding",
+            RootActorId = "actor-1",
+        };
 
-            var request = envelope.Payload.Unpack<QueryWorkflowActorBindingRequestedEvent>();
-            await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-        }
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "evt-definition",
+                Timestamp = Timestamp.FromDateTime(DateTime.SpecifyKind(new DateTime(2026, 3, 14, 12, 0, 0), DateTimeKind.Utc)),
+                Payload = Any.Pack(new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = " direct ",
+                    WorkflowYaml = "name: direct",
+                    InlineWorkflowYamls =
+                    {
+                        [" child "] = "yaml-child",
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        var document = dispatcher.Documents["actor-1"];
+        document.ActorKind.Should().Be(WorkflowActorKind.Definition);
+        document.DefinitionActorId.Should().Be("actor-1");
+        document.RunId.Should().BeEmpty();
+        document.WorkflowName.Should().Be("direct");
+        document.WorkflowYaml.Should().Be("name: direct");
+        document.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
+        document.LastEventId.Should().Be("evt-definition");
     }
 
-    private sealed class FakeAgentTypeVerifier(
-        params (string ActorId, Type ExpectedType, bool Result)[] entries) : IAgentTypeVerifier
+    [Fact]
+    public async Task ProjectAsync_ShouldCaptureRunBinding_AndNormalizeRunId()
     {
-        private readonly IReadOnlyDictionary<(string ActorId, Type ExpectedType), bool> _entries = entries
-            .ToDictionary(
-                x => (x.ActorId, x.ExpectedType),
-                x => x.Result);
+        var dispatcher = new FakeStoreDispatcher();
+        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var context = new WorkflowBindingProjectionContext
+        {
+            ProjectionId = "actor-2:binding",
+            RootActorId = "actor-2",
+        };
 
-        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default)
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "evt-run",
+                Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+                {
+                    DefinitionActorId = "definition-2",
+                    RunId = " run-2 ",
+                    WorkflowName = " auto ",
+                    WorkflowYaml = "name: auto",
+                    InlineWorkflowYamls =
+                    {
+                        [" child "] = "yaml-child",
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        var document = dispatcher.Documents["actor-2"];
+        document.ActorKind.Should().Be(WorkflowActorKind.Run);
+        document.DefinitionActorId.Should().Be("definition-2");
+        document.RunId.Should().Be("run-2");
+        document.WorkflowName.Should().Be("auto");
+        document.InlineWorkflowYamls.Should().ContainKey("child");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreUnrelatedEvents()
+    {
+        var dispatcher = new FakeStoreDispatcher();
+        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var context = new WorkflowBindingProjectionContext
+        {
+            ProjectionId = "actor-3:binding",
+            RootActorId = "actor-3",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "evt-ignored",
+                Payload = Any.Pack(new WorkflowCompletedEvent
+                {
+                    WorkflowName = "ignored",
+                    Success = true,
+                }),
+            },
+            CancellationToken.None);
+
+        dispatcher.Documents.Should().BeEmpty();
+    }
+
+    private sealed class FakeStoreDispatcher
+        : IProjectionWriteDispatcher<WorkflowActorBindingDocument, string>,
+          IProjectionDocumentReader<WorkflowActorBindingDocument, string>
+    {
+        public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);
+
+        public Task UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(_entries.TryGetValue((actorId, expectedType), out var result) && result);
+            Documents[readModel.Id] = readModel.DeepClone();
+            return Task.CompletedTask;
         }
+
+        public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.DeepClone() : null);
+        }
+
+        public Task<IReadOnlyList<WorkflowActorBindingDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<WorkflowActorBindingDocument>>(
+                Documents.Values.Take(take).Select(static x => x.DeepClone()).ToList());
+        }
+    }
+
+    private sealed class StaticClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
     }
 }

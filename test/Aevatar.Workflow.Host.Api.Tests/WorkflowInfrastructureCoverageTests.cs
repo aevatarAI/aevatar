@@ -2,13 +2,13 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Configuration;
 using Aevatar.Hosting;
-using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
-using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
+using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Reporting;
@@ -33,20 +33,52 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IWorkflowExecutionReportArtifactSink, FakeReportSink>();
 
-        services.AddWorkflowInfrastructure();
+        services.AddWorkflowInfrastructure(options =>
+        {
+            options.Enabled = false;
+            options.OutputDirectory = "/tmp/workflow-reports";
+        });
 
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowExecutionReportArtifactSink) &&
-            x.ImplementationType == typeof(FileSystemWorkflowExecutionReportArtifactSink));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowActorBindingReader) &&
-            x.ImplementationType == typeof(RuntimeWorkflowActorBindingReader));
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowExecutionReportArtifactOptions>>().Value;
+
+        options.Enabled.Should().BeFalse();
+        options.OutputDirectory.Should().Be("/tmp/workflow-reports");
+        provider.GetRequiredService<IWorkflowExecutionReportArtifactSink>()
+            .Should().BeOfType<FileSystemWorkflowExecutionReportArtifactSink>();
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowDefinitionResolver) &&
             x.ImplementationType == typeof(RegistryWorkflowDefinitionResolver));
+    }
+
+    [Fact]
+    public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkflowDefinitionRegistry>(new WorkflowDefinitionRegistry());
+
+        services.AddWorkflowDefinitionFileSource(options =>
+        {
+            options.WorkflowDirectories.Add("/tmp/a");
+            options.WorkflowDirectories.Add("/tmp/b");
+        });
+
+        services.Should().Contain(x => x.ServiceType == typeof(FileBackedWorkflowCatalogPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCatalogPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowCapabilitiesPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
+
+        using var provider = services.BuildServiceProvider();
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
+        catalogPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
+        capabilitiesPort.Should().BeOfType<FileBackedWorkflowCatalogPort>();
+        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
@@ -68,6 +100,60 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public void FileBackedWorkflowCatalogPort_ShouldReturnCatalogAndDetail()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "aevatar-workflow-catalog-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var yamlPath = Path.Combine(tempDir, "repo_install.yaml");
+            File.WriteAllText(yamlPath, """
+            name: repo_install
+            description: Bootstrap runtime.
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """);
+
+            var options = new WorkflowDefinitionFileSourceOptions();
+            options.WorkflowDirectories.Add(tempDir);
+
+            var registry = new WorkflowDefinitionRegistry();
+            registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+            registry.Register("repo_install", File.ReadAllText(yamlPath));
+
+            var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
+
+            var catalog = port.ListWorkflowCatalog();
+            catalog.Should().Contain(item => item.Name == "repo_install" && item.Source == "file");
+            catalog.Should().Contain(item => item.Name == "direct" && item.Source == "builtin");
+
+            var detail = port.GetWorkflowDetail("repo_install");
+            detail.Should().NotBeNull();
+            detail!.Catalog.Name.Should().Be("repo_install");
+            detail.Catalog.RequiresLlmProvider.Should().BeFalse();
+            detail.Definition.Description.Should().Be("Bootstrap runtime.");
+            detail.Definition.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+
+            var capabilities = port.GetCapabilities();
+            capabilities.SchemaVersion.Should().Be("capabilities.v1");
+            capabilities.Workflows.Should().Contain(item => item.Name == "repo_install");
+            capabilities.Primitives.Should().Contain(item => item.Name == "assign");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void AddWorkflowCapabilityServices_ShouldRegisterInteractionAndDispatchPipeline()
     {
         var services = new ServiceCollection();
@@ -85,6 +171,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowActorBindingReader));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IWorkflowExecutionReportArtifactSink) &&
+            x.ImplementationType == typeof(FileSystemWorkflowExecutionReportArtifactSink));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
@@ -161,6 +251,9 @@ public sealed class WorkflowInfrastructureCoverageTests
             Directory.Exists(enabledDir).Should().BeTrue();
             Directory.EnumerateFiles(enabledDir, "*.json").Should().ContainSingle();
             Directory.EnumerateFiles(enabledDir, "*.html").Should().ContainSingle();
+            var jsonPath = Directory.EnumerateFiles(enabledDir, "*.json").Single();
+            var json = await File.ReadAllTextAsync(jsonPath);
+            json.Should().Contain("\"commandId\": \"cmd-1\"");
         }
         finally
         {

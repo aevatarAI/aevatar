@@ -1,18 +1,18 @@
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionDocumentStoreBinding<TReadModel, TKey>
-    : IProjectionQueryableStoreBinding<TReadModel, TKey>,
+    : IProjectionStoreBinding<TReadModel, TKey>,
       IProjectionStoreBindingAvailability
     where TReadModel : class, IProjectionReadModel
 {
-    private readonly IProjectionDocumentStore<TReadModel, TKey>? _store;
+    private readonly IProjectionDocumentWriter<TReadModel>? _writer;
 
-    public ProjectionDocumentStoreBinding(IProjectionDocumentStore<TReadModel, TKey>? store = null)
+    public ProjectionDocumentStoreBinding(IProjectionDocumentWriter<TReadModel>? writer = null)
     {
-        _store = store;
+        _writer = writer;
     }
 
-    public bool IsConfigured => _store is not null;
+    public bool IsConfigured => _writer is not null;
 
     public string AvailabilityReason => IsConfigured
         ? "Document binding is active."
@@ -22,31 +22,9 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel, TKey>
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
-        if (_store is null)
+        if (_writer is null)
             return Task.CompletedTask;
 
-        return _store.UpsertAsync(readModel, ct);
-    }
-
-    public Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        return GetRequiredStore().MutateAsync(key, mutate, ct);
-    }
-
-    public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
-    {
-        return GetRequiredStore().GetAsync(key, ct);
-    }
-
-    public Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
-    {
-        return GetRequiredStore().ListAsync(take, ct);
-    }
-
-    private IProjectionDocumentStore<TReadModel, TKey> GetRequiredStore()
-    {
-        return _store ??
-               throw new InvalidOperationException(
-                   $"Document projection store is not configured for read model '{typeof(TReadModel).FullName}'.");
+        return _writer.UpsertAsync(readModel, ct);
     }
 }

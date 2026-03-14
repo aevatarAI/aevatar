@@ -42,4 +42,5 @@ public sealed class WorkflowRunBehaviorOptions
         {
             typeof(WorkflowDirectFallbackTriggerException),
         };
+
 }

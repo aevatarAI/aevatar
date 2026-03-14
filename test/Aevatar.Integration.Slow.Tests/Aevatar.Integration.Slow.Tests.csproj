@@ -44,7 +44,8 @@
   <ItemGroup>
     <Protobuf Include="..\Aevatar.Integration.Tests\Protos\text_normalization_protocol.proto"
               Link="Protos/text_normalization_protocol.proto"
-              GrpcServices="None" />
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

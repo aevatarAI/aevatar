@@ -61,6 +61,40 @@ public class ScriptPromotionDecisionTests
         decision.FailureReason.Should().Be("denied");
         decision.ValidationReport.Should().BeSameAs(validation);
     }
+
+    [Fact]
+    public void ValueEquality_ShouldHandleEqualDifferentAndNullInstances()
+    {
+        var left = new ScriptPromotionDecision(
+            Accepted: true,
+            ProposalId: "proposal-1",
+            ScriptId: "script-1",
+            BaseRevision: "rev-1",
+            CandidateRevision: "rev-2",
+            Status: "promoted",
+            FailureReason: string.Empty,
+            DefinitionActorId: "definition-1",
+            CatalogActorId: "catalog-1",
+            ValidationReport: new ScriptEvolutionValidationReport(true, ["ok"]),
+            DefinitionSnapshot: new ScriptDefinitionBindingSpec
+            {
+                ScriptId = "script-1",
+                Revision = "rev-2",
+            });
+        var equal = (left with { })!;
+        var different = left with { Status = "rejected" };
+
+        (left == equal).Should().BeTrue();
+        (left != equal).Should().BeFalse();
+        left.Equals(equal).Should().BeTrue();
+        left.Equals((object?)equal).Should().BeTrue();
+        left.Equals((object?)different).Should().BeFalse();
+        left.Equals((object?)null).Should().BeFalse();
+        var equalHashCode = equal!.GetHashCode();
+        var leftHashCode = left.GetHashCode();
+        leftHashCode.Should().Be(equalHashCode);
+        left.ToString().Should().Contain("proposal-1");
+    }
 }
 
 public class ScriptEvolutionValidationReportTests

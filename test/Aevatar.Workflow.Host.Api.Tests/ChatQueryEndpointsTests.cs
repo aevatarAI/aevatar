@@ -166,6 +166,9 @@ public sealed class ChatQueryEndpointsTests
         public bool ActorQueryEnabled => true;
         public IReadOnlyList<WorkflowAgentSummary> Agents { get; init; } = [];
         public IReadOnlyList<string> Workflows { get; init; } = [];
+        public IReadOnlyList<WorkflowCatalogItem> WorkflowCatalog { get; init; } = [];
+        public WorkflowCatalogItemDetail? WorkflowDetail { get; init; }
+        public WorkflowCapabilitiesDocument Capabilities { get; init; } = new();
         public WorkflowActorSnapshot? Snapshot { get; init; }
         public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowActorGraphEdge> GraphEdges { get; init; } = [];
@@ -183,6 +186,24 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add("ListWorkflows");
             return Workflows;
+        }
+
+        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog()
+        {
+            Calls.Add("ListWorkflowCatalog");
+            return WorkflowCatalog;
+        }
+
+        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+        {
+            Calls.Add($"GetWorkflowDetail:{workflowName}");
+            return WorkflowDetail;
+        }
+
+        public WorkflowCapabilitiesDocument GetCapabilities()
+        {
+            Calls.Add("GetCapabilities");
+            return Capabilities;
         }
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)

@@ -27,7 +27,7 @@ public sealed class WorkflowExecutionReadModelMapper
 
     public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
     {
-        return new WorkflowActorTimelineItem
+        var item = new WorkflowActorTimelineItem
         {
             Timestamp = source.Timestamp,
             Stage = source.Stage,
@@ -36,44 +36,48 @@ public sealed class WorkflowExecutionReadModelMapper
             StepId = source.StepId,
             StepType = source.StepType,
             EventType = source.EventType,
-            Data = new Dictionary<string, string>(source.Data, StringComparer.Ordinal),
         };
+        item.Data.Add(source.Data);
+        return item;
     }
 
     public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
     {
-        return new WorkflowActorGraphNode
+        var node = new WorkflowActorGraphNode
         {
             NodeId = source.NodeId,
             NodeType = source.NodeType,
             UpdatedAt = source.UpdatedAt,
-            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
         };
+        node.Properties.Add(source.Properties);
+        return node;
     }
 
     public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
     {
-        return new WorkflowActorGraphEdge
+        var edge = new WorkflowActorGraphEdge
         {
             EdgeId = source.EdgeId,
             FromNodeId = source.FromNodeId,
             ToNodeId = source.ToNodeId,
             EdgeType = source.EdgeType,
             UpdatedAt = source.UpdatedAt,
-            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
         };
+        edge.Properties.Add(source.Properties);
+        return edge;
     }
 
     public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
         string rootNodeId,
         ProjectionGraphSubgraph source)
     {
-        return new WorkflowActorGraphSubgraph
+        var subgraph = new WorkflowActorGraphSubgraph
         {
             RootNodeId = rootNodeId,
-            Nodes = source.Nodes.Select(ToActorGraphNode).ToList(),
-            Edges = source.Edges.Select(ToActorGraphEdge).ToList(),
         };
+        subgraph.Nodes.Add(source.Nodes.Select(ToActorGraphNode));
+        subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
+        return subgraph;
     }
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(

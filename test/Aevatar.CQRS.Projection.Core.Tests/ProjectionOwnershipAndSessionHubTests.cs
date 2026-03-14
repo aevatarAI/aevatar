@@ -79,6 +79,81 @@ public class ActorProjectionOwnershipCoordinatorTests
     }
 
     [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnTrue_WhenLeaseMatchesAndNotExpired()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 60_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-1", CancellationToken.None);
+
+        hasActiveLease.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnFalse_WhenLeaseExpired()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 1_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-5)),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-1", CancellationToken.None);
+
+        hasActiveLease.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnFalse_WhenSessionDoesNotMatch()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 60_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-2", CancellationToken.None);
+
+        hasActiveLease.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task AcquireAsync_ShouldRecover_WhenCreateRaces()
     {
         var runtime = new OwnershipCoordinatorRuntime();
@@ -115,7 +190,8 @@ public class ActorProjectionOwnershipCoordinatorTests
         var coordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             runtime,
-            new DefaultAgentTypeVerifier(new NullActorTypeProbe()));
+            new DefaultAgentTypeVerifier(new NullActorTypeProbe()),
+            new TestInMemoryEventStore());
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -129,7 +205,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent()));
         var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe());
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, runtime, verifier);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, runtime, verifier, new TestInMemoryEventStore());
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -138,15 +214,38 @@ public class ActorProjectionOwnershipCoordinatorTests
 
     private static ActorProjectionOwnershipCoordinator CreateCoordinator(
         IActorRuntime runtime,
-        ProjectionOwnershipCoordinatorOptions? options = null)
+        ProjectionOwnershipCoordinatorOptions? options = null,
+        IEventStore? eventStore = null)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime));
         return new ActorProjectionOwnershipCoordinator(
             runtime,
             (IActorDispatchPort)runtime,
             verifier,
+            eventStore ?? new TestInMemoryEventStore(),
             options);
     }
+
+    private static Task AppendStateEventAsync(
+        IEventStore store,
+        string agentId,
+        long version,
+        IMessage payload) =>
+        store.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = version,
+                    EventType = payload.Descriptor.FullName,
+                    EventData = Any.Pack(payload),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: version - 1,
+            CancellationToken.None);
 }
 
 public class ProjectionOwnershipCoordinatorGAgentTests

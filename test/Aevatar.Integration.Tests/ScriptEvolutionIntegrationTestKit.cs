@@ -15,6 +15,9 @@ namespace Aevatar.Integration.Tests;
 
 internal static class ScriptEvolutionIntegrationTestKit
 {
+    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan ObservationPollInterval = TimeSpan.FromMilliseconds(100);
+
     public static ServiceProvider BuildProvider(Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
@@ -178,18 +181,63 @@ internal static class ScriptEvolutionIntegrationTestKit
         return agent.State.StateRoot.Unpack<TState>();
     }
 
-    public static Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
+    public static async Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
         IServiceProvider provider,
         string scriptId,
-        CancellationToken ct) =>
-        provider.GetRequiredService<IScriptCatalogQueryPort>()
-            .GetCatalogEntryAsync(null, scriptId, ct);
+        CancellationToken ct,
+        string? expectedRevision = null)
+    {
+        var queryPort = provider.GetRequiredService<IScriptCatalogQueryPort>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
 
-    public static Task<ScriptDefinitionSnapshot> GetDefinitionSnapshotAsync(
+        ScriptCatalogEntrySnapshot? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await queryPort.GetCatalogEntryAsync(null, scriptId, timeoutCts.Token);
+                if (last != null &&
+                    (string.IsNullOrWhiteSpace(expectedRevision) ||
+                     string.Equals(last.ActiveRevision, expectedRevision, StringComparison.Ordinal)))
+                {
+                    return last;
+                }
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return last;
+        }
+    }
+
+    public static async Task<ScriptDefinitionSnapshot> GetDefinitionSnapshotAsync(
         IServiceProvider provider,
         string definitionActorId,
         string revision,
-        CancellationToken ct) =>
-        provider.GetRequiredService<IScriptDefinitionSnapshotPort>()
-            .GetRequiredAsync(definitionActorId, revision, ct);
+        CancellationToken ct)
+    {
+        var snapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        try
+        {
+            while (true)
+            {
+                var snapshot = await snapshotPort.TryGetAsync(definitionActorId, revision, timeoutCts.Token);
+                if (snapshot != null)
+                    return snapshot;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Script definition snapshot not found for actor `{definitionActorId}` revision `{revision}`.");
+        }
+    }
 }

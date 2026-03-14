@@ -11,13 +11,17 @@ public enum WorkflowRunControlStartErrorCode
     ActorNotWorkflowRun = 4,
     RunBindingMissing = 5,
     RunBindingMismatch = 6,
+    InvalidStepId = 7,
+    InvalidSignalName = 8,
 }
 
 public sealed record WorkflowRunControlStartError(
     WorkflowRunControlStartErrorCode Code,
     string ActorId,
     string RequestedRunId,
-    string BoundRunId)
+    string BoundRunId,
+    string RequestedStepId = "",
+    string RequestedSignalName = "")
 {
     public static WorkflowRunControlStartError InvalidActorId(string actorId) =>
         new(WorkflowRunControlStartErrorCode.InvalidActorId, actorId ?? string.Empty, string.Empty, string.Empty);
@@ -36,6 +40,22 @@ public sealed record WorkflowRunControlStartError(
 
     public static WorkflowRunControlStartError RunBindingMismatch(string actorId, string runId, string boundRunId) =>
         new(WorkflowRunControlStartErrorCode.RunBindingMismatch, actorId ?? string.Empty, runId ?? string.Empty, boundRunId ?? string.Empty);
+
+    public static WorkflowRunControlStartError InvalidStepId(string actorId, string runId, string stepId) =>
+        new(
+            WorkflowRunControlStartErrorCode.InvalidStepId,
+            actorId ?? string.Empty,
+            runId ?? string.Empty,
+            string.Empty,
+            stepId ?? string.Empty);
+
+    public static WorkflowRunControlStartError InvalidSignalName(string actorId, string runId, string signalName) =>
+        new(
+            WorkflowRunControlStartErrorCode.InvalidSignalName,
+            actorId ?? string.Empty,
+            runId ?? string.Empty,
+            string.Empty,
+            RequestedSignalName: signalName ?? string.Empty);
 }
 
 public interface IWorkflowRunControlCommand : ICommandContextSeed
@@ -61,14 +81,16 @@ public sealed record WorkflowResumeCommand(
     string StepId,
     string? CommandId,
     bool Approved,
-    string? UserInput) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    string? UserInput,
+    IReadOnlyDictionary<string, string>? Metadata = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
 
 public sealed record WorkflowSignalCommand(
     string ActorId,
     string RunId,
     string SignalName,
     string? CommandId,
-    string? Payload) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+    string? Payload,
+    string? StepId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
 
 public sealed record WorkflowRunControlAcceptedReceipt(
     string ActorId,

@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.Workflow.Projection.Orchestration";
+
+import "google/protobuf/timestamp.proto";
+
+message WorkflowRunDetachedCleanupOutboxState {
+  map<string, WorkflowRunDetachedCleanupOutboxEntry> entries = 1;
+}
+
+message WorkflowRunDetachedCleanupOutboxEntry {
+  string record_id = 1;
+  string actor_id = 2;
+  string workflow_name = 3;
+  string command_id = 4;
+  repeated string created_actor_ids = 5;
+  google.protobuf.Timestamp enqueued_at_utc = 6;
+  google.protobuf.Timestamp next_visible_at_utc = 7;
+  int32 attempt_count = 8;
+  string last_error = 9;
+  google.protobuf.Timestamp completed_at_utc = 10;
+  google.protobuf.Timestamp dispatch_accepted_at_utc = 11;
+}
+
+message WorkflowRunDetachedCleanupEnqueuedEvent {
+  string record_id = 1;
+  string actor_id = 2;
+  string workflow_name = 3;
+  string command_id = 4;
+  repeated string created_actor_ids = 5;
+  google.protobuf.Timestamp enqueued_at_utc = 6;
+}
+
+message WorkflowRunDetachedCleanupRetryScheduledEvent {
+  string record_id = 1;
+  int32 attempt_count = 2;
+  google.protobuf.Timestamp next_visible_at_utc = 3;
+  string error = 4;
+}
+
+message WorkflowRunDetachedCleanupDispatchAcceptedEvent {
+  string record_id = 1;
+  google.protobuf.Timestamp dispatch_accepted_at_utc = 2;
+}
+
+message WorkflowRunDetachedCleanupSucceededEvent {
+  string record_id = 1;
+  google.protobuf.Timestamp completed_at_utc = 2;
+}
+
+message WorkflowRunDetachedCleanupDiscardedEvent {
+  string record_id = 1;
+  google.protobuf.Timestamp discarded_at_utc = 2;
+}
+
+message WorkflowRunDetachedCleanupTriggerReplayEvent {
+  int32 batch_size = 1;
+}

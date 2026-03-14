@@ -975,6 +975,151 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task SecureInputModule_ShouldCaptureMaskedValueAndPublishSecureEvent()
+    {
+        var services = new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider();
+        var agent = new TestWorkflowRunAgent("workflow-secure-module-test-agent", "run-secure");
+        var module = new SecureInputModule();
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-1",
+                StepType = "secure_input",
+                RunId = "run-secure",
+                Parameters =
+                {
+                    ["prompt"] = "provide secret",
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
+        suspended.SuspensionType.Should().Be("secure_input");
+        suspended.Metadata["secure"].Should().Be("true");
+        suspended.Metadata["variable"].Should().Be("api_key");
+        ctx.Published.Clear();
+
+        var persistedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
+        persistedState.Pending.Should().ContainKey("run-secure::secure-1");
+
+        var resumedModule = new SecureInputModule();
+        var resumedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+        await resumedModule.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure",
+                StepId = "secure-1",
+                Approved = true,
+                UserInput = "top-secret-value",
+            }),
+            resumedCtx,
+            CancellationToken.None);
+
+        var captured = resumedCtx.Published.Select(x => x.evt).OfType<SecureValueCapturedEvent>().Single();
+        captured.Variable.Should().Be("api_key");
+        captured.Value.Should().BeEmpty();
+
+        var completed = resumedCtx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("[secure input captured]");
+        completed.Annotations["secure.input"].Should().Be("true");
+        completed.Annotations["secure.variable"].Should().Be("api_key");
+
+        var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
+        resumedState.Pending.Should().BeEmpty();
+        resumedState.Captured.Should().BeEmpty();
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
+        ((Dictionary<string, string>)capturedItems!).Should().Contain(new KeyValuePair<string, string>("run-secure::api_key", "top-secret-value"));
+
+        await resumedModule.HandleAsync(
+            Envelope(new WorkflowCompletedEvent
+            {
+                RunId = "run-secure",
+            }),
+            resumedCtx,
+            CancellationToken.None);
+
+        agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SecureInputModule_ShouldClearPreviousCapturedValue_WhenSameVariableIsRequestedAgainAndRecaptureFails()
+    {
+        var services = new ServiceCollection().AddAevatarWorkflow().BuildServiceProvider();
+        var agent = new TestWorkflowRunAgent("workflow-secure-recapture-test-agent", "run-secure-recapture");
+        var module = new SecureInputModule();
+        var ctx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-1",
+                StepType = "secure_input",
+                RunId = "run-secure-recapture",
+                Parameters =
+                {
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure-recapture",
+                StepId = "secure-1",
+                Approved = true,
+                UserInput = "old-secret",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
+        ((Dictionary<string, string>)capturedItems!).Should().Contain(
+            new KeyValuePair<string, string>("run-secure-recapture::api_key", "old-secret"));
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "secure-2",
+                StepType = "secure_input",
+                RunId = "run-secure-recapture",
+                Parameters =
+                {
+                    ["variable"] = "api_key",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-secure-recapture",
+                StepId = "secure-2",
+                Approved = false,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        failed.Success.Should().BeFalse();
+        failed.Error.Should().Contain("timed out");
+        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task RaceModule_ShouldPickFirstSuccessAndFailWhenAllBranchesFail()
     {
         var module = new RaceModule();
@@ -1564,6 +1709,127 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldDispatchViaAgentTypeAndForwardStepParametersAsMetadata()
+    {
+        var runtime = new RecordingActorRuntimeForAgentType();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddAevatarWorkflow()
+            .BuildServiceProvider();
+        var module = new LLMCallModule();
+        var ctx = CreateContext(services);
+
+        var request = new StepRequestEvent
+        {
+            StepId = "llm-agent-type",
+            StepType = "llm_call",
+            RunId = "run-agent-type",
+            Input = "hello bridge",
+            TargetRole = "legacy-role",
+        };
+        request.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        request.Parameters["agent_id"] = "bridge:telegram:prod";
+        request.Parameters["chat_id"] = "10001";
+        request.Parameters["llm_timeout_ms"] = "120000";
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().ContainSingle();
+        ctx.Sent[0].targetActorId.Should().Be("bridge:telegram:prod");
+        var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        chatRequest.Metadata["chat_id"].Should().Be("10001");
+        runtime.Created.Should().ContainSingle(x => x.actorId == "bridge:telegram:prod");
+
+        await module.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = chatRequest.SessionId,
+                Content = "telegram-ack",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.StepId.Should().Be("llm-agent-type");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("telegram-ack");
+    }
+
+    [Fact]
+    public async Task EvaluateAndReflectModules_ShouldDispatchViaAgentType()
+    {
+        var runtime = new RecordingActorRuntimeForAgentType();
+        var services = new ServiceCollection()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddAevatarWorkflow()
+            .BuildServiceProvider();
+        var ctx = CreateContext(services);
+
+        var evaluate = new EvaluateModule();
+        var evaluateRequest = new StepRequestEvent
+        {
+            StepId = "eval-agent-type",
+            StepType = "evaluate",
+            RunId = "run-eval-agent-type",
+            Input = "draft",
+        };
+        evaluateRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        evaluateRequest.Parameters["agent_id"] = "agent:evaluate";
+        evaluateRequest.Parameters["chat_id"] = "chat-eval";
+        evaluateRequest.Parameters["threshold"] = "2";
+        await evaluate.HandleAsync(Envelope(evaluateRequest), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().ContainSingle(x => x.targetActorId == "agent:evaluate");
+        var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        evaluateChat.Metadata["chat_id"].Should().Be("chat-eval");
+        ctx.Published.Clear();
+
+        await evaluate.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = evaluateChat.SessionId,
+                Content = "3",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+            .Single(x => x.StepId == "eval-agent-type")
+            .Success.Should().BeTrue();
+        ctx.Published.Clear();
+
+        var reflect = new ReflectModule();
+        var reflectRequest = new StepRequestEvent
+        {
+            StepId = "reflect-agent-type",
+            StepType = "reflect",
+            RunId = "run-reflect-agent-type",
+            Input = "draft-reflect",
+        };
+        reflectRequest.Parameters["agent_type"] = typeof(AgentTypeDispatchTargetAgent).AssemblyQualifiedName!;
+        reflectRequest.Parameters["agent_id"] = "agent:reflect";
+        reflectRequest.Parameters["chat_id"] = "chat-reflect";
+        reflectRequest.Parameters["max_rounds"] = "1";
+        await reflect.HandleAsync(Envelope(reflectRequest), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().Contain(x => x.targetActorId == "agent:reflect");
+        var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
+        reflectChat.Metadata["chat_id"].Should().Be("chat-reflect");
+        ctx.Published.Clear();
+
+        await reflect.HandleAsync(
+            Envelope(new ChatResponseEvent
+            {
+                SessionId = reflectChat.SessionId,
+                Content = "PASS",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+            .Single(x => x.StepId == "reflect-agent-type")
+            .Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ReflectModule_ShouldHandlePassPathAndIterativeImprovementPath()
     {
         var module = new ReflectModule();
@@ -1990,6 +2256,100 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         completed.Success.Should().BeTrue();
         completed.Output.Should().Contain("```yaml");
         completed.Output.Should().Contain("name: validate_ok");
+    }
+
+    [Fact]
+    public async Task WorkflowYamlValidateModule_WhenYamlContainsDynamicWorkflowStep_ShouldFailValidation()
+    {
+        var module = new WorkflowYamlValidateModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "validate-dynamic-workflow",
+                StepType = "workflow_yaml_validate",
+                RunId = "run-validate-dynamic-workflow",
+                Input = """
+                        ```yaml
+                        name: dynamic_workflow_not_allowed
+                        roles: []
+                        steps:
+                          - id: ensure_runtime_ready
+                            type: dynamic_workflow
+                          - id: done
+                            type: assign
+                            parameters:
+                              target: result
+                              value: "$input"
+                        ```
+                        """,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("dynamic_workflow");
+    }
+
+    private sealed class RecordingActorRuntimeForAgentType : IActorRuntime
+    {
+        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
+        public List<(System.Type agentType, string actorId)> Created { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id;
+            var agent = (IAgent)Activator.CreateInstance(agentType, actorId)!;
+            var actor = new RecordingRuntimeActor(actorId, agent);
+            _actors[actorId] = actor;
+            Created.Add((agentType, actorId));
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _actors.Remove(id);
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id)
+        {
+            _actors.TryGetValue(id, out var actor);
+            return Task.FromResult(actor);
+        }
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRuntimeActor(string id, IAgent agent) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = agent;
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class AgentTypeDispatchTargetAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("agent-type-target");
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)

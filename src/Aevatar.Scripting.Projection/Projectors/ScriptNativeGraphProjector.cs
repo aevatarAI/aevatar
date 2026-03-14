@@ -16,7 +16,7 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeGraphProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptNativeGraphReadModel, string> _graphStoreDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string> _graphWriteDispatcher;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
@@ -24,14 +24,14 @@ public sealed class ScriptNativeGraphProjector
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptNativeGraphProjector(
-        IProjectionStoreDispatcher<ScriptNativeGraphReadModel, string> graphStoreDispatcher,
+        IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string> graphWriteDispatcher,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptNativeGraphMaterializer materializer,
         IProtobufMessageCodec codec)
     {
-        _graphStoreDispatcher = graphStoreDispatcher ?? throw new ArgumentNullException(nameof(graphStoreDispatcher));
+        _graphWriteDispatcher = graphWriteDispatcher ?? throw new ArgumentNullException(nameof(graphWriteDispatcher));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
@@ -62,7 +62,9 @@ public sealed class ScriptNativeGraphProjector
             fact.DefinitionActorId,
             fact.Revision,
             ct);
-        var scriptPackage = snapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(snapshot.SourceText);
+        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
+            snapshot.ScriptPackage,
+            snapshot.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             snapshot.ScriptId,
             snapshot.Revision,
@@ -104,7 +106,7 @@ public sealed class ScriptNativeGraphProjector
             fact,
             semanticReadModel,
             plan);
-        await _graphStoreDispatcher.UpsertAsync(graphReadModel, ct);
+        await _graphWriteDispatcher.UpsertAsync(graphReadModel, ct);
     }
 
     public ValueTask CompleteAsync(

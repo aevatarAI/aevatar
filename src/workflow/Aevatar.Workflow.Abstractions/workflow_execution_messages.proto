@@ -19,22 +19,6 @@ message BindWorkflowDefinitionEvent
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
 }
-message QueryWorkflowActorBindingRequestedEvent
-{
-  string request_id = 1;
-  string reply_stream_id = 2;
-}
-message WorkflowActorBindingRespondedEvent
-{
-  string request_id = 1;
-  string actor_id = 2;
-  string actor_kind = 3;
-  string definition_actor_id = 4;
-  string run_id = 5;
-  string workflow_name = 6;
-  string workflow_yaml = 7;
-  map<string, string> inline_workflow_yamls = 8;
-}
 message WorkflowRunExecutionStartedEvent
 {
   string run_id = 1;
@@ -97,15 +81,18 @@ message SubWorkflowInvocationCompletedEvent
   string output = 4;
   string error = 5;
 }
-message WorkflowSuspendedEvent {
+message WorkflowSuspendedEvent
+{
   string run_id = 1;
   string step_id = 2;
   string suspension_type = 3;
   string prompt = 4;
   int32 timeout_seconds = 5;
   string variable_name = 6;
+  map<string, string> metadata = 7;
 }
-message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; }
+message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
 
 // Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
 message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
@@ -117,3 +104,11 @@ message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; i
 message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
 message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
 message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
+message WorkflowSignalBufferedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string payload = 4;
+  int64 received_at_unix_time_ms = 5;
+}

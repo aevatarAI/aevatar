@@ -16,6 +16,7 @@ internal sealed class WorkflowRunCommandTarget
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -23,7 +24,8 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
@@ -32,6 +34,7 @@ internal sealed class WorkflowRunCommandTarget
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
 
     public IActor Actor { get; }
@@ -41,6 +44,7 @@ internal sealed class WorkflowRunCommandTarget
     public string ActorId => Actor.Id;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
     public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
+    public bool DispatchFailureCleanupCompleted { get; private set; }
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
@@ -53,23 +57,54 @@ internal sealed class WorkflowRunCommandTarget
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
 
-    public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
-        ReleaseAsync(destroyCreatedActors: true, ct: ct);
+    public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
+    {
+        DispatchFailureCleanupCompleted = false;
+        await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+        DispatchFailureCleanupCompleted = true;
+    }
 
     public Task RollbackCreatedActorsAsync(CancellationToken ct = default) =>
         DestroyCreatedActorsAsync(ct);
 
+    public async Task DetachLiveObservationAsync(CancellationToken ct = default)
+    {
+        var sink = LiveSink;
+        if (sink == null)
+            return;
+
+        Exception? firstException = null;
+        if (ProjectionLease != null)
+        {
+            try
+            {
+                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
+        try
+        {
+            await CompleteAndDisposeLiveSinkAsync(sink, ct);
+            LiveSink = null;
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
     public Task ReleaseAfterInteractionAsync(
         WorkflowChatRunAcceptedReceipt receipt,
         CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(receipt);
-        ArgumentNullException.ThrowIfNull(cleanup);
-
-        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
-        return ReleaseAsync(destroyCreatedActors: destroyCreatedActors, ct: ct);
-    }
+        CancellationToken ct = default) =>
+        ReleaseAfterInteractionCoreAsync(receipt, cleanup, ct);
 
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,
@@ -77,52 +112,52 @@ internal sealed class WorkflowRunCommandTarget
         CancellationToken ct = default)
     {
         Exception? firstException = null;
-        if (ProjectionLease != null && LiveSink != null)
+        var projectionLease = ProjectionLease;
+        var liveSink = LiveSink;
+
+        if (projectionLease != null && liveSink != null)
         {
             try
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
-                    ProjectionLease,
-                    LiveSink,
+                    projectionLease,
+                    liveSink,
                     onDetachedAsync,
                     ct);
+                ProjectionLease = null;
+                LiveSink = null;
             }
             catch (Exception ex)
             {
                 firstException ??= ex;
             }
-
-            ProjectionLease = null;
-            LiveSink = null;
         }
         else
         {
-            if (LiveSink != null)
+            if (liveSink != null)
             {
                 try
                 {
-                    await LiveSink.DisposeAsync();
+                    await CompleteAndDisposeLiveSinkAsync(liveSink, ct);
+                    LiveSink = null;
                 }
                 catch (Exception ex)
                 {
                     firstException ??= ex;
                 }
-
-                LiveSink = null;
             }
 
-            if (ProjectionLease != null)
+            if (projectionLease != null)
             {
                 try
                 {
-                    await _projectionPort.ReleaseActorProjectionAsync(ProjectionLease, ct);
+                    await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
+                    ProjectionLease = null;
                 }
                 catch (Exception ex)
                 {
                     firstException ??= ex;
                 }
-
-                ProjectionLease = null;
             }
         }
 
@@ -136,6 +171,48 @@ internal sealed class WorkflowRunCommandTarget
             {
                 firstException ??= ex;
             }
+        }
+
+        if (firstException != null)
+            ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    public async Task ReleaseDetachedSessionOwnershipAsync()
+    {
+        var projectionLease = ProjectionLease;
+        if (projectionLease == null)
+            return;
+
+        if (projectionLease is IWorkflowExecutionProjectionOwnershipLease ownershipLease)
+            await ownershipLease.StopOwnershipHeartbeatAsync();
+
+        ProjectionLease = null;
+    }
+
+    private static async Task CompleteAndDisposeLiveSinkAsync(
+        IEventSink<WorkflowRunEventEnvelope> sink,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        Exception? firstException = null;
+        try
+        {
+            sink.Complete();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
+        }
+
+        try
+        {
+            await sink.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            firstException ??= ex;
         }
 
         if (firstException != null)
@@ -177,4 +254,35 @@ internal sealed class WorkflowRunCommandTarget
                 ? failures[0]
                 : new AggregateException("Workflow actor cleanup failed.", failures)).Throw();
     }
+
+    private async Task ReleaseAfterInteractionCoreAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(cleanup);
+
+        var destroyCreatedActors = cleanup.ObservedCompleted || cleanup.DurableCompletion.HasTerminalCompletion;
+        if (destroyCreatedActors)
+        {
+            await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+            return;
+        }
+
+        await DetachLiveObservationAsync(ct);
+        await ScheduleDetachedCleanupAsync(receipt, ct);
+        await ReleaseDetachedSessionOwnershipAsync();
+    }
+
+    private Task ScheduleDetachedCleanupAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CancellationToken ct) =>
+        _cleanupScheduler.ScheduleAsync(
+            new WorkflowRunDetachedCleanupRequest(
+                receipt.ActorId,
+                WorkflowName,
+                receipt.CommandId,
+                CreatedActorIds),
+            ct);
 }

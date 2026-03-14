@@ -1,6 +1,6 @@
 # Aevatar.Workflow.Infrastructure
 
-工作流基础设施层。负责 IO、配置装配、Host 能力接线，以及 workflow actor binding 查询和 `IWorkflowRunActorPort` 的运行时适配。
+工作流基础设施层。负责 IO、配置装配、Host 能力接线，以及 `IWorkflowRunActorPort` 的运行时适配。
 
 ## 当前职责
 
@@ -22,7 +22,7 @@
 
 当前实现约束：
 
-- source actor binding 读取统一通过 `IWorkflowActorBindingReader`。其基础设施实现 `RuntimeWorkflowActorBindingReader` 使用 workflow actor 自身的 query/reply 协议读取 binding，而不是读取 generic raw state payload；因此 Local / Orleans 共用同一套语义。
+- source actor binding 读取统一通过 `IWorkflowActorBindingReader`。当前默认实现是 projection 侧的 `ProjectionWorkflowActorBindingReader`：先判定 actor kind，再确保 binding projection，就地读取 read model；不再依赖 runtime query/reply 侧读 actor 状态。
 - 对显式传入的 `DefinitionActorId`，端口采用强约束复用策略：
   - actor 不存在：按该 id 创建新的 `WorkflowGAgent`
   - actor 已存在且是 `WorkflowGAgent`：若 definition 已一致则直接复用，不一致则原地重绑

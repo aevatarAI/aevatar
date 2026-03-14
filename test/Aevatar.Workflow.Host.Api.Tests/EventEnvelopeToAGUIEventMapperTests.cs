@@ -76,7 +76,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void StepCompletedEvent_ShouldMapStepFinishedAndCustomPayload()
+    public void StepCompletedEvent_ShouldMapStepFinishedAndExposeTypedFields()
     {
         var events = CreateMapper().Map(Wrap(new StepCompletedEvent
         {
@@ -92,6 +92,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             Annotations =
             {
                 ["reason"] = "score-high",
+                ["source"] = "tests",
             },
         }));
 
@@ -109,6 +110,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         payload.AssignedVariable.Should().Be("decision");
         payload.AssignedValue.Should().Be("approved");
         payload.Annotations.Should().ContainKey("reason").WhoseValue.Should().Be("score-high");
+        payload.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("tests");
     }
 
     [Fact]
@@ -249,6 +251,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         suspended[0].Custom.Name.Should().Be("aevatar.human_input.request");
         var request = suspended[0].Custom.Payload.Unpack<WorkflowHumanInputRequestCustomPayload>();
         request.VariableName.Should().Be("user_context");
+        request.Metadata.Should().NotContainKey("variable");
 
         waiting.Should().ContainSingle();
         waiting[0].Custom.Name.Should().Be("aevatar.workflow.waiting_signal");
@@ -272,6 +275,31 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().ContainSingle();
         events[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().Be("corr-wait");
+    }
+
+    [Fact]
+    public void WorkflowSignalBufferedEvent_ProjectsTo_CustomBufferedSignalEvent()
+    {
+        var envelope = Wrap(new WorkflowSignalBufferedEvent
+        {
+            RunId = "run-b",
+            StepId = "wait-b",
+            SignalName = "reply_ready",
+            Payload = "payload",
+            ReceivedAtUnixTimeMs = 123,
+        });
+
+        var events = CreateMapper().Map(envelope);
+
+        events.Should().ContainSingle();
+        events[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        events[0].Custom.Name.Should().Be("aevatar.workflow.signal.buffered");
+        var payload = events[0].Custom.Payload.Unpack<WorkflowSignalBufferedCustomPayload>();
+        payload.RunId.Should().Be("run-b");
+        payload.StepId.Should().Be("wait-b");
+        payload.SignalName.Should().Be("reply_ready");
+        payload.Payload.Should().Be("payload");
+        payload.ReceivedAtUnixTimeMs.Should().Be(123);
     }
 
     [Fact]
@@ -340,6 +368,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         new WorkflowWaitingSignalRunEventEnvelopeMappingHandler().TryMap(unsupported, out var waitingEvents).Should().BeFalse();
         waitingEvents.Should().BeEmpty();
+
+        new WorkflowSignalBufferedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var bufferedEvents).Should().BeFalse();
+        bufferedEvents.Should().BeEmpty();
     }
 
     [Fact]
@@ -409,6 +440,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new ToolCallRunEventEnvelopeMappingHandler(),
             new WorkflowSuspendedRunEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalRunEventEnvelopeMappingHandler(),
+            new WorkflowSignalBufferedRunEventEnvelopeMappingHandler(),
         ]);
     }
 }
