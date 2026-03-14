@@ -123,6 +123,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             "direct",
             "cmd-1",
             ["definition-1", "actor-1"]));
+        await agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent("actor-1", "cmd-1"));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
         await lifecycle.Stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -163,6 +164,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             actorPort: actorPort));
 
         await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1"]));
+        await agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent("actor-1", "cmd-1"));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
         var entry = agent.State.Entries.Values.Single();
@@ -205,38 +207,31 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenSnapshotIsMissingPastPreDispatchGrace_ShouldCleanupAndRemoveEntry()
+    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotIsMissing_ShouldLeaveEntryPending()
     {
         var lifecycle = new RecordingLifecycleService();
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
-        var options = new WorkflowExecutionProjectionOptions
-        {
-            DetachedCleanupRetryBaseDelayMs = 0,
-            DetachedCleanupRetryMaxDelayMs = 0,
-            DetachedCleanupPreDispatchGraceMs = 0,
-        };
         var agent = CreateAgent(CreateAgentServices(
             lifecycle: lifecycle,
             readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
-            actorPort: actorPort,
-            options: options));
+            actorPort: actorPort));
 
         await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1"]));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
-        agent.State.Entries.Should().BeEmpty();
+        agent.State.Entries.Should().ContainKey("actor-1::cmd-1");
         lifecycle.StopCalls.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
-        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-        actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("definition-1");
+        ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenSnapshotHasNoProjectedEventsPastPreDispatchGrace_ShouldCleanupAndRemoveEntry()
+    public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotMatchesCommand_ShouldMarkAcceptedAndWaitForTerminal()
     {
         var queryPort = new RecordingQueryPort
         {
@@ -244,6 +239,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             {
                 ActorId = "actor-1",
                 WorkflowName = "direct",
+                LastCommandId = "cmd-1",
                 CompletionStatus = WorkflowRunCompletionStatus.Unknown,
                 StateVersion = 0,
                 LastEventId = string.Empty,
@@ -253,27 +249,21 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
-        var options = new WorkflowExecutionProjectionOptions
-        {
-            DetachedCleanupRetryBaseDelayMs = 0,
-            DetachedCleanupRetryMaxDelayMs = 0,
-            DetachedCleanupPreDispatchGraceMs = 0,
-        };
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
             readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
-            actorPort: actorPort,
-            options: options));
+            actorPort: actorPort));
 
         await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]));
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
-        agent.State.Entries.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
+        entry.DispatchAcceptedAtUtc.Should().NotBeNull();
+        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
-        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+        ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -324,6 +314,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             "direct",
             "cmd-1",
             ["definition-1", "actor-1"]));
+        await agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent("actor-1", "cmd-1"));
 
         var replayTask = agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
         await lifecycle.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -338,6 +329,81 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
         readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
         ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+        agent.State.Entries.Should().BeEmpty();
+
+        await runtimeLease.StopProjectionReleaseListenerAsync();
+        await runtimeLease.StopOwnershipHeartbeatAsync();
+    }
+
+    [Fact]
+    public async Task HandleTriggerReplay_WhenReleaseCompletedPublishFails_ShouldRetryAndSucceedOnLaterReplay()
+    {
+        var queryPort = new RecordingQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "actor-1",
+                WorkflowName = "direct",
+                CompletionStatus = WorkflowRunCompletionStatus.Completed,
+                LastUpdatedAt = DateTimeOffset.UtcNow,
+            },
+        };
+        var lifecycle = new RecordingLifecycleService();
+        var projectionControlHub = new RecordingProjectionControlHub
+        {
+            ReleaseCompletedPublishFailuresRemaining = 1,
+        };
+        var readModelUpdater = new RecordingReadModelUpdater();
+        var ownershipCoordinator = new RecordingOwnershipCoordinator();
+        var actorPort = new RecordingActorPort();
+        var options = new WorkflowExecutionProjectionOptions
+        {
+            DetachedCleanupRetryBaseDelayMs = 0,
+            DetachedCleanupRetryMaxDelayMs = 0,
+            DetachedCleanupReleaseAckTimeoutMs = 100,
+        };
+        var agent = CreateAgent(CreateAgentServices(
+            queryPort: queryPort,
+            lifecycle: lifecycle,
+            readModelUpdater: readModelUpdater,
+            ownershipCoordinator: ownershipCoordinator,
+            projectionControlHub: projectionControlHub,
+            actorPort: actorPort,
+            options: options));
+        var runtimeLease = new WorkflowExecutionRuntimeLease(
+            new WorkflowExecutionProjectionContext
+            {
+                ProjectionId = "actor-1",
+                CommandId = "cmd-1",
+                RootActorId = "actor-1",
+                WorkflowName = "direct",
+                StartedAt = DateTimeOffset.UtcNow,
+                Input = "hello",
+            },
+            ownershipCoordinator: ownershipCoordinator,
+            lifecycle: lifecycle,
+            projectionControlHub: projectionControlHub,
+            readModelUpdater: readModelUpdater);
+        await runtimeLease.WaitForProjectionReleaseListenerReadyAsync();
+
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent(
+            "actor-1",
+            "direct",
+            "cmd-1",
+            ["definition-1", "actor-1"]));
+        await agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent("actor-1", "cmd-1"));
+
+        await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+
+        agent.State.Entries.Should().ContainKey("actor-1::cmd-1");
+        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
+        actorPort.DestroyCalls.Should().BeEmpty();
+
+        await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
+
+        ownershipCoordinator.ReleaseCalls.Should().HaveCount(2);
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
         agent.State.Entries.Should().BeEmpty();
 
@@ -380,6 +446,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var services = CreateAgentServices(queryPort: queryPort, actorPort: actorPort);
         var agent = CreateAgent(services);
         await agent.HandleEnqueueAsync(CreateEnqueueEvent("actor-1", "direct", "cmd-1", ["definition-1"]));
+        await agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent("actor-1", "cmd-1"));
 
         var outbox = new DirectOutbox(agent);
         var timer = new WorkflowRunDetachedCleanupReplayHostedService(
@@ -408,6 +475,15 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             CommandId = commandId,
             CreatedActorIds = { createdActorIds },
             EnqueuedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+        };
+
+    private static WorkflowRunDetachedCleanupDispatchAcceptedEvent CreateDispatchAcceptedEvent(
+        string actorId,
+        string commandId) =>
+        new()
+        {
+            RecordId = WorkflowRunDetachedCleanupOutboxGAgent.BuildRecordId(actorId, commandId),
+            DispatchAcceptedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
         };
 
     private sealed class RecordingQueryPort : IWorkflowExecutionProjectionQueryPort
@@ -614,6 +690,11 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 request.CommandId,
                 request.CreatedActorIds));
 
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default) =>
+            agent.HandleDispatchAcceptedAsync(CreateDispatchAcceptedEvent(request.ActorId, request.CommandId));
+
         public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default) =>
             agent.HandleDiscardAsync(new WorkflowRunDetachedCleanupDiscardedEvent
             {
@@ -634,6 +715,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         private readonly Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> _handlers = new();
 
         public TaskCompletionSource<bool> SubscriptionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int ReleaseCompletedPublishFailuresRemaining { get; set; }
 
         public async Task PublishAsync(
             string scopeId,
@@ -643,6 +725,13 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         {
             ct.ThrowIfCancellationRequested();
             ArgumentNullException.ThrowIfNull(evt);
+
+            if (evt.EventCase == WorkflowProjectionControlEvent.EventOneofCase.ReleaseCompleted &&
+                ReleaseCompletedPublishFailuresRemaining > 0)
+            {
+                ReleaseCompletedPublishFailuresRemaining--;
+                throw new InvalidOperationException("release completed publish failed");
+            }
 
             if (!_handlers.TryGetValue((scopeId, sessionId), out var handlers))
                 return;

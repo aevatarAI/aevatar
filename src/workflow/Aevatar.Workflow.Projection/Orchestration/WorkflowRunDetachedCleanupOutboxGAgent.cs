@@ -62,6 +62,16 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     }
 
     [EventHandler]
+    public async Task HandleDispatchAcceptedAsync(WorkflowRunDetachedCleanupDispatchAcceptedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (string.IsNullOrWhiteSpace(evt.RecordId))
+            throw new InvalidOperationException("Record id is required to mark detached cleanup dispatch accepted.");
+
+        await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler]
     public async Task HandleTriggerReplayAsync(WorkflowRunDetachedCleanupTriggerReplayEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -88,6 +98,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             .Match(current, evt)
             .On<WorkflowRunDetachedCleanupEnqueuedEvent>(ApplyEnqueued)
             .On<WorkflowRunDetachedCleanupDiscardedEvent>(ApplyDiscarded)
+            .On<WorkflowRunDetachedCleanupDispatchAcceptedEvent>(ApplyDispatchAccepted)
             .On<WorkflowRunDetachedCleanupRetryScheduledEvent>(ApplyRetryScheduled)
             .On<WorkflowRunDetachedCleanupSucceededEvent>(ApplySucceeded)
             .OrCurrent();
@@ -127,6 +138,22 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         return next;
     }
 
+    private static WorkflowRunDetachedCleanupOutboxState ApplyDispatchAccepted(
+        WorkflowRunDetachedCleanupOutboxState current,
+        WorkflowRunDetachedCleanupDispatchAcceptedEvent evt)
+    {
+        var next = current.Clone();
+        if (!next.Entries.TryGetValue(evt.RecordId, out var existing))
+            return next;
+
+        var updated = existing.Clone();
+        updated.DispatchAcceptedAtUtc = evt.DispatchAcceptedAtUtc;
+        updated.NextVisibleAtUtc = evt.DispatchAcceptedAtUtc;
+        updated.LastError = string.Empty;
+        next.Entries[evt.RecordId] = updated;
+        return next;
+    }
+
     private static WorkflowRunDetachedCleanupOutboxState ApplyDiscarded(
         WorkflowRunDetachedCleanupOutboxState current,
         WorkflowRunDetachedCleanupDiscardedEvent evt)
@@ -160,18 +187,20 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             return;
         }
 
-        if (ShouldTreatAsAbandonedPreDispatch(entry, snapshot))
+        if (!HasDispatchAccepted(entry))
         {
+            if (!CanConfirmDispatchAccepted(entry, snapshot))
+                return;
+
             try
             {
-                await CompleteDirectEntryAsync(entry);
+                entry = await MarkDispatchAcceptedAsync(entry);
             }
             catch (Exception ex)
             {
                 await ScheduleRetryAsync(entry, ex);
+                return;
             }
-
-            return;
         }
 
         if (!HasTerminalCompletion(snapshot))
@@ -342,6 +371,21 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         });
     }
 
+    private async Task<WorkflowRunDetachedCleanupOutboxEntry> MarkDispatchAcceptedAsync(
+        WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        var acceptedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow);
+        await PersistDomainEventAsync(new WorkflowRunDetachedCleanupDispatchAcceptedEvent
+        {
+            RecordId = entry.RecordId,
+            DispatchAcceptedAtUtc = acceptedAtUtc,
+        });
+
+        return State.Entries.TryGetValue(entry.RecordId, out var updated)
+            ? updated
+            : entry;
+    }
+
     private TimeSpan ComputeRetryDelay(int attempt)
     {
         var options = Services.GetRequiredService<WorkflowExecutionProjectionOptions>();
@@ -368,22 +412,31 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
             WorkflowRunCompletionStatus.TimedOut or
             WorkflowRunCompletionStatus.Failed;
 
-    private bool ShouldTreatAsAbandonedPreDispatch(
+    private static bool HasDispatchAccepted(WorkflowRunDetachedCleanupOutboxEntry entry)
+    {
+        return entry.DispatchAcceptedAtUtc != null;
+    }
+
+    private static bool CanConfirmDispatchAccepted(
         WorkflowRunDetachedCleanupOutboxEntry entry,
         WorkflowActorSnapshot? snapshot)
     {
-        var options = Services.GetRequiredService<WorkflowExecutionProjectionOptions>();
-        var graceMs = Math.Max(0, options.DetachedCleanupPreDispatchGraceMs);
-        var enqueuedAtUtc = NormalizeUtc(entry.EnqueuedAtUtc?.ToDateTime() ?? DateTime.UnixEpoch);
-        if (DateTime.UtcNow - enqueuedAtUtc < TimeSpan.FromMilliseconds(graceMs))
+        if (snapshot == null)
             return false;
 
-        if (snapshot == null)
+        if (!string.IsNullOrWhiteSpace(snapshot.LastCommandId))
+        {
+            return string.Equals(
+                snapshot.LastCommandId,
+                entry.CommandId,
+                StringComparison.Ordinal);
+        }
+
+        if (snapshot.CompletionStatus != WorkflowRunCompletionStatus.Unknown)
             return true;
 
-        return snapshot.CompletionStatus == WorkflowRunCompletionStatus.Unknown &&
-               snapshot.StateVersion == 0 &&
-               string.IsNullOrWhiteSpace(snapshot.LastEventId);
+        return snapshot.StateVersion > 0 ||
+               !string.IsNullOrWhiteSpace(snapshot.LastEventId);
     }
 
     private static bool IsVisible(
@@ -399,9 +452,4 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         return utcNow >= nextVisible;
     }
-
-    private static DateTime NormalizeUtc(DateTime value) =>
-        value.Kind == DateTimeKind.Utc
-            ? value
-            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }

@@ -10,10 +10,18 @@ public sealed record WorkflowRunDetachedCleanupDiscardRequest(
     string ActorId,
     string CommandId);
 
+public sealed record WorkflowRunDetachedCleanupDispatchAcceptedRequest(
+    string ActorId,
+    string CommandId);
+
 public interface IWorkflowRunDetachedCleanupScheduler
 {
     Task ScheduleAsync(
         WorkflowRunDetachedCleanupRequest request,
+        CancellationToken ct = default);
+
+    Task MarkDispatchAcceptedAsync(
+        WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
         CancellationToken ct = default);
 
     Task DiscardAsync(

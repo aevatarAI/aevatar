@@ -8,6 +8,10 @@ internal interface IWorkflowRunDetachedCleanupOutbox
         WorkflowRunDetachedCleanupRequest request,
         CancellationToken ct = default);
 
+    Task MarkDispatchAcceptedAsync(
+        WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+        CancellationToken ct = default);
+
     Task DiscardAsync(
         WorkflowRunDetachedCleanupDiscardRequest request,
         CancellationToken ct = default);

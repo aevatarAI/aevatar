@@ -159,6 +159,25 @@ public sealed class ActorWorkflowRunDetachedCleanupOutboxCoverageTests
     }
 
     [Fact]
+    public async Task MarkDispatchAcceptedAsync_ShouldDispatchAcceptedEventAndTriggerReplay()
+    {
+        var actor = new RecordingActor("workflow.run.detached.cleanup.outbox:workflow");
+        var runtime = new RecordingActorRuntime();
+        runtime.EnqueueGetResult(actor);
+        var outbox = new ActorWorkflowRunDetachedCleanupOutbox(
+            runtime,
+            runtime,
+            new RecordingAgentTypeVerifier { Result = true });
+
+        await outbox.MarkDispatchAcceptedAsync(
+            new WorkflowRunDetachedCleanupDispatchAcceptedRequest("actor-1", "cmd-1"));
+
+        actor.HandledEnvelopes.Should().HaveCount(2);
+        actor.HandledEnvelopes[0].Payload.Is(WorkflowRunDetachedCleanupDispatchAcceptedEvent.Descriptor).Should().BeTrue();
+        actor.HandledEnvelopes[1].Payload.Is(WorkflowRunDetachedCleanupTriggerReplayEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task EnqueueAsync_WhenRequestIsNull_ShouldThrowArgumentNullException()
     {
         var runtime = new RecordingActorRuntime();
@@ -454,6 +473,15 @@ public sealed class WorkflowRunDetachedCleanupReplayHostedServiceCoverageTests
         public int LastBatchSize { get; private set; }
 
         public Task EnqueueAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
         {
             _ = request;
             ct.ThrowIfCancellationRequested();

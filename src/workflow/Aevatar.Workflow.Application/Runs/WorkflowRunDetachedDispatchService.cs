@@ -46,10 +46,21 @@ internal sealed class WorkflowRunDetachedDispatchService
         }
         catch
         {
-            await TryDiscardDetachedCleanupAsync(execution.Target, execution.Receipt);
+            if (execution.Target.DispatchFailureCleanupCompleted)
+            {
+                await TryDiscardDetachedCleanupAsync(execution.Target, execution.Receipt);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Detached workflow cleanup rollback did not complete after dispatch failure; keeping durable cleanup scheduled. actorId={ActorId}, commandId={CommandId}",
+                    execution.Receipt.ActorId,
+                    execution.Receipt.CommandId);
+            }
             throw;
         }
 
+        await TryMarkDetachedCleanupAcceptedAsync(execution.Receipt, ct);
         await DetachLiveObservationAsync(execution.Target, execution.Receipt, ct);
         await ReleaseDetachedSessionOwnershipAsync(execution.Target, execution.Receipt);
         return CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(execution.Receipt);
@@ -136,6 +147,28 @@ internal sealed class WorkflowRunDetachedDispatchService
             _logger.LogWarning(
                 ex,
                 "Detached workflow cleanup discard failed after dispatch failure. actorId={ActorId}, commandId={CommandId}",
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+    }
+
+    private async Task TryMarkDetachedCleanupAcceptedAsync(
+        WorkflowChatRunAcceptedReceipt receipt,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _cleanupScheduler.MarkDispatchAcceptedAsync(
+                new WorkflowRunDetachedCleanupDispatchAcceptedRequest(
+                    receipt.ActorId,
+                    receipt.CommandId),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Detached workflow cleanup dispatch acceptance marker failed. actorId={ActorId}, commandId={CommandId}",
                 receipt.ActorId,
                 receipt.CommandId);
         }

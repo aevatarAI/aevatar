@@ -347,6 +347,7 @@ public sealed class WorkflowRunFallbackCoverageTests
     private sealed class RecordingDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
     {
         public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
         public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
 
         public Task ScheduleAsync(
@@ -356,6 +357,16 @@ public sealed class WorkflowRunFallbackCoverageTests
             ArgumentNullException.ThrowIfNull(request);
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DispatchAcceptedRequests.Add(request);
             return Task.CompletedTask;
         }
 

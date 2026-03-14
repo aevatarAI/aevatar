@@ -207,7 +207,7 @@ public sealed class WorkflowExecutionRuntimeLease
         {
             await lifecycle.StopAsync(Context, CancellationToken.None).ConfigureAwait(false);
             await FinalizeProjectionReleaseAsync().ConfigureAwait(false);
-            await TryPublishReleaseCompletedAsync().ConfigureAwait(false);
+            await PublishReleaseCompletedAsync().ConfigureAwait(false);
             if (_projectionReleaseListenerCts != null &&
                 Interlocked.Exchange(ref _projectionReleaseListenerStopped, 1) == 0)
             {
@@ -266,35 +266,23 @@ public sealed class WorkflowExecutionRuntimeLease
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
-    private async Task TryPublishReleaseCompletedAsync()
+    private Task PublishReleaseCompletedAsync()
     {
         if (_projectionControlHub == null)
-            return;
+            return Task.CompletedTask;
 
-        try
-        {
-            await _projectionControlHub.PublishAsync(
-                    ActorId,
-                    CommandId,
-                    new WorkflowProjectionControlEvent
-                    {
-                        ReleaseCompleted = new WorkflowProjectionReleaseCompletedEvent
-                        {
-                            ActorId = ActorId,
-                            CommandId = CommandId,
-                        },
-                    },
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Workflow projection release completion publish failed. actorId={ActorId}, commandId={CommandId}",
-                ActorId,
-                CommandId);
-        }
+        return _projectionControlHub.PublishAsync(
+            ActorId,
+            CommandId,
+            new WorkflowProjectionControlEvent
+            {
+                ReleaseCompleted = new WorkflowProjectionReleaseCompletedEvent
+                {
+                    ActorId = ActorId,
+                    CommandId = CommandId,
+                },
+            },
+            CancellationToken.None);
     }
 
     private static TimeSpan ResolveHeartbeatInterval(ProjectionOwnershipCoordinatorOptions? ownershipOptions)

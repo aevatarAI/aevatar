@@ -240,6 +240,7 @@ public sealed class WorkflowApplicationLayerTests
         projectionPort.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
         scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
         scheduler.Requests.Single().ActorId.Should().Be("actor-1");
         scheduler.Requests.Single().WorkflowName.Should().Be("direct");
         scheduler.Requests.Single().CommandId.Should().Be("cmd-1");
@@ -269,6 +270,7 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeTrue();
         projectionPort.DetachCalls.Should().ContainSingle();
         scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
         target.ProjectionLease.Should().BeNull();
     }
 
@@ -320,6 +322,7 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.DetachedCleanupUnavailable);
         scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
         scheduler.DiscardRequests.Should().BeEmpty();
         pipeline.DispatchPreparedCalls.Should().Be(0);
         projectionPort.DetachCalls.Should().ContainSingle();
@@ -350,9 +353,40 @@ public sealed class WorkflowApplicationLayerTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
         scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
         scheduler.DiscardRequests.Should().ContainSingle();
         scheduler.DiscardRequests.Single().ActorId.Should().Be("actor-1");
         scheduler.DiscardRequests.Single().CommandId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldKeepScheduledCleanup_WhenPreparedDispatchRollbackFails()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("cleanup failed"),
+        };
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var scheduler = new FakeDetachedCleanupScheduler();
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline
+            {
+                Result = Success(target, receipt),
+                DispatchPreparedException = new InvalidOperationException("dispatch failed"),
+            },
+            scheduler);
+
+        var act = () => service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*actor-1*");
+        scheduler.Requests.Should().ContainSingle();
+        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
+        scheduler.DiscardRequests.Should().BeEmpty();
+        target.DispatchFailureCleanupCompleted.Should().BeFalse();
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
@@ -572,8 +606,10 @@ public sealed class WorkflowApplicationLayerTests
     private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
     {
         public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
         public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
         public Exception? ScheduleException { get; set; }
+        public Exception? DispatchAcceptedException { get; set; }
         public Exception? DiscardException { get; set; }
 
         public Task ScheduleAsync(
@@ -585,6 +621,19 @@ public sealed class WorkflowApplicationLayerTests
             Requests.Add(request);
             if (ScheduleException != null)
                 return Task.FromException(ScheduleException);
+
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DispatchAcceptedRequests.Add(request);
+            if (DispatchAcceptedException != null)
+                return Task.FromException(DispatchAcceptedException);
 
             return Task.CompletedTask;
         }
@@ -607,6 +656,7 @@ public sealed class WorkflowApplicationLayerTests
         : IWorkflowRunDetachedCleanupScheduler
     {
         public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
+        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
         public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
 
         public Task ScheduleAsync(
@@ -617,6 +667,16 @@ public sealed class WorkflowApplicationLayerTests
             ct.ThrowIfCancellationRequested();
             assertBeforeSchedule();
             Requests.Add(request);
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            DispatchAcceptedRequests.Add(request);
             return Task.CompletedTask;
         }
 

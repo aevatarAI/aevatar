@@ -44,6 +44,7 @@ internal sealed class WorkflowRunCommandTarget
     public string ActorId => Actor.Id;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
     public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
+    public bool DispatchFailureCleanupCompleted { get; private set; }
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
@@ -56,8 +57,12 @@ internal sealed class WorkflowRunCommandTarget
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
 
-    public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
-        ReleaseAsync(destroyCreatedActors: true, ct: ct);
+    public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
+    {
+        DispatchFailureCleanupCompleted = false;
+        await ReleaseAsync(destroyCreatedActors: true, ct: ct);
+        DispatchFailureCleanupCompleted = true;
+    }
 
     public Task RollbackCreatedActorsAsync(CancellationToken ct = default) =>
         DestroyCreatedActorsAsync(ct);

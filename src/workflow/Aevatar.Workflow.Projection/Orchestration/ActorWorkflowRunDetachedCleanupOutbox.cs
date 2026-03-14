@@ -69,6 +69,35 @@ internal sealed class ActorWorkflowRunDetachedCleanupOutbox
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
+    public async Task MarkDispatchAcceptedAsync(
+        WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var actor = await ResolveOutboxActorAsync(ct);
+        var envelope = CreateEnvelope(
+            new WorkflowRunDetachedCleanupDispatchAcceptedEvent
+            {
+                RecordId = WorkflowRunDetachedCleanupOutboxGAgent.BuildRecordId(request.ActorId, request.CommandId),
+                DispatchAcceptedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            },
+            request.CommandId);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+
+        try
+        {
+            await TriggerReplayAsync(batchSize: 1, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Detached workflow cleanup replay trigger failed after dispatch acceptance. actorId={ActorId}, commandId={CommandId}",
+                request.ActorId,
+                request.CommandId);
+        }
+    }
+
     public async Task DiscardAsync(
         WorkflowRunDetachedCleanupDiscardRequest request,
         CancellationToken ct = default)

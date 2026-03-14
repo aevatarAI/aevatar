@@ -783,6 +783,15 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             return Task.CompletedTask;
         }
 
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
         public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(request);
