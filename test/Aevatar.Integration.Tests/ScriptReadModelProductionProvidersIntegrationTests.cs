@@ -11,6 +11,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
+[Trait("Category", "ProviderIntegration")]
+[Trait("Feature", "ScriptingReadModelProviders")]
 public sealed class ScriptReadModelProductionProvidersIntegrationTests
 {
     [ElasticsearchIntegrationFact]

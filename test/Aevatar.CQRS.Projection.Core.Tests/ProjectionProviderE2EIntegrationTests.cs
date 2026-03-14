@@ -4,6 +4,8 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
+[Trait("Category", "ProviderIntegration")]
+[Trait("Feature", "ProjectionProviders")]
 public sealed class ProjectionProviderE2EIntegrationTests
 {
     [ElasticsearchIntegrationFact]
