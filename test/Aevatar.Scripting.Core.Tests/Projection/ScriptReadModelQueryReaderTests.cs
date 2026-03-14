@@ -600,29 +600,9 @@ public sealed class ScriptReadModelQueryReaderTests
         }
     }
 
-    private sealed class InMemoryReadModelStore : IProjectionDocumentStore<ScriptReadModelDocument, string>
+    private sealed class InMemoryReadModelStore : IProjectionDocumentReader<ScriptReadModelDocument, string>
     {
         private readonly Dictionary<string, ScriptReadModelDocument> _items = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _items[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
 
         public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
         {
@@ -635,6 +615,13 @@ public sealed class ScriptReadModelQueryReaderTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).ToArray());
+        }
+
+        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _items[readModel.Id] = readModel;
+            return Task.CompletedTask;
         }
     }
 

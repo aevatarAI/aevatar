@@ -24,6 +24,14 @@ message WorkflowActorSnapshot {
   int32 role_reply_count = 14;
 }
 
+message WorkflowActorProjectionState {
+  string actor_id = 1;
+  string last_command_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp last_updated_at_utc = 5;
+}
+
 message WorkflowActorTimelineItem {
   google.protobuf.Timestamp timestamp_utc = 1;
   string stage = 2;

@@ -10,12 +10,12 @@ public sealed class StateMirrorReadModelProjector<TState, TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly IStateMirrorProjection<TState, TReadModel> _projection;
-    private readonly IProjectionWriteDispatcher<TReadModel, TKey> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<TReadModel> _writeDispatcher;
     private readonly IProjectionDocumentReader<TReadModel, TKey> _documentReader;
 
     public StateMirrorReadModelProjector(
         IStateMirrorProjection<TState, TReadModel> projection,
-        IProjectionWriteDispatcher<TReadModel, TKey> writeDispatcher,
+        IProjectionWriteDispatcher<TReadModel> writeDispatcher,
         IProjectionDocumentReader<TReadModel, TKey> documentReader)
     {
         _projection = projection;

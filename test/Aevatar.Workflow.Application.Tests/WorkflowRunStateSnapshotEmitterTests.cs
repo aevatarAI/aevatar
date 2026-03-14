@@ -57,10 +57,6 @@ public sealed class WorkflowRunFinalizeEmitterTests
         {
             ActorId = "actor-1",
             WorkflowName = "direct",
-            LastCommandId = "cmd-1",
-            StateVersion = 42,
-            LastEventId = "evt-1",
-            LastUpdatedAt = new DateTimeOffset(2026, 3, 11, 9, 30, 0, TimeSpan.Zero),
             LastSuccess = true,
             LastOutput = "ok",
             LastError = string.Empty,
@@ -69,8 +65,20 @@ public sealed class WorkflowRunFinalizeEmitterTests
             CompletedSteps = 6,
             RoleReplyCount = 5,
         };
+        var projectionState = new WorkflowActorProjectionState
+        {
+            ActorId = "actor-1",
+            LastCommandId = "cmd-1",
+            StateVersion = 42,
+            LastEventId = "evt-1",
+            LastUpdatedAt = new DateTimeOffset(2026, 3, 11, 9, 30, 0, TimeSpan.Zero),
+        };
         var emitter = new WorkflowRunFinalizeEmitter(
-            new FakeProjectionQueryPort { Snapshot = snapshot });
+            new FakeProjectionQueryPort
+            {
+                Snapshot = snapshot,
+                ProjectionState = projectionState,
+            });
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         WorkflowProjectionStateSnapshotPayload? payload = null;
 
@@ -93,11 +101,12 @@ public sealed class WorkflowRunFinalizeEmitterTests
         payload.SnapshotAvailable.Should().BeTrue();
         payload.Snapshot.Should().NotBeNull();
         payload.Snapshot.ActorId.Should().Be("actor-1");
-        payload.Snapshot.LastCommandId.Should().Be("cmd-1");
-        payload.Snapshot.StateVersion.Should().Be(42);
         payload.Snapshot.LastSuccess.Should().BeTrue();
         payload.Snapshot.TotalSteps.Should().Be(8);
         payload.Snapshot.RoleReplyCount.Should().Be(5);
+        payload.ProjectionState.Should().NotBeNull();
+        payload.ProjectionState.LastCommandId.Should().Be("cmd-1");
+        payload.ProjectionState.StateVersion.Should().Be(42);
     }
 
     [Fact]
@@ -145,6 +154,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
     {
         public bool EnableActorQueryEndpoints => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
+        public WorkflowActorProjectionState? ProjectionState { get; set; }
         public Exception? SnapshotException { get; set; }
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
@@ -158,6 +168,15 @@ public sealed class WorkflowRunFinalizeEmitterTests
 
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            if (SnapshotException != null)
+                throw SnapshotException;
+            return Task.FromResult(ProjectionState);
+        }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();

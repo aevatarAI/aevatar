@@ -5,12 +5,12 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionReadModelUpdater
 {
-    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionReadModelUpdater(
-        IProjectionWriteDispatcher<WorkflowExecutionReport, string> writeDispatcher,
+        IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher,
         IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         IProjectionClock clock)
     {

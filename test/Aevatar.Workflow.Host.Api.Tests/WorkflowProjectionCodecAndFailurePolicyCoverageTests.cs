@@ -89,8 +89,12 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
                     {
                         ActorId = "actor-1",
                         WorkflowName = "direct",
-                        LastCommandId = "cmd-1",
                         TotalSteps = 2,
+                    },
+                    ProjectionState = new WorkflowActorProjectionStatePayload
+                    {
+                        ActorId = "actor-1",
+                        LastCommandId = "cmd-1",
                     },
                 }),
             },

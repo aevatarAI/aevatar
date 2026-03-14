@@ -27,6 +27,7 @@ public sealed class WorkflowRunFinalizeEmitter
         ArgumentNullException.ThrowIfNull(emitAsync);
 
         var snapshot = await TryGetSnapshotAsync(receipt.ActorId, ct);
+        var projectionState = await TryGetProjectionStateAsync(receipt.ActorId, ct);
         var snapshotPayload = new WorkflowProjectionStateSnapshotPayload
         {
             ActorId = receipt.ActorId,
@@ -36,6 +37,7 @@ public sealed class WorkflowRunFinalizeEmitter
             ProjectionCompletionStatus = MapStatus(completion),
             SnapshotAvailable = snapshot != null,
             Snapshot = snapshot == null ? null : MapSnapshot(snapshot),
+            ProjectionState = projectionState == null ? null : MapProjectionState(projectionState),
         };
 
         await emitAsync(
@@ -55,6 +57,22 @@ public sealed class WorkflowRunFinalizeEmitter
         try
         {
             return await _projectionQueryPort.GetActorSnapshotAsync(actorId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<WorkflowActorProjectionState?> TryGetProjectionStateAsync(string actorId, CancellationToken ct)
+    {
+        try
+        {
+            return await _projectionQueryPort.GetActorProjectionStateAsync(actorId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -94,5 +112,15 @@ public sealed class WorkflowRunFinalizeEmitter
             RequestedSteps = snapshot.RequestedSteps,
             CompletedSteps = snapshot.CompletedSteps,
             RoleReplyCount = snapshot.RoleReplyCount,
+        };
+
+    private static WorkflowActorProjectionStatePayload MapProjectionState(WorkflowActorProjectionState state) =>
+        new()
+        {
+            ActorId = state.ActorId,
+            LastCommandId = state.LastCommandId,
+            StateVersion = state.StateVersion,
+            LastEventId = state.LastEventId,
+            LastUpdatedAtUtc = Timestamp.FromDateTimeOffset(state.LastUpdatedAt.ToUniversalTime()),
         };
 }

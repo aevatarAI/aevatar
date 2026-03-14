@@ -312,11 +312,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
         });
         var relationStore = new InMemoryProjectionGraphStore();
-        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
-            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(
+            new IProjectionWriteSink<WorkflowExecutionReport>[]
             {
-                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
+                new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
             });
         var updater = new WorkflowProjectionReadModelUpdater(
             dispatcher,
@@ -367,11 +367,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             CompletionStatus = WorkflowExecutionCompletionStatus.Unknown,
         });
         var relationStore = new InMemoryProjectionGraphStore();
-        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(
-            new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        var dispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(
+            new IProjectionWriteSink<WorkflowExecutionReport>[]
             {
-                new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
+                new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
             });
         var updater = new WorkflowProjectionReadModelUpdater(
             dispatcher,
@@ -432,11 +432,13 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             new InMemoryProjectionGraphStore());
 
         var snapshot = await reader.GetActorSnapshotAsync("actor-3");
+        var projectionState = await reader.GetActorProjectionStateAsync("actor-3");
         var timeline = await reader.ListActorTimelineAsync("actor-3", take: 2);
 
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("actor-3");
-        snapshot.LastCommandId.Should().Be("cmd-3");
+        projectionState.Should().NotBeNull();
+        projectionState!.LastCommandId.Should().Be("cmd-3");
         snapshot.LastOutput.Should().Be("done");
         snapshot.TotalSteps.Should().Be(3);
         timeline.Should().HaveCount(2);
@@ -673,14 +675,16 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             },
         };
         var snapshot = mapper.ToActorSnapshot(report);
+        var projectionState = mapper.ToActorProjectionState(report);
         snapshot.ActorId.Should().Be("actor-map");
         snapshot.WorkflowName.Should().Be("wf-map");
-        snapshot.LastCommandId.Should().Be("cmd-map");
-        snapshot.LastEventId.Should().Be("evt-map");
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("ok");
         snapshot.TotalSteps.Should().Be(3);
         snapshot.RoleReplyCount.Should().Be(2);
+        projectionState.ActorId.Should().Be("actor-map");
+        projectionState.LastCommandId.Should().Be("cmd-map");
+        projectionState.LastEventId.Should().Be("evt-map");
 
         var timelineSource = new WorkflowExecutionTimelineEvent
         {

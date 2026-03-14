@@ -1,6 +1,8 @@
 namespace Aevatar.Demos.CaseProjection.Stores;
 
-public sealed class InMemoryCaseReadModelStore : IProjectionDocumentStore<CaseProjectionReadModel, string>
+public sealed class InMemoryCaseReadModelStore
+    : IProjectionDocumentReader<CaseProjectionReadModel, string>,
+      IProjectionDocumentWriter<CaseProjectionReadModel>
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, CaseProjectionReadModel> _reports = new(StringComparer.Ordinal);

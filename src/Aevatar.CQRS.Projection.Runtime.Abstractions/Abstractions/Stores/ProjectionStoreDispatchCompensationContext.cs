@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Runtime.Abstractions;
 
-public sealed class ProjectionStoreDispatchCompensationContext<TReadModel, TKey>
+public sealed class ProjectionStoreDispatchCompensationContext<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     public string DispatchId { get; init; } = Guid.NewGuid().ToString("N");
@@ -14,8 +14,6 @@ public sealed class ProjectionStoreDispatchCompensationContext<TReadModel, TKey>
     public required TReadModel ReadModel { get; init; }
 
     public required Exception Exception { get; init; }
-
-    public TKey? Key { get; init; }
 
     public string ReadModelType { get; init; } =
         typeof(TReadModel).FullName ?? typeof(TReadModel).Name;

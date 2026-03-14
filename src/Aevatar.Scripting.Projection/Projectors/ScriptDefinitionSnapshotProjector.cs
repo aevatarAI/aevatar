@@ -11,11 +11,11 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptDefinitionSnapshotProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptDefinitionSnapshotProjector(
-        IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument, string> writeDispatcher,
+        IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));

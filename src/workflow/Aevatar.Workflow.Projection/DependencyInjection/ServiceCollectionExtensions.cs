@@ -41,7 +41,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
-        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport, string>, WorkflowProjectionDurableOutboxCompensator>();
+        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport>, WorkflowProjectionDurableOutboxCompensator>();
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunDetachedCleanupScheduler, ActorWorkflowRunDetachedCleanupOutbox>());
         services.TryAddSingleton<IWorkflowRunDetachedCleanupOutbox>(sp =>
             (ActorWorkflowRunDetachedCleanupOutbox)sp.GetRequiredService<IWorkflowRunDetachedCleanupScheduler>());

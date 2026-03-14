@@ -38,7 +38,7 @@ public sealed class ScriptNativeReadModelMaterializationIntegrationTests
             },
             CancellationToken.None);
 
-        var nativeDocumentStore = provider.GetRequiredService<IProjectionDocumentStore<ScriptNativeDocumentReadModel, string>>();
+        var nativeDocumentStore = provider.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>();
         var nativeDocument = await nativeDocumentStore.GetAsync(runtimeActorId, CancellationToken.None);
         nativeDocument.Should().NotBeNull();
         nativeDocument!.SchemaId.Should().Be("claim_case");

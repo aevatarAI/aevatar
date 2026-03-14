@@ -10,8 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
-    : IProjectionDocumentStore<TReadModel, TKey>,
-      IProjectionDocumentReader<TReadModel, TKey>,
+    : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
       IDisposable
     where TReadModel : class, IProjectionReadModel

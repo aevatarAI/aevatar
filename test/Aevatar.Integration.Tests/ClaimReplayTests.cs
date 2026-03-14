@@ -277,8 +277,8 @@ public class ClaimReplayTests
         """;
 
     private sealed class InMemoryReadModelDispatcher
-        : IProjectionDocumentStore<ScriptReadModelDocument, string>,
-          IProjectionWriteDispatcher<ScriptReadModelDocument, string>
+        : IProjectionDocumentReader<ScriptReadModelDocument, string>,
+          IProjectionWriteDispatcher<ScriptReadModelDocument>
     {
         private readonly Dictionary<string, ScriptReadModelDocument> _store = new(StringComparer.Ordinal);
 

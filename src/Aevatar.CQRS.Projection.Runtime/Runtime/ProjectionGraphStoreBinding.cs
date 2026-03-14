@@ -1,8 +1,7 @@
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
-public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
-    : IProjectionStoreBinding<TReadModel, TKey>,
-      IProjectionStoreBindingAvailability
+public sealed class ProjectionGraphStoreBinding<TReadModel>
+    : IProjectionWriteSink<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private const int CleanupPageSize = 1000;
@@ -19,11 +18,11 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
         _materializer = materializer;
     }
 
-    public bool IsConfigured =>
+    public bool IsEnabled =>
         _graphStore is not null &&
         _materializer is not null;
 
-    public string AvailabilityReason
+    public string DisabledReason
     {
         get
         {
@@ -39,7 +38,7 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
         }
     }
 
-    public string StoreName => IsConfigured ? "Graph" : "Graph(Unconfigured)";
+    public string SinkName => IsEnabled ? "Graph" : "Graph(Unconfigured)";
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {

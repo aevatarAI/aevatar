@@ -25,6 +25,18 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
+    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionReport source)
+    {
+        return new WorkflowActorProjectionState
+        {
+            ActorId = source.RootActorId,
+            LastCommandId = source.CommandId,
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
+        };
+    }
+
     public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
     {
         var item = new WorkflowActorTimelineItem

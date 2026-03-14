@@ -120,7 +120,7 @@ public sealed class WorkflowActorBindingProjectorTests
     }
 
     private sealed class FakeStoreDispatcher
-        : IProjectionWriteDispatcher<WorkflowActorBindingDocument, string>,
+        : IProjectionWriteDispatcher<WorkflowActorBindingDocument>,
           IProjectionDocumentReader<WorkflowActorBindingDocument, string>
     {
         public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);

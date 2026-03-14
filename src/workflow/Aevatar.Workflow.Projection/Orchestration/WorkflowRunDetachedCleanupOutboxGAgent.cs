@@ -188,11 +188,12 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     {
         var madeProgress = false;
         WorkflowActorSnapshot? snapshot;
+        WorkflowActorProjectionState? projectionState;
+        var queryPort = Services.GetRequiredService<IWorkflowExecutionProjectionQueryPort>();
         try
         {
-            snapshot = await Services
-                .GetRequiredService<IWorkflowExecutionProjectionQueryPort>()
-                .GetActorSnapshotAsync(entry.ActorId, CancellationToken.None);
+            snapshot = await queryPort.GetActorSnapshotAsync(entry.ActorId, CancellationToken.None);
+            projectionState = await queryPort.GetActorProjectionStateAsync(entry.ActorId, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -202,11 +203,11 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         if (!HasDispatchAccepted(entry))
         {
-            if (!CanConfirmDispatchAccepted(entry, snapshot))
+            if (!CanConfirmDispatchAccepted(entry, projectionState))
             {
                 await ScheduleRetryAsync(
                     entry,
-                    CreateDispatchAcceptancePendingException(entry, snapshot));
+                    CreateDispatchAcceptancePendingException(entry, projectionState));
                 return ReplayEntryOutcome.Progressed;
             }
 
@@ -477,44 +478,44 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
     private static Exception CreateDispatchAcceptancePendingException(
         WorkflowRunDetachedCleanupOutboxEntry entry,
-        WorkflowActorSnapshot? snapshot)
+        WorkflowActorProjectionState? projectionState)
     {
-        if (snapshot == null)
+        if (projectionState == null)
         {
             return new InvalidOperationException(
-                $"Detached cleanup is waiting for a workflow snapshot before dispatch acceptance can be confirmed. actorId='{entry.ActorId}', commandId='{entry.CommandId}'.");
+                $"Detached cleanup is waiting for workflow projection state before dispatch acceptance can be confirmed. actorId='{entry.ActorId}', commandId='{entry.CommandId}'.");
         }
 
-        if (!HasProjectedRuntimeEvidence(snapshot))
+        if (!HasProjectedRuntimeEvidence(projectionState))
         {
             return new InvalidOperationException(
                 $"Detached cleanup is waiting for projected workflow events before dispatch acceptance can be confirmed. actorId='{entry.ActorId}', commandId='{entry.CommandId}'.");
         }
 
         return new InvalidOperationException(
-            $"Detached cleanup snapshot evidence does not match the expected command. actorId='{entry.ActorId}', commandId='{entry.CommandId}', snapshotCommandId='{snapshot.LastCommandId}'.");
+            $"Detached cleanup projection-state evidence does not match the expected command. actorId='{entry.ActorId}', commandId='{entry.CommandId}', projectedCommandId='{projectionState.LastCommandId}'.");
     }
 
     private static bool CanConfirmDispatchAccepted(
         WorkflowRunDetachedCleanupOutboxEntry entry,
-        WorkflowActorSnapshot? snapshot)
+        WorkflowActorProjectionState? projectionState)
     {
-        if (snapshot == null)
+        if (projectionState == null)
             return false;
 
-        if (!HasProjectedRuntimeEvidence(snapshot))
+        if (!HasProjectedRuntimeEvidence(projectionState))
             return false;
 
-        return string.IsNullOrWhiteSpace(snapshot.LastCommandId) ||
+        return string.IsNullOrWhiteSpace(projectionState.LastCommandId) ||
                string.Equals(
-                   snapshot.LastCommandId,
+                   projectionState.LastCommandId,
                    entry.CommandId,
                    StringComparison.Ordinal);
     }
 
-    private static bool HasProjectedRuntimeEvidence(WorkflowActorSnapshot snapshot) =>
-        snapshot.StateVersion > 0 ||
-        !string.IsNullOrWhiteSpace(snapshot.LastEventId);
+    private static bool HasProjectedRuntimeEvidence(WorkflowActorProjectionState projectionState) =>
+        projectionState.StateVersion > 0 ||
+        !string.IsNullOrWhiteSpace(projectionState.LastEventId);
 
     private static bool IsVisible(
         WorkflowRunDetachedCleanupOutboxEntry entry,

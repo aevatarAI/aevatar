@@ -38,6 +38,14 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
             .ToList();
     }
 
+    public async Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        var report = await _documentReader.GetAsync(actorId, ct);
+        return report == null ? null : _mapper.ToActorProjectionState(report);
+    }
+
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

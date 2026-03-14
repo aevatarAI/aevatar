@@ -1,12 +1,10 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
-    : IProjectionDocumentStore<TReadModel, TKey>,
-      IProjectionDocumentReader<TReadModel, TKey>,
+    : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
@@ -18,7 +16,6 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     private readonly Func<TReadModel, object?>? _listSortSelector;
     private readonly int _listTakeMax;
     private readonly ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>> _logger;
-    private readonly JsonSerializerOptions _jsonOptions = new();
 
     public InMemoryProjectionDocumentStore(
         Func<TReadModel, TKey> keySelector,
@@ -127,12 +124,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         if (source is IProjectionReadModelCloneable<TReadModel> cloneable)
             return cloneable.DeepClone();
 
-        var payload = JsonSerializer.Serialize(source, _jsonOptions);
-        var clone = JsonSerializer.Deserialize<TReadModel>(payload, _jsonOptions);
-        if (clone == null)
-            throw new InvalidOperationException(
-                $"Failed to clone read model '{typeof(TReadModel).FullName}' in InMemory provider.");
-
-        return clone;
+        throw new InvalidOperationException(
+            $"Read model '{typeof(TReadModel).FullName}' must implement '{typeof(IProjectionReadModelCloneable<TReadModel>).FullName}' for InMemory projection storage.");
     }
 }

@@ -46,9 +46,9 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
-        var documentStore = provider.GetRequiredService<IProjectionDocumentStore<WorkflowExecutionReport, string>>();
+        var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var dispatcher = provider.GetRequiredService<IProjectionStoreDispatcher<WorkflowExecutionReport, string>>();
+        var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionReport>>();
 
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
@@ -157,11 +157,7 @@ public class WorkflowExecutionProjectionRegistrationTests
             {
                 Endpoints = ["http://localhost:9200"],
             },
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowExecutionReport>();
-            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
     }

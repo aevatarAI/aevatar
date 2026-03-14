@@ -6,14 +6,17 @@ namespace Aevatar.Demos.CaseProjection.Projectors;
 public sealed class CaseReadModelProjector
     : IProjectionProjector<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>>
 {
-    private readonly IProjectionDocumentStore<CaseProjectionReadModel, string> _store;
+    private readonly IProjectionDocumentReader<CaseProjectionReadModel, string> _reader;
+    private readonly IProjectionDocumentWriter<CaseProjectionReadModel> _writer;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>>> _reducersByType;
 
     public CaseReadModelProjector(
-        IProjectionDocumentStore<CaseProjectionReadModel, string> store,
+        IProjectionDocumentReader<CaseProjectionReadModel, string> reader,
+        IProjectionDocumentWriter<CaseProjectionReadModel> writer,
         IEnumerable<IProjectionEventReducer<CaseProjectionReadModel, CaseProjectionContext>> reducers)
     {
-        _store = store;
+        _reader = reader;
+        _writer = writer;
         _reducersByType = reducers
             .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
             .ToDictionary(
@@ -37,7 +40,7 @@ public sealed class CaseReadModelProjector
             Summary = new CaseProjectionSummary(),
         };
 
-        return new ValueTask(_store.UpsertAsync(model, ct));
+        return new ValueTask(_writer.UpsertAsync(model, ct));
     }
 
     public ValueTask ProjectAsync(CaseProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -67,7 +70,7 @@ public sealed class CaseReadModelProjector
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var report = await _store.GetAsync(context.RunId, ct);
+        var report = await _reader.GetAsync(context.RunId, ct);
         if (report == null)
             throw new CaseReadModelNotFoundException(context.RunId);
 
@@ -79,7 +82,7 @@ public sealed class CaseReadModelProjector
             return;
 
         CaseProjectionMutations.RefreshDerivedFields(report);
-        await _store.UpsertAsync(report, ct);
+        await _writer.UpsertAsync(report, ct);
     }
 
     private async Task CompleteCoreAsync(
@@ -87,7 +90,7 @@ public sealed class CaseReadModelProjector
         IReadOnlyList<CaseTopologyEdge> topology,
         CancellationToken ct)
     {
-        var report = await _store.GetAsync(context.RunId, ct);
+        var report = await _reader.GetAsync(context.RunId, ct);
         if (report == null)
             throw new CaseReadModelNotFoundException(context.RunId);
 
@@ -99,7 +102,7 @@ public sealed class CaseReadModelProjector
             report.EndedAt = DateTimeOffset.UtcNow;
 
         CaseProjectionMutations.RefreshDerivedFields(report);
-        await _store.UpsertAsync(report, ct);
+        await _writer.UpsertAsync(report, ct);
     }
 
     private static DateTimeOffset ResolveEventTimestamp(EventEnvelope envelope)

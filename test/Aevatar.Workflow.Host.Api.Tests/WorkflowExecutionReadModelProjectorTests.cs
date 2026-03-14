@@ -27,16 +27,16 @@ public class WorkflowExecutionReadModelProjectorTests
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         listSortSelector: report => report.StartedAt);
-    private static IProjectionStoreDispatcher<WorkflowExecutionReport, string> CreateDispatcher(
+    private static IProjectionWriteDispatcher<WorkflowExecutionReport> CreateDispatcher(
         InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> store)
     {
         var graphStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(graphStore, GraphMaterializer),
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(graphStore, GraphMaterializer),
         };
-        return new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
+        return new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
     }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>

@@ -11,14 +11,14 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowExecutionReadModelProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
     private readonly IEventDeduplicator _deduplicator;
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
     public WorkflowExecutionReadModelProjector(
-        IProjectionWriteDispatcher<WorkflowExecutionReport, string> writeDispatcher,
+        IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher,
         IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         IEventDeduplicator deduplicator,
         IProjectionClock clock,

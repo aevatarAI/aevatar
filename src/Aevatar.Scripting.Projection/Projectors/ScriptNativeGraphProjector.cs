@@ -16,7 +16,7 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeGraphProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string> _graphWriteDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel> _graphWriteDispatcher;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
@@ -24,7 +24,7 @@ public sealed class ScriptNativeGraphProjector
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptNativeGraphProjector(
-        IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string> graphWriteDispatcher,
+        IProjectionWriteDispatcher<ScriptNativeGraphReadModel> graphWriteDispatcher,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IScriptReadModelMaterializationCompiler materializationCompiler,

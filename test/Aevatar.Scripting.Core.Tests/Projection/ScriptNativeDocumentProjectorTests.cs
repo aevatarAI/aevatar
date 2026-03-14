@@ -137,7 +137,7 @@ public sealed class ScriptNativeDocumentProjectorTests
         }
     }
 
-    private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel, string>
+    private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel>
     {
         public ScriptNativeDocumentReadModel? LastUpsert { get; private set; }
 

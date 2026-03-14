@@ -136,7 +136,7 @@ public sealed class ScriptNativeGraphProjectorTests
         }
     }
 
-    private sealed class RecordingNativeGraphDispatcher : IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string>
+    private sealed class RecordingNativeGraphDispatcher : IProjectionWriteDispatcher<ScriptNativeGraphReadModel>
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
