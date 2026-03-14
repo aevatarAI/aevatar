@@ -5,47 +5,6 @@ public sealed record WorkflowAgentSummary(
     string Type,
     string Description);
 
-public sealed class WorkflowActorSnapshot
-{
-    public string ActorId { get; set; } = string.Empty;
-    public string WorkflowName { get; set; } = string.Empty;
-    public string LastCommandId { get; set; } = string.Empty;
-    public WorkflowRunCompletionStatus CompletionStatus { get; set; } = WorkflowRunCompletionStatus.Unknown;
-    public long StateVersion { get; set; }
-    public string LastEventId { get; set; } = string.Empty;
-    public DateTimeOffset LastUpdatedAt { get; set; }
-    public bool? LastSuccess { get; set; }
-    public string LastOutput { get; set; } = string.Empty;
-    public string LastError { get; set; } = string.Empty;
-    public int TotalSteps { get; set; }
-    public int RequestedSteps { get; set; }
-    public int CompletedSteps { get; set; }
-    public int RoleReplyCount { get; set; }
-}
-
-public sealed class WorkflowActorTimelineItem
-{
-    public DateTimeOffset Timestamp { get; set; }
-    public string Stage { get; set; } = string.Empty;
-    public string Message { get; set; } = string.Empty;
-    public string AgentId { get; set; } = string.Empty;
-    public string StepId { get; set; } = string.Empty;
-    public string StepType { get; set; } = string.Empty;
-    public string EventType { get; set; } = string.Empty;
-    public Dictionary<string, string> Data { get; set; } = [];
-}
-
-public sealed class WorkflowActorGraphNode
-{
-    public string NodeId { get; set; } = string.Empty;
-
-    public string NodeType { get; set; } = string.Empty;
-
-    public DateTimeOffset UpdatedAt { get; set; }
-
-    public Dictionary<string, string> Properties { get; set; } = [];
-}
-
 public enum WorkflowActorGraphDirection
 {
     Outbound = 0,
@@ -58,37 +17,6 @@ public sealed class WorkflowActorGraphQueryOptions
     public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
 
     public IReadOnlyList<string> EdgeTypes { get; set; } = [];
-}
-
-public sealed class WorkflowActorGraphEdge
-{
-    public string EdgeId { get; set; } = string.Empty;
-
-    public string FromNodeId { get; set; } = string.Empty;
-
-    public string ToNodeId { get; set; } = string.Empty;
-
-    public string EdgeType { get; set; } = string.Empty;
-
-    public DateTimeOffset UpdatedAt { get; set; }
-
-    public Dictionary<string, string> Properties { get; set; } = [];
-}
-
-public sealed class WorkflowActorGraphSubgraph
-{
-    public string RootNodeId { get; set; } = string.Empty;
-
-    public List<WorkflowActorGraphNode> Nodes { get; set; } = [];
-
-    public List<WorkflowActorGraphEdge> Edges { get; set; } = [];
-}
-
-public sealed class WorkflowActorGraphEnrichedSnapshot
-{
-    public WorkflowActorSnapshot Snapshot { get; set; } = new();
-
-    public WorkflowActorGraphSubgraph Subgraph { get; set; } = new();
 }
 
 public sealed record WorkflowTopologyEdge(string Parent, string Child);

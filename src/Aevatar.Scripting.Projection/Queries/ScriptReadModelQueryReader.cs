@@ -62,7 +62,9 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
             snapshot.DefinitionActorId,
             snapshot.Revision,
             ct);
-        var scriptPackage = definitionSnapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(definitionSnapshot.SourceText);
+        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
+            definitionSnapshot.ScriptPackage,
+            definitionSnapshot.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             definitionSnapshot.ScriptId,
             definitionSnapshot.Revision,

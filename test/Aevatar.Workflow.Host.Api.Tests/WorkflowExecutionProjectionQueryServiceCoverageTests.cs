@@ -90,13 +90,13 @@ public sealed class WorkflowExecutionProjectionQueryServiceCoverageTests
             {
                 RootNodeId = "actor-1",
                 Nodes =
-                [
+                {
                     new WorkflowActorGraphNode
                     {
                         NodeId = "actor-1",
                         NodeType = "Actor",
                     },
-                ],
+                },
             },
             GraphEnrichedResult = new WorkflowActorGraphEnrichedSnapshot
             {

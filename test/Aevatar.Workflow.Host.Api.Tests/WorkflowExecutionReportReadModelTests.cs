@@ -89,8 +89,8 @@ public sealed class WorkflowExecutionReportReadModelTests
         var report = new WorkflowExecutionReport
         {
             RootActorId = " ",
-            CommandId = null!,
-            WorkflowName = null!,
+            CommandId = string.Empty,
+            WorkflowName = string.Empty,
             UpdatedAt = default,
             Steps =
             [

@@ -109,7 +109,7 @@ public sealed class WorkflowActorBindingProjector
             : WorkflowRunIdNormalizer.Normalize(runId);
 
     private static void ReplaceInlineWorkflowYamls(
-        Dictionary<string, string> target,
+        IDictionary<string, string> target,
         Google.Protobuf.Collections.MapField<string, string> source)
     {
         target.Clear();

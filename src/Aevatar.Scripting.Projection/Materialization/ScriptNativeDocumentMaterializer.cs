@@ -28,7 +28,7 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
             if (value == null)
                 continue;
 
-            AssignFieldValue(fields, field.Path, ScriptNativeReadModelCloneSupport.CloneObjectGraph(value));
+            AssignFieldValue(fields, field.Path, ScriptProjectionReadModelSupport.CloneObjectGraph(value));
         }
 
         return new ScriptNativeDocumentReadModel
@@ -103,7 +103,7 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
     {
         return source.ToDictionary(
             static pair => pair.Key,
-            static pair => ScriptNativeReadModelCloneSupport.CloneObjectGraph(pair.Value),
+            static pair => ScriptProjectionReadModelSupport.CloneObjectGraph(pair.Value),
             StringComparer.Ordinal);
     }
 }

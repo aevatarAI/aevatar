@@ -70,8 +70,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var subgraph = new WorkflowActorGraphSubgraph
         {
             RootNodeId = "actor-1",
-            Nodes = [new WorkflowActorGraphNode { NodeId = "actor-1" }],
-            Edges = [new WorkflowActorGraphEdge { EdgeId = "edge-2" }],
+            Nodes = { new WorkflowActorGraphNode { NodeId = "actor-1" } },
+            Edges = { new WorkflowActorGraphEdge { EdgeId = "edge-2" } },
         };
         var enriched = new WorkflowActorGraphEnrichedSnapshot
         {

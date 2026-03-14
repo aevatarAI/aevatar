@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package aevatar.scripting.queries;
+
+option csharp_namespace = "Aevatar.Scripting.Abstractions.Queries";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+message ScriptReadModelSnapshot {
+  string actor_id = 1;
+  string script_id = 2;
+  string definition_actor_id = 3;
+  string revision = 4;
+  string read_model_type_url = 5;
+  google.protobuf.Any read_model_payload = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+}

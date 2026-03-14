@@ -35,7 +35,7 @@ internal static class WorkflowExecutionProjectionMutations
         string? stepId,
         string? stepType,
         string eventType,
-        IReadOnlyDictionary<string, string>? data = null)
+        IEnumerable<KeyValuePair<string, string>>? data = null)
     {
         report.Timeline.Add(new WorkflowExecutionTimelineEvent
         {

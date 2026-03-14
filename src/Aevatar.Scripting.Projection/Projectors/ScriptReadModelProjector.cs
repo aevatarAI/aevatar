@@ -63,7 +63,9 @@ public sealed class ScriptReadModelProjector
             fact.DefinitionActorId,
             fact.Revision,
             ct);
-        var scriptPackage = snapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(snapshot.SourceText);
+        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
+            snapshot.ScriptPackage,
+            snapshot.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             snapshot.ScriptId,
             snapshot.Revision,

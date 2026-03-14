@@ -129,7 +129,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 Revision: State.Revision ?? string.Empty,
                 SourceText: State.SourceText ?? string.Empty,
                 SourceHash: State.SourceHash ?? string.Empty,
-                ScriptPackage: State.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+                ScriptPackage: ScriptPackageModel.ResolveDeclaredPackage(
+                    State.ScriptPackage,
+                    State.SourceText ?? string.Empty),
                 StateTypeUrl: State.StateTypeUrl ?? string.Empty,
                 ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
                 CurrentStateRoot: State.StateRoot?.Clone(),
@@ -158,7 +160,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
         next.ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty;
         next.ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty;
-        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(evt.SourceText ?? string.Empty);
+        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
         next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
@@ -174,7 +176,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         var next = state.Clone();
         var payload = evt.DomainEventPayload?.Clone() ?? Any.Pack(new Empty());
-        var scriptPackage = state.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(state.SourceText ?? string.Empty);
+        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
+            state.ScriptPackage,
+            state.SourceText ?? string.Empty);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
             string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,

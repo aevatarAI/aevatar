@@ -1,6 +1,10 @@
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
+using Google.Protobuf.Collections;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
@@ -28,16 +32,92 @@ public enum WorkflowExecutionCompletionStatus
     Unknown = 99,
 }
 
-/// <summary>
-/// Read model for one workflow execution.
-/// </summary>
-public sealed class WorkflowExecutionReport
-    : AevatarReadModelBase,
+public sealed partial class WorkflowExecutionReport
+    : IProjectionReadModel,
+      IProjectionReadModelCloneable<WorkflowExecutionReport>,
       IHasProjectionTimeline,
       IHasProjectionRoleReplies,
       IGraphReadModel
 {
     private const string UnknownToken = "unknown";
+
+    public DateTimeOffset CreatedAt
+    {
+        get => ToDateTimeOffset(CreatedAtUtcValue);
+        set => CreatedAtUtcValue = ToTimestamp(value);
+    }
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ToTimestamp(value);
+    }
+
+    public WorkflowExecutionProjectionScope ProjectionScope
+    {
+        get => (WorkflowExecutionProjectionScope)ProjectionScopeValue;
+        set => ProjectionScopeValue = (int)value;
+    }
+
+    public WorkflowExecutionTopologySource TopologySource
+    {
+        get => (WorkflowExecutionTopologySource)TopologySourceValue;
+        set => TopologySourceValue = (int)value;
+    }
+
+    public WorkflowExecutionCompletionStatus CompletionStatus
+    {
+        get => (WorkflowExecutionCompletionStatus)CompletionStatusValue;
+        set => CompletionStatusValue = (int)value;
+    }
+
+    public DateTimeOffset StartedAt
+    {
+        get => ToDateTimeOffset(StartedAtUtcValue);
+        set => StartedAtUtcValue = ToTimestamp(value);
+    }
+
+    public DateTimeOffset EndedAt
+    {
+        get => ToDateTimeOffset(EndedAtUtcValue);
+        set => EndedAtUtcValue = ToTimestamp(value);
+    }
+
+    public bool? Success
+    {
+        get => SuccessWrapper;
+        set => SuccessWrapper = value;
+    }
+
+    public IList<WorkflowExecutionTopologyEdge> Topology
+    {
+        get => TopologyEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TopologyEntries, value);
+    }
+
+    public IList<WorkflowExecutionStepTrace> Steps
+    {
+        get => StepEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(StepEntries, value);
+    }
+
+    public IList<WorkflowExecutionRoleReply> RoleReplies
+    {
+        get => RoleReplyEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(RoleReplyEntries, value);
+    }
+
+    public IList<WorkflowExecutionTimelineEvent> Timeline
+    {
+        get => TimelineEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
+    }
+
+    public WorkflowExecutionSummary Summary
+    {
+        get => SummaryValue ??= new WorkflowExecutionSummary();
+        set => SummaryValue = value ?? new WorkflowExecutionSummary();
+    }
 
     public string GraphScope => WorkflowExecutionGraphConstants.Scope;
 
@@ -45,25 +125,7 @@ public sealed class WorkflowExecutionReport
 
     public IReadOnlyList<ProjectionGraphEdge> GraphEdges => BuildGraphEdges();
 
-    public string RootActorId { get; set; } = "";
-    public string CommandId { get; set; } = "";
-    public string ReportVersion { get; set; } = "1.0";
-    public WorkflowExecutionProjectionScope ProjectionScope { get; set; } = WorkflowExecutionProjectionScope.RunIsolated;
-    public WorkflowExecutionTopologySource TopologySource { get; set; } = WorkflowExecutionTopologySource.RuntimeSnapshot;
-    public WorkflowExecutionCompletionStatus CompletionStatus { get; set; } = WorkflowExecutionCompletionStatus.Unknown;
-    public string WorkflowName { get; set; } = "";
-    public DateTimeOffset StartedAt { get; set; }
-    public DateTimeOffset EndedAt { get; set; }
-    public double DurationMs { get; set; }
-    public bool? Success { get; set; }
-    public string Input { get; set; } = "";
-    public string FinalOutput { get; set; } = "";
-    public string FinalError { get; set; } = "";
-    public List<WorkflowExecutionTopologyEdge> Topology { get; set; } = [];
-    public List<WorkflowExecutionStepTrace> Steps { get; set; } = [];
-    public List<WorkflowExecutionRoleReply> RoleReplies { get; set; } = [];
-    public List<WorkflowExecutionTimelineEvent> Timeline { get; set; } = [];
-    public WorkflowExecutionSummary Summary { get; set; } = new();
+    public WorkflowExecutionReport DeepClone() => Clone();
 
     public void AddTimeline(ProjectionTimelineEvent timelineEvent)
     {
@@ -110,7 +172,7 @@ public sealed class WorkflowExecutionReport
             NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["workflowName"] = WorkflowName ?? "",
+                ["workflowName"] = WorkflowName ?? string.Empty,
             },
             UpdatedAt = updatedAt,
         };
@@ -123,9 +185,9 @@ public sealed class WorkflowExecutionReport
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rootActorId"] = rootActorId,
-                ["workflowName"] = WorkflowName ?? "",
+                ["workflowName"] = WorkflowName ?? string.Empty,
                 ["commandId"] = NormalizeToken(CommandId),
-                ["input"] = Input ?? "",
+                ["input"] = Input ?? string.Empty,
             },
             UpdatedAt = updatedAt,
         };
@@ -143,10 +205,10 @@ public sealed class WorkflowExecutionReport
                     ["rootActorId"] = rootActorId,
                     ["commandId"] = NormalizeToken(CommandId),
                     ["stepId"] = NormalizeToken(step.StepId),
-                    ["stepType"] = step.StepType ?? "",
-                    ["targetRole"] = step.TargetRole ?? "",
-                    ["workerId"] = step.WorkerId ?? "",
-                    ["success"] = step.Success?.ToString() ?? "",
+                    ["stepType"] = step.StepType ?? string.Empty,
+                    ["targetRole"] = step.TargetRole ?? string.Empty,
+                    ["workerId"] = step.WorkerId ?? string.Empty,
+                    ["success"] = step.Success?.ToString() ?? string.Empty,
                 },
                 UpdatedAt = updatedAt,
             };
@@ -165,7 +227,7 @@ public sealed class WorkflowExecutionReport
                     NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
                     Properties = new Dictionary<string, string>(StringComparer.Ordinal)
                     {
-                        ["workflowName"] = WorkflowName ?? "",
+                        ["workflowName"] = WorkflowName ?? string.Empty,
                     },
                     UpdatedAt = updatedAt,
                 };
@@ -180,7 +242,7 @@ public sealed class WorkflowExecutionReport
                     NodeType = WorkflowExecutionGraphConstants.ActorNodeType,
                     Properties = new Dictionary<string, string>(StringComparer.Ordinal)
                     {
-                        ["workflowName"] = WorkflowName ?? "",
+                        ["workflowName"] = WorkflowName ?? string.Empty,
                     },
                     UpdatedAt = updatedAt,
                 };
@@ -215,7 +277,7 @@ public sealed class WorkflowExecutionReport
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["stepId"] = NormalizeToken(step.StepId),
-                    ["stepType"] = step.StepType ?? "",
+                    ["stepType"] = step.StepType ?? string.Empty,
                 },
                 updatedAt);
             edges[containsEdge.EdgeId] = containsEdge;
@@ -287,65 +349,120 @@ public sealed class WorkflowExecutionReport
 
     private static string NormalizeToken(string? token)
     {
-        var normalized = token?.Trim() ?? "";
+        var normalized = token?.Trim() ?? string.Empty;
         return normalized.Length == 0 ? UnknownToken : normalized;
+    }
+
+    private static Timestamp ToTimestamp(DateTimeOffset value) =>
+        Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+
+    private static DateTimeOffset ToDateTimeOffset(Timestamp? value) =>
+        value == null ? default : value.ToDateTimeOffset();
+
+}
+
+public sealed partial class WorkflowExecutionSummary
+{
+    public IDictionary<string, int> StepTypeCounts
+    {
+        get => StepTypeCountsMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(StepTypeCountsMap, value);
     }
 }
 
-public sealed class WorkflowExecutionSummary
+public sealed partial class WorkflowExecutionStepTrace
 {
-    public int TotalSteps { get; set; }
-    public int RequestedSteps { get; set; }
-    public int CompletedSteps { get; set; }
-    public int RoleReplyCount { get; set; }
-    public Dictionary<string, int> StepTypeCounts { get; set; } = [];
-}
+    public DateTimeOffset? RequestedAt
+    {
+        get => RequestedAtUtcValue == null ? null : RequestedAtUtcValue.ToDateTimeOffset();
+        set => RequestedAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
 
-public sealed class WorkflowExecutionStepTrace
-{
-    public string StepId { get; set; } = "";
-    public string StepType { get; set; } = "";
-    public string TargetRole { get; set; } = "";
-    public DateTimeOffset? RequestedAt { get; set; }
-    public DateTimeOffset? CompletedAt { get; set; }
-    public bool? Success { get; set; }
-    public string WorkerId { get; set; } = "";
-    public string OutputPreview { get; set; } = "";
-    public string Error { get; set; } = "";
-    public Dictionary<string, string> RequestParameters { get; set; } = [];
-    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
-    public string NextStepId { get; set; } = "";
-    public string BranchKey { get; set; } = "";
-    public string AssignedVariable { get; set; } = "";
-    public string AssignedValue { get; set; } = "";
-    public string SuspensionType { get; set; } = "";
-    public string SuspensionPrompt { get; set; } = "";
-    public int? SuspensionTimeoutSeconds { get; set; }
-    public string RequestedVariableName { get; set; } = "";
+    public DateTimeOffset? CompletedAt
+    {
+        get => CompletedAtUtcValue == null ? null : CompletedAtUtcValue.ToDateTimeOffset();
+        set => CompletedAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
+
+    public bool? Success
+    {
+        get => SuccessWrapper;
+        set => SuccessWrapper = value;
+    }
+
+    public IDictionary<string, string> RequestParameters
+    {
+        get => RequestParametersMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(RequestParametersMap, value);
+    }
+
+    public IDictionary<string, string> CompletionAnnotations
+    {
+        get => CompletionAnnotationsMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(CompletionAnnotationsMap, value);
+    }
+
+    public int? SuspensionTimeoutSeconds
+    {
+        get => SuspensionTimeoutSecondsValue == 0 ? null : SuspensionTimeoutSecondsValue;
+        set => SuspensionTimeoutSecondsValue = value ?? 0;
+    }
+
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;
 }
 
-public sealed class WorkflowExecutionRoleReply
+public sealed partial class WorkflowExecutionRoleReply
 {
-    public DateTimeOffset Timestamp { get; set; }
-    public string RoleId { get; set; } = "";
-    public string SessionId { get; set; } = "";
-    public string Content { get; set; } = "";
-    public int ContentLength { get; set; }
+    public DateTimeOffset Timestamp
+    {
+        get => TimestampUtcValue == null ? default : TimestampUtcValue.ToDateTimeOffset();
+        set => TimestampUtcValue = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
 }
 
-public sealed class WorkflowExecutionTimelineEvent
+public sealed partial class WorkflowExecutionTimelineEvent
 {
-    public DateTimeOffset Timestamp { get; set; }
-    public string Stage { get; set; } = "";
-    public string Message { get; set; } = "";
-    public string AgentId { get; set; } = "";
-    public string StepId { get; set; } = "";
-    public string StepType { get; set; } = "";
-    public string EventType { get; set; } = "";
-    public Dictionary<string, string> Data { get; set; } = [];
+    public DateTimeOffset Timestamp
+    {
+        get => TimestampUtcValue == null ? default : TimestampUtcValue.ToDateTimeOffset();
+        set => TimestampUtcValue = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public IDictionary<string, string> Data
+    {
+        get => DataMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(DataMap, value);
+    }
 }
 
-public sealed record WorkflowExecutionTopologyEdge(string Parent, string Child);
+public sealed partial class WorkflowExecutionTopologyEdge
+{
+    public WorkflowExecutionTopologyEdge(string parent, string child)
+    {
+        Parent = parent ?? string.Empty;
+        Child = child ?? string.Empty;
+    }
+}
+
+internal static class WorkflowExecutionReadModelCollections
+{
+    public static void ReplaceCollection<T>(RepeatedField<T> target, IEnumerable<T>? source)
+    {
+        target.Clear();
+        if (source == null)
+            return;
+
+        target.Add(source);
+    }
+
+    public static void ReplaceMap<TValue>(MapField<string, TValue> target, IDictionary<string, TValue>? source)
+    {
+        target.Clear();
+        if (source == null)
+            return;
+
+        target.Add(source);
+    }
+}

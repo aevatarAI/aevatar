@@ -16,6 +16,13 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="script_projection_read_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Scripting.Abstractions" />
   </ItemGroup>
 </Project>

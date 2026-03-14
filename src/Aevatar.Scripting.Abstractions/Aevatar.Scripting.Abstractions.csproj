@@ -18,8 +18,10 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="CorePorts/script_projection_snapshots.proto" GrpcServices="None" />
     <Protobuf Include="Protos/scripting_schema_options.proto" GrpcServices="None" />
     <Protobuf Include="Protos/scripting_runtime_options.proto" GrpcServices="None" />
+    <Protobuf Include="Queries/script_read_model_query_models.proto" GrpcServices="None" />
     <Protobuf Include="script_host_messages.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
