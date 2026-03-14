@@ -290,8 +290,10 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
         {
             if (descriptor.Commands.TryGetValue(payloadTypeUrl, out var command))
                 return command.MessageClrType;
+            if (descriptor.Signals.TryGetValue(payloadTypeUrl, out var signal))
+                return signal.MessageClrType;
 
-            throw new InvalidOperationException($"Command payload type `{payloadTypeUrl}` is not declared.");
+            throw new InvalidOperationException($"Command or signal payload type `{payloadTypeUrl}` is not declared.");
         }
 
         if (descriptor.Commands.TryGetValue(payloadTypeUrl, out var commandRegistration))

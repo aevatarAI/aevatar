@@ -159,6 +159,96 @@ public class RoslynScriptBehaviorCompilerTests
             x.Contains("Runtime semantics are missing", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Compile_ShouldReject_WhenCommandDeclaresProjectableFlag()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-projectable-command",
+            Revision: "rev-projectable-command",
+            Package: CreateInvalidRuntimePackage(
+                commandRuntimeOptions: """
+                                       kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                                       projectable: true
+                                       command_id_field: "command_id"
+                                       """)));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("projectable = true", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Compile_ShouldReject_WhenIdentityFieldDoesNotExist()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-missing-field",
+            Revision: "rev-missing-field",
+            Package: CreateInvalidRuntimePackage(
+                commandRuntimeOptions: """
+                                       kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                                       command_id_field: "missing_command_id"
+                                       """)));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("does not exist", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Compile_ShouldReject_WhenIdentityFieldIsRepeated()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-repeated-field",
+            Revision: "rev-repeated-field",
+            Package: CreateInvalidRuntimePackage(
+                commandRuntimeOptions: """
+                                       kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                                       command_id_field: "tags"
+                                       """,
+                extraCommandFields: "repeated string tags = 2;")));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("only singular scalar fields are supported", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Compile_ShouldReject_WhenQueryResultDeclaresWrongRuntimeKind()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-wrong-query-kind",
+            Revision: "rev-wrong-query-kind",
+            Package: CreateInvalidRuntimePackage(
+                resultRuntimeOptions: """
+                                      kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+                                      read_model_scope: "dynamic.invalidruntime.InvalidRuntimeReadModel"
+                                      """)));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("Runtime semantics are missing", StringComparison.Ordinal) ||
+            x.Contains("expected `QueryResult`", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Compile_ShouldReject_WhenQueryDeclaresWrongResultDescriptor()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-wrong-result",
+            Revision: "rev-wrong-result",
+            Package: CreateInvalidRuntimePackage(
+                queryResultFullName: "dynamic.invalidruntime.NotTheResult")));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("declares result descriptor", StringComparison.Ordinal));
+    }
+
     private const string ContractBehaviorSource =
         """
         using System;
@@ -266,6 +356,153 @@ public class RoslynScriptBehaviorCompilerTests
             }
         }
         """;
+
+    private static ScriptSourcePackage CreateInvalidRuntimePackage(
+        string? commandRuntimeOptions = null,
+        string? extraCommandFields = null,
+        string? resultRuntimeOptions = null,
+        string? queryResultFullName = null)
+    {
+        const string behaviorSource =
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Aevatar.Scripting.Abstractions.Behaviors;
+            using Dynamic.InvalidRuntime;
+
+            public sealed class InvalidRuntimeBehavior : ScriptBehavior<InvalidRuntimeState, InvalidRuntimeReadModel>
+            {
+                protected override void Configure(IScriptBehaviorBuilder<InvalidRuntimeState, InvalidRuntimeReadModel> builder)
+                {
+                    builder
+                        .OnCommand<InvalidRuntimeCommand>(HandleAsync)
+                        .OnEvent<InvalidRuntimeUpdated>(
+                            apply: static (_, evt, _) => evt.Current == null
+                                ? new InvalidRuntimeState()
+                                : new InvalidRuntimeState { LastCommandId = evt.CommandId ?? string.Empty },
+                            reduce: static (_, evt, _) => evt.Current)
+                        .OnQuery<InvalidRuntimeQueryRequested, InvalidRuntimeQueryResponded>(HandleQueryAsync);
+                }
+
+                private static Task HandleAsync(
+                    InvalidRuntimeCommand command,
+                    ScriptCommandContext<InvalidRuntimeState> context,
+                    CancellationToken ct)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    context.Emit(new InvalidRuntimeUpdated
+                    {
+                        CommandId = command.CommandId ?? string.Empty,
+                        Current = new InvalidRuntimeReadModel
+                        {
+                            LastCommandId = command.CommandId ?? string.Empty,
+                        },
+                    });
+                    return Task.CompletedTask;
+                }
+
+                private static Task<InvalidRuntimeQueryResponded?> HandleQueryAsync(
+                    InvalidRuntimeQueryRequested query,
+                    ScriptQueryContext<InvalidRuntimeReadModel> snapshot,
+                    CancellationToken ct)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    return Task.FromResult<InvalidRuntimeQueryResponded?>(new InvalidRuntimeQueryResponded
+                    {
+                        RequestId = query.RequestId ?? string.Empty,
+                        Current = snapshot.CurrentReadModel ?? new InvalidRuntimeReadModel(),
+                    });
+                }
+            }
+            """;
+
+        var commandOptions = string.IsNullOrWhiteSpace(commandRuntimeOptions)
+            ? """
+              kind: SCRIPTING_MESSAGE_KIND_COMMAND
+              command_id_field: "command_id"
+              """
+            : commandRuntimeOptions;
+        var queryOptions = string.IsNullOrWhiteSpace(queryResultFullName)
+            ? "result_full_name: \"dynamic.invalidruntime.InvalidRuntimeQueryResponded\""
+            : $"result_full_name: \"{queryResultFullName}\"";
+        var resultOptions = string.IsNullOrWhiteSpace(resultRuntimeOptions)
+            ? """
+              kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+              read_model_scope: "dynamic.invalidruntime.InvalidRuntimeReadModel"
+              """
+            : resultRuntimeOptions;
+        var extraFields = string.IsNullOrWhiteSpace(extraCommandFields)
+            ? string.Empty
+            : Environment.NewLine + "  " + extraCommandFields;
+        var protoSource =
+            $$"""
+            syntax = "proto3";
+
+            package dynamic.invalidruntime;
+
+            option csharp_namespace = "Dynamic.InvalidRuntime";
+
+            import "scripting_schema_options.proto";
+            import "scripting_runtime_options.proto";
+
+            message InvalidRuntimeState {
+              string last_command_id = 1;
+            }
+
+            message InvalidRuntimeReadModel {
+              option (aevatar.scripting.schema.scripting_read_model) = {
+                schema_id: "invalid_runtime"
+                schema_version: "1"
+                store_kinds: "document"
+              };
+              string last_command_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+            }
+
+            message InvalidRuntimeCommand {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+            {{commandOptions}}
+              };
+              string command_id = 1;{{extraFields}}
+            }
+
+            message InvalidRuntimeUpdated {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+                projectable: true
+                replay_safe: true
+                command_id_field: "command_id"
+                read_model_scope: "dynamic.invalidruntime.InvalidRuntimeReadModel"
+              };
+              string command_id = 1;
+              InvalidRuntimeReadModel current = 2;
+            }
+
+            message InvalidRuntimeQueryRequested {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+                read_model_scope: "dynamic.invalidruntime.InvalidRuntimeReadModel"
+              };
+              option (aevatar.scripting.runtime.scripting_query) = {
+                {{queryOptions}}
+              };
+              string request_id = 1;
+            }
+
+            message InvalidRuntimeQueryResponded {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+            {{resultOptions}}
+              };
+              string request_id = 1;
+              InvalidRuntimeReadModel current = 2;
+            }
+            """;
+
+        return new ScriptSourcePackage(
+            ScriptSourcePackage.CurrentFormat,
+            [new ScriptSourceFile("Behavior.cs", behaviorSource)],
+            [new ScriptSourceFile("invalid_runtime.proto", protoSource)],
+            "InvalidRuntimeBehavior");
+    }
 
     private static ScriptSourcePackage CreatePackageMissingRuntimeOptions()
     {

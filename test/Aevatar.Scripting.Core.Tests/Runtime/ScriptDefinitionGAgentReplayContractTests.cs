@@ -130,6 +130,48 @@ public class ScriptDefinitionGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task HandleUpsertRequested_ShouldComputePackageHash_WhenSourceHashIsMissing()
+    {
+        var agent = CreateAgent();
+        var package = ScriptPackageSpecExtensions.CreateSingleSource(DefinitionBehaviorSource);
+        var expectedHash = ScriptPackageModel.ComputePackageHash(package);
+
+        await agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
+        {
+            ScriptId = "script-computed-hash",
+            ScriptRevision = "rev-hash",
+            SourceText = string.Empty,
+            ScriptPackage = package,
+            SourceHash = string.Empty,
+        });
+
+        agent.State.ScriptId.Should().Be("script-computed-hash");
+        agent.State.Revision.Should().Be("rev-hash");
+        agent.State.SourceHash.Should().Be(expectedHash);
+        agent.State.SourceText.Should().Contain("DefinitionReplayBehavior");
+    }
+
+    [Fact]
+    public async Task HandleUpsertRequested_ShouldThrow_WhenCompilationFails_AndKeepStateEmpty()
+    {
+        var agent = CreateAgent();
+
+        var act = () => agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
+        {
+            ScriptId = "script-invalid",
+            ScriptRevision = "rev-invalid",
+            SourceText = "public sealed class BrokenBehavior :",
+            SourceHash = "hash-invalid",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Script definition compilation failed*");
+        agent.State.ScriptId.Should().BeEmpty();
+        agent.State.Revision.Should().BeEmpty();
+        agent.State.LastAppliedEventVersion.Should().Be(0);
+    }
+
+    [Fact]
     public async Task QuerySnapshot_ShouldReturnMismatch_WhenRequestedRevisionDiffers()
     {
         var publisher = new RecordingEventPublisher();
@@ -190,6 +232,47 @@ public class ScriptDefinitionGAgentReplayContractTests
         response.StateTypeUrl.Should().Be(Any.Pack(new ScriptProfileState()).TypeUrl);
         response.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
         response.ReadModelSchemaVersion.Should().Be("3");
+    }
+
+    [Fact]
+    public async Task QuerySnapshot_ShouldIgnoreIncompleteRequest()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = string.Empty,
+            ReplyStreamId = "reply-stream",
+        });
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-missing-reply",
+            ReplyStreamId = string.Empty,
+        });
+
+        publisher.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QuerySnapshot_ShouldReturnNotFound_WhenDefinitionStateIsEmpty()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent();
+        agent.EventPublisher = publisher;
+
+        await agent.HandleQueryScriptDefinitionSnapshotRequested(new QueryScriptDefinitionSnapshotRequestedEvent
+        {
+            RequestId = "request-empty",
+            ReplyStreamId = "reply-stream",
+        });
+
+        publisher.Sent.Should().ContainSingle();
+        var response = publisher.Sent[0].Should().BeOfType<ScriptDefinitionSnapshotRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-empty");
+        response.Found.Should().BeFalse();
+        response.FailureReason.Should().Contain("source text is empty");
     }
 
     private static ScriptDefinitionGAgent CreateAgent(

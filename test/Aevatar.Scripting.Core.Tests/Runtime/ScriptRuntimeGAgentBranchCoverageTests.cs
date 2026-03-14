@@ -16,6 +16,41 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public sealed class ScriptRuntimeGAgentBranchCoverageTests
 {
+    [Theory]
+    [InlineData("dispatcher")]
+    [InlineData("capabilityFactory")]
+    [InlineData("artifactResolver")]
+    [InlineData("codec")]
+    public void Ctor_ShouldRejectNullDependencies(string parameterName)
+    {
+        Action act = parameterName switch
+        {
+            "dispatcher" => () => _ = new ScriptBehaviorGAgent(
+                null!,
+                new NoOpCapabilityFactory(),
+                new NoOpArtifactResolver(),
+                new ProtobufMessageCodec()),
+            "capabilityFactory" => () => _ = new ScriptBehaviorGAgent(
+                new NoOpDispatcher(),
+                null!,
+                new NoOpArtifactResolver(),
+                new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptBehaviorGAgent(
+                new NoOpDispatcher(),
+                new NoOpCapabilityFactory(),
+                null!,
+                new ProtobufMessageCodec()),
+            "codec" => () => _ = new ScriptBehaviorGAgent(
+                new NoOpDispatcher(),
+                new NoOpCapabilityFactory(),
+                new NoOpArtifactResolver(),
+                null!),
+            _ => throw new InvalidOperationException("Unexpected parameter name."),
+        };
+
+        act.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be(parameterName);
+    }
+
     [Fact]
     public async Task HandleEnvelopeAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
@@ -73,6 +108,20 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
     }
 
     [Fact]
+    public async Task HandleEnvelopeAsync_ShouldIgnoreBindingQuery_WhenRequestIdIsMissing()
+    {
+        var harness = CreateHarness();
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
+        {
+            RequestId = string.Empty,
+            ReplyStreamId = "reply-stream",
+        }));
+
+        harness.Publisher.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleEnvelopeAsync_ShouldRejectDispatch_WhenActorIsNotBound()
     {
         var harness = CreateHarness();
@@ -94,14 +143,389 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             .WithMessage("*is not bound*");
     }
 
-    private static BranchCoverageHarness CreateHarness()
+    [Theory]
+    [InlineData("", "script-1", "rev-1", "source", "DefinitionActorId is required.")]
+    [InlineData("definition-1", "", "rev-1", "source", "ScriptId is required.")]
+    [InlineData("definition-1", "script-1", "", "source", "Revision is required.")]
+    [InlineData("definition-1", "script-1", "rev-1", "", "ScriptPackage must contain at least one C# source.")]
+    public async Task HandleEnvelopeAsync_ShouldRejectInvalidBinding(
+        string definitionActorId,
+        string scriptId,
+        string revision,
+        string sourceText,
+        string expectedMessage)
+    {
+        var harness = CreateHarness();
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = definitionActorId,
+            ScriptId = scriptId,
+            Revision = revision,
+            SourceText = sourceText,
+            SourceHash = "hash-1",
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldAcceptBinding_WhenScriptPackageProvidesSource()
+    {
+        var harness = CreateHarness();
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = string.Empty,
+            SourceHash = ScriptSources.UppercaseBehaviorHash,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
+            StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
+        }));
+
+        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
+        harness.Agent.State.ScriptPackage.CsharpSources.Should().NotBeEmpty();
+        harness.Agent.State.SourceText.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldBind_WhenOnlySourceTextIsProvided()
+    {
+        var harness = CreateHarness();
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = ScriptSources.UppercaseBehavior,
+            SourceHash = ScriptSources.UppercaseBehaviorHash,
+            StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
+        }));
+
+        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
+        harness.Agent.State.SourceText.Should().Be(ScriptSources.UppercaseBehavior);
+        harness.Agent.State.ScriptPackage.CsharpSources.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRespondBindingQuery_WhenActorIsUnbound()
+    {
+        var harness = CreateHarness();
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
+        {
+            RequestId = "request-unbound",
+            ReplyStreamId = "reply-stream",
+        }));
+
+        harness.Publisher.Sent.Should().ContainSingle();
+        var response = harness.Publisher.Sent[0].Should().BeOfType<ScriptBehaviorBindingRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-unbound");
+        response.Found.Should().BeFalse();
+        response.FailureReason.Should().Contain("not bound");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRespondBindingQuery_WhenActorIsBound()
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
+        {
+            RequestId = "request-bound",
+            ReplyStreamId = "reply-stream",
+        }));
+
+        harness.Publisher.Sent.Should().ContainSingle();
+        var response = harness.Publisher.Sent[0].Should().BeOfType<ScriptBehaviorBindingRespondedEvent>().Subject;
+        response.RequestId.Should().Be("request-bound");
+        response.Found.Should().BeTrue();
+        response.DefinitionActorId.Should().Be("definition-1");
+        response.Revision.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRejectDispatch_WhenRunTargetsDifferentDefinition()
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-1",
+            DefinitionActorId = "definition-2",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "hello",
+            }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*bound to definition `definition-1`*definition-2*");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRejectDispatch_WhenRunTargetsDifferentRevision()
+    {
+        var harness = CreateHarness();
+        await BindAsync(harness.Agent);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-1",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-2",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "hello",
+            }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*bound to revision `rev-1`*rev-2*");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldDispatch_WhenRunOmitsDefinitionAndRevision()
+    {
+        ScriptBehaviorDispatchRequest? capturedRequest = null;
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            {
+                capturedRequest = request;
+                return [];
+            }));
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-no-target",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-no-target",
+                Value = "hello",
+            }),
+        }));
+
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.DefinitionActorId.Should().Be("definition-1");
+        capturedRequest.Revision.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldDispatchDirectCommandEnvelope()
+    {
+        ScriptBehaviorDispatchRequest? capturedRequest = null;
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            {
+                capturedRequest = request;
+                return [];
+            }));
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new SimpleTextCommand
+        {
+            CommandId = string.Empty,
+            Value = "hello",
+        }));
+
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.DefinitionActorId.Should().Be("definition-1");
+        capturedRequest.Envelope.Id.Should().NotBeNullOrWhiteSpace();
+        capturedRequest.Envelope.Payload.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldPersistFactsAndApplyState_WhenDispatcherReturnsCommittedFact()
+    {
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            {
+                var fact = new ScriptDomainFactCommitted
+                {
+                    ActorId = request.ActorId,
+                    DefinitionActorId = request.DefinitionActorId,
+                    ScriptId = request.ScriptId,
+                    Revision = request.Revision,
+                    RunId = "run-committed",
+                    CommandId = "command-committed",
+                    CorrelationId = "correlation-committed",
+                    EventSequence = 1,
+                    EventType = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextEvent)),
+                    DomainEventPayload = Any.Pack(new SimpleTextEvent
+                    {
+                        CommandId = "command-committed",
+                        Current = new SimpleTextReadModel
+                        {
+                            HasValue = true,
+                            Value = "HELLO",
+                        },
+                    }),
+                    StateTypeUrl = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextState)),
+                    ReadModelTypeUrl = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextReadModel)),
+                    StateVersion = request.CurrentStateVersion + 1,
+                    OccurredAtUnixTimeMs = 1234,
+                };
+                return [fact];
+            }),
+            artifactResolver: new StaticArtifactResolver(new ApplyingBehavior()));
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-committed",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-committed",
+                Value = "hello",
+            }),
+        }));
+
+        harness.Agent.State.LastRunId.Should().Be("run-committed");
+        harness.Agent.State.LastAppliedEventVersion.Should().Be(2);
+        harness.Agent.State.LastEventId.Should().Be(ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextEvent)));
+        harness.Agent.State.StateRoot.Should().NotBeNull();
+        harness.Agent.State.StateRoot.Unpack<SimpleTextState>().Value.Should().Be("HELLO");
+        var persisted = await harness.EventStore.GetEventsAsync(harness.Agent.Id, ct: CancellationToken.None);
+        persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldPreserveBindingValues_WhenCommittedFactOmitsOptionalFields()
+    {
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            [
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = request.ActorId,
+                    DefinitionActorId = string.Empty,
+                    ScriptId = string.Empty,
+                    Revision = string.Empty,
+                    RunId = "run-fallback",
+                    CommandId = "command-fallback",
+                    CorrelationId = "correlation-fallback",
+                    EventSequence = 1,
+                    EventType = string.Empty,
+                    DomainEventPayload = Any.Pack(new SimpleTextEvent
+                    {
+                        CommandId = "command-fallback",
+                        Current = new SimpleTextReadModel
+                        {
+                            HasValue = true,
+                            Value = "FALLBACK",
+                        },
+                    }),
+                    StateTypeUrl = string.Empty,
+                    ReadModelTypeUrl = string.Empty,
+                    StateVersion = request.CurrentStateVersion + 1,
+                    OccurredAtUnixTimeMs = 1234,
+                },
+            ]),
+            artifactResolver: new StaticArtifactResolver(new ApplyingBehavior()));
+        await BindAsync(harness.Agent);
+
+        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-fallback",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-fallback",
+                Value = "hello",
+            }),
+        }));
+
+        harness.Agent.State.DefinitionActorId.Should().Be("definition-1");
+        harness.Agent.State.ScriptId.Should().Be("script-1");
+        harness.Agent.State.Revision.Should().Be("rev-1");
+        harness.Agent.State.StateTypeUrl.Should().Be(ScriptSources.UppercaseStateTypeUrl);
+        harness.Agent.State.ReadModelTypeUrl.Should().Be(ScriptSources.UppercaseReadModelTypeUrl);
+        harness.Agent.State.LastEventId.Should().Be(ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextEvent)));
+        harness.Agent.State.StateRoot.Should().NotBeNull();
+        harness.Agent.State.StateRoot.Unpack<SimpleTextState>().Value.Should().Be("FALLBACK");
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_ShouldRejectCommittedFact_WhenArtifactDoesNotDeclareEventType()
+    {
+        var harness = CreateHarness(
+            dispatcher: new ReturningDispatcher(request =>
+            [
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = request.ActorId,
+                    DefinitionActorId = request.DefinitionActorId,
+                    ScriptId = request.ScriptId,
+                    Revision = request.Revision,
+                    RunId = "run-undeclared-event",
+                    CommandId = "command-undeclared-event",
+                    CorrelationId = "correlation-undeclared-event",
+                    EventSequence = 1,
+                    EventType = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextUnexpectedEvent)),
+                    DomainEventPayload = Any.Pack(new SimpleTextUnexpectedEvent
+                    {
+                        Value = "HELLO",
+                    }),
+                    StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+                    ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+                    StateVersion = request.CurrentStateVersion + 1,
+                    OccurredAtUnixTimeMs = 1234,
+                },
+            ]),
+            artifactResolver: new StaticArtifactResolver(new ApplyingBehavior()));
+        await BindAsync(harness.Agent);
+
+        var act = () => harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new RunScriptRequestedEvent
+        {
+            RunId = "run-undeclared-event",
+            DefinitionActorId = "definition-1",
+            ScriptRevision = "rev-1",
+            RequestedEventType = "integration.requested",
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-undeclared-event",
+                Value = "hello",
+            }),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot apply undeclared domain event type*");
+    }
+
+    private static BranchCoverageHarness CreateHarness(
+        IScriptBehaviorDispatcher? dispatcher = null,
+        IScriptBehaviorArtifactResolver? artifactResolver = null)
     {
         var eventStore = new InMemoryEventStore();
         var publisher = new RecordingEventPublisher();
         var agent = new ScriptBehaviorGAgent(
-            new NoOpDispatcher(),
+            dispatcher ?? new NoOpDispatcher(),
             new NoOpCapabilityFactory(),
-            new NoOpArtifactResolver(),
+            artifactResolver ?? new NoOpArtifactResolver(),
             new ProtobufMessageCodec())
         {
             EventPublisher = publisher,
@@ -129,6 +553,23 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         RecordingEventPublisher Publisher,
         InMemoryEventStore EventStore);
 
+    private static async Task BindAsync(ScriptBehaviorGAgent agent)
+    {
+        await agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent
+        {
+            DefinitionActorId = "definition-1",
+            ScriptId = "script-1",
+            Revision = "rev-1",
+            SourceText = ScriptSources.UppercaseBehavior,
+            SourceHash = ScriptSources.UppercaseBehaviorHash,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
+            StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+            ReadModelSchemaVersion = "1",
+            ReadModelSchemaHash = "schema-hash",
+        }));
+    }
+
     private sealed class NoOpDispatcher : IScriptBehaviorDispatcher
     {
         public Task<IReadOnlyList<ScriptDomainFactCommitted>> DispatchAsync(
@@ -141,11 +582,38 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
         }
     }
 
+    private sealed class ReturningDispatcher(
+        Func<ScriptBehaviorDispatchRequest, IReadOnlyList<ScriptDomainFactCommitted>> factory) : IScriptBehaviorDispatcher
+    {
+        public Task<IReadOnlyList<ScriptDomainFactCommitted>> DispatchAsync(
+            ScriptBehaviorDispatchRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(factory(request));
+        }
+    }
+
     private sealed class NoOpArtifactResolver : IScriptBehaviorArtifactResolver
     {
         public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
         {
             throw new InvalidOperationException($"Artifact resolution should not be reached in this test. request={request}");
+        }
+    }
+
+    private sealed class StaticArtifactResolver(IScriptBehaviorBridge behavior) : IScriptBehaviorArtifactResolver
+    {
+        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
+        {
+            _ = request;
+            return new ScriptBehaviorArtifact(
+                "script-1",
+                "rev-1",
+                "hash-1",
+                behavior.Descriptor,
+                behavior.Descriptor.ToContract(),
+                () => behavior);
         }
     }
 
@@ -233,6 +701,50 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             ct.ThrowIfCancellationRequested();
             Sent.Add(evt);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ApplyingBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    {
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
+        {
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+        }
+
+        private static Task HandleAsync(
+            SimpleTextCommand command,
+            ScriptCommandContext<SimpleTextState> context,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = command.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = command.Value ?? string.Empty,
+                },
+            });
+            return Task.CompletedTask;
+        }
+
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested query,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+            {
+                RequestId = query.RequestId ?? string.Empty,
+                Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+            });
         }
     }
 }

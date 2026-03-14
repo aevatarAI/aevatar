@@ -9,11 +9,103 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public class ScriptEvolutionSessionGAgentTests
 {
+    [Theory]
+    [InlineData("addressResolver")]
+    [InlineData("policyEvaluator")]
+    [InlineData("validationService")]
+    [InlineData("catalogBaselineReader")]
+    [InlineData("definitionCommandPort")]
+    [InlineData("catalogCommandPort")]
+    [InlineData("promotionCompensationService")]
+    [InlineData("rollbackService")]
+    public void Ctor_ShouldRejectNullDependencies(string parameterName)
+    {
+        Action act = parameterName switch
+        {
+            "addressResolver" => () => _ = new ScriptEvolutionSessionGAgent(
+                null!,
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "policyEvaluator" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                null!,
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "validationService" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                null!,
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "catalogBaselineReader" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                null!,
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "definitionCommandPort" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                null!,
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "catalogCommandPort" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                null!,
+                new RecordingCompensationService(),
+                new RecordingRollbackService()),
+            "promotionCompensationService" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                null!,
+                new RecordingRollbackService()),
+            "rollbackService" => () => _ = new ScriptEvolutionSessionGAgent(
+                new StaticAddressResolver(),
+                new StaticPolicyEvaluator(string.Empty),
+                new StaticValidationService(new ScriptEvolutionValidationReport(true, [])),
+                new StaticBaselineReader(new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty)),
+                new RecordingDefinitionPort(),
+                new RecordingCatalogCommandPort(),
+                new RecordingCompensationService(),
+                null!),
+            _ => throw new InvalidOperationException("Unexpected parameter name.")
+        };
+
+        act.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be(parameterName);
+    }
+
     [Fact]
     public async Task Start_ShouldOwnProposalExecution_AndCompletePromotion()
     {
@@ -68,6 +160,79 @@ public class ScriptEvolutionSessionGAgentTests
             x.Direction == TopologyAudience.Self &&
             x.Payload.GetType() == typeof(ScriptEvolutionExecutionRequestedEvent) &&
             ((ScriptEvolutionExecutionRequestedEvent)x.Payload).ProposalId == "proposal-1");
+    }
+
+    [Fact]
+    public async Task Start_ShouldGenerateProposalId_WhenRequestDoesNotProvideOne()
+    {
+        var publisher = new RecordingEventPublisher();
+        var definitionPort = new RecordingDefinitionPort { DefinitionActorId = "definition-2" };
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: new ScriptCatalogEntrySnapshot(
+                    ScriptId: "script-1",
+                    ActiveRevision: "rev-1",
+                    ActiveDefinitionActorId: "definition-1",
+                    ActiveSourceHash: "hash-1",
+                    PreviousRevision: string.Empty,
+                    RevisionHistory: ["rev-1"],
+                    LastProposalId: "proposal-prev"),
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            definitionPort: definitionPort,
+            catalogCommandPort: new RecordingCatalogCommandPort());
+
+        await StartSessionAsync(agent, publisher, new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = string.Empty,
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-v2",
+            CandidateSourceHash = "hash-v2",
+            Reason = "rollout",
+        });
+
+        agent.State.ProposalId.Should().NotBeNullOrWhiteSpace();
+        agent.State.ProposalId.Should().HaveLength(32);
+        var executeRequest = publisher.Published.Should().ContainSingle().Subject.Payload
+            .Should().BeOfType<ScriptEvolutionExecutionRequestedEvent>().Subject;
+        executeRequest.ProposalId.Should().Be(agent.State.ProposalId);
+    }
+
+    [Theory]
+    [InlineData("", "rev-2", "source-v2", "ScriptId is required.")]
+    [InlineData("script-1", "", "source-v2", "CandidateRevision is required.")]
+    [InlineData("script-1", "rev-2", "", "CandidateSource is required.")]
+    public async Task Start_ShouldRejectMissingRequiredProposalFields(
+        string scriptId,
+        string candidateRevision,
+        string candidateSource,
+        string expectedMessage)
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+
+        var act = () => agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = "proposal-invalid",
+            ScriptId = scriptId,
+            BaseRevision = "rev-1",
+            CandidateRevision = candidateRevision,
+            CandidateSource = candidateSource,
+            CandidateSourceHash = "hash-v2",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
+        agent.State.ProposalId.Should().BeEmpty();
     }
 
     [Fact]
@@ -196,6 +361,119 @@ public class ScriptEvolutionSessionGAgentTests
         agent.State.Completed.Should().BeFalse();
         definitionPort.Requests.Should().BeEmpty();
         catalogCommandPort.PromoteCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecutionRequested_ShouldIgnore_WhenSessionHasNoProposal()
+    {
+        var publisher = new RecordingEventPublisher();
+        var definitionPort = new RecordingDefinitionPort();
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: null,
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            definitionPort: definitionPort,
+            catalogCommandPort: catalogCommandPort);
+
+        await agent.HandleScriptEvolutionExecutionRequested(new ScriptEvolutionExecutionRequestedEvent
+        {
+            ProposalId = "proposal-missing",
+        });
+
+        definitionPort.Requests.Should().BeEmpty();
+        catalogCommandPort.PromoteCalls.Should().BeEmpty();
+        agent.State.Completed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecutionRequested_ShouldIgnore_WhenProposalIdDoesNotMatchSession()
+    {
+        var publisher = new RecordingEventPublisher();
+        var definitionPort = new RecordingDefinitionPort();
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: new ScriptCatalogEntrySnapshot(
+                    ScriptId: "script-1",
+                    ActiveRevision: "rev-1",
+                    ActiveDefinitionActorId: "definition-1",
+                    ActiveSourceHash: "hash-1",
+                    PreviousRevision: string.Empty,
+                    RevisionHistory: ["rev-1"],
+                    LastProposalId: "proposal-prev"),
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            definitionPort: definitionPort,
+            catalogCommandPort: catalogCommandPort);
+
+        await agent.HandleStartScriptEvolutionSessionRequested(new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = "proposal-bound",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-v2",
+            CandidateSourceHash = "hash-v2",
+        });
+
+        await agent.HandleScriptEvolutionExecutionRequested(new ScriptEvolutionExecutionRequestedEvent
+        {
+            ProposalId = "proposal-other",
+        });
+
+        definitionPort.Requests.Should().BeEmpty();
+        catalogCommandPort.PromoteCalls.Should().BeEmpty();
+        agent.State.Completed.Should().BeFalse();
+        agent.State.ProposalId.Should().Be("proposal-bound");
+    }
+
+    [Fact]
+    public async Task ExecutionRequested_ShouldIgnore_WhenSessionAlreadyCompleted()
+    {
+        var publisher = new RecordingEventPublisher();
+        var definitionPort = new RecordingDefinitionPort();
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: "policy-denied",
+            validation: new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: null,
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            definitionPort: definitionPort,
+            catalogCommandPort: catalogCommandPort);
+
+        await StartSessionAsync(agent, publisher, new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = "proposal-completed",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-v2",
+            CandidateSourceHash = "hash-v2",
+        });
+
+        await agent.HandleScriptEvolutionExecutionRequested(new ScriptEvolutionExecutionRequestedEvent
+        {
+            ProposalId = "proposal-completed",
+        });
+
+        definitionPort.Requests.Should().BeEmpty();
+        catalogCommandPort.PromoteCalls.Should().BeEmpty();
+        agent.State.Completed.Should().BeTrue();
+        agent.State.Status.Should().Be(ScriptEvolutionStatuses.Rejected);
     }
 
     [Fact]
@@ -368,6 +646,47 @@ public class ScriptEvolutionSessionGAgentTests
     }
 
     [Fact]
+    public async Task Start_ShouldContinue_WhenManagerMirrorSendFails()
+    {
+        var publisher = new ThrowingManagerMirrorPublisher();
+        var definitionPort = new RecordingDefinitionPort { DefinitionActorId = "definition-2" };
+        var catalogCommandPort = new RecordingCatalogCommandPort();
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, ["compile-ok"]),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: new ScriptCatalogEntrySnapshot(
+                    ScriptId: "script-1",
+                    ActiveRevision: "rev-1",
+                    ActiveDefinitionActorId: "definition-1",
+                    ActiveSourceHash: "hash-1",
+                    PreviousRevision: string.Empty,
+                    RevisionHistory: ["rev-1"],
+                    LastProposalId: "proposal-prev"),
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            definitionPort: definitionPort,
+            catalogCommandPort: catalogCommandPort);
+
+        await StartSessionAsync(agent, publisher, new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = "proposal-mirror-failure",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-v2",
+            CandidateSourceHash = "hash-v2",
+        });
+
+        publisher.ManagerMirrorFailures.Should().BeGreaterThan(0);
+        agent.State.Completed.Should().BeTrue();
+        agent.State.Accepted.Should().BeTrue();
+        catalogCommandPort.PromoteCalls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Start_ShouldBeIdempotent_ForSameProposal()
     {
         var publisher = new RecordingEventPublisher();
@@ -502,6 +821,34 @@ public class ScriptEvolutionSessionGAgentTests
     }
 
     [Fact]
+    public async Task Rollback_ShouldIgnore_WhenSessionHasNoProposal()
+    {
+        var publisher = new RecordingEventPublisher();
+        var rollbackService = new RecordingRollbackService();
+        var agent = CreateAgent(
+            publisher,
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(
+                CatalogActorId: "script-catalog",
+                Baseline: null,
+                BaselineSource: "query",
+                FailureReason: string.Empty),
+            rollbackService: rollbackService);
+
+        await agent.HandleScriptEvolutionRollbackRequested(new ScriptEvolutionRollbackRequestedEvent
+        {
+            ProposalId = "proposal-missing",
+            ScriptId = "script-1",
+            TargetRevision = "rev-1",
+            Reason = "manual-rollback",
+        });
+
+        rollbackService.Requests.Should().BeEmpty();
+        publisher.Sent.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Rollback_ShouldIgnore_WhenProposalDoesNotMatchSession()
     {
         var publisher = new RecordingEventPublisher();
@@ -540,6 +887,153 @@ public class ScriptEvolutionSessionGAgentTests
         rollbackService.Requests.Should().BeEmpty();
         publisher.Sent.Should().BeEmpty();
         agent.State.Status.Should().Be(ScriptEvolutionStatuses.Rejected);
+    }
+
+    [Fact]
+    public void BuildProposalFromState_ShouldRejectMissingRequiredState()
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+
+        var missingProposal = () => InvokePrivate<ScriptEvolutionProposal>(agent, "BuildProposalFromState");
+        missingProposal.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("*ProposalId is required*");
+
+        agent.State.ProposalId = "proposal-1";
+        var missingScript = () => InvokePrivate<ScriptEvolutionProposal>(agent, "BuildProposalFromState");
+        missingScript.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("*ScriptId is required*");
+
+        agent.State.ScriptId = "script-1";
+        var missingRevision = () => InvokePrivate<ScriptEvolutionProposal>(agent, "BuildProposalFromState");
+        missingRevision.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("*CandidateRevision is required*");
+
+        agent.State.CandidateRevision = "rev-2";
+        var missingSource = () => InvokePrivate<ScriptEvolutionProposal>(agent, "BuildProposalFromState");
+        missingSource.Should().Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("*CandidateSource is required*");
+    }
+
+    [Fact]
+    public void BuildBestEffortProposalFromState_ShouldUseFallbackProposalId_WhenStateProposalIdMissing()
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+        agent.State.ScriptId = "script-1";
+        agent.State.CandidateRevision = "rev-2";
+        agent.State.CandidateSource = "source-v2";
+        agent.State.CandidateSourceHash = "hash-v2";
+
+        var proposal = InvokePrivate<ScriptEvolutionProposal>(
+            agent,
+            "BuildBestEffortProposalFromState",
+            "fallback-proposal");
+
+        proposal.ProposalId.Should().Be("fallback-proposal");
+        proposal.ScriptId.Should().Be("script-1");
+        proposal.CandidateRevision.Should().Be("rev-2");
+        proposal.CandidateSource.Should().Be("source-v2");
+    }
+
+    [Fact]
+    public void TransitionState_ShouldDefaultRejectedStatus_WhenRejectedEventOmitsStatus()
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+        var state = new ScriptEvolutionSessionState
+        {
+            ProposalId = "proposal-1",
+            LastAppliedEventVersion = 2,
+        };
+
+        var next = InvokeTransition(
+            agent,
+            state,
+            new ScriptEvolutionRejectedEvent
+            {
+                ProposalId = "proposal-1",
+                FailureReason = "rejected",
+                Status = string.Empty,
+            });
+
+        next.Status.Should().Be(ScriptEvolutionStatuses.Rejected);
+        next.FailureReason.Should().Be("rejected");
+        next.LastAppliedEventVersion.Should().Be(3);
+    }
+
+    [Fact]
+    public void TransitionState_ShouldRetainCandidateRevision_WhenRollbackRequestTargetIsBlank()
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+        var state = new ScriptEvolutionSessionState
+        {
+            ProposalId = "proposal-1",
+            CandidateRevision = "rev-2",
+            LastAppliedEventVersion = 4,
+        };
+
+        var next = InvokeTransition(
+            agent,
+            state,
+            new ScriptEvolutionRollbackRequestedEvent
+            {
+                ProposalId = "proposal-1",
+                TargetRevision = string.Empty,
+                Reason = "operator rollback",
+                CatalogActorId = "catalog-explicit",
+            });
+
+        next.CandidateRevision.Should().Be("rev-2");
+        next.CatalogActorId.Should().Be("catalog-explicit");
+        next.Status.Should().Be(ScriptEvolutionStatuses.RollbackRequested);
+        next.LastAppliedEventVersion.Should().Be(5);
+    }
+
+    [Fact]
+    public void TransitionState_ShouldUseValidationFailedStatus_WhenValidationIsInvalid()
+    {
+        var agent = CreateAgent(
+            new RecordingEventPublisher(),
+            policyFailure: string.Empty,
+            validation: new ScriptEvolutionValidationReport(true, []),
+            baselineResolution: new ScriptCatalogBaselineResolution(string.Empty, null, string.Empty, string.Empty));
+        var state = new ScriptEvolutionSessionState
+        {
+            ProposalId = "proposal-1",
+            LastAppliedEventVersion = 1,
+        };
+
+        var next = InvokeTransition(
+            agent,
+            state,
+            new ScriptEvolutionValidatedEvent
+            {
+                ProposalId = "proposal-1",
+                IsValid = false,
+                Diagnostics = { "compile-failed" },
+            });
+
+        next.Status.Should().Be(ScriptEvolutionStatuses.ValidationFailed);
+        next.ValidationSucceeded.Should().BeFalse();
+        next.Diagnostics.Should().ContainSingle(x => x == "compile-failed");
     }
 
     private static ScriptEvolutionSessionGAgent CreateAgent(
@@ -595,13 +1089,13 @@ public class ScriptEvolutionSessionGAgentTests
         }
     }
 
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private class RecordingEventPublisher : IEventPublisher
     {
         public List<PublishedMessage> Sent { get; } = [];
         public List<PublishedMessage> Published { get; } = [];
         public RecordingCallbackScheduler CallbackScheduler { get; } = new();
 
-        public Task PublishAsync<T>(
+        public virtual Task PublishAsync<T>(
             T evt,
             TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
@@ -618,7 +1112,7 @@ public class ScriptEvolutionSessionGAgentTests
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<T>(
+        public virtual Task SendToAsync<T>(
             string targetActorId,
             T evt,
             CancellationToken ct = default,
@@ -646,6 +1140,28 @@ public class ScriptEvolutionSessionGAgentTests
             _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingManagerMirrorPublisher : RecordingEventPublisher
+    {
+        public int ManagerMirrorFailures { get; private set; }
+
+        public override Task SendToAsync<T>(
+            string targetActorId,
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.Equals(targetActorId, "script-evolution-manager", StringComparison.Ordinal))
+            {
+                ManagerMirrorFailures++;
+                throw new InvalidOperationException("manager-mirror-down");
+            }
+
+            return base.SendToAsync(targetActorId, evt, ct, sourceEnvelope, options);
         }
     }
 
@@ -887,5 +1403,20 @@ public class ScriptEvolutionSessionGAgentTests
             Requests.Add(request);
             return Task.CompletedTask;
         }
+    }
+
+    private static T InvokePrivate<T>(object instance, string methodName, params object?[] arguments)
+    {
+        var method = instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        return (T)method!.Invoke(instance, arguments)!;
+    }
+
+    private static ScriptEvolutionSessionState InvokeTransition(
+        ScriptEvolutionSessionGAgent agent,
+        ScriptEvolutionSessionState current,
+        IMessage evt)
+    {
+        return InvokePrivate<ScriptEvolutionSessionState>(agent, "TransitionState", current, evt);
     }
 }
