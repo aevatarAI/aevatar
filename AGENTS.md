@@ -51,6 +51,7 @@
 - 运行时形态不是业务事实：不得把本地实例类型、代理类型、对象可见结构当成业务绑定依据；业务事实必须来自 actor-owned contract 或 read model。
 - 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
 - 读写边界不能混合：写侧端口只负责 lifecycle / command；读取必须走窄 query contract 或 projection，禁止在 Application / Infrastructure 直接读取 write-model 内部状态。
+- 禁止用侧读冒充 query：当系统缺少正式 query/reply 语义时，禁止通过直读其他 actor 的 event store、持久态快照或任意“事实重建器”在中间层拼装查询结果；这类跨 actor 读取必须回到 actor-owned contract、projection，或显式的事件化 continuation。
 - projection 只消费 committed 事实：projection/read model 必须基于 committed domain event 或其同源 durable feed 构建；禁止订阅入站 command、self continuation 或 actor 运行时偶然结构去推测业务完成态。
 - 默认路径必须先定义资源语义：任何“缺失即创建”的默认策略，都必须同时定义稳定归属、复用规则和清理责任；禁止生成不可达、不可复用、不可回收的隐式资源。
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
@@ -69,6 +70,7 @@
 - 业务推进内聚：工作流推进（成功/失败/分支/重试）必须在 Actor 事件处理流程内完成，保证顺序性与可重放性。
 - self continuation 必须事件化：Actor 需要“下一拍继续”时，必须通过标准 self-message 进入自身 inbox，再由 Actor 事件处理流程消费；禁止新增绕过消息抽象的临时 helper，或依赖特定 runtime 的 self-dispatch 偶然行为来推进业务。
 - 延迟与超时事件化：所有 `delay/timeout/retry backoff` 统一采用“异步等待 -> 发布内部事件 -> Actor 内消费并对账”的模式，禁止回调线程直接改状态。
+- 跨 actor 等待必须 continuation 化：Actor 向其他 actor 请求事实或动作时，必须采用“发送请求事件 -> 结束当前 turn -> 由 reply event 或 timeout event 唤醒自身继续处理”的模型；禁止在当前 turn 内同步等待 reply，也禁止用本地快照读取、event store 侧读或伪 RPC 绕过这一约束。
 - 显式对账：内部触发事件必须携带最小充分相关键（如 `run_id + step_id`），由 Actor 内做活跃态校验，拒绝陈旧事件。
 - 无锁优先：若设计需要加锁才能正确，优先判定为“破坏 Actor 边界”，应先重构为事件化串行模型，再实现功能。
 
