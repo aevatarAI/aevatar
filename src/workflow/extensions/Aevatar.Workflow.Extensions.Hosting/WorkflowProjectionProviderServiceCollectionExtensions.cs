@@ -54,23 +54,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         if (enableElasticsearchDocument)
         {
-            services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp =>
-                {
-                    var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                    return metadataResolver.Resolve<WorkflowExecutionReport>();
-                },
-                keySelector: report => report.RootActorId,
-                keyFormatter: key => key);
+            AddElasticsearchDocumentStores(services, configuration);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
-                keySelector: report => report.RootActorId,
-                keyFormatter: key => key,
-                listSortSelector: report => report.CreatedAt,
-                listTakeMax: 200);
+            AddInMemoryDocumentStores(services);
         }
 
         if (enableNeo4jGraph)
@@ -84,6 +72,44 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         }
 
         return services;
+    }
+
+    private static void AddElasticsearchDocumentStores(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp =>
+            {
+                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                return metadataResolver.Resolve<WorkflowExecutionReport>();
+            },
+            keySelector: static report => report.RootActorId,
+            keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp =>
+            {
+                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
+                return metadataResolver.Resolve<WorkflowActorBindingDocument>();
+            },
+            keySelector: static document => document.Id,
+            keyFormatter: static key => key);
+    }
+
+    private static void AddInMemoryDocumentStores(IServiceCollection services)
+    {
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
+            keySelector: static report => report.RootActorId,
+            keyFormatter: static key => key,
+            listSortSelector: static report => report.CreatedAt,
+            listTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
+            keySelector: static document => document.Id,
+            keyFormatter: static key => key,
+            listSortSelector: static document => document.UpdatedAt,
+            listTakeMax: 200);
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)
