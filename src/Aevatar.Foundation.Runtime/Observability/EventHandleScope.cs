@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Runtime.Observability;
@@ -41,7 +42,11 @@ public struct EventHandleScope : IDisposable
 
         var activity = AevatarActivitySource.StartHandleEvent(actorId, envelope);
         var logScope = logger.BeginScope(TracingContextHelpers.CreateLogScopeState(envelope));
-        return new EventHandleScope(Stopwatch.StartNew(), activity, logScope, envelope.Direction.ToString());
+        return new EventHandleScope(
+            Stopwatch.StartNew(),
+            activity,
+            logScope,
+            envelope.Route.Describe());
     }
 
     public void MarkError(Exception ex)

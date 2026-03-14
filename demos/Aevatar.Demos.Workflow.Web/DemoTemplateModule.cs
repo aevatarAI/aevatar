@@ -3,11 +3,14 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoTemplateModule : IEventModule
+public sealed class DemoTemplateModule
+    : IEventModule<IWorkflowExecutionContext>,
+        IEventModule<IEventHandlerContext>
 {
     public string Name => "demo_template";
     public int Priority => -10;
@@ -16,48 +19,48 @@ public sealed class DemoTemplateModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
         envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true;
 
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
+    {
+        var payload = envelope.Payload;
+        if (payload == null || !payload.Is(StepRequestEvent.Descriptor))
+            return;
+
+        var request = payload.Unpack<StepRequestEvent>();
+        if (!IsSupportedStepType(request.StepType))
+            return;
+
+        var input = request.Input ?? string.Empty;
+        var template = request.Parameters.GetValueOrDefault("template", "{{input}}");
+        var rendered = template.Replace("{{input}}", input, StringComparison.Ordinal);
+
+        foreach (var (key, value) in request.Parameters)
+        {
+            var token = $"{{{{param.{key}}}}}";
+            rendered = rendered.Replace(token, value ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        var prefix = request.Parameters.GetValueOrDefault("prefix", string.Empty);
+        var suffix = request.Parameters.GetValueOrDefault("suffix", string.Empty);
+        var upper = string.Equals(request.Parameters.GetValueOrDefault("uppercase", "false"), "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        var output = $"{prefix}{rendered}{suffix}";
+        if (upper)
+            output = output.ToUpperInvariant();
+
+        await ctx.PublishAsync(new StepCompletedEvent
+        {
+            StepId = request.StepId,
+            RunId = request.RunId,
+            Success = true,
+            Output = output,
+        }, TopologyAudience.Self, ct);
+    }
+
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
-        if (payload == null)
-            return;
-
-        if (payload.Is(StepRequestEvent.Descriptor))
-        {
-            var request = payload.Unpack<StepRequestEvent>();
-            if (!IsSupportedStepType(request.StepType))
-                return;
-
-            var input = request.Input ?? string.Empty;
-            var template = request.Parameters.GetValueOrDefault("template", "{{input}}");
-            var rendered = template.Replace("{{input}}", input, StringComparison.Ordinal);
-
-            foreach (var (key, value) in request.Parameters)
-            {
-                var token = $"{{{{param.{key}}}}}";
-                rendered = rendered.Replace(token, value ?? string.Empty, StringComparison.Ordinal);
-            }
-
-            var prefix = request.Parameters.GetValueOrDefault("prefix", string.Empty);
-            var suffix = request.Parameters.GetValueOrDefault("suffix", string.Empty);
-            var upper = string.Equals(request.Parameters.GetValueOrDefault("uppercase", "false"), "true",
-                StringComparison.OrdinalIgnoreCase);
-
-            var output = $"{prefix}{rendered}{suffix}";
-            if (upper)
-                output = output.ToUpperInvariant();
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                Success = true,
-                Output = output,
-            }, EventDirection.Self, ct);
-            return;
-        }
-
-        if (!payload.Is(ChatRequestEvent.Descriptor))
+        if (payload == null || !payload.Is(ChatRequestEvent.Descriptor))
             return;
 
         // Only intercept role-level ChatRequest events. Root workflow actor ChatRequest
@@ -74,7 +77,7 @@ public sealed class DemoTemplateModule : IEventModule
             Content = outputText,
         };
 
-        await ctx.PublishAsync(response, EventDirection.Up, ct);
+        await ctx.PublishAsync(response, TopologyAudience.Parent, ct);
 
         // Replace payload to prevent the default RoleGAgent ChatRequest handler from invoking LLM.
         envelope.Payload = Any.Pack(response);

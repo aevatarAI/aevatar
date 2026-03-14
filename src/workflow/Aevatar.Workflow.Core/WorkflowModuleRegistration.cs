@@ -1,4 +1,3 @@
-using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Core;
@@ -8,11 +7,11 @@ namespace Aevatar.Workflow.Core;
 /// </summary>
 public sealed class WorkflowModuleRegistration
 {
-    private readonly Func<IServiceProvider, IEventModule> _factory;
+    private readonly Func<IServiceProvider, IEventModule<IWorkflowExecutionContext>> _factory;
 
     private WorkflowModuleRegistration(
         Type moduleType,
-        Func<IServiceProvider, IEventModule> factory,
+        Func<IServiceProvider, IEventModule<IWorkflowExecutionContext>> factory,
         IReadOnlyList<string> names)
     {
         ModuleType = moduleType;
@@ -25,7 +24,7 @@ public sealed class WorkflowModuleRegistration
     public IReadOnlyList<string> Names { get; }
 
     public static WorkflowModuleRegistration Create<TModule>(params string[] names)
-        where TModule : class, IEventModule
+        where TModule : class, IEventModule<IWorkflowExecutionContext>
     {
         var cleanedNames = NormalizeNames(names);
         return new WorkflowModuleRegistration(
@@ -34,7 +33,7 @@ public sealed class WorkflowModuleRegistration
             cleanedNames);
     }
 
-    public IEventModule Create(IServiceProvider serviceProvider)
+    public IEventModule<IWorkflowExecutionContext> Create(IServiceProvider serviceProvider)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         return _factory(serviceProvider);

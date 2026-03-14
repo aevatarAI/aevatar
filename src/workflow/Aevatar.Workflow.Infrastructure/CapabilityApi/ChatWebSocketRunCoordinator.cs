@@ -1,6 +1,8 @@
 using System.Net.WebSockets;
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -9,16 +11,18 @@ internal static class ChatWebSocketRunCoordinator
     public static async Task ExecuteAsync(
         WebSocket socket,
         ChatWebSocketCommandEnvelope command,
-        ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError> chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         ApiRequestScope scope,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        WorkflowCapabilitiesDocument? capabilities = null,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
         var correlationId = string.Empty;
         CapabilityMessageTraceContext ResolveContext() =>
             CapabilityTraceContext.CreateMessageContext(correlationId, command.RequestId);
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(command.Input, capabilities, defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -38,10 +42,10 @@ internal static class ChatWebSocketRunCoordinator
         var executionResult = await chatRunService.ExecuteAsync(
             normalizedRequest.Request!,
             SendAguiEventAndRecordAsync,
-            onStartedAsync: SendAckAndRecordAsync,
+            onAcceptedAsync: SendAckAndRecordAsync,
             ct);
 
-        if (executionResult.Error != WorkflowChatRunStartError.None)
+        if (!executionResult.Succeeded || executionResult.Receipt == null)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(executionResult.Error);
             var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(executionResult.Error);
@@ -57,28 +61,28 @@ internal static class ChatWebSocketRunCoordinator
             return;
         }
 
-        if (executionResult.Started != null)
-            correlationId = executionResult.Started.CommandId;
+        if (executionResult.Receipt != null)
+            correlationId = executionResult.Receipt.CorrelationId;
         return;
 
-        async ValueTask SendAguiEventAndRecordAsync(WorkflowOutputFrame frame, CancellationToken token)
+        async ValueTask SendAguiEventAndRecordAsync(WorkflowRunEventEnvelope frame, CancellationToken token)
         {
             var context = ResolveContext();
             await ChatWebSocketProtocol.SendAsync(
                 socket,
                 ChatWebSocketEnvelopeFactory.CreateAguiEvent(
-                    command.RequestId, frame, context.CorrelationId),
+                    command.RequestId, ChatJsonPayloads.ToJsonElement(frame), context.CorrelationId),
                 token,
                 responseMessageType);
             scope.RecordFirstResponse();
         }
 
-        async ValueTask SendAckAndRecordAsync(WorkflowChatRunStarted started, CancellationToken token)
+        async ValueTask SendAckAndRecordAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {
-            correlationId = started.CommandId;
+            correlationId = receipt.CorrelationId;
             await ChatWebSocketProtocol.SendAsync(
                 socket,
-                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, started),
+                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, receipt),
                 token,
                 responseMessageType);
             scope.RecordFirstResponse();

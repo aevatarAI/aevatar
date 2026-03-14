@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Primitives;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -11,10 +12,15 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Sends a structured evaluation prompt to the target role, parses the numeric score
 /// from the response, and applies threshold-based branching.
 /// </summary>
-public sealed class EvaluateModule : IEventModule
+public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<string, EvalContext> _pending = [];
-    private readonly Dictionary<string, int> _attemptsByRunStep = [];
+    private const string ModuleStateKey = "evaluate";
+    private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
+
+    public EvaluateModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    {
+        _targetAgentResolver = targetAgentResolver;
+    }
 
     public string Name => "evaluate";
     public int Priority => 5;
@@ -28,7 +34,7 @@ public sealed class EvaluateModule : IEventModule
                 p.Is(ChatResponseEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -44,6 +50,18 @@ public sealed class EvaluateModule : IEventModule
             var threshold = double.TryParse(thresholdStr, out var th) ? th : 3.0;
             var onBelow = request.Parameters.GetValueOrDefault("on_below", "");
             var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
+            var stepId = request.StepId?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(stepId))
+            {
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = request.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = "evaluate step requires non-empty step_id",
+                }, TopologyAudience.Self, ct);
+                return;
+            }
 
             var prompt = $"""
                 Evaluate the following content on these criteria: {criteria}
@@ -53,31 +71,76 @@ public sealed class EvaluateModule : IEventModule
                 {request.Input}
                 """;
 
-            var stepRunKey = $"{runId}:{request.StepId}";
-            var attempt = _attemptsByRunStep.GetValueOrDefault(stepRunKey, 0) + 1;
-            _attemptsByRunStep[stepRunKey] = attempt;
+            var state = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
+            var attemptKey = BuildAttemptKey(runId, stepId);
+            var attempt = state.AttemptsByStepId.GetValueOrDefault(attemptKey, 0) + 1;
+            state.AttemptsByStepId[attemptKey] = attempt;
 
-            var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, runId, request.StepId, attempt);
-            _pending[sessionId] = new EvalContext(request.StepId, runId, request.Input ?? "", threshold, onBelow);
-
-            var targetRole = request.TargetRole;
-            if (!string.IsNullOrEmpty(targetRole))
+            WorkflowStepTargetAgentResolution target;
+            try
             {
-                var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, targetRole);
-                ctx.Logger.LogInformation(
-                    "EvaluateModule: step={StepId} → SendTo role={Role} actor={ActorId}",
-                    request.StepId, targetRole, targetActorId);
-                await ctx.SendToAsync(targetActorId, new ChatRequestEvent
-                {
-                    Prompt = prompt, SessionId = sessionId,
-                }, ct);
+                target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
             }
-            else
+            catch (Exception ex)
             {
-                await ctx.PublishAsync(new ChatRequestEvent
+                state.AttemptsByStepId.Remove(attemptKey);
+                await SaveStateAsync(state, ctx, CancellationToken.None);
+                await ctx.PublishAsync(new StepCompletedEvent
                 {
-                    Prompt = prompt, SessionId = sessionId,
-                }, EventDirection.Self, ct);
+                    StepId = stepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = $"evaluate target resolution failed: {ex.Message}",
+                }, TopologyAudience.Self, ct);
+                return;
+            }
+
+            var sessionId = CreateSessionId(ctx.AgentId, runId, stepId, attempt);
+            state.PendingBySessionId[sessionId] = new EvalContextState
+            {
+                StepId = stepId,
+                RunId = runId,
+                OriginalInput = request.Input ?? string.Empty,
+                Threshold = threshold,
+                OnBelow = onBelow,
+            };
+            await SaveStateAsync(state, ctx, ct);
+
+            var chatRequest = new ChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = sessionId,
+            };
+            CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+            try
+            {
+                if (!target.UseSelf)
+                {
+                    ctx.Logger.LogInformation(
+                        "EvaluateModule: step={StepId} → SendTo mode={Mode} actor={ActorId}",
+                        stepId,
+                        target.Mode,
+                        target.ActorId);
+                    await ctx.SendToAsync(target.ActorId, chatRequest, ct);
+                }
+                else
+                {
+                    await ctx.PublishAsync(chatRequest, TopologyAudience.Self, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                state.PendingBySessionId.Remove(sessionId);
+                state.AttemptsByStepId.Remove(attemptKey);
+                await SaveStateAsync(state, ctx, CancellationToken.None);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = stepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = $"evaluate dispatch failed: {ex.Message}",
+                }, TopologyAudience.Self, ct);
+                return;
             }
             return;
         }
@@ -96,8 +159,12 @@ public sealed class EvaluateModule : IEventModule
             content = evt.Content; sid = evt.SessionId;
         }
 
-        if (sid == null || !_pending.Remove(sid, out var evalCtx)) return;
-        _attemptsByRunStep.Remove($"{evalCtx.RunId}:{evalCtx.StepId}");
+        if (sid == null)
+            return;
+
+        var stateForCompletion = WorkflowExecutionStateAccess.Load<EvaluateModuleState>(ctx, ModuleStateKey);
+        if (!stateForCompletion.PendingBySessionId.TryGetValue(sid, out var evalCtx))
+            return;
 
         var score = ParseScore(content ?? "");
         var passed = score >= evalCtx.Threshold;
@@ -112,13 +179,17 @@ public sealed class EvaluateModule : IEventModule
             Success = true,
             Output = evalCtx.OriginalInput,
         };
-        completed.Metadata["evaluate.score"] = score.ToString("F1");
-        completed.Metadata["evaluate.passed"] = passed.ToString();
+        completed.Annotations["evaluate.score"] = score.ToString("F1");
+        completed.Annotations["evaluate.passed"] = passed.ToString();
 
         if (!passed && !string.IsNullOrEmpty(evalCtx.OnBelow))
-            completed.Metadata["branch"] = evalCtx.OnBelow;
+            completed.BranchKey = evalCtx.OnBelow;
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+
+        stateForCompletion.PendingBySessionId.Remove(sid);
+        stateForCompletion.AttemptsByStepId.Remove(BuildAttemptKey(evalCtx.RunId, evalCtx.StepId));
+        await SaveStateAsync(stateForCompletion, ctx, ct);
     }
 
     private static double ParseScore(string text)
@@ -133,5 +204,52 @@ public sealed class EvaluateModule : IEventModule
         return 0;
     }
 
-    private sealed record EvalContext(string StepId, string RunId, string OriginalInput, double Threshold, string OnBelow);
+    private static Task SaveStateAsync(
+        EvaluateModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.PendingBySessionId.Count == 0 && state.AttemptsByStepId.Count == 0)
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
+    private static void CopyParametersToChatMetadata(
+        MapField<string, string> parameters,
+        MapField<string, string> metadata)
+    {
+        foreach (var (key, value) in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+            if (string.Equals(key, "agent_type", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "agent_id", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            metadata[key.Trim()] = value.Trim();
+        }
+    }
+
+    private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
+    {
+        if (_targetAgentResolver != null)
+            return _targetAgentResolver;
+
+        var resolver = ctx.Services.GetService(typeof(WorkflowStepTargetAgentResolver)) as WorkflowStepTargetAgentResolver;
+        if (resolver != null)
+            return resolver;
+
+        return new WorkflowStepTargetAgentResolver();
+    }
+
+    private static string BuildAttemptKey(string runId, string stepId) =>
+        string.IsNullOrWhiteSpace(runId) ? stepId : $"{runId}:{stepId}";
+
+    private static string CreateSessionId(string scopeId, string runId, string stepId, int attempt) =>
+        string.IsNullOrWhiteSpace(runId)
+            ? ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, $"{stepId}:a{attempt}")
+            : ChatSessionKeys.CreateWorkflowStepSessionId(scopeId, runId, stepId, attempt);
 }

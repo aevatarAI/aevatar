@@ -368,7 +368,7 @@ internal static class DemoScenarioRunner
         var child = await runtime.CreateAsync<DemoCollectorAgent>("child");
         await runtime.LinkAsync(parent.Id, child.Id);
 
-        await DispatchAsync(parent, new PingEvent { Message = "hello-child" }, EventDirection.Down);
+        await DispatchAsync(parent, new PingEvent { Message = "hello-child" }, TopologyAudience.Children);
         await WaitForAsync(() => GetCollectorValues(traceStore, child.Id).Count > 0);
 
         traceStore.SetSummary("childReceived", string.Join(",", GetCollectorValues(traceStore, child.Id)));
@@ -386,7 +386,7 @@ internal static class DemoScenarioRunner
         await runtime.LinkAsync(coord.Id, w2.Id);
         await runtime.LinkAsync(coord.Id, w3.Id);
 
-        await DispatchAsync(coord, new PingEvent { Message = "task" }, EventDirection.Down);
+        await DispatchAsync(coord, new PingEvent { Message = "task" }, TopologyAudience.Children);
         await WaitForAsync(() =>
             GetCollectorValues(traceStore, w1.Id).Count > 0 &&
             GetCollectorValues(traceStore, w2.Id).Count > 0 &&
@@ -404,12 +404,12 @@ internal static class DemoScenarioRunner
         var collector = await runtime.CreateAsync<DemoCollectorAgent>("sink");
         await runtime.LinkAsync(transformer.Id, collector.Id);
 
-        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "A" }, EventDirection.Self);
-        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, EventDirection.Self);
+        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "A" }, TopologyAudience.Self);
+        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, TopologyAudience.Self);
         await WaitForAsync(() => GetCollectorValues(traceStore, collector.Id).Count > 0);
 
-        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "B" }, EventDirection.Self);
-        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, EventDirection.Self);
+        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "B" }, TopologyAudience.Self);
+        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, TopologyAudience.Self);
         await WaitForAsync(() => GetCollectorValues(traceStore, collector.Id).Count > 1);
 
         traceStore.SetSummary("pipelineReplies", string.Join(",", GetCollectorValues(traceStore, collector.Id)));
@@ -421,7 +421,7 @@ internal static class DemoScenarioRunner
         var faulty = await runtime.CreateAsync<DemoFaultyAgent>("faulty");
         try
         {
-            await DispatchAsync(faulty, new PingEvent { Message = "boom" }, EventDirection.Self);
+            await DispatchAsync(faulty, new PingEvent { Message = "boom" }, TopologyAudience.Self);
         }
         catch (InvalidOperationException)
         {
@@ -440,13 +440,13 @@ internal static class DemoScenarioRunner
     {
         var actor = await runtime.CreateAsync<DemoCounterAgent>("stateful");
 
-        await DispatchAsync(actor, new IncrementEvent { Amount = 7 }, EventDirection.Self);
+        await DispatchAsync(actor, new IncrementEvent { Amount = 7 }, TopologyAudience.Self);
         await WaitForAsync(() => TryGetLatestCounterAfter(traceStore, actor.Id, out var count) && count == 7);
 
         await runtime.DestroyAsync(actor.Id);
         var restored = await runtime.CreateAsync<DemoCounterAgent>("stateful");
         var baselineEventCount = CountCounterStateEvents(traceStore, restored.Id);
-        await DispatchAsync(restored, new IncrementEvent { Amount = 0 }, EventDirection.Self);
+        await DispatchAsync(restored, new IncrementEvent { Amount = 0 }, TopologyAudience.Self);
         await WaitForAsync(() => CountCounterStateEvents(traceStore, restored.Id) > baselineEventCount);
         TryGetLatestCounterAfter(traceStore, restored.Id, out var state);
 
@@ -457,7 +457,7 @@ internal static class DemoScenarioRunner
     private static async Task DispatchAsync<T>(
         IActor actor,
         T evt,
-        EventDirection direction,
+        TopologyAudience direction,
         string publisherId = "demo-user")
         where T : IMessage
     {
@@ -555,15 +555,14 @@ internal static class DemoScenarioRunner
     private static EventEnvelope CreateEnvelope<T>(
         T evt,
         string publisherId = "demo-user",
-        EventDirection direction = EventDirection.Down)
+        TopologyAudience direction = TopologyAudience.Children)
         where T : IMessage =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId,
-            Direction = direction,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
         };
 }
 

@@ -6,7 +6,7 @@ namespace Aevatar.Foundation.Abstractions.Propagation;
 public interface IEnvelopePropagationPolicy
 {
     /// <summary>
-    /// Applies correlation and metadata propagation.
+    /// Applies correlation and propagation-context inheritance.
     /// </summary>
     void Apply(EventEnvelope outboundEnvelope, EventEnvelope? inboundEnvelope);
 }

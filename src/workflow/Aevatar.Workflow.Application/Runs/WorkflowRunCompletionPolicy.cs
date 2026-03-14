@@ -1,23 +1,27 @@
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-public sealed class WorkflowRunCompletionPolicy : IWorkflowRunCompletionPolicy
+public sealed class WorkflowRunCompletionPolicy
+    : ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
 {
+    public WorkflowProjectionCompletionStatus IncompleteCompletion => WorkflowProjectionCompletionStatus.Unknown;
+
     public bool TryResolve(
-        WorkflowOutputFrame frame,
-        out WorkflowProjectionCompletionStatus status)
+        WorkflowRunEventEnvelope evt,
+        out WorkflowProjectionCompletionStatus completion)
     {
-        status = WorkflowProjectionCompletionStatus.Unknown;
-        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunFinished, StringComparison.Ordinal))
+        completion = WorkflowProjectionCompletionStatus.Unknown;
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished)
         {
-            status = WorkflowProjectionCompletionStatus.Completed;
+            completion = WorkflowProjectionCompletionStatus.Completed;
             return true;
         }
 
-        if (string.Equals(frame.Type, WorkflowRunEventTypes.RunError, StringComparison.Ordinal))
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError)
         {
-            status = WorkflowProjectionCompletionStatus.Failed;
+            completion = WorkflowProjectionCompletionStatus.Failed;
             return true;
         }
 

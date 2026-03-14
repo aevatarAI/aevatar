@@ -4,7 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application;
 
-internal static class ScriptingActorRequestEnvelopeFactory
+public static class ScriptingActorRequestEnvelopeFactory
 {
     private const string RequestPublisherId = "scripting.application";
 
@@ -25,10 +25,11 @@ internal static class ScriptingActorRequestEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            PublisherId = resolvedPublisherId,
-            Direction = EventDirection.Self,
-            TargetActorId = targetActorId,
-            CorrelationId = correlationId ?? string.Empty,
+            Route = EnvelopeRouteSemantics.CreateDirect(resolvedPublisherId, targetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
         };
     }
 }

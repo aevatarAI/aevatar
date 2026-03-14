@@ -176,11 +176,13 @@ public class WorkflowExecutionProjectionRegistrationTests
     private static void RegisterEventStore(IServiceCollection services)
     {
         services.AddSingleton<IEventStore, InMemoryEventStore>();
-        services.AddSingleton<IActorRuntime, NoOpActorRuntime>();
+        services.AddSingleton<NoOpActorRuntime>();
+        services.AddSingleton<IActorRuntime>(sp => sp.GetRequiredService<NoOpActorRuntime>());
+        services.AddSingleton<IActorDispatchPort>(sp => sp.GetRequiredService<NoOpActorRuntime>());
         services.AddSingleton<IAgentTypeVerifier, AlwaysTrueTypeVerifier>();
     }
 
-    private sealed class NoOpActorRuntime : IActorRuntime
+    private sealed class NoOpActorRuntime : IActorRuntime, IActorDispatchPort
     {
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -192,6 +194,14 @@ public class WorkflowExecutionProjectionRegistrationTests
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
 

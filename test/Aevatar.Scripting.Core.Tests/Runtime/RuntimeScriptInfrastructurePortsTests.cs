@@ -1,9 +1,14 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Ports;
@@ -19,10 +24,9 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task SpawnRuntimeAsync_ShouldCreateActorWithLatestRevision_WhenRevisionIsEmpty()
     {
         var runtime = new TestActorRuntime();
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeProvisioningService(runtime);
 
-        var actorId = await service.SpawnRuntimeAsync(
+        var actorId = await service.EnsureRuntimeAsync(
             definitionActorId: "definition-1",
             scriptRevision: string.Empty,
             runtimeActorId: null,
@@ -37,10 +41,9 @@ public class RuntimeScriptInfrastructurePortsTests
     {
         var runtime = new TestActorRuntime();
         runtime.RegisterActor(new TestActor("runtime-existing"));
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeProvisioningService(runtime);
 
-        var actorId = await service.SpawnRuntimeAsync(
+        var actorId = await service.EnsureRuntimeAsync(
             definitionActorId: "definition-1",
             scriptRevision: "rev-1",
             runtimeActorId: "runtime-existing",
@@ -54,8 +57,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldThrow_WhenRuntimeActorIdMissing()
     {
         var runtime = new TestActorRuntime();
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeCommandService(runtime);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: string.Empty,
@@ -73,8 +75,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldThrow_WhenRunIdMissing()
     {
         var runtime = new TestActorRuntime();
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeCommandService(runtime);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -92,8 +93,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldThrow_WhenRuntimeActorNotFound()
     {
         var runtime = new TestActorRuntime();
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeCommandService(runtime);
 
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-missing",
@@ -119,8 +119,7 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }));
-        var accessor = new RuntimeScriptActorAccessor(runtime);
-        var service = new RuntimeScriptExecutionLifecycleService(accessor);
+        var service = CreateRuntimeCommandService(runtime);
 
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -253,114 +252,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task DefinitionSnapshotPort_ShouldExposeEventDrivenModeFromOptions()
-    {
-        var runtime = new TestActorRuntime();
-        var streams = new InMemoryStreamProvider();
-        var queryClient = new RuntimeScriptQueryClient(streams);
-        var port = new RuntimeScriptDefinitionSnapshotPort(
-            new RuntimeScriptActorAccessor(runtime),
-            queryClient,
-            new FixedQueryModes(useEventDrivenDefinitionQuery: true),
-            new FixedTimeouts());
-
-        port.UseEventDrivenDefinitionQuery.Should().BeTrue();
-        await Task.CompletedTask;
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenManagerActorMissing()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, _ => throw new InvalidOperationException("should-not-handle"));
-
-        var decision = await port.TryResolveAsync("manager-missing", "proposal-1", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenQueryTimesOut()
-    {
-        var runtime = new TestActorRuntime();
-        var streams = new InMemoryStreamProvider();
-        runtime.RegisterActor(new TestActor("manager-1", (envelope, ct) =>
-        {
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }));
-        var port = new RuntimeScriptEvolutionDecisionFallbackPort(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-timeout", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldReturnNull_WhenDecisionNotFound()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, request =>
-            new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = false,
-                ProposalId = request.ProposalId,
-            });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-not-found", CancellationToken.None);
-
-        decision.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldMapDecision_WhenFound()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, request =>
-            new ScriptEvolutionDecisionRespondedEvent
-            {
-                RequestId = request.RequestId,
-                Found = true,
-                Accepted = true,
-                ProposalId = request.ProposalId,
-                ScriptId = "script-1",
-                BaseRevision = "rev-1",
-                CandidateRevision = "rev-2",
-                Status = "promoted",
-                FailureReason = string.Empty,
-                DefinitionActorId = "definition-1",
-                CatalogActorId = "catalog-1",
-                Diagnostics = { "compile-ok" },
-            });
-
-        var decision = await port.TryResolveAsync("manager-1", "proposal-hit", CancellationToken.None);
-
-        decision.Should().NotBeNull();
-        decision!.Accepted.Should().BeTrue();
-        decision.ProposalId.Should().Be("proposal-hit");
-        decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
-    }
-
-    [Fact]
-    public async Task DecisionFallbackPort_ShouldThrow_WhenArgumentsMissing()
-    {
-        var runtime = new TestActorRuntime();
-        var port = CreateDecisionFallbackPort(runtime, _ => throw new InvalidOperationException("should-not-handle"));
-
-        var missingManager = () => port.TryResolveAsync(string.Empty, "proposal-1", CancellationToken.None);
-        var missingProposal = () => port.TryResolveAsync("manager-1", string.Empty, CancellationToken.None);
-
-        await missingManager.Should().ThrowAsync<ArgumentException>();
-        await missingProposal.Should().ThrowAsync<ArgumentException>();
-    }
-
-    [Fact]
-    public async Task CatalogLifecycleService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
+    public async Task CatalogCommandService_ShouldDispatchPromoteRequest_WithResolvedCatalogActorId()
     {
         PromoteScriptRevisionRequestedEvent? captured = null;
         var runtime = new TestActorRuntime
@@ -372,11 +264,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = new RuntimeScriptCatalogLifecycleService(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider()),
-            new StaticAddressResolver(),
-            new FixedTimeouts());
+        var service = CreateCatalogCommandService(runtime);
 
         await service.PromoteCatalogRevisionAsync(
             catalogActorId: null,
@@ -395,7 +283,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_ShouldDispatchRollbackRequest_WithProvidedCatalogActorId()
+    public async Task CatalogCommandService_ShouldDispatchRollbackRequest_WithProvidedCatalogActorId()
     {
         RollbackScriptRevisionRequestedEvent? captured = null;
         var runtime = new TestActorRuntime
@@ -407,11 +295,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = new RuntimeScriptCatalogLifecycleService(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(new InMemoryStreamProvider()),
-            new StaticAddressResolver(),
-            new FixedTimeouts());
+        var service = CreateCatalogCommandService(runtime);
 
         await service.RollbackCatalogRevisionAsync(
             catalogActorId: "catalog-custom",
@@ -429,9 +313,9 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenScriptIdMissing()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenScriptIdMissing()
     {
-        var service = CreateCatalogLifecycleService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestActorRuntime());
 
         var entry = await service.GetCatalogEntryAsync(null, string.Empty, CancellationToken.None);
 
@@ -439,9 +323,9 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogActorMissing()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenCatalogActorMissing()
     {
-        var service = CreateCatalogLifecycleService(new TestActorRuntime());
+        var service = CreateCatalogQueryService(new TestActorRuntime());
 
         var entry = await service.GetCatalogEntryAsync(null, "script-1", CancellationToken.None);
 
@@ -449,10 +333,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldReturnNull_WhenQueryRespondsNotFound()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldReturnNull_WhenQueryRespondsNotFound()
     {
         var runtime = new TestActorRuntime();
-        var service = CreateCatalogLifecycleService(
+        var service = CreateCatalogQueryService(
             runtime,
             request => new ScriptCatalogEntryRespondedEvent
             {
@@ -467,10 +351,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task CatalogLifecycleService_GetCatalogEntryAsync_ShouldMapSnapshot_WhenFound()
+    public async Task CatalogQueryService_GetCatalogEntryAsync_ShouldMapSnapshot_WhenFound()
     {
         var runtime = new TestActorRuntime();
-        var service = CreateCatalogLifecycleService(
+        var service = CreateCatalogQueryService(
             runtime,
             request => new ScriptCatalogEntryRespondedEvent
             {
@@ -495,10 +379,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldReturnDecision_WhenSessionCompletes()
+    public async Task EvolutionInteractionService_ShouldReturnDecision_WhenSessionCompletes()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var fallbackPort = new TestFallbackPort();
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
         {
             projectionPort.Publish("script-evolution-session:proposal-1", new ScriptEvolutionSessionCompletedEvent
@@ -517,7 +401,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 Diagnostics = { "compile-ok" },
             });
         });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -535,14 +419,14 @@ public class RuntimeScriptInfrastructurePortsTests
         decision.ValidationReport.Diagnostics.Should().ContainSingle(x => x == "compile-ok");
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
-        fallbackPort.Calls.Should().BeEmpty();
+        decisionReadPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldGenerateProposalId_WhenRequestProposalIdMissing()
+    public async Task EvolutionInteractionService_ShouldGenerateProposalId_WhenRequestProposalIdMissing()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var fallbackPort = new TestFallbackPort();
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort();
         StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
         var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
         {
@@ -554,7 +438,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 Status = "promoted",
             });
         });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -573,10 +457,10 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldUseFallbackDecision_WhenSessionTimesOut()
+    public async Task EvolutionInteractionService_ShouldUseFallbackDecision_WhenSessionTimesOut()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var fallbackPort = new TestFallbackPort
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort
         {
             NextResult = new ScriptPromotionDecision(
                 Accepted: false,
@@ -591,11 +475,11 @@ public class RuntimeScriptInfrastructurePortsTests
                 ValidationReport: ScriptEvolutionValidationReport.Empty),
         };
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
-        var service = CreateEvolutionLifecycleService(
+        var service = CreateEvolutionInteractionService(
             runtime,
             projectionPort,
-            fallbackPort,
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+            decisionReadPort,
+            new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var decision = await service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -609,22 +493,22 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken.None);
 
         decision.FailureReason.Should().Be("fallback-decision");
-        fallbackPort.Calls.Should().ContainSingle();
+        decisionReadPort.Calls.Should().ContainSingle();
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldThrowTimeout_WhenSessionTimesOutWithoutFallback()
+    public async Task EvolutionInteractionService_ShouldThrowTimeout_WhenSessionTimesOutWithoutFallback()
     {
-        var projectionPort = new TestProjectionLifecyclePort();
-        var fallbackPort = new TestFallbackPort { NextResult = null };
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort { NextResult = null };
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
-        var service = CreateEvolutionLifecycleService(
+        var service = CreateEvolutionInteractionService(
             runtime,
             projectionPort,
-            fallbackPort,
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+            decisionReadPort,
+            new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(50) });
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -639,16 +523,16 @@ public class RuntimeScriptInfrastructurePortsTests
 
         await act.Should().ThrowAsync<TimeoutException>()
             .WithMessage("*proposal-timeout-no-fallback*");
-        fallbackPort.Calls.Should().ContainSingle();
+        decisionReadPort.Calls.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task EvolutionLifecycleService_ShouldThrow_WhenProjectionLeaseIsUnavailable()
+    public async Task EvolutionInteractionService_ShouldThrow_WhenProjectionLeaseIsUnavailable()
     {
-        var projectionPort = new TestProjectionLifecyclePort { ReturnNullLease = true };
-        var fallbackPort = new TestFallbackPort();
+        var projectionPort = new TestProjectionPort { ReturnNullLease = true };
+        var decisionReadPort = new TestDecisionReadPort();
         var runtime = CreateEvolutionRuntime(projectionPort, (_, _) => { });
-        var service = CreateEvolutionLifecycleService(runtime, projectionPort, fallbackPort);
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
 
         var act = () => service.ProposeAsync(
             new ScriptEvolutionProposal(
@@ -680,29 +564,11 @@ public class RuntimeScriptInfrastructurePortsTests
         }));
         return new RuntimeScriptDefinitionSnapshotPort(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
-            new FixedQueryModes(useEventDrivenDefinitionQuery: false),
-            new FixedTimeouts { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
+            new ScriptingQueryTimeoutOptions { DefinitionSnapshotQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
-    private static RuntimeScriptEvolutionDecisionFallbackPort CreateDecisionFallbackPort(
-        TestActorRuntime runtime,
-        Func<QueryScriptEvolutionDecisionRequestedEvent, ScriptEvolutionDecisionRespondedEvent> responseFactory)
-    {
-        var streams = new InMemoryStreamProvider();
-        runtime.RegisterActor(new TestActor("manager-1", async (envelope, ct) =>
-        {
-            var request = envelope.Payload.Unpack<QueryScriptEvolutionDecisionRequestedEvent>();
-            var response = responseFactory(request);
-            await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
-        }));
-        return new RuntimeScriptEvolutionDecisionFallbackPort(
-            new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
-            new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
-    }
-
-    private static RuntimeScriptCatalogLifecycleService CreateCatalogLifecycleService(
+    private static RuntimeScriptCatalogQueryService CreateCatalogQueryService(
         TestActorRuntime runtime,
         Func<QueryScriptCatalogEntryRequestedEvent, ScriptCatalogEntryRespondedEvent>? responseFactory = null)
     {
@@ -725,15 +591,15 @@ public class RuntimeScriptInfrastructurePortsTests
                 await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
             }));
 
-        return new RuntimeScriptCatalogLifecycleService(
+        return new RuntimeScriptCatalogQueryService(
             new RuntimeScriptActorAccessor(runtime),
-            new RuntimeScriptQueryClient(streams),
+            new RuntimeScriptQueryClient(streams, new RuntimeStreamRequestReplyClient()),
             new StaticAddressResolver(),
-            new FixedTimeouts { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
+            new ScriptingQueryTimeoutOptions { CatalogEntryQueryTimeout = TimeSpan.FromMilliseconds(200) });
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
-        TestProjectionLifecyclePort projectionPort,
+        TestProjectionPort projectionPort,
         Action<string, StartScriptEvolutionSessionRequestedEvent> onStartSession)
     {
         var runtime = new TestActorRuntime();
@@ -758,21 +624,85 @@ public class RuntimeScriptInfrastructurePortsTests
         return runtime;
     }
 
-    private static RuntimeScriptEvolutionLifecycleService CreateEvolutionLifecycleService(
+    private static RuntimeScriptEvolutionInteractionService CreateEvolutionInteractionService(
         TestActorRuntime runtime,
-        TestProjectionLifecyclePort projectionPort,
-        TestFallbackPort fallbackPort,
-        IScriptingPortTimeouts? timeouts = null)
+        TestProjectionPort projectionPort,
+        TestDecisionReadPort decisionReadPort,
+        ScriptingInteractionTimeoutOptions? interactionTimeoutOptions = null)
     {
-        return new RuntimeScriptEvolutionLifecycleService(
-            new RuntimeScriptActorAccessor(runtime),
-            projectionPort,
-            fallbackPort,
-            new StaticAddressResolver(),
-            timeouts ?? new FixedTimeouts { EvolutionDecisionTimeout = TimeSpan.FromMilliseconds(200) });
+        var resolvedInteractionTimeoutOptions = interactionTimeoutOptions
+            ?? new ScriptingInteractionTimeoutOptions { EvolutionCompletionTimeout = TimeSpan.FromMilliseconds(200) };
+        var actorAccessor = new RuntimeScriptActorAccessor(runtime);
+        var addressResolver = new StaticAddressResolver();
+        var targetResolver = new ScriptEvolutionCommandTargetResolver(
+            actorAccessor,
+            addressResolver,
+            projectionPort);
+        var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
+            targetResolver,
+            new DefaultCommandContextPolicy(),
+            new ScriptEvolutionCommandTargetBinder(projectionPort),
+            new ScriptEvolutionEnvelopeFactory(),
+            new ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>(runtime),
+            new ScriptEvolutionAcceptedReceiptFactory());
+        var interactionService = new DefaultCommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>(
+            dispatchPipeline,
+            new ScriptEvolutionTimedEventOutputStream(resolvedInteractionTimeoutOptions),
+            new ScriptEvolutionCompletionPolicy(),
+            new NoOpCommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>(),
+            new ScriptEvolutionDurableCompletionResolver(decisionReadPort));
+
+        return new RuntimeScriptEvolutionInteractionService(interactionService);
     }
 
-    private sealed class TestActorRuntime : IActorRuntime
+    private static RuntimeScriptProvisioningService CreateRuntimeProvisioningService(TestActorRuntime runtime)
+    {
+        return new RuntimeScriptProvisioningService(new RuntimeScriptActorAccessor(runtime));
+    }
+
+    private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
+    {
+        return new RuntimeScriptCommandService(
+            CreateDispatchService(
+                runtime,
+                new RunScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
+                new RunScriptRuntimeCommandEnvelopeFactory()));
+    }
+
+    private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(TestActorRuntime runtime)
+    {
+        return new RuntimeScriptCatalogCommandService(
+            CreateDispatchService(
+                runtime,
+                new PromoteScriptCatalogRevisionCommandTargetResolver(
+                    new RuntimeScriptActorAccessor(runtime),
+                    new StaticAddressResolver()),
+                new PromoteScriptCatalogRevisionCommandEnvelopeFactory()),
+            CreateDispatchService(
+                runtime,
+                new RollbackScriptCatalogRevisionCommandTargetResolver(
+                    new RuntimeScriptActorAccessor(runtime),
+                    new StaticAddressResolver()),
+                new RollbackScriptCatalogRevisionCommandEnvelopeFactory()));
+    }
+
+    private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
+        TestActorRuntime runtime,
+        ICommandTargetResolver<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError> resolver,
+        ICommandEnvelopeFactory<TCommand> envelopeFactory)
+        where TCommand : class
+    {
+        return new DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>(
+            new DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>(
+                resolver,
+                new DefaultCommandContextPolicy(),
+                new NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>(),
+                envelopeFactory,
+                new ActorCommandTargetDispatcher<ScriptingActorCommandTarget>(runtime),
+                new ScriptingCommandAcceptedReceiptFactory()));
+    }
+
+    private sealed class TestActorRuntime : IActorRuntime, IActorDispatchPort
     {
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
 
@@ -817,6 +747,13 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             _actors.TryGetValue(id, out var actor);
             return Task.FromResult(actor);
+        }
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+            await actor.HandleEventAsync(envelope, ct);
         }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
@@ -911,20 +848,6 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
-    private sealed class FixedTimeouts : IScriptingPortTimeouts
-    {
-        public TimeSpan DefinitionSnapshotQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-
-        public TimeSpan CatalogEntryQueryTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-
-        public TimeSpan EvolutionDecisionTimeout { get; init; } = TimeSpan.FromMilliseconds(200);
-    }
-
-    private sealed class FixedQueryModes(bool useEventDrivenDefinitionQuery) : IScriptingRuntimeQueryModes
-    {
-        public bool UseEventDrivenDefinitionQuery { get; } = useEventDrivenDefinitionQuery;
-    }
-
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
@@ -936,19 +859,18 @@ public class RuntimeScriptInfrastructurePortsTests
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
     }
 
-    private sealed class TestFallbackPort : IScriptEvolutionDecisionFallbackPort
+    private sealed class TestDecisionReadPort : IScriptEvolutionDecisionReadPort
     {
         public ScriptPromotionDecision? NextResult { get; set; }
 
-        public List<(string ManagerActorId, string ProposalId)> Calls { get; } = [];
+        public List<string> Calls { get; } = [];
 
-        public Task<ScriptPromotionDecision?> TryResolveAsync(
-            string managerActorId,
+        public Task<ScriptPromotionDecision?> TryGetAsync(
             string proposalId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            Calls.Add((managerActorId, proposalId));
+            Calls.Add(proposalId);
             return Task.FromResult(NextResult);
         }
     }
@@ -960,7 +882,7 @@ public class RuntimeScriptInfrastructurePortsTests
         public string ProposalId { get; } = proposalId;
     }
 
-    private sealed class TestProjectionLifecyclePort : IScriptEvolutionProjectionLifecyclePort
+    private sealed class TestProjectionPort : IScriptEvolutionProjectionPort
     {
         private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
             new(StringComparer.Ordinal);

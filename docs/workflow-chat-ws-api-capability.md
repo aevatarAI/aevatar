@@ -14,12 +14,21 @@
 
 | Endpoint | 协议 | 作用 |
 |---|---|---|
-| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收事件流 |
+| `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
 说明：`/api/chat` 与 `/api/ws/chat` 走同一套执行链路，差别只有传输协议。
+
+口径补充：
+
+- API 输入会先规范化为应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> dispatch port -> accepted receipt`。
+- Workflow capability 只提供 workflow 特有的目标解析、payload 映射与观察映射；命令生命周期契约属于 CQRS Core，而不是 workflow 私有协议。
+- 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成。
+- 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
+- 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
+- `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
 
 ## 2. 输入模型（chat）
 
@@ -76,7 +85,7 @@
 
 ## 4. Human Approval / Human Input 如何继续
 
-当 run 到 `human_input` 或 `human_approval`，事件流会发出 `HUMAN_INPUT_REQUEST`，包含：
+当 run 到 `human_input` 或 `human_approval`，运行时 envelope 投影流会发出 `HUMAN_INPUT_REQUEST`，包含：
 
 - `runId`
 - `stepId`
@@ -151,6 +160,12 @@ POST /api/workflows/signal
 - `command.ack`：返回 `commandId/actorId/workflow`
 - `agui.event`：逐帧业务事件（payload 即 `WorkflowOutputFrame`）
 - `command.error`：输入或启动阶段错误
+
+`command.ack` 使用约束：
+
+1. 客户端应把 `actorId + commandId` 视为后续观察句柄，其中 `commandId` 负责追踪，`actorId` 负责定位。
+2. `command.ack` 是 CQRS dispatch pipeline 生成的 accepted receipt，只表示当前命令已经通过 runtime 成功 dispatch 到目标 actor 语义边界。
+3. 最终结果仍以 `agui.event` 流与 `/api/actors/*` 查询为准。
 
 ## 7. 常见使用模式
 

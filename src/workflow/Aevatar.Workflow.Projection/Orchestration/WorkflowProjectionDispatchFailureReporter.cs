@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
@@ -9,12 +10,12 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionDispatchFailureReporter
     : IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>
 {
-    private const string ProjectionDispatchFailureCode = "PROJECTION_DISPATCH_FAILED";
-    private readonly IProjectionSessionEventHub<WorkflowRunEvent> _runEventStreamHub;
+    internal const string ProjectionDispatchFailureEventName = "aevatar.projection.dispatch.failure";
+    private readonly IProjectionSessionEventHub<WorkflowRunEventEnvelope> _runEventStreamHub;
     private readonly IProjectionClock _clock;
 
     public WorkflowProjectionDispatchFailureReporter(
-        IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
+        IProjectionSessionEventHub<WorkflowRunEventEnvelope> runEventStreamHub,
         IProjectionClock clock)
     {
         _runEventStreamHub = runEventStreamHub;
@@ -35,11 +36,19 @@ public sealed class WorkflowProjectionDispatchFailureReporter
             return ValueTask.CompletedTask;
 
         var payloadType = envelope.Payload?.TypeUrl ?? "(none)";
-        var evt = new WorkflowRunErrorEvent
+        var evt = new WorkflowRunEventEnvelope
         {
-            Code = ProjectionDispatchFailureCode,
-            Message = $"Projection dispatch failed. eventId={envelope.Id}, payloadType={payloadType}, reason={exception.Message}",
             Timestamp = _clock.UtcNow.ToUnixTimeMilliseconds(),
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = ProjectionDispatchFailureEventName,
+                Payload = Any.Pack(new WorkflowProjectionDispatchFailureCustomPayload
+                {
+                    EventId = envelope.Id ?? string.Empty,
+                    PayloadType = payloadType,
+                    Reason = exception.Message ?? string.Empty,
+                }),
+            },
         };
 
         return new ValueTask(

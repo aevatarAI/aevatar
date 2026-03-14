@@ -14,8 +14,10 @@
 //   ${or(a, b)}                — 逻辑或
 // ─────────────────────────────────────────────────────────────
 
-using System.Text.RegularExpressions;
 using System.Globalization;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Expressions;
 
@@ -75,6 +77,7 @@ public sealed partial class WorkflowExpressionEvaluator
                 "upper" => EvalUpper(args, variables),
                 "lower" => EvalLower(args, variables),
                 "trim" => EvalTrim(args, variables),
+                "json" => EvalJson(args, variables),
                 "add" => EvalAdd(args, variables),
                 "sub" => EvalSub(args, variables),
                 "mul" => EvalMul(args, variables),
@@ -132,6 +135,15 @@ public sealed partial class WorkflowExpressionEvaluator
 
     private string EvalTrim(List<string> args, IReadOnlyDictionary<string, string> variables) =>
         args.Count > 0 ? EvaluateExpression(args[0], variables).Trim() : "";
+
+    private string EvalJson(List<string> args, IReadOnlyDictionary<string, string> variables)
+    {
+        if (args.Count == 0)
+            return "";
+
+        var value = EvaluateExpression(args[0], variables);
+        return JsonEncodedText.Encode(value ?? string.Empty, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
+    }
 
     private string EvalAdd(List<string> args, IReadOnlyDictionary<string, string> variables)
     {

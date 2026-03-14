@@ -1,9 +1,8 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -13,173 +12,124 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatWebSocketCoordinatorAndProtocolTests
 {
     [Fact]
-    public async Task ExecuteAsync_WhenSuccess_ShouldSendAckAndRunEvents()
+    public void CreateCommandAck_ShouldMapReceiptFields()
+    {
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+
+        var envelope = ChatWebSocketEnvelopeFactory.CreateCommandAck("req-1", receipt);
+
+        envelope.RequestId.Should().Be("req-1");
+        envelope.CorrelationId.Should().Be("corr-1");
+        envelope.Payload.CommandId.Should().Be("cmd-1");
+        envelope.Payload.ActorId.Should().Be("actor-1");
+        envelope.Payload.Workflow.Should().Be("direct");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldSendAckAndAguiEvent()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        using var activity = new Activity("ws-success-trace").Start();
-        var service = new FakeCommandExecutionService
+        var service = new FakeCommandInteractionService
         {
-            Handler = async (_, emitAsync, onStartedAsync, ct) =>
+            Handler = async (_, emitAsync, onAcceptedAsync, ct) =>
             {
-                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-1");
-                if (onStartedAsync != null)
-                    await onStartedAsync(started, ct);
-
-                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" }, ct);
-                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunFinished, ThreadId = "actor-1" }, ct);
-
-                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.None,
-                    started,
-                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "message-1",
+                        Delta = "hello",
+                    },
+                }, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
 
-        var scope = ApiRequestScope.BeginWebSocket();
-        await ChatWebSocketRunCoordinator.ExecuteAsync(
-            socket,
-            new ChatWebSocketCommandEnvelope("req-1", new ChatInput
-            {
-                Prompt = "hello",
-                Workflow = "direct",
-                WorkflowYamls = ["name: direct"],
-                AgentId = "actor-1",
-            }, WebSocketMessageType.Text),
-            service,
-            scope,
-            CancellationToken.None);
-
-        var types = socket.SentTexts
-            .Select(static text => JsonDocument.Parse(text).RootElement.GetProperty("type").GetString())
-            .ToList();
-        types.Should().Equal(
-            ChatWebSocketMessageTypes.CommandAck,
-            ChatWebSocketMessageTypes.AguiEvent,
-            ChatWebSocketMessageTypes.AguiEvent);
-
-        service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.Prompt.Should().Be("hello");
-        service.LastCommand.WorkflowName.Should().BeNull();
-        service.LastCommand.WorkflowYamls.Should().NotBeNull();
-        service.LastCommand.WorkflowYamls![0].Should().Be("name: direct");
-
-        using var ackDoc = JsonDocument.Parse(socket.SentTexts[0]);
-        ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        ackDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
-
-        using var eventDoc = JsonDocument.Parse(socket.SentTexts[1]);
-        eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-1");
-        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenStartFails_ShouldSendCommandErrorOnly()
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        using var activity = new Activity("ws-error-trace").Start();
-        var service = new FakeCommandExecutionService
-        {
-            Handler = (_, _, _, _) => Task.FromResult(
-                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.WorkflowNotFound,
-                    null,
-                    null)),
-        };
-
-        var scope = ApiRequestScope.BeginWebSocket();
-        await ChatWebSocketRunCoordinator.ExecuteAsync(
-            socket,
-            new ChatWebSocketCommandEnvelope("req-2", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
-            service,
-            scope,
-            CancellationToken.None);
-
-        socket.SentTexts.Should().ContainSingle();
-        using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandError);
-        doc.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_NOT_FOUND");
-        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-2");
-        doc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
-        doc.RootElement.TryGetProperty("payload", out _).Should().BeFalse();
-        service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.WorkflowName.Should().Be("auto");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenAgentIdProvidedWithoutWorkflow_ShouldKeepWorkflowUnset()
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        var service = new FakeCommandExecutionService
-        {
-            Handler = (_, _, _, _) => Task.FromResult(
-                new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.AgentNotFound,
-                    null,
-                    null)),
-        };
-
-        var scope = ApiRequestScope.BeginWebSocket();
         await ChatWebSocketRunCoordinator.ExecuteAsync(
             socket,
             new ChatWebSocketCommandEnvelope(
-                "req-3",
-                new ChatInput
-                {
-                    Prompt = "hello",
-                    AgentId = " actor-1 ",
-                },
+                "req-1",
+                new ChatInput { Prompt = "hello" },
                 WebSocketMessageType.Text),
             service,
-            scope,
-            CancellationToken.None);
-
-        service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.ActorId.Should().Be("actor-1");
-        service.LastCommand.WorkflowName.Should().BeNull();
-        socket.SentTexts.Should().ContainSingle();
-        using var doc = JsonDocument.Parse(socket.SentTexts[0]);
-        doc.RootElement.GetProperty("code").GetString().Should().Be("AGENT_NOT_FOUND");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenRunEventArrivesBeforeAck_ShouldUseRequestIdAsCorrelationFallback()
-    {
-        var socket = new FakeWebSocket(WebSocketState.Open);
-        using var activity = new Activity("ws-out-of-order-trace").Start();
-        var service = new FakeCommandExecutionService
-        {
-            Handler = async (_, emitAsync, onStartedAsync, ct) =>
-            {
-                await emitAsync(new WorkflowOutputFrame { Type = WorkflowRunEventTypes.RunStarted, ThreadId = "actor-1" }, ct);
-                var started = new WorkflowChatRunStarted("actor-1", "direct", "cmd-late");
-                if (onStartedAsync != null)
-                    await onStartedAsync(started, ct);
-
-                return new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.None,
-                    started,
-                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
-            },
-        };
-
-        var scope = ApiRequestScope.BeginWebSocket();
-        await ChatWebSocketRunCoordinator.ExecuteAsync(
-            socket,
-            new ChatWebSocketCommandEnvelope("req-fallback", new ChatInput { Prompt = "hello" }, WebSocketMessageType.Text),
-            service,
-            scope,
+            ApiRequestScope.BeginHttp(),
             CancellationToken.None);
 
         socket.SentTexts.Should().HaveCount(2);
-        using var eventDoc = JsonDocument.Parse(socket.SentTexts[0]);
-        eventDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.AguiEvent);
-        eventDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("req-fallback");
-        eventDoc.RootElement.TryGetProperty("traceId", out _).Should().BeFalse();
+        socket.SentTexts[0].Should().Contain("\"type\":\"command.ack\"");
+        socket.SentTexts[0].Should().Contain("\"commandId\":\"cmd-1\"");
+        socket.SentTexts[1].Should().Contain("\"type\":\"agui.event\"");
+        socket.SentTexts[1].Should().Contain("\"delta\":\"hello\"");
+    }
 
-        using var ackDoc = JsonDocument.Parse(socket.SentTexts[1]);
-        ackDoc.RootElement.GetProperty("type").GetString().Should().Be(ChatWebSocketMessageTypes.CommandAck);
-        ackDoc.RootElement.GetProperty("correlationId").GetString().Should().Be("cmd-late");
+    [Fact]
+    public async Task ExecuteAsync_ShouldSendCommandError_WhenStartFails()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
+        };
 
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-1",
+                new ChatInput { Prompt = "hello", Workflow = "missing" },
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None);
+
+        socket.SentTexts.Should().ContainSingle();
+        socket.SentTexts[0].Should().Contain("\"type\":\"command.error\"");
+        socket.SentTexts[0].Should().Contain("WORKFLOW_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRuntimeDefaultMetadataProvided_ShouldMergeWithRequestMetadata()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound)),
+        };
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-defaults",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["telegram.chat_id"] = "-100-request",
+                    },
+                },
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None,
+            defaultMetadata: new Dictionary<string, string>
+            {
+                ["telegram.chat_id"] = "-100-default",
+                ["telegram.openclaw_bot_username"] = "openclaw_bot",
+            });
+
+        var command = service.LastRequest;
+        command.Should().NotBeNull();
+        var metadata = command!.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
+        metadata["telegram.chat_id"].Should().Be("-100-request");
+        metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
     }
 
     [Fact]
@@ -234,6 +184,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
             doc.RootElement.GetProperty("requestId").GetString().Should().Be("r1");
             doc.RootElement.GetProperty("valueNum").GetInt32().Should().Be(2);
         }
+
         openSocket.SentBinaries.Should().ContainSingle();
         using (var doc = JsonDocument.Parse(openSocket.SentBinaries[0]))
         {
@@ -264,26 +215,24 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         aborted.CloseCalls.Should().Be(0);
     }
 
-    private sealed class FakeCommandExecutionService
-        : ICommandExecutionService<WorkflowChatRunRequest, WorkflowChatRunStarted, WorkflowOutputFrame, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>
+    private sealed class FakeCommandInteractionService
+        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
     {
-        public Func<WorkflowChatRunRequest, Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunStarted, CancellationToken, ValueTask>?, CancellationToken, Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>>>
-            Handler { get; set; } = (_, _, _, _) =>
-                Task.FromResult(new CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>(
-                    WorkflowChatRunStartError.None,
-                    null,
-                    null));
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> Handler { get; set; } =
+            (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public WorkflowChatRunRequest? LastCommand { get; private set; }
+        public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Task<CommandExecutionResult<WorkflowChatRunStarted, WorkflowChatRunFinalizeResult, WorkflowChatRunStartError>> ExecuteAsync(
-            WorkflowChatRunRequest command,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunStarted, CancellationToken, ValueTask>? onStartedAsync = null,
+        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+            WorkflowChatRunRequest request,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
-            LastCommand = command;
-            return Handler(command, emitAsync, onStartedAsync, ct);
+            LastRequest = request;
+            return Handler(request, emitAsync, onAcceptedAsync, ct);
         }
     }
 
@@ -308,10 +257,8 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
 
-        public void EnqueueReceive(WebSocketMessageType type, byte[] data, bool endOfMessage)
-        {
+        public void EnqueueReceive(WebSocketMessageType type, byte[] data, bool endOfMessage) =>
             _receiveQueue.Enqueue((type, data, endOfMessage));
-        }
 
         public override void Abort()
         {
@@ -360,6 +307,8 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _ = endOfMessage;
+
             if (messageType == WebSocketMessageType.Text)
             {
                 var text = Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count);

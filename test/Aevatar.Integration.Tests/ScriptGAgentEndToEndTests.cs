@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
@@ -28,18 +29,18 @@ public class ScriptGAgentEndToEndTests
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(
             "script-definition-" + Guid.NewGuid().ToString("N")[..8]);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(
             "script-runtime-" + Guid.NewGuid().ToString("N")[..8]);
 
-        var upsertAdapter = new UpsertScriptDefinitionActorRequestAdapter();
-        var definitionEnvelope = upsertAdapter.Map(
-            new UpsertScriptDefinitionActorRequest(
-                ScriptId: "script-1",
-                ScriptRevision: "rev-1",
-                SourceText: """
+        var definitionEnvelope = ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+            definitionActor.Id,
+            "script-1",
+            "rev-1",
+            """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -82,8 +83,7 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             });
 }
 """,
-                SourceHash: "hash-1"),
-            definitionActor.Id);
+            "hash-1");
         await definitionActor.HandleEventAsync(definitionEnvelope, CancellationToken.None);
 
         var context = new ScriptProjectionContext
@@ -99,36 +99,29 @@ public sealed class EndToEndScript : IScriptPackageRuntime
             [new ScriptRunDomainEventCommittedReducer()]);
         await projector.InitializeAsync(context, CancellationToken.None);
 
-        var runAdapter = new RunScriptActorRequestAdapter();
-        var runEnvelope = runAdapter.Map(
-            new RunScriptActorRequest(
-                RunId: "run-1",
-                InputPayload: Any.Pack(new Struct
-                {
-                    Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
-                }),
-                ScriptRevision: "rev-1",
-                DefinitionActorId: definitionActor.Id),
-            runtimeActor.Id);
-        await runtimeActor.HandleEventAsync(runEnvelope, CancellationToken.None);
+        var runEnvelope = ScriptingCommandEnvelopeTestKit.CreateRunScript(
+            runtimeActor.Id,
+            "run-1",
+            Any.Pack(new Struct
+            {
+                Fields = { ["name"] = Google.Protobuf.WellKnownTypes.Value.ForString("alice") },
+            }),
+            "rev-1",
+            definitionActor.Id);
+        var committedObservation = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActor.Id,
+            "run-1",
+            () => runtimeActor.HandleEventAsync(runEnvelope, CancellationToken.None),
+            CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActor.Id, ct: CancellationToken.None);
         var committedStateEvent = persisted
             .LastOrDefault(x => x.EventData?.Is(ScriptRunDomainEventCommitted.Descriptor) == true);
         committedStateEvent.Should().NotBeNull();
+        await projector.ProjectAsync(context, committedObservation.Envelope, CancellationToken.None);
 
-        var projectionEnvelope = new EventEnvelope
-        {
-            Id = committedStateEvent!.EventId,
-            Timestamp = committedStateEvent.Timestamp,
-            Payload = committedStateEvent.EventData,
-            PublisherId = runtimeActor.Id,
-            Direction = EventDirection.Self,
-            CorrelationId = "run-1",
-        };
-        await projector.ProjectAsync(context, projectionEnvelope, CancellationToken.None);
-
-        var committedEvent = committedStateEvent.EventData.Unpack<ScriptRunDomainEventCommitted>();
+        var committedEvent = committedObservation.Event;
         var readModel = await dispatcher.GetAsync(runtimeActor.Id, CancellationToken.None);
 
         committedEvent.RunId.Should().Be("run-1");

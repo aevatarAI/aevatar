@@ -7,3 +7,5 @@ global using Aevatar.AI.Abstractions.Agents;
 global using Aevatar.AI.Abstractions.LLMProviders;
 global using Aevatar.AI.Abstractions.ToolProviders;
 global using Aevatar.Workflow.Abstractions;
+global using Aevatar.Workflow.Abstractions.Execution;
+global using Aevatar.Workflow.Core.Execution;

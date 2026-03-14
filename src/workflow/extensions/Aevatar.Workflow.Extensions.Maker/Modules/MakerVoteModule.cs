@@ -10,7 +10,7 @@ namespace Aevatar.Workflow.Extensions.Maker.Modules;
 /// MAKER voting primitive:
 /// first-to-ahead-by-k with red-flag filtering by response length.
 /// </summary>
-public sealed class MakerVoteModule : IEventModule
+public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "maker_vote";
     public int Priority => 6;
@@ -18,7 +18,7 @@ public sealed class MakerVoteModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (!string.Equals(request.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
@@ -97,24 +97,24 @@ public sealed class MakerVoteModule : IEventModule
             Success = true,
             Output = winner,
         };
-        completed.Metadata["maker_vote.total_candidates"] = rawCandidates.Length.ToString();
-        completed.Metadata["maker_vote.red_flagged"] = flagged.ToString();
-        completed.Metadata["maker_vote.valid_candidates"] = valid.Count.ToString();
-        completed.Metadata["maker_vote.k"] = k.ToString();
-        completed.Metadata["maker_vote.max_response_length"] = maxLen.ToString();
-        completed.Metadata["maker_vote.top_votes"] = topVotes.ToString();
-        completed.Metadata["maker_vote.runner_up_votes"] = runnerUpVotes.ToString();
-        completed.Metadata["maker_vote.used_majority_fallback"] = useMajorityFallback.ToString();
+        completed.Annotations["maker_vote.total_candidates"] = rawCandidates.Length.ToString();
+        completed.Annotations["maker_vote.red_flagged"] = flagged.ToString();
+        completed.Annotations["maker_vote.valid_candidates"] = valid.Count.ToString();
+        completed.Annotations["maker_vote.k"] = k.ToString();
+        completed.Annotations["maker_vote.max_response_length"] = maxLen.ToString();
+        completed.Annotations["maker_vote.top_votes"] = topVotes.ToString();
+        completed.Annotations["maker_vote.runner_up_votes"] = runnerUpVotes.ToString();
+        completed.Annotations["maker_vote.used_majority_fallback"] = useMajorityFallback.ToString();
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string error,
         CancellationToken ct,
-        Dictionary<string, string>? metadata = null,
+        Dictionary<string, string>? annotations = null,
         string runId = "")
     {
         var completed = new StepCompletedEvent
@@ -124,12 +124,12 @@ public sealed class MakerVoteModule : IEventModule
             Success = false,
             Error = error,
         };
-        if (metadata != null)
+        if (annotations != null)
         {
-            foreach (var (key, value) in metadata)
-                completed.Metadata[key] = value;
+            foreach (var (key, value) in annotations)
+                completed.Annotations[key] = value;
         }
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

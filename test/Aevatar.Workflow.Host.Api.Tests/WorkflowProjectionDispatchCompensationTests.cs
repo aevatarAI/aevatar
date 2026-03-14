@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,7 +55,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             FailedStore = "Graph",
             SucceededStores = { "Document" },
             ReadModelType = typeof(WorkflowExecutionReport).FullName!,
-            ReadModelJson = "{}",
+            ReadModel = CreateReadModelPayload("root-1"),
             Key = "root-1",
             LastError = "InvalidOperationException",
         });
@@ -65,6 +66,8 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         entry.Operation.Should().Be("mutate");
         entry.AttemptCount.Should().Be(0);
         entry.CompletedAtUtc.Should().BeNull();
+        entry.ReadModel.Should().NotBeNull();
+        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -110,7 +113,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "{}"));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         agent.State.Entries["r1"].CompletedAtUtc.Should().NotBeNull();
@@ -125,7 +128,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
 
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
         binding.AttemptCount.Should().Be(1);
@@ -146,9 +149,9 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "{}"));
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r2", "{}"));
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r3", "{}"));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r2", CreateReadModelPayload("root-2")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r3", CreateReadModelPayload("root-3")));
 
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 2 });
         binding.AttemptCount.Should().Be(2);
@@ -165,7 +168,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var agent = CreateAgent(services);
 
         for (var i = 0; i < 21; i++)
-            await agent.HandleEnqueueAsync(CreateEnqueueEvent($"r{i}", CreateReadModelJson($"root-{i}")));
+            await agent.HandleEnqueueAsync(CreateEnqueueEvent($"r{i}", CreateReadModelPayload($"root-{i}")));
 
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 0 });
         binding.AttemptCount.Should().Be(20);
@@ -179,7 +182,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     {
         var agent = CreateAgent(CreateAgentServices());
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         var entry = agent.State.Entries["r1"];
@@ -189,34 +192,34 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenReadModelJsonInvalid_ShouldScheduleRetryWithoutStoreWrite()
+    public async Task HandleTriggerReplay_WhenReadModelPayloadIncompatible_ShouldScheduleRetryWithoutStoreWrite()
     {
         var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "{"));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", Any.Pack(new StringValue { Value = "bad-payload" })));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         var entry = agent.State.Entries["r1"];
         entry.AttemptCount.Should().Be(1);
-        entry.LastError.Should().Contain("JsonException");
+        entry.LastError.Should().Contain("missing or incompatible");
         binding.AttemptCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task HandleTriggerReplay_WhenReadModelJsonDeserializesNull_ShouldScheduleRetry()
+    public async Task HandleTriggerReplay_WhenReadModelPayloadMissing_ShouldScheduleRetry()
     {
         var binding = new FlakyGraphBinding(failuresBeforeSuccess: 0);
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", "null"));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", null));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         var entry = agent.State.Entries["r1"];
         entry.AttemptCount.Should().Be(1);
-        entry.LastError.Should().Contain("deserialized null read model");
+        entry.LastError.Should().Contain("missing or incompatible");
         binding.AttemptCount.Should().Be(0);
     }
 
@@ -228,7 +231,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var agent = CreateAgent(services);
         var futureVisibleAt = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1));
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1"), enqueuedAtUtc: futureVisibleAt));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1"), enqueuedAtUtc: futureVisibleAt));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         binding.AttemptCount.Should().Be(0);
@@ -245,7 +248,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var services = CreateAgentServices(bindings: [first, second]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
 
         first.AttemptCount.Should().Be(0);
@@ -264,7 +267,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         };
         var services = CreateAgentServices(bindings: [binding], options: options);
         var agent = CreateAgent(services);
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
 
         await agent.HandleTriggerReplayAsync(new ProjectionCompensationTriggerReplayEvent { BatchSize = 10 });
         var afterReplay = DateTime.UtcNow;
@@ -286,7 +289,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 
         var agent1 = CreateAgent(services);
         await agent1.ActivateAsync();
-        await agent1.HandleEnqueueAsync(CreateEnqueueEvent("r1", "{}"));
+        await agent1.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
         await agent1.DeactivateAsync();
 
         var agent2 = CreateAgent(services);
@@ -320,7 +323,8 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var entry = agent.State.Entries.Values.Single();
         entry.FailedStore.Should().Be("Graph");
         entry.Operation.Should().Be("mutate");
-        entry.ReadModelJson.Should().NotBeNullOrWhiteSpace();
+        entry.ReadModel.Should().NotBeNull();
+        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -330,7 +334,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var services = CreateAgentServices(bindings: [binding]);
         var agent = CreateAgent(services);
 
-        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelJson("root-1")));
+        await agent.HandleEnqueueAsync(CreateEnqueueEvent("r1", CreateReadModelPayload("root-1")));
 
         var outbox = new DirectOutbox(agent);
         var options = new WorkflowExecutionProjectionOptions
@@ -347,24 +351,30 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 
     private static ProjectionCompensationEnqueuedEvent CreateEnqueueEvent(
         string recordId,
-        string readModelJson,
+        Any? readModel,
         string failedStore = "Graph",
-        Timestamp? enqueuedAtUtc = null) =>
-        new()
+        Timestamp? enqueuedAtUtc = null)
+    {
+        var evt = new ProjectionCompensationEnqueuedEvent
         {
             RecordId = recordId,
             Operation = "mutate",
             FailedStore = failedStore,
             SucceededStores = { "Document" },
             ReadModelType = typeof(WorkflowExecutionReport).FullName!,
-            ReadModelJson = readModelJson,
             Key = recordId,
             LastError = "test",
             EnqueuedAtUtc = enqueuedAtUtc,
         };
 
-    private static string CreateReadModelJson(string rootActorId) =>
-        System.Text.Json.JsonSerializer.Serialize(CreateReadModel(rootActorId));
+        if (readModel != null)
+            evt.ReadModel = readModel;
+
+        return evt;
+    }
+
+    private static Any CreateReadModelPayload(string rootActorId) =>
+        WorkflowExecutionReportSnapshotMapper.Pack(CreateReadModel(rootActorId));
 
     private static WorkflowExecutionReport CreateReadModel(string rootActorId) =>
         new()

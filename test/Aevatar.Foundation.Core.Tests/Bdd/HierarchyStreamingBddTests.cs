@@ -37,7 +37,7 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         var child = await _runtime.CreateAsync<CollectorAgent>("c1");
         await _runtime.LinkAsync("p1", "c1");
 
-        await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello" }, EventDirection.Down);
+        await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello" }, TopologyAudience.Children);
         var childAgent = (CollectorAgent)child.Agent;
         await childAgent.WaitForMessageCountAsync(1, TimeSpan.FromSeconds(2));
         childAgent.ReceivedMessages.Should().Contain("hello");
@@ -54,7 +54,7 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         await _runtime.LinkAsync("coord", "w2");
         await _runtime.LinkAsync("coord", "w3");
 
-        await ((GAgentBase)coord.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, EventDirection.Down);
+        await ((GAgentBase)coord.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, TopologyAudience.Children);
         var worker1 = (CollectorAgent)w1.Agent;
         var worker2 = (CollectorAgent)w2.Agent;
         var worker3 = (CollectorAgent)w3.Agent;
@@ -77,7 +77,7 @@ public class HierarchyStreamingBddTests : IAsyncLifetime
         await _runtime.LinkAsync("p4", "m4");
         await _runtime.LinkAsync("m4", "c4");
 
-        await ((GAgentBase)middle.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "self" }, EventDirection.Self);
+        await ((GAgentBase)middle.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "self" }, TopologyAudience.Self);
         var parentCollector = (CollectorAgent)parent.Agent;
         var childCollector = (CollectorAgent)child.Agent;
 

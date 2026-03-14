@@ -11,7 +11,7 @@ cd demos/Aevatar.Demos.Workflow
 dotnet run
 
 # 运行单个 demo
-dotnet run -- 01_transform
+dotnet run -- transform
 
 # 运行所有确定性 demo（无需 LLM API Key）
 dotnet run -- --deterministic
@@ -30,7 +30,7 @@ dotnet run -- --all
 | `transform` | — | TransformModule | 纯函数变换：count、take、join、split、distinct、uppercase、lowercase、trim、reverse_lines、count_words |
 | `guard` | `assert` | GuardModule | 数据校验：not_empty、json_valid、regex、max_length、contains；支持 on_fail 策略（fail/skip/branch） |
 | `conditional` | — | ConditionalModule | 简单条件分支，根据输入中是否包含关键词选择 true/false 路径 |
-| `switch` | — | SwitchModule | 多路分支，按 `on` 参数精确匹配或包含匹配 branch key，未命中走 `_default` |
+| `switch` | — | SwitchModule | 多路分支，按 `on` 参数精确匹配或包含匹配 branch key，结果写入 `StepCompletedEvent.BranchKey`，未命中走 `_default` |
 | `assign` | — | AssignModule | 变量赋值，从字面值或 `$` 路径引用上一步输出 |
 | `retrieve_facts` | — | RetrieveFactsModule | 关键词检索 top-k 事实（输入按行分隔的事实列表） |
 | `emit` | `publish` | EmitModule | 发布自定义事件，用于可观测性 / Webhook / 跨工作流信号 |
@@ -74,13 +74,13 @@ dotnet run -- --all
 |---|---|---|
 | `workflow_loop` | WorkflowLoopModule | 工作流主循环引擎，处理步骤调度、变量、重试、超时、分支解析 |
 
-## Workflow YAML 分类（55 个主 workflow）
+## Workflow YAML 分类（67 个主 workflow）
 
 说明：
 
-- `workflows/` 目录里目前是 **58** 个 YAML；
-- 其中 `48_subworkflow_level1/2/3.yaml` 是 `49_workflow_call_multilevel.yaml` 的子流程定义；
-- 文档里说的 **55 个 workflow** 指主流程文件（01-07、08-16、17-38、39-47、49-56）。
+- `workflows/` 目录里目前是 **71** 个 YAML；
+- 其中 `subworkflow_level1/2/3.yaml` 是 `workflow_call_multilevel.yaml` 的子流程定义；
+- 文档里说的 **68 个 workflow** 指主流程文件（01-07、08-16、17-38、39-47、49-69）。
 
 | 分组 | 文件范围 | 数量 | 主要展示能力 |
 |---|---|---:|---|
@@ -90,7 +90,7 @@ dotnet run -- --all
 | Role Event Modules | `20-38` | 19 | Role 级 `event_modules`/`event_routes` 配置、multiplex 路由、`extensions` 兼容与覆盖优先级、混合 step+role 执行链 |
 | Human Interaction（Legacy Auto） | `39-42` | 4 | 自动恢复式人机交互：`human_input`/`human_approval` 自动继续，覆盖 approve/reject(fail/skip) 分支 |
 | Human Interaction（Manual） | `43-47` | 5 | 手动交互场景：人工输入、人工审批、`wait_signal` 成功与超时、审批+信号混合编排 |
-| Workflow Call（Multi-level） | `49` + `48_subworkflow_*` | 1(+3) | 多层子流程调用：`workflow_call` 递归调用 + 子流程文本标准化/去重/反转处理 |
+| Workflow Call（Multi-level） | `workflow_call_multilevel` + `subworkflow_*` | 1(+3) | 多层子流程调用：`workflow_call` 递归调用 + 子流程文本标准化/去重/反转处理 |
 | Connector Integration | `50` | 1 | `connector_call` 端到端：role 连接器白名单 + 本地 CLI connector 调用 |
 | Ergonomic Aliases | `51-53` | 3 | ergonomic alias 演示：`cli_call`、`foreach_llm`、`map_reduce_llm` |
 | Integration Utility | `54-56` | 3 | 集成辅助场景：`publish/emit`、`tool_call` 失败 fallback、`delay+checkpoint` |
@@ -108,7 +108,7 @@ dotnet run -- --all
 
 ## 仍未做“独立 YAML 演示”的原语
 
-以下原语目前没有单独编号 demo（但在集成测试或组合场景里有覆盖）：
+以下原语目前没有单独 demo（但在集成测试或组合场景里有覆盖）：
 
 - `while` / `loop`
 - `vote_consensus`

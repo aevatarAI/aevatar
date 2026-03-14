@@ -179,11 +179,33 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
     }
 
+    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
+    protected Task<string?> ChatAsync(
+        string userMessage,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+    }
+
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
         return _chat!.ChatStreamAsync(userMessage, ct);
+    }
+
+    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        return _chat!.ChatStreamAsync(userMessage, requestId, metadata, ct);
     }
 
     /// <summary>注册单个工具。</summary>
@@ -252,6 +274,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private LLMRequest BuildRequest() => new()
     {
         Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
+        RequestId = null,
+        Metadata = null,
         Tools = Tools.HasTools ? Tools.GetAll() : null,
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,

@@ -421,14 +421,16 @@ public sealed class SimpleQueryRuntimeScript : IScriptPackageRuntime
 
         public Task PublishAsync<T>(
             T evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where T : IMessage
         {
             _ = evt;
             _ = direction;
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -437,12 +439,29 @@ public sealed class SimpleQueryRuntimeScript : IScriptPackageRuntime
             string targetActorId,
             T evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where T : IMessage
         {
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = evt;
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

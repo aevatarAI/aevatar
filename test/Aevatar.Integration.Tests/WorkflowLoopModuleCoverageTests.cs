@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
@@ -166,6 +165,41 @@ public sealed class WorkflowLoopModuleCoverageTests
         var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         request.Parameters["condition"].Should().Be("${lt(iteration, 3)}");
         request.Parameters["sub_param_prompt"].Should().Be("${concat('iter=', iteration, ', input=', input)}");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenStartParametersProvided_ShouldExposeContextVariablesToStepExpressions()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "assign",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["target"] = "result",
+                    ["value"] = "${session_id}",
+                },
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-start-parameters",
+                Input = "seed",
+                Parameters =
+                {
+                    ["session_id"] = "session-ctx-001",
+                    ["workflow.session_id"] = "workflow-session-ctx-001",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["value"].Should().Be("session-ctx-001");
     }
 
     [Fact]
@@ -559,7 +593,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["branch"] = "yes" },
+                BranchKey = "yes",
             }),
             ctx,
             CancellationToken.None);
@@ -592,7 +626,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["next_step"] = "s3" },
+                NextStepId = "s3",
             }),
             ctx,
             CancellationToken.None);
@@ -612,34 +646,16 @@ public sealed class WorkflowLoopModuleCoverageTests
             TimeoutMs = 1,
         }));
         var ctx = CreateContext();
-        var timeoutFired = new TaskCompletionSource<WorkflowStepTimeoutFiredEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ctx.OnPublish = (evt, _) =>
-        {
-            if (evt is WorkflowStepTimeoutFiredEvent fired &&
-                fired.StepId == "s1")
-            {
-                timeoutFired.TrySetResult(fired);
-            }
-
-            if (evt is StepCompletedEvent completed &&
-                completed.StepId == "s1" &&
-                !completed.Success &&
-                completed.Error.Contains("TIMEOUT", StringComparison.Ordinal))
-            {
-                timeoutPublished.TrySetResult(completed);
-            }
-        };
 
         await module.HandleAsync(
             Envelope(new StartWorkflowEvent { RunId = "run-timeout", Input = "start" }),
             ctx,
             CancellationToken.None);
 
-        var timeoutFiredEvent = await timeoutFired.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await module.HandleAsync(Envelope(timeoutFiredEvent), ctx, CancellationToken.None);
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowStepTimeoutFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
 
-        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var timeoutEvent = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutEvent.Error.Should().Contain("TIMEOUT");
     }
 
@@ -672,7 +688,10 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var retry = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is WorkflowStepRetryBackoffFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
+
+        var retry = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
         retry.StepId.Should().Be("s1");
         retry.Input.Should().Be("start");
     }
@@ -732,6 +751,51 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackHasNoOutput_ShouldPassErrorTextToFallbackStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "workflow_yaml_validate",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "fallback",
+                    FallbackStep = "repair",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "repair",
+                Type = "llm_call",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-fallback-error-input";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "invalid-yaml" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = false,
+                Error = "Invalid workflow YAML: Property 'description' not found on type 'RawStep'.",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        fallbackRequest.StepId.Should().Be("repair");
+        fallbackRequest.Input.Should().Contain("Property 'description' not found");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenStepCompletesBeforeTimeout_ShouldCancelPendingTimeout()
     {
         var module = new WorkflowLoopModule();
@@ -762,6 +826,8 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         next.StepId.Should().Be("s2");
+        ctx.Canceled.Should().ContainSingle(x =>
+            x.CallbackId.StartsWith("workflow-step-timeout:run-cancel-timeout:s1:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -893,11 +959,8 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "ignored",
-                Metadata =
-                {
-                    ["assign.target"] = "counter",
-                    ["assign.value"] = "1",
-                },
+                AssignedVariable = "counter",
+                AssignedValue = "1",
             }),
             ctx,
             CancellationToken.None);
@@ -962,11 +1025,11 @@ public sealed class WorkflowLoopModuleCoverageTests
         };
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static TestEventHandlerContext CreateContext()
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("workflow-loop-test-agent"),
+            new TestAgent("workflow-loop-test-agent"),
             NullLogger.Instance);
     }
 
@@ -977,48 +1040,8 @@ public sealed class WorkflowLoopModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public Action<IMessage, EventDirection>? OnPublish { get; set; }
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            OnPublish?.Invoke(evt, direction);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

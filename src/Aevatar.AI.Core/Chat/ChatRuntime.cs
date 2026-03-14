@@ -53,7 +53,16 @@ public sealed class ChatRuntime
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
-    public async Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default)
+    public Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default) =>
+        ChatAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
+
+    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
+    public async Task<string?> ChatAsync(
+        string userMessage,
+        int maxToolRounds,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default)
     {
         var runContext = new AgentRunContext
         {
@@ -68,9 +77,9 @@ public sealed class ChatRuntime
             if (runContext.Terminate) return;
 
             _history.Add(ChatMessage.User(runContext.UserMessage));
-            var baseRequest = _requestBuilder();
+            var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
             var provider = _providerFactory();
-            runContext.Metadata["gen_ai.provider.name"] = provider.Name;
+            runContext.Items["gen_ai.provider.name"] = provider.Name;
             var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
             var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
@@ -86,8 +95,17 @@ public sealed class ChatRuntime
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userMessage, requestId: null, metadata: null, ct);
+
+    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-        string userMessage, [EnumeratorCancellation] CancellationToken ct = default)
+        string userMessage,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
@@ -117,14 +135,16 @@ public sealed class ChatRuntime
                     if (runContext.Terminate) return;
 
                     _history.Add(ChatMessage.User(runContext.UserMessage));
-                    var baseRequest = _requestBuilder();
+                    var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                     var provider = _providerFactory();
-                    runContext.Metadata["gen_ai.provider.name"] = provider.Name;
+                    runContext.Items["gen_ai.provider.name"] = provider.Name;
                     var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
                     var request = new LLMRequest
                     {
                         Messages = messages,
+                        RequestId = baseRequest.RequestId,
+                        Metadata = baseRequest.Metadata,
                         Tools = baseRequest.Tools,
                         Model = baseRequest.Model,
                         Temperature = baseRequest.Temperature,
@@ -138,6 +158,7 @@ public sealed class ChatRuntime
                         CancellationToken = runToken,
                         IsStreaming = true,
                     };
+                    AnnotateRequestIdentity(llmCallContext);
 
                     string? streamedContent = null;
                     TokenUsage? streamedUsage = null;
@@ -226,6 +247,62 @@ public sealed class ChatRuntime
         {
             linkedCts.Cancel();
             try { await runTask.ConfigureAwait(false); } catch { /* best-effort */ }
+        }
+    }
+
+    private static LLMRequest ApplyRequestIdentity(
+        LLMRequest baseRequest,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        return new LLMRequest
+        {
+            Messages = baseRequest.Messages,
+            RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
+            Metadata = MergeMetadata(baseRequest.Metadata, metadata),
+            Tools = baseRequest.Tools,
+            Model = baseRequest.Model,
+            Temperature = baseRequest.Temperature,
+            MaxTokens = baseRequest.MaxTokens,
+        };
+    }
+
+    private static IReadOnlyDictionary<string, string>? MergeMetadata(
+        IReadOnlyDictionary<string, string>? baseMetadata,
+        IReadOnlyDictionary<string, string>? overrideMetadata)
+    {
+        if ((baseMetadata == null || baseMetadata.Count == 0) &&
+            (overrideMetadata == null || overrideMetadata.Count == 0))
+        {
+            return null;
+        }
+
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (baseMetadata != null)
+        {
+            foreach (var pair in baseMetadata)
+                merged[pair.Key] = pair.Value;
+        }
+
+        if (overrideMetadata != null)
+        {
+            foreach (var pair in overrideMetadata)
+                merged[pair.Key] = pair.Value;
+        }
+
+        return merged;
+    }
+
+    private static void AnnotateRequestIdentity(LLMCallContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
+            context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
+
+        if (context.Request.Metadata != null &&
+            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
+            !string.IsNullOrWhiteSpace(callId))
+        {
+            context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }
     }
 

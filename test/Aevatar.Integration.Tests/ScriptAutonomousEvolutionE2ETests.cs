@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
+[Trait("Category", "Slow")]
 public class ScriptAutonomousEvolutionE2ETests
 {
     [Fact]
@@ -27,48 +28,42 @@ public class ScriptAutonomousEvolutionE2ETests
         const string orchestratorDefinitionActorId = "orchestrator-definition";
         const string orchestratorRuntimeActorId = "orchestrator-runtime";
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
-        var run = new RunScriptActorRequestAdapter();
-
         var workerDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(workerDefinitionActorId);
         await workerDefinition.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "worker-script",
-                    ScriptRevision: "rev-worker-1",
-                    SourceText: WorkerRuntimeV1Source,
-                    SourceHash: "hash-worker-1"),
-                workerDefinitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                workerDefinitionActorId,
+                "worker-script",
+                "rev-worker-1",
+                WorkerRuntimeV1Source,
+                "hash-worker-1"),
             CancellationToken.None);
 
         var orchestratorDefinition = await runtime.CreateAsync<ScriptDefinitionGAgent>(orchestratorDefinitionActorId);
         await orchestratorDefinition.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "orchestrator-script",
-                    ScriptRevision: "rev-orchestrator-1",
-                    SourceText: ScriptOnlyOrchestratorSource,
-                    SourceHash: "hash-orchestrator-1"),
-                orchestratorDefinitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                orchestratorDefinitionActorId,
+                "orchestrator-script",
+                "rev-orchestrator-1",
+                ScriptOnlyOrchestratorSource,
+                "hash-orchestrator-1"),
             CancellationToken.None);
 
         var orchestratorRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(orchestratorRuntimeActorId);
         await orchestratorRuntime.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-autonomy-1",
-                    InputPayload: Any.Pack(new Struct
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                orchestratorRuntimeActorId,
+                "run-autonomy-1",
+                Any.Pack(new Struct
+                {
+                    Fields =
                     {
-                        Fields =
-                        {
-                            ["newScriptSource"] = Google.Protobuf.WellKnownTypes.Value.ForString(NewRuntimeSource),
-                            ["workerV2Source"] = Google.Protobuf.WellKnownTypes.Value.ForString(WorkerRuntimeV2Source),
-                        },
-                    }),
-                    ScriptRevision: "rev-orchestrator-1",
-                    DefinitionActorId: orchestratorDefinitionActorId,
-                    RequestedEventType: "script.autonomous.orchestrate"),
-                orchestratorRuntimeActorId),
+                        ["newScriptSource"] = Google.Protobuf.WellKnownTypes.Value.ForString(NewRuntimeSource),
+                        ["workerV2Source"] = Google.Protobuf.WellKnownTypes.Value.ForString(WorkerRuntimeV2Source),
+                    },
+                }),
+                "rev-orchestrator-1",
+                orchestratorDefinitionActorId,
+                "script.autonomous.orchestrate"),
             CancellationToken.None);
 
         var summary = ((ScriptRuntimeGAgent)orchestratorRuntime.Agent)

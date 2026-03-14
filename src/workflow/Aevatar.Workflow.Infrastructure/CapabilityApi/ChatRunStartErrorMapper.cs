@@ -13,6 +13,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowNotFound => StatusCodes.Status404NotFound,
             WorkflowChatRunStartError.AgentTypeNotSupported => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.ProjectionDisabled => StatusCodes.Status503ServiceUnavailable,
+            WorkflowChatRunStartError.DetachedCleanupUnavailable => StatusCodes.Status503ServiceUnavailable,
             WorkflowChatRunStartError.WorkflowBindingMismatch => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.InvalidWorkflowYaml => StatusCodes.Status400BadRequest,
@@ -27,8 +28,9 @@ internal static class ChatRunStartErrorMapper
         {
             WorkflowChatRunStartError.AgentNotFound => ("AGENT_NOT_FOUND", "Agent not found."),
             WorkflowChatRunStartError.WorkflowNotFound => ("WORKFLOW_NOT_FOUND", "Workflow not found."),
-            WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Agent is not WorkflowGAgent."),
+            WorkflowChatRunStartError.AgentTypeNotSupported => ("AGENT_TYPE_NOT_SUPPORTED", "Actor is not workflow-capable."),
             WorkflowChatRunStartError.ProjectionDisabled => ("PROJECTION_DISABLED", "Projection pipeline is disabled."),
+            WorkflowChatRunStartError.DetachedCleanupUnavailable => ("DETACHED_CLEANUP_UNAVAILABLE", "Detached cleanup pipeline is unavailable."),
             WorkflowChatRunStartError.WorkflowBindingMismatch => ("WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => ("AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => ("INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),

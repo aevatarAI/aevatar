@@ -53,7 +53,8 @@ public sealed class ScriptRuntimeExecutionOrchestrator : IScriptRuntimeExecution
                 request.ScriptRevision,
                 request.RunEvent.DefinitionActorId ?? string.Empty,
                 runId,
-                correlationId));
+                correlationId,
+                request.MessageContext));
 
             var context = new ScriptExecutionContext(
                 ActorId: request.RuntimeActorId,

@@ -12,9 +12,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Extracts a workflow YAML from step input, then publishes
 /// <see cref="ReplaceWorkflowDefinitionAndExecuteEvent"/> so the owning
-/// WorkflowGAgent replaces its bound workflow definition and restarts execution.
+/// workflow run actor replaces its bound definition snapshot and restarts execution.
 /// </summary>
-public sealed class DynamicWorkflowModule : IEventModule
+public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionContext>
 {
     private static readonly Regex YamlFenceRegex = new(
         @"```ya?ml\s*\n([\s\S]*?)```",
@@ -29,7 +29,7 @@ public sealed class DynamicWorkflowModule : IEventModule
         return payload != null && payload.Is(StepRequestEvent.Descriptor);
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -55,7 +55,7 @@ public sealed class DynamicWorkflowModule : IEventModule
                 RunId = request.RunId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -75,7 +75,7 @@ public sealed class DynamicWorkflowModule : IEventModule
                 RunId = request.RunId,
                 Success = false,
                 Error = $"Invalid workflow YAML: {errorMessage}",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -87,7 +87,7 @@ public sealed class DynamicWorkflowModule : IEventModule
         {
             WorkflowYaml = yaml,
             Input = originalInput,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     internal static string? ExtractYaml(string input)
@@ -105,7 +105,7 @@ public sealed class DynamicWorkflowModule : IEventModule
         return string.IsNullOrWhiteSpace(lastYaml) ? null : lastYaml;
     }
 
-    internal static List<string> ValidateWorkflowYaml(string yaml, IEventHandlerContext ctx)
+    internal static List<string> ValidateWorkflowYaml(string yaml, IWorkflowExecutionContext ctx)
     {
         WorkflowDefinition parsed;
         try
@@ -122,7 +122,7 @@ public sealed class DynamicWorkflowModule : IEventModule
                 .SelectMany(pack => pack.Modules)
                 .SelectMany(module => module.Names));
 
-        var moduleFactory = ctx.Services.GetService<IEventModuleFactory>();
+        var moduleFactory = ctx.Services.GetService<IEventModuleFactory<IWorkflowExecutionContext>>();
         if (moduleFactory != null)
             ExpandKnownStepTypesFromFactory(parsed.Steps, knownStepTypes, moduleFactory);
 
@@ -132,6 +132,7 @@ public sealed class DynamicWorkflowModule : IEventModule
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = knownStepTypes,
+                DisallowDynamicWorkflowStep = true,
             },
             availableWorkflowNames: null);
     }
@@ -139,7 +140,7 @@ public sealed class DynamicWorkflowModule : IEventModule
     private static void ExpandKnownStepTypesFromFactory(
         IEnumerable<StepDefinition> steps,
         ISet<string> knownStepTypes,
-        IEventModuleFactory moduleFactory)
+        IEventModuleFactory<IWorkflowExecutionContext> moduleFactory)
     {
         foreach (var stepType in EnumerateReferencedStepTypes(steps))
         {

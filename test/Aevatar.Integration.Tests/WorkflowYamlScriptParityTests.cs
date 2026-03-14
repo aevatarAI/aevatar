@@ -50,8 +50,10 @@ public class WorkflowYamlScriptParityTests
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
 
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-parity-" + Guid.NewGuid().ToString("N")[..8]);
-        await actor.HandleEventAsync(new EventEnvelope
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-parity-definition-" + Guid.NewGuid().ToString("N")[..8]);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-parity-run-" + Guid.NewGuid().ToString("N")[..8]);
+
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -60,12 +62,32 @@ public class WorkflowYamlScriptParityTests
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
-        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = BuildParityWorkflowYaml(),
+                WorkflowName = "yaml_script_parity",
+                RunId = "yaml-script-parity-run",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var completedTcs = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = await stream.SubscribeAsync<EventEnvelope>(envelope =>
         {
@@ -77,7 +99,7 @@ public class WorkflowYamlScriptParityTests
             return Task.CompletedTask;
         });
 
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -86,14 +108,17 @@ public class WorkflowYamlScriptParityTests
                 Prompt = prompt,
                 SessionId = "parity-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var completed = await completedTcs.Task.WaitAsync(timeout.Token);
-        await runtime.DestroyAsync(actor.Id);
+        await runtime.DestroyAsync(runActor.Id);
+        await runtime.DestroyAsync(definitionActor.Id);
         return completed.Output ?? string.Empty;
     }
 

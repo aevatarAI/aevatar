@@ -20,7 +20,9 @@ public sealed class GarnetEventStoreIntegrationTests
         var store = provider.GetRequiredService<IEventStore>();
 
         var firstBatch = CreateEvents(agentId, startVersion: 1, count: 3);
-        (await store.AppendAsync(agentId, firstBatch, expectedVersion: 0)).Should().Be(3);
+        var firstCommit = await store.AppendAsync(agentId, firstBatch, expectedVersion: 0);
+        firstCommit.LatestVersion.Should().Be(3);
+        firstCommit.CommittedEvents.Select(x => x.Version).Should().Equal(1, 2, 3);
         (await store.GetVersionAsync(agentId)).Should().Be(3);
 
         var all = await store.GetEventsAsync(agentId);
@@ -34,7 +36,9 @@ public sealed class GarnetEventStoreIntegrationTests
         retained.Select(x => x.Version).Should().Equal(3);
 
         var secondBatch = CreateEvents(agentId, startVersion: 4, count: 2);
-        (await store.AppendAsync(agentId, secondBatch, expectedVersion: 3)).Should().Be(5);
+        var secondCommit = await store.AppendAsync(agentId, secondBatch, expectedVersion: 3);
+        secondCommit.LatestVersion.Should().Be(5);
+        secondCommit.CommittedEvents.Select(x => x.Version).Should().Equal(4, 5);
 
         var afterAppend = await store.GetEventsAsync(agentId);
         afterAppend.Select(x => x.Version).Should().Equal(3, 4, 5);

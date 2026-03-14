@@ -32,12 +32,18 @@ internal static class CapabilityTraceContext
             response.Headers["X-Correlation-Id"] = context.CorrelationId;
     }
 
-    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(WorkflowChatRunStarted started) =>
-        CreateAcceptedPayload(started.CommandId, started.ActorId);
-
-    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(string commandId, string actorId)
+    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(WorkflowChatRunAcceptedReceipt receipt)
     {
-        var context = CreateMessageContext(commandId);
+        ArgumentNullException.ThrowIfNull(receipt);
+        return CreateAcceptedPayload(receipt.CommandId, receipt.CorrelationId, receipt.ActorId);
+    }
+
+    public static WorkflowRunAcceptedPayload CreateAcceptedPayload(
+        string commandId,
+        string correlationId,
+        string actorId)
+    {
+        var context = CreateMessageContext(correlationId, commandId);
         return new WorkflowRunAcceptedPayload
         {
             CommandId = commandId,

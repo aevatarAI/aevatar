@@ -1,10 +1,13 @@
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Demos.Workflow.Web;
 
-public sealed class DemoWorkflowModuleFactory : WorkflowModuleFactory
+public sealed class DemoWorkflowModuleFactory
+    : WorkflowModuleFactory,
+        IEventModuleFactory<IEventHandlerContext>
 {
     private readonly IServiceProvider _serviceProvider;
 
@@ -27,7 +30,7 @@ public sealed class DemoWorkflowModuleFactory : WorkflowModuleFactory
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
     }
 
-    public override bool TryCreate(string name, out IEventModule? module)
+    public override bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
     {
         if (base.TryCreate(name, out module) && module != null)
             return true;
@@ -39,7 +42,22 @@ public sealed class DemoWorkflowModuleFactory : WorkflowModuleFactory
         if (!DemoModuleTypes.TryGetValue(name.Trim(), out var moduleType))
             return false;
 
-        module = (IEventModule)ActivatorUtilities.CreateInstance(_serviceProvider, moduleType);
+        module = (IEventModule<IWorkflowExecutionContext>)ActivatorUtilities.CreateInstance(_serviceProvider, moduleType);
+        return true;
+    }
+
+    bool IEventModuleFactory<IEventHandlerContext>.TryCreate(
+        string name,
+        out IEventModule<IEventHandlerContext>? module)
+    {
+        module = null;
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        if (!DemoModuleTypes.TryGetValue(name.Trim(), out var moduleType))
+            return false;
+
+        module = (IEventModule<IEventHandlerContext>)ActivatorUtilities.CreateInstance(_serviceProvider, moduleType);
         return true;
     }
 }

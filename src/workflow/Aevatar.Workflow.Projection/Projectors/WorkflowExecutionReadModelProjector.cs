@@ -39,7 +39,7 @@ public sealed class WorkflowExecutionReadModelProjector
         {
             Id = context.RootActorId,
             ReportVersion = "1.0",
-            ProjectionScope = WorkflowExecutionProjectionScope.ActorShared,
+            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
             TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
             CompletionStatus = WorkflowExecutionCompletionStatus.Running,
             WorkflowName = context.WorkflowName,
@@ -57,19 +57,23 @@ public sealed class WorkflowExecutionReadModelProjector
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        var typeUrl = envelope.Payload?.TypeUrl;
+        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
+        if (normalized == null)
+            return;
+
+        var typeUrl = normalized.Payload?.TypeUrl;
         if (string.IsNullOrWhiteSpace(typeUrl))
             return;
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
-        if (!string.IsNullOrWhiteSpace(envelope.Id))
+        if (!string.IsNullOrWhiteSpace(normalized.Id))
         {
-            var dedupKey = $"{context.RootActorId}:{envelope.Id}";
+            var dedupKey = $"{context.RootActorId}:{normalized.Id}";
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
 
-        var now = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
+        var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
         await _storeDispatcher.MutateAsync(context.RootActorId, report =>
         {
             report.Id = context.RootActorId;
@@ -77,12 +81,12 @@ public sealed class WorkflowExecutionReadModelProjector
                 report.RootActorId = context.RootActorId;
             var mutated = false;
             foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(report, context, envelope, now);
+                mutated |= reducer.Reduce(report, context, normalized, now);
 
             if (!mutated)
                 return;
 
-            WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, envelope);
+            WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, normalized);
             WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
         }, ct);
     }

@@ -1,6 +1,11 @@
 # Aevatar.Workflow.Presentation.AGUIAdapter
 
-工作流事件到 AGUI 协议的适配层。将内部 `EventEnvelope` 转换为 AG-UI 协议事件，再映射为领域中立的 `WorkflowRunEvent`，写入 run event sink 供上层消费。
+工作流运行时 envelope 到 AGUI 协议的适配层。将内部 `EventEnvelope` 转换为 AG-UI 协议事件，再映射为领域中立的 `WorkflowRunEvent`，写入 run event sink 供上层消费。
+
+语义边界：
+
+- 这里输入的是 runtime `EventEnvelope`，不是 Event Sourcing 的持久化领域事件记录。
+- AGUIAdapter 处理的是运行时消息投影，不直接读取 Actor state，也不直接消费 EventStore。
 
 ## 目录结构
 

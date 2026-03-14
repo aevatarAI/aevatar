@@ -7,7 +7,7 @@
 1. 严格分层：`Domain / Application / Infrastructure / Host`。
 2. 统一能力入口：`Mainnet` 为默认生产入口。
 3. Maker 定位：`Workflow` 插件扩展，不是独立能力系统。
-4. 统一读写链路：`Command -> Event -> Projection -> ReadModel`。
+4. 统一读写链路：`Application Command -> Actor Message(EventEnvelope) -> Domain Event -> Projection -> ReadModel`。
 
 ## 2. 解决方案结构
 
@@ -74,9 +74,15 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 
 统一链路：
 
-1. `Command -> Event`。
-2. `Projection` 统一消费事件并更新 `ReadModel`。
-3. API 推送（SSE/WS/AGUI）共享同一投影输入链路。
+1. `Command` 先进入 Application，再被包装为 `EventEnvelope` 投递到目标 Actor。
+2. Actor 在串行邮箱里做决策，并显式持久化领域事件。
+3. `Projection` 统一消费 Actor envelope 流并更新 `ReadModel`。
+4. API 推送（SSE/WS/AGUI）共享同一投影输入链路。
+
+补充口径：
+
+1. `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的 `StateEvent`。
+2. `IActorRuntime` 是构建在 stream 之上的 Actor 语义层，不是与 stream 并列的第二条业务主链路。
 
 运行口径：
 
@@ -88,6 +94,7 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 1. `bash tools/ci/architecture_guards.sh`
 2. `dotnet build aevatar.slnx --nologo`
 3. `dotnet test aevatar.slnx --nologo`
+4. `bash tools/ci/slow_test_guards.sh`
 
 关键守卫语义：
 
@@ -95,3 +102,4 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 2. 禁止残留独立 Maker 工程（Application/Infrastructure/Host/Core）。
 3. 禁止 `AddMakerCapability()` 与 `/api/maker/*` 端点回流。
 4. 强制 Mainnet 使用 `AddWorkflowMakerExtensions()` 装配插件。
+5. 默认 `dotnet test aevatar.slnx --nologo` 为快速主链路；分钟级脚本自治演化回归由 `slow_test_guards.sh` 单独承接。

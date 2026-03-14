@@ -161,7 +161,7 @@ Ergonomic 别名（解析期归一化到 `connector_call`）：
   - 否则失败。
 - 重试次数：`attempts = retry + 1`（`retry` 上限 5）。
 
-元数据会写入 `StepCompletedEvent.Metadata`，例如：
+运行注解会写入 `StepCompletedEvent.Annotations`，例如：
 
 - 通用：`connector.name/type/operation/attempts/timeout_ms/duration_ms`
 - skip：`connector.skipped`, `connector.skip_reason`

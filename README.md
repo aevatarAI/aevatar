@@ -28,7 +28,7 @@ Aevatar 是一个 **多 Agent 协作系统（Multi-Agent Collaboration System）
 |------|------|
 | **环境变量** | 终端里执行：`export DEEPSEEK_API_KEY="sk-..."` 或 `export OPENAI_API_KEY="sk-..."`。 |
 | **配置文件** | 在 `~/.aevatar/secrets.json` 里写 Provider 与 API Key，详见 [配置说明](src/Aevatar.Configuration/README.md)。 |
-| **配置工具（推荐）** | 运行 `dotnet run --project tools/Aevatar.Tools.Config`，在浏览器里填 API Key 并保存。 |
+| **配置工具（推荐）** | 运行 `dotnet run --project tools/Aevatar.Tools.Cli -- config`（或安装后直接 `aevatar config`），在浏览器里填 API Key 并保存。 |
 
 ### 2. 启动 API 服务
 
@@ -66,6 +66,11 @@ curl -X POST http://localhost:5000/api/chat \
 
 运行结束后，仓库根目录的 `artifacts/workflow-executions/` 下会生成本次运行的 JSON 与 HTML 报告。
 （可通过 `WorkflowExecutionProjection` 配置开关控制）
+
+### .NET SDK 接入（App 侧）
+
+- 使用 `Aevatar.Workflow.Sdk` 可快速接入 `/api/chat` 流式调用与 `resume/signal`。
+- 接入文档见：`docs/SDK_WORKFLOW_CHAT_DOTNET.md`。
 
 ---
 
@@ -320,7 +325,8 @@ sequenceDiagram
   - `src/Aevatar.Bootstrap` / `src/Aevatar.Bootstrap.Extensions.AI`：能力装配入口
 - **配套目录**
   - `workflows/`：YAML 工作流定义
-  - `tools/Aevatar.Tools.Config`：本地配置工具
+  - `tools/Aevatar.Tools.Cli`：统一工具入口（`aevatar config` / `aevatar app`）
+  - `tools/Aevatar.Tools.Config`：兼容的 `aevatar-config` 配置工具
   - `demos/`：演示工程
   - `test/`：单元、集成、宿主测试
 
@@ -357,9 +363,14 @@ sequenceDiagram
 ## 给开发者
 
 - **运行测试**：`dotnet test test/Aevatar.Foundation.Core.Tests/Aevatar.Foundation.Core.Tests.csproj`
+- **默认全量测试**：`dotnet test aevatar.slnx --nologo`
+  说明：默认全量回归不包含脚本自治演化慢测，当前本地口径约 `8.5s` 结束。
 - **分片守卫**：`bash tools/ci/solution_split_guards.sh`
 - **分片测试守卫**：`bash tools/ci/solution_split_test_guards.sh`
+- **慢测守卫**：`bash tools/ci/slow_test_guards.sh`
+  说明：单独执行 `Aevatar.Integration.Slow.Tests`，包含脚本自治演化与 3-node Orleans 一致性慢测。
 - **按域构建**：`dotnet build aevatar.foundation.slnf` / `dotnet build aevatar.ai.slnf` / `dotnet build aevatar.cqrs.slnf` / `dotnet build aevatar.workflow.slnf` / `dotnet build aevatar.hosting.slnf`
 - **CLI 演示**（不看 LLM，只看事件流）：  
   `dotnet run --project demos/Aevatar.Demos.Cli -- run hierarchy --web artifacts/demo/hierarchy.html`
+- **统一工具入口**：`dotnet run --project tools/Aevatar.Tools.Cli -- config|app`（安装后命令为 `aevatar`）
 - **Agent 命名约定**：带 **GAgent** 的类负责框架能力（事件分发、状态、路由）；业务逻辑放在基于 GAgent 的扩展或自定义步骤/Connector 里。

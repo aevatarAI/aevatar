@@ -5,13 +5,13 @@
 
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
-using Aevatar.Foundation.Runtime.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +26,7 @@ public sealed class LocalActorRuntime : IActorRuntime
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILocalActivationIndexStore _activationIndexStore;
     private readonly IServiceProvider _services;
+    private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
     private readonly ILogger<LocalActorRuntime> _logger;
 
@@ -42,6 +43,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
         _activationIndexStore = services.GetService<ILocalActivationIndexStore>()
             ?? new InMemoryLocalActivationIndexStore();
+        _callbackScheduler = services.GetService<IActorRuntimeCallbackScheduler>();
         _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
     }
 
@@ -54,17 +56,22 @@ public sealed class LocalActorRuntime : IActorRuntime
     {
         var actorId = id ?? AgentId.New(agentType);
         var agent = CreateAgentInstance(agentType);
-        var router = new EventRouter(actorId);
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
         var propagationPolicy = _services.GetService<IEnvelopePropagationPolicy>();
-        var publisher = new LocalActorPublisher(actorId, router, _streams, propagationPolicy);
+        var deduplicator = _services.GetService<IEventDeduplicator>();
         var actor = new LocalActor(
             agent,
             actorId,
-            router,
             _streams,
             logger,
-            _deactivationHookDispatcher);
+            _deactivationHookDispatcher,
+            deduplicator);
+        var publisher = new LocalActorPublisher(
+            actorId,
+            () => actor.ParentId,
+            () => actor.ChildrenCount,
+            _streams,
+            propagationPolicy);
 
         InjectDependencies(agent, publisher, actorId, logger);
 
@@ -83,11 +90,34 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Destroys actor and cleans up stream and activation index.</summary>
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
+        if (_callbackScheduler != null)
+            await _callbackScheduler.PurgeActorAsync(id, ct);
+
         if (!_actors.TryRemove(id, out var actor))
         {
             _streamLifecycleManager.RemoveStream(id);
             await _activationIndexStore.DeleteAsync(id, ct);
             return;
+        }
+
+        var parentId = await actor.GetParentIdAsync();
+        if (!string.IsNullOrWhiteSpace(parentId))
+        {
+            if (_actors.TryGetValue(parentId, out var parent))
+                parent.RemoveChild(id);
+
+            await _streams.GetStream(parentId).RemoveRelayAsync(id, ct);
+            await actor.UnsubscribeFromParentAsync();
+        }
+
+        var children = await actor.GetChildrenIdsAsync();
+        foreach (var childId in children)
+        {
+            if (_actors.TryGetValue(childId, out var child))
+                await child.UnsubscribeFromParentAsync();
+
+            await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
         }
 
         await actor.DeactivateAsync(ct);
@@ -214,11 +244,16 @@ public sealed class LocalActorRuntime : IActorRuntime
         return null;
     }
 
-    private void InjectDependencies(IAgent agent, IEventPublisher publisher, string actorId, ILogger logger)
+    private void InjectDependencies(
+        IAgent agent,
+        LocalActorPublisher publisher,
+        string actorId,
+        ILogger logger)
     {
         if (agent is not GAgentBase gab) return;
         gab.SetId(actorId);
         gab.EventPublisher = publisher;
+        gab.CommittedStateEventPublisher = publisher;
         gab.Logger = logger;
         gab.Services = _services;
         if (gab is IEventSourcingFactoryBinding statefulBinding)

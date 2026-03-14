@@ -2,7 +2,10 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -11,83 +14,127 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
     [Fact]
     public void Channel_ShouldBeWorkflowRun()
     {
-        var codec = new WorkflowRunEventSessionCodec();
-
-        codec.Channel.Should().Be("workflow-run");
+        new WorkflowRunEventSessionCodec().Channel.Should().Be("workflow-run");
     }
 
     [Fact]
-    public void GetEventType_WhenEventIsNull_ShouldThrowArgumentNullException()
+    public void GetEventTypeAndSerialize_WhenEventIsNull_ShouldThrowArgumentNullException()
     {
         var codec = new WorkflowRunEventSessionCodec();
 
-        Action act = () => codec.GetEventType(null!);
+        Action getType = () => codec.GetEventType(null!);
+        Action serialize = () => codec.Serialize(null!);
 
-        act.Should().Throw<ArgumentNullException>();
+        getType.Should().Throw<ArgumentNullException>();
+        serialize.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
-    public void Serialize_WhenEventIsNull_ShouldThrowArgumentNullException()
+    public void Deserialize_WhenEventTypeOrPayloadInvalid_ShouldReturnNull()
     {
         var codec = new WorkflowRunEventSessionCodec();
-
-        Action act = () => codec.Serialize(null!);
-
-        act.Should().Throw<ArgumentNullException>();
-    }
-
-    [Theory]
-    [InlineData(null, "{}")]
-    [InlineData("", "{}")]
-    [InlineData("RUN_STARTED", null)]
-    [InlineData("RUN_STARTED", "")]
-    [InlineData("UNKNOWN", "{}")]
-    public void Deserialize_WhenEventTypeOrPayloadInvalid_ShouldReturnNull(string? eventType, string? payload)
-    {
-        var codec = new WorkflowRunEventSessionCodec();
-
-        var deserialized = codec.Deserialize(eventType!, payload!);
-
-        deserialized.Should().BeNull();
-    }
-
-    [Fact]
-    public void Deserialize_WhenPayloadIsMalformed_ShouldReturnNull()
-    {
-        var codec = new WorkflowRunEventSessionCodec();
-
-        var deserialized = codec.Deserialize(WorkflowRunEventTypes.RunStarted, "{");
-
-        deserialized.Should().BeNull();
-    }
-
-    [Fact]
-    public void SerializeAndDeserialize_ShouldRoundTripKnownWorkflowEvent()
-    {
-        var codec = new WorkflowRunEventSessionCodec();
-        var evt = new WorkflowRunFinishedEvent
+        var valid = new WorkflowRunEventEnvelope
         {
-            ThreadId = "thread-1",
-            Result = "ok",
+            RunStarted = new WorkflowRunStartedEventPayload { ThreadId = "thread-1" },
+        };
+
+        codec.Deserialize(null!, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
+        codec.Deserialize(string.Empty, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, null!).Should().BeNull();
+        codec.Deserialize(WorkflowRunEventTypes.RunStarted, Any.Pack(new StringValue { Value = "payload" }).ToByteString()).Should().BeNull();
+        codec.Deserialize("UNKNOWN", codec.Serialize(valid)).Should().BeNull();
+    }
+
+    [Fact]
+    public void SerializeAndDeserialize_ShouldRoundTripRunFinishedEnvelope()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var evt = new WorkflowRunEventEnvelope
+        {
             Timestamp = 123,
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                ThreadId = "thread-1",
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "ok" }),
+            },
         };
 
         var payload = codec.Serialize(evt);
-        var deserialized = codec.Deserialize(evt.Type, payload);
+        var deserialized = codec.Deserialize(WorkflowRunEventTypes.RunFinished, payload);
 
-        deserialized.Should().BeOfType<WorkflowRunFinishedEvent>();
-        var finished = (WorkflowRunFinishedEvent)deserialized!;
-        finished.ThreadId.Should().Be("thread-1");
-        finished.Result.Should().BeOfType<System.Text.Json.JsonElement>();
-        ((System.Text.Json.JsonElement)finished.Result!).GetString().Should().Be("ok");
-        finished.Timestamp.Should().Be(123);
+        deserialized.Should().NotBeNull();
+        deserialized!.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
+        deserialized.Timestamp.Should().Be(123);
+        deserialized.RunFinished.ThreadId.Should().Be("thread-1");
+        deserialized.RunFinished.Result.Unpack<WorkflowRunResultPayload>().Output.Should().Be("ok");
+    }
+
+    [Fact]
+    public void SerializeAndDeserialize_ShouldRoundTripStructuredStateSnapshot()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var evt = new WorkflowRunEventEnvelope
+        {
+            Timestamp = 456,
+            StateSnapshot = new WorkflowStateSnapshotEventPayload
+            {
+                Snapshot = Any.Pack(new WorkflowProjectionStateSnapshotPayload
+                {
+                    ActorId = "actor-1",
+                    WorkflowName = "direct",
+                    CommandId = "cmd-1",
+                    ProjectionCompleted = true,
+                    ProjectionCompletionStatus = WorkflowProjectionCompletionStatusPayload.Completed,
+                    SnapshotAvailable = true,
+                    Snapshot = new WorkflowActorSnapshotPayload
+                    {
+                        ActorId = "actor-1",
+                        WorkflowName = "direct",
+                        LastCommandId = "cmd-1",
+                        TotalSteps = 2,
+                    },
+                }),
+            },
+        };
+
+        var payload = codec.Serialize(evt);
+        var deserialized = codec.Deserialize(WorkflowRunEventTypes.StateSnapshot, payload);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.Timestamp.Should().Be(456);
+        var snapshot = deserialized.StateSnapshot.Snapshot.Unpack<WorkflowProjectionStateSnapshotPayload>();
+        snapshot.ActorId.Should().Be("actor-1");
+        snapshot.Snapshot.TotalSteps.Should().Be(2);
+    }
+
+    [Fact]
+    public void SerializeAndDeserialize_ShouldRoundTripCustomAnyPayload()
+    {
+        var codec = new WorkflowRunEventSessionCodec();
+        var evt = new WorkflowRunEventEnvelope
+        {
+            Timestamp = 789,
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "custom",
+                Payload = Any.Pack(new Int32Value { Value = 9 }),
+            },
+        };
+
+        var payload = codec.Serialize(evt);
+        var deserialized = codec.Deserialize(WorkflowRunEventTypes.Custom, payload);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.Custom.Name.Should().Be("custom");
+        deserialized.Custom.Payload.Unpack<Int32Value>().Value.Should().Be(9);
+        deserialized.Timestamp.Should().Be(789);
     }
 }
 
 public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 {
     [Fact]
-    public async Task TryHandleAsync_WhenInvalidOperation_ShouldDetachAndPublishRunError()
+    public async Task TryHandleAsync_WhenInvalidOperation_ShouldNotifyCurrentSink_CompleteIt_AndPublishCustomFailure()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -95,23 +142,30 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             sinkManager,
             runEventHub,
             new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
 
         var handled = await policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
-            new WorkflowStepStartedEvent { StepName = "step-1" },
+            sink,
+            BuildStepStarted("step-1"),
             new InvalidOperationException("sink write failed"));
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().ContainSingle();
-        var runError = runEventHub.PublishedEvents.Single().evt.Should().BeOfType<WorkflowRunErrorEvent>().Subject;
-        runError.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
-        runError.Message.Should().Contain("eventType=STEP_STARTED");
+        runEventHub.PublishedEvents.Single().evt.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        runEventHub.PublishedEvents.Single().evt.Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        var payload = runEventHub.PublishedEvents.Single().evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>();
+        payload.Code.Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        payload.EventType.Should().Be(WorkflowRunEventTypes.StepStarted);
+        payload.Reason.Should().Contain("sink write failed");
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenLeaseIdsMissing_ShouldDetachWithoutPublishing()
+    public async Task TryHandleAsync_WhenLeaseIdsMissing_ShouldStillNotifyCurrentSink_ButSkipHubPublish()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub();
@@ -119,20 +173,54 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             sinkManager,
             runEventHub,
             new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
 
         var handled = await policy.TryHandleAsync(
             CreateLease(string.Empty, "   "),
-            new NoopRunEventSink(),
-            new WorkflowRunStartedEvent { ThreadId = "thread-1" },
+            sink,
+            BuildRunStarted("thread-1"),
             new EventSinkBackpressureException());
 
         handled.Should().BeTrue();
         sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].Custom.Name.Should().Be(WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkBackpressureErrorCode);
+        sink.CompleteCalls.Should().Be(1);
         runEventHub.PublishedEvents.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task TryHandleAsync_WhenRunErrorPublishFails_ShouldSwallowAndReturnTrue()
+    public async Task TryHandleAsync_WhenSinkCompleted_ShouldPublishCustomFailureAndCompleteCurrentSink()
+    {
+        var sinkManager = new RecordingSinkSubscriptionManager();
+        var runEventHub = new RecordingRunEventHub();
+        var policy = new WorkflowProjectionSinkFailurePolicy(
+            sinkManager,
+            runEventHub,
+            new FixedClock(new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero)));
+        var sink = new RecordingRunEventSink();
+
+        var handled = await policy.TryHandleAsync(
+            CreateLease("actor-1", "cmd-1"),
+            sink,
+            BuildRunStarted("thread-1"),
+            new EventSinkCompletedException());
+
+        handled.Should().BeTrue();
+        sinkManager.DetachCalls.Should().Be(1);
+        sink.PushedEvents.Should().ContainSingle();
+        sink.PushedEvents[0].Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+        sink.CompleteCalls.Should().Be(1);
+        runEventHub.PublishedEvents.Should().ContainSingle();
+        runEventHub.PublishedEvents[0].evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code
+            .Should().Be(WorkflowProjectionSinkFailurePolicy.SinkWriteErrorCode);
+    }
+
+    [Fact]
+    public async Task TryHandleAsync_WhenCustomFailurePublishFails_ShouldSwallowAndReturnTrue()
     {
         var sinkManager = new RecordingSinkSubscriptionManager();
         var runEventHub = new RecordingRunEventHub
@@ -146,8 +234,8 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         var handled = await policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
-            new WorkflowRunStartedEvent { ThreadId = "thread-1" },
+            new RecordingRunEventSink(),
+            BuildRunStarted("thread-1"),
             new EventSinkBackpressureException());
 
         handled.Should().BeTrue();
@@ -167,8 +255,8 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         Func<Task> act = () => policy.TryHandleAsync(
             CreateLease("actor-1", "cmd-1"),
-            new NoopRunEventSink(),
-            new WorkflowRunStartedEvent { ThreadId = "thread-1" },
+            new RecordingRunEventSink(),
+            BuildRunStarted("thread-1"),
             new InvalidOperationException("write failed"),
             cts.Token).AsTask();
 
@@ -186,6 +274,18 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
             Input = "input",
         });
 
+    private static WorkflowRunEventEnvelope BuildRunStarted(string threadId) =>
+        new()
+        {
+            RunStarted = new WorkflowRunStartedEventPayload { ThreadId = threadId },
+        };
+
+    private static WorkflowRunEventEnvelope BuildStepStarted(string stepName) =>
+        new()
+        {
+            StepStarted = new WorkflowStepStartedEventPayload { StepName = stepName },
+        };
+
     private sealed class FixedClock : IProjectionClock
     {
         public FixedClock(DateTimeOffset utcNow)
@@ -197,14 +297,14 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
     }
 
     private sealed class RecordingSinkSubscriptionManager
-        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>
+        : IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>
     {
         public int DetachCalls { get; private set; }
 
         public Task AttachOrReplaceAsync(
             WorkflowExecutionRuntimeLease lease,
-            IEventSink<WorkflowRunEvent> sink,
-            Func<WorkflowRunEvent, ValueTask> handler,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            Func<WorkflowRunEventEnvelope, ValueTask> handler,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -216,7 +316,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
 
         public Task DetachAsync(
             WorkflowExecutionRuntimeLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -227,13 +327,13 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         }
     }
 
-    private sealed class RecordingRunEventHub : IProjectionSessionEventHub<WorkflowRunEvent>
+    private sealed class RecordingRunEventHub : IProjectionSessionEventHub<WorkflowRunEventEnvelope>
     {
         public bool ThrowOnPublish { get; init; }
 
-        public List<(string scopeId, string sessionId, WorkflowRunEvent evt)> PublishedEvents { get; } = [];
+        public List<(string scopeId, string sessionId, WorkflowRunEventEnvelope evt)> PublishedEvents { get; } = [];
 
-        public Task PublishAsync(string scopeId, string sessionId, WorkflowRunEvent evt, CancellationToken ct = default)
+        public Task PublishAsync(string scopeId, string sessionId, WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             if (ThrowOnPublish)
@@ -246,7 +346,7 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         public Task<IAsyncDisposable> SubscribeAsync(
             string scopeId,
             string sessionId,
-            Func<WorkflowRunEvent, ValueTask> handler,
+            Func<WorkflowRunEventEnvelope, ValueTask> handler,
             CancellationToken ct = default)
         {
             _ = scopeId;
@@ -262,25 +362,23 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class NoopRunEventSink : IEventSink<WorkflowRunEvent>
+    private sealed class RecordingRunEventSink : IEventSink<WorkflowRunEventEnvelope>
     {
-        public void Push(WorkflowRunEvent evt)
-        {
-            _ = evt;
-        }
+        public List<WorkflowRunEventEnvelope> PushedEvents { get; } = [];
+        public int CompleteCalls { get; private set; }
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public void Push(WorkflowRunEventEnvelope evt) => PushedEvents.Add(evt);
+
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
-            _ = evt;
             ct.ThrowIfCancellationRequested();
+            PushedEvents.Add(evt);
             return ValueTask.CompletedTask;
         }
 
-        public void Complete()
-        {
-        }
+        public void Complete() => CompleteCalls++;
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             _ = ct;

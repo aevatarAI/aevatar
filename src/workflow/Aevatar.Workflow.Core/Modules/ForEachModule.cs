@@ -20,10 +20,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Splits input by delimiter, dispatches a sub-step per item,
 /// collects results, and publishes merged output.
 /// </summary>
-public sealed class ForEachModule : IEventModule
+public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<string, int> _expected = [];
-    private readonly Dictionary<string, List<StepCompletedEvent>> _collected = [];
+    private const string ModuleStateKey = "foreach";
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -37,7 +36,7 @@ public sealed class ForEachModule : IEventModule
         envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -68,12 +67,16 @@ public sealed class ForEachModule : IEventModule
                     StepId = evt.StepId,
                     RunId = runId,
                     Success = true, Output = "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
-            _expected[parentKey] = items.Length;
-            _collected[parentKey] = [];
+            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            state.Parents[parentKey] = new ForEachParentState
+            {
+                Expected = items.Length,
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -98,7 +101,7 @@ public sealed class ForEachModule : IEventModule
                         subReq.Parameters[key["sub_param_".Length..]] = value;
                 }
 
-                await ctx.PublishAsync(subReq, EventDirection.Self, ct);
+                await ctx.PublishAsync(subReq, TopologyAudience.Self, ct);
             }
         }
         else
@@ -110,14 +113,16 @@ public sealed class ForEachModule : IEventModule
             var parent = TryGetParentFromDirectItemStepId(evt.StepId);
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = parent == null ? null : BuildRunStepKey(runId, parent);
+            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
 
-            if (parent == null || parentKey == null || !_collected.ContainsKey(parentKey)) return;
+            if (parent == null || parentKey == null || !state.Parents.TryGetValue(parentKey, out var parentState)) return;
 
-            _collected[parentKey].Add(evt);
+            parentState.Collected.Add(evt.ToForEachItemResult());
+            state.Parents[parentKey] = parentState;
 
-            if (_collected[parentKey].Count >= _expected[parentKey])
+            if (parentState.Collected.Count >= parentState.Expected)
             {
-                var results = _collected[parentKey];
+                var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
 
@@ -125,15 +130,19 @@ public sealed class ForEachModule : IEventModule
                     "ForEach {StepId}: all {Count} items completed, success={Success}",
                     parent, results.Count, allSuccess);
 
+                state.Parents.Remove(parentKey);
+                await SaveStateAsync(state, ctx, ct);
+
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = parent,
                     RunId = runId,
                     Success = allSuccess, Output = merged,
-                }, EventDirection.Self, ct);
-
-                _collected.Remove(parentKey);
-                _expected.Remove(parentKey);
+                }, TopologyAudience.Self, ct);
+            }
+            else
+            {
+                await SaveStateAsync(state, ctx, ct);
             }
         }
     }
@@ -152,4 +161,16 @@ public sealed class ForEachModule : IEventModule
 
         return stepId[..idx];
     }
+
+    private static Task SaveStateAsync(
+        ForEachModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Parents.Count == 0)
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
 }

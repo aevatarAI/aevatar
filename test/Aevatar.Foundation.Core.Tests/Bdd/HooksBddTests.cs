@@ -33,7 +33,7 @@ public class HooksBddTests
 }
 
 /// <summary>Test agent that tracks hook invocation.</summary>
-public class HookTrackingAgent : GAgentBase<CounterState>
+public class HookTrackingAgent : TestGAgentBase<CounterState>
 {
     public bool HookStartCalled { get; private set; }
     public bool HookEndCalled { get; private set; }
@@ -50,7 +50,7 @@ public class HookTrackingAgent : GAgentBase<CounterState>
 }
 
 /// <summary>Test agent whose handler throws an exception.</summary>
-public class ThrowingAgent : GAgentBase<CounterState>
+public class ThrowingAgent : TestGAgentBase<CounterState>
 {
     public Exception? LastException { get; private set; }
 

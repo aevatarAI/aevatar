@@ -16,9 +16,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Human input module. Handles step_type == "human_input".
 /// Suspends workflow and waits for a WorkflowResumedEvent carrying user input.
 /// </summary>
-public sealed class HumanInputModule : IEventModule
+public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
+    private const string ModuleStateKey = "human_input";
 
     public string Name => "human_input";
     public int Priority => 5;
@@ -31,7 +31,7 @@ public sealed class HumanInputModule : IEventModule
                 payload.Is(WorkflowResumedEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -56,7 +56,15 @@ public sealed class HumanInputModule : IEventModule
                 request.Parameters,
                 defaultSeconds: 1800);
 
-            _pending[(runId, request.StepId)] = request;
+            var state = WorkflowExecutionStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
+            state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingHumanInputState
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Input = request.Input ?? string.Empty,
+                OnTimeout = request.Parameters.GetValueOrDefault("on_timeout", "fail"),
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "HumanInput: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", variable={Var}, timeout={Timeout}s",
@@ -69,10 +77,10 @@ public sealed class HumanInputModule : IEventModule
                 SuspensionType = "human_input",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
+                VariableName = variable,
             };
-            suspended.Metadata["variable"] = variable;
 
-            await ctx.PublishAsync(suspended, EventDirection.Both, ct);
+            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -80,12 +88,12 @@ public sealed class HumanInputModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+            var state = WorkflowExecutionStateAccess.Load<HumanInputModuleState>(ctx, ModuleStateKey);
+            if (!TryResolvePending(state, resumed, out var pendingKey, out var pending))
                 return;
-            _pending.Remove(pendingKey);
 
             var userInput = resumed.UserInput;
-            var onTimeout = pending.Parameters.GetValueOrDefault("on_timeout", "fail");
+            var onTimeout = pending.OnTimeout;
 
             if (string.IsNullOrEmpty(userInput) && !resumed.Approved)
             {
@@ -100,7 +108,9 @@ public sealed class HumanInputModule : IEventModule
                     Success = onTimeout != "fail",
                     Output = pending.Input,
                     Error = onTimeout == "fail" ? "Human input timed out" : "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
+                state.Pending.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
                 return;
             }
 
@@ -116,39 +126,48 @@ public sealed class HumanInputModule : IEventModule
                 RunId = pending.RunId,
                 Success = true,
                 Output = userInput ?? "",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
+            state.Pending.Remove(pendingKey);
+            await SaveStateAsync(state, ctx, ct);
         }
     }
 
     private bool TryResolvePending(
+        HumanInputModuleState state,
         WorkflowResumedEvent resumed,
-        out (string RunId, string StepId) pendingKey,
-        out StepRequestEvent pending)
+        out string pendingKey,
+        out PendingHumanInputState pending)
     {
-        if (!string.IsNullOrWhiteSpace(resumed.RunId))
-        {
-            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
-            return _pending.TryGetValue(pendingKey, out pending!);
-        }
+        pendingKey = string.Empty;
+        pending = new PendingHumanInputState();
+        if (string.IsNullOrWhiteSpace(resumed.RunId))
+            return false;
 
-        // Backward compatibility: old clients may omit run_id.
-        var matchCount = 0;
-        pendingKey = default;
-        pending = default!;
-        foreach (var entry in _pending)
-        {
-            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
-                continue;
+        pendingKey = BuildPendingKey(
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            resumed.StepId ?? string.Empty);
+        if (!state.Pending.TryGetValue(pendingKey, out var resolvedPending))
+            return false;
 
-            matchCount++;
-            if (matchCount > 1)
-                return false;
+        pending = resolvedPending;
+        return string.Equals(
+            pending.RunId,
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            StringComparison.Ordinal);
+    }
 
-            pendingKey = entry.Key;
-            pending = entry.Value;
-        }
+    private static string BuildPendingKey(string runId, string stepId) =>
+        $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
 
-        return matchCount == 1;
+    private static Task SaveStateAsync(
+        HumanInputModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Pending.Count == 0)
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
 }

@@ -1,7 +1,12 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
@@ -28,6 +33,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("direct");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("direct")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("direct"));
     }
 
     [Fact]
@@ -53,6 +59,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("auto");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("auto")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto"));
         yaml.Should().Contain("name: auto");
         yaml.Should().Contain("dynamic_workflow");
         yaml!.IndexOf("- id: done", StringComparison.Ordinal)
@@ -82,6 +89,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
         var yaml = registry.GetYaml("auto_review");
         yaml.Should().NotBeNullOrWhiteSpace();
+        registry.GetDefinition("auto_review")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto_review"));
         yaml.Should().Contain("name: auto_review");
         yaml.Should().Contain("\"true\": done");
         yaml.Should().Contain("Approve to finalize YAML for manual run");
@@ -154,24 +162,60 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void AddWorkflowApplication_ShouldWireWorkflowRunOutputStreamerAcrossAbstractions()
+    public void AddWorkflowApplication_ShouldWireGenericEventStreamingAndInteractionServices()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(IdentityEventFrameMapper<WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(WorkflowRunFinalizeEmitter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(WorkflowRunDetachedDispatchService) &&
+            x.ImplementationType == typeof(WorkflowRunDetachedDispatchService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFallbackPolicy<WorkflowChatRunRequest>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         using var provider = services.BuildServiceProvider();
 
-        var concrete = provider.GetRequiredService<WorkflowRunOutputStreamer>();
-        var outputStreamer = provider.GetRequiredService<IWorkflowRunOutputStreamer>();
-        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>();
-        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>();
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
 
-        outputStreamer.Should().BeSameAs(concrete);
-        eventOutputStream.Should().BeSameAs(concrete);
-        frameMapper.Should().BeSameAs(concrete);
+        catalogPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        capabilitiesPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldUseSessionIdFromMetadata()
+    public void EnvelopeFactory_ShouldMergeHeadersAndCommandMetadata()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -181,21 +225,34 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
+                ["source"] = "headers",
+            });
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            "direct",
+            "actor-1",
+            SessionId: "session-42",
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
+                [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
             });
-        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
-        envelope.TargetActorId.Should().Be("actor-1");
-        envelope.CorrelationId.Should().Be("corr-1");
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.PublisherId.Should().Be("api");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
+        envelope.Route.IsDirect().Should().BeTrue();
+        envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
+        request.Metadata["source"].Should().Be("headers");
     }
 
     [Fact]
@@ -214,186 +271,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(command, new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
-            new Dictionary<string, string>
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "   ",
-            }));
+            new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
-    }
-
-    [Fact]
-    public async Task WorkflowRunRequestExecutor_WhenActorSucceeds_ShouldNotPushError()
-    {
-        var actor = new RecordingActor();
-        var sink = new RecordingSink();
-        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
-        var envelope = new EventEnvelope { Id = "e-1" };
-
-        await executor.ExecuteAsync(actor, actor.Id, envelope, sink, CancellationToken.None);
-
-        actor.Received.Should().ContainSingle().Which.Should().BeSameAs(envelope);
-        sink.Events.Should().BeEmpty();
-        sink.CompleteCalls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task WorkflowRunRequestExecutor_WhenActorThrows_ShouldPushErrorAndComplete()
-    {
-        var actor = new ThrowingActor(new InvalidOperationException("boom"));
-        var sink = new RecordingSink();
-        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
-
-        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-2" }, sink, CancellationToken.None);
-
-        sink.Events.Should().ContainSingle();
-        var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
-        error.Code.Should().Be("INTERNAL_ERROR");
-        error.Message.Should().Be("Workflow execution error: boom");
-        sink.CompleteCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task WorkflowRunRequestExecutor_WhenExceptionMessageContainsNewLine_ShouldSanitizeErrorMessage()
-    {
-        var actor = new ThrowingActor(new InvalidOperationException("boom\ntrace"));
-        var sink = new RecordingSink();
-        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
-
-        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-2b" }, sink, CancellationToken.None);
-
-        sink.Events.Should().ContainSingle();
-        var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
-        error.Code.Should().Be("INTERNAL_ERROR");
-        error.Message.Should().Be("Workflow execution error: boom trace");
-        sink.CompleteCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task WorkflowRunRequestExecutor_WhenExceptionMessageIsBlank_ShouldUseUnknownErrorFallback()
-    {
-        var actor = new ThrowingActor(new InvalidOperationException(string.Empty));
-        var sink = new RecordingSink();
-        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
-
-        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-2c" }, sink, CancellationToken.None);
-
-        sink.Events.Should().ContainSingle();
-        var error = sink.Events[0].Should().BeOfType<WorkflowRunErrorEvent>().Subject;
-        error.Message.Should().Be("Workflow execution error: unknown error");
-        sink.CompleteCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task WorkflowRunRequestExecutor_WhenSinkPushThrowsInvalidOperation_ShouldStillComplete()
-    {
-        var actor = new ThrowingActor(new InvalidOperationException("boom"));
-        var sink = new ThrowingPushSink();
-        var executor = new WorkflowRunRequestExecutor(NullLogger<WorkflowRunRequestExecutor>.Instance);
-
-        await executor.ExecuteAsync(actor, actor.Id, new EventEnvelope { Id = "e-3" }, sink, CancellationToken.None);
-
-        sink.CompleteCalls.Should().Be(1);
-    }
-
-    private sealed class RecordingActor : IActor
-    {
-        public string Id => "actor-recording";
-        public IAgent Agent { get; } = new StubAgent("agent-recording");
-        public List<EventEnvelope> Received { get; } = [];
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Received.Add(envelope);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class ThrowingActor : IActor
-    {
-        private readonly Exception _exception;
-
-        public ThrowingActor(Exception exception)
-        {
-            _exception = exception;
-        }
-
-        public string Id => "actor-throwing";
-        public IAgent Agent { get; } = new StubAgent("agent-throwing");
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.FromException(_exception);
-    }
-
-    private sealed class RecordingSink : IEventSink<WorkflowRunEvent>
-    {
-        public List<WorkflowRunEvent> Events { get; } = [];
-        public int CompleteCalls { get; private set; }
-
-        public void Push(WorkflowRunEvent evt) => Events.Add(evt);
-
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Events.Add(evt);
-            return ValueTask.CompletedTask;
-        }
-
-        public void Complete() => CompleteCalls++;
-
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class ThrowingPushSink : IEventSink<WorkflowRunEvent>
-    {
-        public int CompleteCalls { get; private set; }
-
-        public void Push(WorkflowRunEvent evt) => throw new InvalidOperationException("push failed");
-
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _ = evt;
-            throw new InvalidOperationException("push failed");
-        }
-
-        public void Complete() => CompleteCalls++;
-
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
     }
 }

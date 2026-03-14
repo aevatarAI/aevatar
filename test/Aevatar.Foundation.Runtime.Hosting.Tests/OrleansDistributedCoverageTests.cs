@@ -49,7 +49,7 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-1",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
         var built = policy.TryBuildRetryEnvelope(
@@ -61,9 +61,9 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeTrue();
         nextAttempt.Should().Be(1);
         retryEnvelope.Id.Should().Be(envelope.Id);
-        retryEnvelope.Metadata["aevatar.retry.attempt"].Should().Be("1");
-        retryEnvelope.Metadata["aevatar.retry.last_error"].Should().Be("InvalidOperationException");
-        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-1");
+        retryEnvelope.Runtime!.Retry!.Attempt.Should().Be(1);
+        retryEnvelope.Runtime.Retry.LastErrorType.Should().Be("InvalidOperationException");
+        retryEnvelope.Runtime.Retry.OriginEventId.Should().Be("evt-1");
     }
 
     [Fact]
@@ -74,10 +74,16 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-retry-2",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
-        envelope.Metadata["aevatar.retry.origin_event_id"] = "evt-root";
-        envelope.Metadata["aevatar.retry.attempt"] = "1";
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            Retry = new EnvelopeRetryContext
+            {
+                OriginEventId = "evt-root",
+                Attempt = 1,
+            },
+        };
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,
@@ -88,7 +94,7 @@ public sealed class OrleansDistributedCoverageTests
         built.Should().BeTrue();
         nextAttempt.Should().Be(2);
         retryEnvelope.Id.Should().Be("evt-retry-2");
-        retryEnvelope.Metadata["aevatar.retry.origin_event_id"].Should().Be("evt-root");
+        retryEnvelope.Runtime!.Retry!.OriginEventId.Should().Be("evt-root");
     }
 
     [Fact]
@@ -118,9 +124,15 @@ public sealed class OrleansDistributedCoverageTests
         {
             Id = "evt-2",
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Protobuf.WellKnownTypes.StringValue { Value = "payload" }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+            Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext
+                {
+                    Attempt = 1,
+                },
+            },
         };
-        envelope.Metadata["aevatar.retry.attempt"] = "1";
 
         var built = policy.TryBuildRetryEnvelope(
             envelope,
@@ -216,7 +228,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-1",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<EventDirection> { EventDirection.Up, EventDirection.Down },
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Parent, TopologyAudience.Children },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-z", "evt-a" },
             LeaseId = "lease-1",
             Version = 3,
@@ -226,7 +238,7 @@ public sealed class OrleansDistributedCoverageTests
         var persistedEntry = grains["source-1"].LastUpsert;
         persistedEntry.Should().NotBeNull();
         persistedEntry = grains["source-1"].LastUpsert;
-        persistedEntry!.DirectionFilter.Should().Equal(EventDirection.Down, EventDirection.Up);
+        persistedEntry!.DirectionFilter.Should().BeEquivalentTo([TopologyAudience.Children, TopologyAudience.Parent]);
         persistedEntry.EventTypeFilter.Should().Equal("evt-a", "evt-z");
         var listed = await registry.ListBySourceAsync("source-1");
         listed.Should().ContainSingle(x => x.TargetStreamId == "target-1");
@@ -381,7 +393,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-legacy",
             TargetStreamId = "target-legacy",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down],
+            DirectionFilter = [TopologyAudience.Children],
             EventTypeFilter = ["evt"],
             Version = 7,
             LeaseId = "lease-legacy",
@@ -410,7 +422,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-1",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Both },
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.ParentAndChildren },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-b" },
             Version = 1,
             LeaseId = "lease-1",
@@ -422,7 +434,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-1",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Up },
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.Parent },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-b" },
             Version = 1,
             LeaseId = "lease-1",
@@ -434,7 +446,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-1",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Up },
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.Parent },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt-a", "evt-c" },
             Version = 1,
             LeaseId = "lease-1",
@@ -443,7 +455,7 @@ public sealed class OrleansDistributedCoverageTests
 
         var listed = await grain.ListAsync();
         listed.Should().ContainSingle();
-        listed[0].DirectionFilter.Should().BeEquivalentTo(new[] { EventDirection.Down, EventDirection.Up });
+        listed[0].DirectionFilter.Should().BeEquivalentTo(new[] { TopologyAudience.Children, TopologyAudience.Parent });
         listed[0].EventTypeFilter.Should().BeEquivalentTo("evt-a", "evt-c");
     }
 
@@ -457,7 +469,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-legacy",
             TargetStreamId = " ",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down],
+            DirectionFilter = [TopologyAudience.Children],
             EventTypeFilter = ["evt"],
             Version = 1,
             LeaseId = "lease-invalid",
@@ -467,7 +479,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = "source-legacy",
             TargetStreamId = "target-valid",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down],
+            DirectionFilter = [TopologyAudience.Children],
             EventTypeFilter = ["evt"],
             Version = 2,
             LeaseId = "lease-valid",
@@ -542,7 +554,7 @@ public sealed class OrleansDistributedCoverageTests
             SourceStreamId = source,
             TargetStreamId = target,
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<EventDirection> { EventDirection.Down, EventDirection.Both },
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Children, TopologyAudience.ParentAndChildren },
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt" },
             Version = version,
             LeaseId = leaseId,

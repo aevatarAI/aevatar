@@ -21,19 +21,24 @@ public sealed class RuntimeActorGrainStateStoreTests
         var state = new EventEnvelope
         {
             Id = "evt-1",
-            PublisherId = "publisher-1",
-            Direction = EventDirection.Both,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-1", TopologyAudience.ParentAndChildren),
+            Propagation = new EnvelopePropagation
+            {
+                Baggage =
+                {
+                    ["k"] = "v",
+                },
+            },
         };
-        state.Metadata["k"] = "v";
 
         await store.SaveAsync("actor-1", state);
         var loaded = await store.LoadAsync("actor-1");
 
         loaded.Should().NotBeNull();
         loaded!.Id.Should().Be("evt-1");
-        loaded.PublisherId.Should().Be("publisher-1");
-        loaded.Direction.Should().Be(EventDirection.Both);
-        loaded.Metadata.Should().ContainKey("k").WhoseValue.Should().Be("v");
+        loaded.Route!.PublisherActorId.Should().Be("publisher-1");
+        loaded.Route.GetTopologyAudience().Should().Be(TopologyAudience.ParentAndChildren);
+        loaded.Propagation!.Baggage.Should().ContainKey("k").WhoseValue.Should().Be("v");
         stateProxy.State.AgentStateTypeName.Should().Be(typeof(EventEnvelope).FullName);
         stateProxy.State.AgentStateSnapshot.Should().NotBeNull();
         stateProxy.WriteCount.Should().Be(1);

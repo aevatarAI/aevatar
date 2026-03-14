@@ -128,7 +128,7 @@ public class WorkflowExecutionReportWriterTests
                     OutputPreview = "preview",
                     Error = "",
                     RequestParameters = new Dictionary<string, string> { ["k"] = "v" },
-                    CompletionMetadata = new Dictionary<string, string> { ["status"] = "ok" },
+                    CompletionAnnotations = new Dictionary<string, string> { ["status"] = "ok" },
                 },
             ],
             RoleReplies = withRoleReplies

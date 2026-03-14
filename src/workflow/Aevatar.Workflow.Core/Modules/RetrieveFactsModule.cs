@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>事实检索模块。处理 type=retrieve_facts 的步骤。</summary>
-public sealed class RetrieveFactsModule : IEventModule
+public sealed class RetrieveFactsModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "retrieve_facts";
     public int Priority => 5;
@@ -23,7 +23,7 @@ public sealed class RetrieveFactsModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "retrieve_facts") return;
@@ -57,6 +57,6 @@ public sealed class RetrieveFactsModule : IEventModule
             StepId = request.StepId,
             RunId = request.RunId,
             Success = true, Output = output,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

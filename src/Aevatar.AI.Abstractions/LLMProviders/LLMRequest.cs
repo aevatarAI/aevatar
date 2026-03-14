@@ -13,6 +13,12 @@ public sealed class LLMRequest
     /// <summary>对话消息列表，按顺序排列（system / user / assistant / tool）。</summary>
     public required List<ChatMessage> Messages { get; init; }
 
+    /// <summary>稳定请求标识，用于 replay/dedup/outbox 等跨边界关联。</summary>
+    public string? RequestId { get; init; }
+
+    /// <summary>透传给 provider/middleware 的附加 metadata。</summary>
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+
     /// <summary>可选工具列表，供 LLM 选择调用。</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 
@@ -35,6 +41,9 @@ public sealed class ChatMessage
     /// <summary>文本内容，tool 角色时表示工具执行结果。</summary>
     public string? Content { get; init; }
 
+    /// <summary>多模态内容分片（文本/图片）。存在时优先由 Provider 按分片构造消息。</summary>
+    public IReadOnlyList<ContentPart>? ContentParts { get; init; }
+
     /// <summary>tool 角色时，对应 tool_call 的 Id。</summary>
     public string? ToolCallId { get; init; }
 
@@ -54,6 +63,30 @@ public sealed class ChatMessage
     /// <param name="callId">对应 tool_call 的 Id。</param>
     /// <param name="result">工具执行结果 JSON 字符串。</param>
     public static ChatMessage Tool(string callId, string result) => new() { Role = "tool", ToolCallId = callId, Content = result };
+}
+
+/// <summary>多模态内容分片。</summary>
+public sealed class ContentPart
+{
+    /// <summary>分片类型：text / image。</summary>
+    public required string Type { get; init; }
+
+    /// <summary>文本分片内容。</summary>
+    public string? Text { get; init; }
+
+    /// <summary>图片分片（base64，不带 data-uri 头）。</summary>
+    public string? ImageBase64 { get; init; }
+
+    /// <summary>图片 MIME 类型（例如 image/png）。</summary>
+    public string? ImageMediaType { get; init; }
+
+    /// <summary>创建文本分片。</summary>
+    public static ContentPart TextPart(string text) =>
+        new() { Type = "text", Text = text };
+
+    /// <summary>创建图片分片。</summary>
+    public static ContentPart ImagePart(string imageBase64, string imageMediaType = "image/png") =>
+        new() { Type = "image", ImageBase64 = imageBase64, ImageMediaType = imageMediaType };
 }
 
 /// <summary>单次工具调用。包含 Id、名称、参数 JSON。</summary>

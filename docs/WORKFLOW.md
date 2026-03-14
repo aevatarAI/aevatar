@@ -1,8 +1,20 @@
 # 工作流引擎设计与实践
 
+> 状态更新（2026-03-08）
+>
+> 当前权威实现已经从“`WorkflowGAgent + WorkflowLoopModule`”演进为“`WorkflowGAgent + WorkflowRunGAgent + WorkflowExecutionKernel`”。
+>
+> - `WorkflowGAgent` 只承载 definition facts，不再直接推进 run。
+> - `WorkflowRunGAgent` 是单次 run 的唯一写侧事实源。
+> - `Foundation` 统一只保留 `IEventModule<TContext>`；workflow step 模块实现 `IEventModule<IWorkflowExecutionContext>`，并通过 `WorkflowExecutionBridgeModule` 接入 Foundation pipeline。
+> - `IEventContext` 是共性根接口；`IEventHandlerContext` 与 `IWorkflowExecutionContext` 只在能力上分化。
+> - `WorkflowExecutionKernel` 已替代 `WorkflowLoopModule` 负责主循环推进。
+>
+> 下文保留了大量 DSL 与原语说明；凡提到旧的 `WorkflowLoopModule`/`WorkflowGAgent` 执行职责，均以上述现状为准。
+
 这份文档回答三个问题：
 
-1. 为什么需要工作流引擎（`Aevatar.Workflow.Core` + Event Modules）？
+1. 为什么需要工作流引擎（`Aevatar.Workflow.Core` + `IEventModule<TContext>`）？
 2. 代码里怎么实现的？
 3. 实际开发时怎么用？
 
@@ -19,43 +31,61 @@
 
 - 把流程控制能力做成通用模块（Event Modules）
 - 把业务流程写成 YAML（可配置）
-- 让 `WorkflowGAgent` 在运行时装配模块并驱动流程
+- 让 `WorkflowGAgent` 负责 definition 绑定，让 `WorkflowRunGAgent` 在运行时装配模块并驱动流程
 
 一句话：**硬编码 Agent 适合固定逻辑，工作流适合可编排、可调整、可复用的流程逻辑。**
+
+口径先说清楚：
+
+- workflow 运行主链路建立在 `EventEnvelope` 消息流之上。
+- `EventEnvelope` 在这里是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
+- `WorkflowRunGAgent` / `WorkflowGAgent` 只有在显式 `PersistDomainEventAsync(...)` 时，才把领域事实写入 EventStore。
 
 ---
 
 ## 二、核心概念
 
-### WorkflowGAgent
+### WorkflowGAgent / WorkflowRunGAgent
 
-工作流入口 Actor（根节点），职责：
+当前实现下，workflow 职责拆成两个 Actor：
 
-1. 持有 workflow YAML（`State.WorkflowYaml`）
-2. 激活时解析 YAML + 校验结构
-3. 按 `roles` 定义创建子 `RoleGAgent` 树
-4. 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经工厂创建并安装
-5. 收到 `ChatRequestEvent` 后发布 `StartWorkflowEvent`，驱动执行
+1. `WorkflowGAgent`
+   - 持有 workflow YAML（definition facts）
+   - 解析 YAML、校验结构、维护版本与编译结果
+   - 作为 definition/source actor 被解析与绑定
+2. `WorkflowRunGAgent`
+   - 一次 run 一个 actor
+   - 按 `roles` 创建 run-scoped `RoleGAgent` 树
+   - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
+   - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
+   - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
 
 ```
 BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
-  -> InstallCognitiveModules:
+  -> BindWorkflowRunDefinition(yaml/run binding)
+  -> InstallCognitiveModules on WorkflowRunGAgent:
        IWorkflowModuleDependencyExpander[]: 推导模块名集合
        WorkflowModuleFactory: 按名称创建实例
        IWorkflowModuleConfigurator[]: 配置实例
-       SetModules: 安装到事件管线
+       WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
 
 ### Event Module
 
-可插拔的事件处理器（实现 `IEventModule`），四个要素：
+可插拔的事件处理器（实现 `IEventModule<TContext>`），四个要素：
 
 - `Name`：模块名（如 `"llm_call"`）
 - `Priority`：数值越小优先级越高
 - `CanHandle(envelope)`：判断是否处理该事件
 - `HandleAsync(envelope, ctx, ct)`：处理逻辑
+
+当前分层里：
+
+- `Foundation` 管线使用 `IEventModule<IEventHandlerContext>`
+- workflow step 模块使用 `IEventModule<IWorkflowExecutionContext>`
+- 两者共享 `EventEnvelope` 与 `IEventContext` 根抽象
 
 模块和静态 `[EventHandler]` 方法一起进入统一事件管线。可以在不改业务代码的情况下替换流程行为。
 
@@ -109,7 +139,7 @@ roles:
 
 | 类别 | YAML type | 模块 | 说明 |
 |------|-----------|------|------|
-| **引擎** | `workflow_loop` | `WorkflowLoopModule` | 按步骤顺序派发，收到完成事件后推进下一步或结束 |
+| **引擎** | N/A | `WorkflowExecutionKernel` | 按步骤顺序派发，收到完成事件后推进下一步或结束 |
 | **执行** | `llm_call` | `LLMCallModule` | 向目标 RoleGAgent 发 `ChatRequestEvent`，等回复转 `StepCompletedEvent` |
 | | `tool_call` | `ToolCallModule` | 调用已注册的 Agent 工具（MCP/Skills） |
 | | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP connector |
@@ -164,17 +194,16 @@ steps:
 ```
 POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
-  ├── WorkflowChatRunApplicationService.ExecuteAsync
-  │     ├── WorkflowRunActorResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
-  │     ├── WorkflowChatRunApplicationService: fallback 由白名单策略控制（workflow + exception type），direct 本身不再二次回退
-  │     ├── WorkflowExecutionRunOrchestrator.StartAsync: 启动投影 run
-  │     └── WorkflowRunRequestExecutor: 投递 ChatRequestEvent
+  ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
+  │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
+  │     ├── WorkflowRunCommandTargetBinder: 建立 projection lease + live sink + accepted receipt
+  │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
-  ├── WorkflowGAgent 收到 ChatRequestEvent
+  ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
-  │     └── 发布 StartWorkflowEvent (EventDirection.Self)
+  │     └── 发布 StartWorkflowEvent (TopologyAudience.Self)
   │
-  ├── WorkflowLoopModule 收到 StartWorkflowEvent
+  ├── WorkflowExecutionKernel 收到 StartWorkflowEvent
   │     └── 取第一个步骤，发布 StepRequestEvent
   │
   ├── 对应模块处理 StepRequestEvent
@@ -183,15 +212,15 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     ├── ParallelFanOutModule: 拆子步骤 → 收齐合并 → 可选投票 → StepCompletedEvent
   │     └── ...其他模块同理
   │
-  ├── WorkflowLoopModule 收到 StepCompletedEvent
+  ├── WorkflowExecutionKernel 收到 StepCompletedEvent
   │     ├── 有下一步 → 再发 StepRequestEvent（循环）
   │     └── 无下一步 → 发布 WorkflowCompletedEvent
   │
-  ├── 事件进入统一 Projection Pipeline（一对多分发）
+  ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
   │     ├── WorkflowExecutionReadModelProjector: reducer 链更新 ReadModel
   │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
   │
-  ├── WorkflowRunOutputStreamer: 从 sink 读事件 → 映射 WorkflowOutputFrame → emitAsync
+  ├── DefaultEventOutputStream + IdentityEventFrameMapper: 从 sink 读事件 → 透传 WorkflowRunEventEnvelope → emitAsync
   └── SSE 流返回客户端
 ```
 
@@ -240,7 +269,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 
 ## 五、模块装配机制
 
-`WorkflowGAgent` 不硬编码"哪个 workflow 需要哪些模块"，而是通过组合策略自动推导：
+`WorkflowRunGAgent` 不硬编码“哪个 workflow 需要哪些模块”，而是通过组合策略自动推导：
 
 ### 1. 依赖推导（`IWorkflowModuleDependencyExpander`）
 
@@ -248,7 +277,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 
 | Expander | 逻辑 |
 |----------|------|
-| `WorkflowLoopModuleDependencyExpander` | 始终加入 `workflow_loop` |
+| `WorkflowLoopModuleDependencyExpander` | 现已等价为“确保执行内核存在”；兼容命名仍保留在依赖推导层 |
 | `WorkflowStepTypeModuleDependencyExpander` | 遍历 steps，按 `type` 加入对应模块 |
 | `WorkflowImplicitModuleDependencyExpander` | 补齐隐式依赖（如 `parallel` 隐式需要 `llm_call`） |
 
@@ -258,15 +287,15 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
 
 | Configurator | 逻辑 |
 |--------------|------|
-| `WorkflowLoopModuleConfigurator` | 向 `WorkflowLoopModule` 注入编译后的 `WorkflowDefinition` |
+| `WorkflowLoopModuleConfigurator` | 历史命名；当前配置目标是 `WorkflowExecutionKernel` 相关执行上下文 |
 
 ### 扩展方式
 
-新增模块不改 `WorkflowGAgent`，只需：
+新增模块不改 `WorkflowRunGAgent`，只需：
 
 ```csharp
-// 1. 实现 IEventModule
-public sealed class MyStepModule : IEventModule { ... }
+// 1. 实现 IEventModule<IWorkflowExecutionContext>
+public sealed class MyStepModule : IEventModule<IWorkflowExecutionContext> { ... }
 
 // 2. DI 注册
 services.AddWorkflowModule<MyStepModule>("my_step", "my_alias");
@@ -446,7 +475,7 @@ steps:
 | 4 | `src/workflow/Aevatar.Workflow.Core/Modules/ParallelFanOutModule.cs` | 并行：扇出/收集/合并/投票 |
 | 5 | `src/workflow/Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` | Connector：安全校验、重试、容错 |
 | 6 | `src/workflow/Aevatar.Workflow.Core/Composition/` | 模块装配策略：expander + configurator |
-| 7 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs` | 应用层编排：start → execute → stream → finalize |
+| 7 | `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs` | 通用交互编排：dispatch → stream → finalize |
 | 8 | `src/workflow/Aevatar.Workflow.Projection/` | 投影管线：reducer → ReadModel、AGUI 输出 |
 | 9 | `src/Aevatar.Foundation.Core/GAgentBase.cs` | 模块如何进入统一事件管线 |
 
@@ -480,7 +509,7 @@ steps:
 - 不要在模块里藏隐式状态，状态尽量显式放在 workflow vars 或事件里
 - 模块保持单一职责：一个模块处理一种 step type
 - YAML 只写 connector 名称和调用意图，连接细节与安全策略放配置
-- 每次 connector 调用的元数据会写入 `StepCompletedEvent.Metadata`，便于回放与审计
+- 每次 connector 调用的运行注解会写入 `StepCompletedEvent.Annotations`，便于回放与审计
 
 ---
 

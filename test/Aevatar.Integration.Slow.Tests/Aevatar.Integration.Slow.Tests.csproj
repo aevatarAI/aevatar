@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Aevatar.Integration.Slow.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Aevatar.Integration.Tests\Orleans3ClusterIntegrationFactAttribute.cs" Link="Orleans3ClusterIntegrationFactAttribute.cs" />
+    <Compile Include="..\Aevatar.Integration.Tests\ScriptingCommandEnvelopeTestKit.cs" Link="ScriptingCommandEnvelopeTestKit.cs" />
+    <Compile Include="..\Aevatar.Integration.Tests\ScriptAutonomousEvolutionComprehensiveE2ETests.cs" Link="ScriptAutonomousEvolutionComprehensiveE2ETests.cs" />
+    <Compile Include="..\Aevatar.Integration.Tests\ScriptAutonomousEvolutionE2ETests.cs" Link="ScriptAutonomousEvolutionE2ETests.cs" />
+    <Compile Include="..\Aevatar.Integration.Tests\ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs" Link="ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs" />
+    <Compile Include="..\Aevatar.Integration.Tests\ScriptExternalEvolutionE2ETests.cs" Link="ScriptExternalEvolutionE2ETests.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
+    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
+    <ProjectReference Include="..\..\demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Aevatar.Scripting.Abstractions" />
+  </ItemGroup>
+</Project>

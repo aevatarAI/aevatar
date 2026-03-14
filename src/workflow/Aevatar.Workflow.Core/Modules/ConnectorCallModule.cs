@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -12,7 +15,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Connector invocation module.
 /// Handles step_type == "connector_call" and delegates execution to a named connector.
 /// </summary>
-public sealed class ConnectorCallModule : IEventModule
+public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly IConnectorRegistry _registry;
 
@@ -25,14 +28,45 @@ public sealed class ConnectorCallModule : IEventModule
     public int Priority => 9;
 
     /// <inheritdoc />
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
+    public bool CanHandle(EventEnvelope envelope)
+    {
+        var payload = envelope.Payload;
+        return payload != null &&
+               (payload.Is(StepRequestEvent.Descriptor) ||
+                payload.Is(SecureValueCapturedEvent.Descriptor) ||
+                payload.Is(WorkflowCompletedEvent.Descriptor));
+    }
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
-        var request = envelope.Payload!.Unpack<StepRequestEvent>();
-        if (!string.Equals(request.StepType, "connector_call", StringComparison.OrdinalIgnoreCase)) return;
+        if (envelope.Payload == null)
+            return;
+
+        if (envelope.Payload.Is(SecureValueCapturedEvent.Descriptor))
+        {
+            var captured = envelope.Payload.Unpack<SecureValueCapturedEvent>();
+            if (!string.IsNullOrWhiteSpace(captured.Variable) && !string.IsNullOrEmpty(captured.Value))
+            {
+                SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, captured.RunId, captured.Variable, captured.Value);
+            }
+            return;
+        }
+
+        if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
+        {
+            SecureInputRuntimeItemsAccess.RemoveRun(ctx, envelope.Payload.Unpack<WorkflowCompletedEvent>().RunId);
+            return;
+        }
+
+        var request = envelope.Payload.Unpack<StepRequestEvent>();
+        var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType);
+        var isSecureStep = string.Equals(canonicalStepType, "secure_connector_call", StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(canonicalStepType, "connector_call", StringComparison.OrdinalIgnoreCase) &&
+            !isSecureStep)
+        {
+            return;
+        }
 
         var connectorName = WorkflowParameterValueParser.GetString(
             request.Parameters,
@@ -92,14 +126,16 @@ public sealed class ConnectorCallModule : IEventModule
 
             try
             {
-                var runId = string.IsNullOrEmpty(request.RunId) ? envelope.CorrelationId : request.RunId;
+                var runId = string.IsNullOrEmpty(request.RunId)
+                    ? envelope.Propagation?.CorrelationId ?? string.Empty
+                    : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
                     RunId = runId,
                     StepId = request.StepId,
                     Connector = connectorName,
                     Operation = operation,
-                    Payload = request.Input,
+                    Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
                     Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
                 };
 
@@ -139,8 +175,8 @@ public sealed class ConnectorCallModule : IEventModule
             };
             AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
             foreach (var (key, value) in response.Metadata)
-                ok.Metadata[key] = value;
-            await ctx.PublishAsync(ok, EventDirection.Self, ct);
+                ok.Annotations[key] = value;
+            await ctx.PublishAsync(ok, TopologyAudience.Self, ct);
             return;
         }
 
@@ -162,9 +198,9 @@ public sealed class ConnectorCallModule : IEventModule
                 Output = request.Input,
             };
             AppendBaseMetadata(continued, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-            continued.Metadata["connector.continued_on_error"] = "true";
-            continued.Metadata["connector.error"] = errorText ?? "";
-            await ctx.PublishAsync(continued, EventDirection.Self, ct);
+            continued.Annotations["connector.continued_on_error"] = "true";
+            continued.Annotations["connector.error"] = errorText ?? "";
+            await ctx.PublishAsync(continued, TopologyAudience.Self, ct);
             return;
         }
 
@@ -176,11 +212,11 @@ public sealed class ConnectorCallModule : IEventModule
             Error = errorText ?? "connector call failed",
         };
         AppendBaseMetadata(failed, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
-        await ctx.PublishAsync(failed, EventDirection.Self, ct);
+        await ctx.PublishAsync(failed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string error,
         CancellationToken ct)
@@ -191,11 +227,11 @@ public sealed class ConnectorCallModule : IEventModule
             RunId = request.RunId,
             Success = false,
             Error = error,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishSkippedAsync(
-        IEventHandlerContext ctx,
+        IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string connectorName,
         string operation,
@@ -210,13 +246,108 @@ public sealed class ConnectorCallModule : IEventModule
             Success = true,
             Output = request.Input,
         };
-        skipped.Metadata["connector.skipped"] = "true";
-        skipped.Metadata["connector.skip_reason"] = reason;
-        skipped.Metadata["connector.name"] = connectorName;
-        skipped.Metadata["connector.operation"] = operation;
-        skipped.Metadata["connector.timeout_ms"] = timeoutMs.ToString();
-        await ctx.PublishAsync(skipped, EventDirection.Self, ct);
+        skipped.Annotations["connector.skipped"] = "true";
+        skipped.Annotations["connector.skip_reason"] = reason;
+        skipped.Annotations["connector.name"] = connectorName;
+        skipped.Annotations["connector.operation"] = operation;
+        skipped.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
+        await ctx.PublishAsync(skipped, TopologyAudience.Self, ct);
     }
+
+    private string? ResolvePayload(
+        StepRequestEvent request,
+        bool isSecureStep,
+        IWorkflowExecutionContext ctx)
+    {
+        var mode = WorkflowParameterValueParser.GetString(
+            request.Parameters,
+            isSecureStep ? "secure_template" : "input",
+            "stdin_mode",
+            "stdin").Trim();
+        if (string.Equals(mode, "input", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "inherit", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return request.Input;
+        }
+
+        if (string.Equals(mode, "secure_variable", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secure_input", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secret_input", StringComparison.OrdinalIgnoreCase))
+        {
+            var variable = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                string.Empty,
+                "stdin_secret_variable",
+                "secret_variable",
+                "secure_variable",
+                "variable");
+            return ResolveSecureVariable(ctx, request.RunId, variable);
+        }
+
+        if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "secure_template", StringComparison.OrdinalIgnoreCase))
+        {
+            var template = WorkflowParameterValueParser.GetString(
+                request.Parameters,
+                request.Input ?? string.Empty,
+                "stdin_template",
+                "payload_template",
+                "stdin_value");
+            return ResolveSecureTemplate(ctx, request.RunId, template);
+        }
+
+        return request.Input;
+    }
+
+    private static string ResolveSecureVariable(
+        IWorkflowExecutionContext ctx,
+        string? runId,
+        string variable)
+    {
+        var normalizedVariable = NormalizeSecureVariableName(variable);
+        if (string.IsNullOrWhiteSpace(normalizedVariable))
+            throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
+
+        if (SecureInputRuntimeItemsAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
+        {
+            return value;
+        }
+
+        throw new InvalidOperationException(
+            $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
+    }
+
+    private static string ResolveSecureTemplate(
+        IWorkflowExecutionContext ctx,
+        string? runId,
+        string template)
+    {
+        if (string.IsNullOrEmpty(template))
+            return string.Empty;
+
+        var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
+        {
+            var variable = match.Groups[1].Value;
+            var value = ResolveSecureVariable(ctx, runId, variable);
+            return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
+        });
+
+        return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
+        {
+            var variable = match.Groups[1].Value;
+            return ResolveSecureVariable(ctx, runId, variable);
+        });
+    }
+
+    private static string NormalizeSecureVariableName(string? variable) =>
+        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
+
+    [GeneratedRegex(@"\[\[secure:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecurePlaceholderPattern();
+
+    [GeneratedRegex(@"\[\[secure_json:([A-Za-z0-9_.:-]+)\]\]", RegexOptions.Compiled)]
+    private static partial Regex SecureJsonPlaceholderPattern();
 
     private static void AppendBaseMetadata(
         StepCompletedEvent evt,
@@ -227,12 +358,12 @@ public sealed class ConnectorCallModule : IEventModule
         int timeoutMs,
         double durationMs)
     {
-        evt.Metadata["connector.name"] = connectorName;
-        evt.Metadata["connector.type"] = connector.Type;
-        evt.Metadata["connector.operation"] = operation;
-        evt.Metadata["connector.attempts"] = attempts.ToString();
-        evt.Metadata["connector.timeout_ms"] = timeoutMs.ToString();
-        evt.Metadata["connector.duration_ms"] = durationMs.ToString("F2");
+        evt.Annotations["connector.name"] = connectorName;
+        evt.Annotations["connector.type"] = connector.Type;
+        evt.Annotations["connector.operation"] = operation;
+        evt.Annotations["connector.attempts"] = attempts.ToString();
+        evt.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
+        evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
     }
 
     private static int ParseBoundedInt(string raw, int min, int max, int fallback)

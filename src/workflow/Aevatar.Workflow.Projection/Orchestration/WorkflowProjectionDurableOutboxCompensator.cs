@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Google.Protobuf.WellKnownTypes;
@@ -12,10 +11,6 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
 {
     private readonly IProjectionDispatchCompensationOutbox _outbox;
     private readonly ILogger<WorkflowProjectionDurableOutboxCompensator> _logger;
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
 
     public WorkflowProjectionDurableOutboxCompensator(
         IProjectionDispatchCompensationOutbox outbox,
@@ -44,7 +39,7 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
             FailedStore = context.FailedStore,
             SucceededStores = { context.SucceededStores },
             ReadModelType = context.ReadModelType,
-            ReadModelJson = JsonSerializer.Serialize(context.ReadModel, JsonOptions),
+            ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(context.ReadModel),
             Key = context.Key ?? string.Empty,
             EnqueuedAtUtc = Timestamp.FromDateTime(now),
             LastError = context.Exception.GetType().Name,

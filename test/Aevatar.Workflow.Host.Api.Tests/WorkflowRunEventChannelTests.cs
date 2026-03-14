@@ -9,39 +9,45 @@ public class WorkflowRunEventSinkChannelTests
     [Fact]
     public async Task PushAsync_DefaultWaitMode_WhenBufferFull_ShouldWaitUntilConsumerReads()
     {
-        await using var channel = new EventChannel<WorkflowRunEvent>(capacity: 1);
+        await using var channel = new EventChannel<WorkflowRunEventEnvelope>(capacity: 1);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
-        channel.Push(new WorkflowStepStartedEvent { StepName = "s1" });
-
-        var terminalPush = channel.PushAsync(new WorkflowRunFinishedEvent
+        channel.Push(new WorkflowRunEventEnvelope
         {
-            ThreadId = "actor-1",
+            StepStarted = new WorkflowStepStartedEventPayload { StepName = "s1" },
+        });
+
+        var terminalPush = channel.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload { ThreadId = "actor-1" },
         }, cts.Token).AsTask();
 
         terminalPush.IsCompleted.Should().BeFalse();
 
         await using var enumerator = channel.ReadAllAsync(cts.Token).GetAsyncEnumerator(cts.Token);
         (await enumerator.MoveNextAsync()).Should().BeTrue();
-        enumerator.Current.Should().BeOfType<WorkflowStepStartedEvent>();
+        enumerator.Current.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.StepStarted);
 
         await terminalPush;
         channel.Complete();
 
         (await enumerator.MoveNextAsync()).Should().BeTrue();
-        enumerator.Current.Should().BeOfType<WorkflowRunFinishedEvent>();
+        enumerator.Current.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
     }
 
     [Fact]
     public async Task PushAsync_WhenCompleted_ShouldThrowCompletedException()
     {
-        await using var channel = new EventChannel<WorkflowRunEvent>();
+        await using var channel = new EventChannel<WorkflowRunEventEnvelope>();
         channel.Complete();
 
-        var act = async () => await channel.PushAsync(new WorkflowRunErrorEvent
+        var act = async () => await channel.PushAsync(new WorkflowRunEventEnvelope
         {
-            Message = "boom",
-            Code = "E",
+            RunError = new WorkflowRunErrorEventPayload
+            {
+                Message = "boom",
+                Code = "E",
+            },
         });
 
         await act.Should().ThrowAsync<EventSinkCompletedException>();
@@ -50,13 +56,19 @@ public class WorkflowRunEventSinkChannelTests
     [Fact]
     public async Task Push_WhenWaitModeAndBufferFull_ShouldThrowBackpressureException()
     {
-        await using var channel = new EventChannel<WorkflowRunEvent>(
+        await using var channel = new EventChannel<WorkflowRunEventEnvelope>(
             capacity: 1,
             fullMode: BoundedChannelFullMode.Wait);
 
-        channel.Push(new WorkflowStepStartedEvent { StepName = "s1" });
+        channel.Push(new WorkflowRunEventEnvelope
+        {
+            StepStarted = new WorkflowStepStartedEventPayload { StepName = "s1" },
+        });
 
-        var act = () => channel.Push(new WorkflowStepFinishedEvent { StepName = "s1" });
+        var act = () => channel.Push(new WorkflowRunEventEnvelope
+        {
+            StepFinished = new WorkflowStepFinishedEventPayload { StepName = "s1" },
+        });
         act.Should().Throw<EventSinkBackpressureException>();
     }
 }

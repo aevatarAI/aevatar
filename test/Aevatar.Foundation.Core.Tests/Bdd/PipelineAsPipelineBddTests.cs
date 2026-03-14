@@ -90,7 +90,7 @@ public class PipelineAsPipelineBddTests
 
 // ─── Test Agent: Ping → Pong hardcoded transformation ───
 
-public class PingToPongAgent : GAgentBase<CounterState>
+public class PingToPongAgent : TestGAgentBase<CounterState>
 {
     [EventHandler]
     public async Task Handle(PingEvent evt)
@@ -101,7 +101,7 @@ public class PingToPongAgent : GAgentBase<CounterState>
 
 // ─── Test Module: Fixed reply ───
 
-public class ReplyModule : IEventModule
+public class ReplyModule : IEventModule<IEventHandlerContext>
 {
     private readonly string _reply;
     public string Name { get; }
@@ -131,9 +131,10 @@ public class CollectingPublisher : IEventPublisher
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         _published.Add(evt);
@@ -144,7 +145,8 @@ public class CollectingPublisher : IEventPublisher
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         _published.Add(evt);

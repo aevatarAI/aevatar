@@ -1,0 +1,66 @@
+name: role_event_module_extensions_multi_role_chain
+description: |
+  Multi-role chain using extensions.* only.
+  Each role configures event_modules/event_routes via extensions and routes
+  ChatRequestEvent to a different module.
+
+roles:
+  - id: template_ext_role
+    name: Template Extensions Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_template
+
+  - id: csv_ext_role
+    name: CSV Extensions Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_csv_markdown
+
+  - id: json_ext_role
+    name: JSON Extensions Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by routed role event module.
+    extensions:
+      event_modules: "demo_template,demo_csv_markdown,demo_json_pick"
+      event_routes: |
+        - when: event.type == "ChatRequestEvent"
+          to: demo_json_pick
+
+steps:
+  - id: first_template_reply
+    type: llm_call
+    role: template_ext_role
+    next: seed_csv
+
+  - id: seed_csv
+    type: assign
+    parameters:
+      value: |
+        service,error_rate,latency_ms
+        search,0.9,190
+        feed,1.5,310
+    next: second_csv_reply
+
+  - id: second_csv_reply
+    type: llm_call
+    role: csv_ext_role
+    next: seed_json
+
+  - id: seed_json
+    type: assign
+    parameters:
+      value: '{"incident":{"id":"INC-2026-031","owner":{"team":"infra","user":"fiona"}},"severity":"high"}'
+    next: final_json_reply
+
+  - id: final_json_reply
+    type: llm_call
+    role: json_ext_role

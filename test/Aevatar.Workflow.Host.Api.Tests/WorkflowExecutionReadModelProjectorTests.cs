@@ -65,8 +65,7 @@ public class WorkflowExecutionReadModelProjectorTests
         Id = id ?? Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime()),
         Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Down,
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
     };
 
     [Fact]
@@ -245,9 +244,9 @@ public class WorkflowExecutionReadModelProjectorTests
         var report = await store.GetAsync("root");
         report.Should().NotBeNull();
         var step = report!.Steps.Should().ContainSingle(x => x.StepId == "s1").Subject;
-        step.CompletionMetadata.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
-        step.CompletionMetadata.Should().ContainKey("suspension_prompt").WhoseValue.Should().Be("Need approval");
-        step.CompletionMetadata.Should().ContainKey("suspension_timeout").WhoseValue.Should().Be("60");
+        step.SuspensionType.Should().Be("human_input");
+        step.SuspensionPrompt.Should().Be("Need approval");
+        step.SuspensionTimeoutSeconds.Should().Be(60);
         var suspendedEvent = report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.suspended").Subject;
         suspendedEvent.Data.Should().ContainKey("suspension_type").WhoseValue.Should().Be("human_input");
         suspendedEvent.Data.Should().ContainKey("prompt").WhoseValue.Should().Be("Need approval");

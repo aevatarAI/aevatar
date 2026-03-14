@@ -113,6 +113,166 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldForwardRequestIdAndMergeMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [],
+                RequestId = "base-request",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["base"] = "1",
+                    ["override"] = "old",
+                },
+            });
+
+        var providerMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["override"] = "new",
+            ["workflow.run_id"] = "run-1",
+        };
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", providerMetadata))
+        {
+        }
+
+        provider.LastStreamRequest.Should().NotBeNull();
+        provider.LastStreamRequest!.RequestId.Should().Be("session-42");
+        provider.LastStreamRequest.Metadata.Should().NotBeNull();
+        provider.LastStreamRequest.Metadata!["base"].Should().Be("1");
+        provider.LastStreamRequest.Metadata["override"].Should().Be("new");
+        provider.LastStreamRequest.Metadata["workflow.run_id"].Should().Be("run-1");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldExposeRequestIdToLlmMiddlewareMetadata()
+    {
+        var provider = new StreamingProvider(["A"]);
+        var captureMiddleware = new CaptureLLMMetadataMiddleware();
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            llmMiddlewares: [captureMiddleware]);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
+        {
+        }
+
+        captureMiddleware.RequestIds.Should().ContainSingle().Which.Should().Be("session-77");
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldReturnSyntheticResultWithoutCallingProvider()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            agentMiddlewares:
+            [
+                new DelegateAgentRunMiddleware((context, _) =>
+                {
+                    context.Result = "short-circuit";
+                    context.Terminate = true;
+                    return Task.CompletedTask;
+                }),
+            ]);
+
+        var result = await runtime.ChatAsync("hello");
+
+        result.Should().Be("short-circuit");
+        provider.ChatCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenAgentMiddlewareTerminates_ShouldEmitSyntheticContentChunk()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            agentMiddlewares:
+            [
+                new DelegateAgentRunMiddleware((context, _) =>
+                {
+                    context.Result = "agent-short-circuit";
+                    context.Terminate = true;
+                    return Task.CompletedTask;
+                }),
+            ]);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().ContainSingle();
+        chunks[0].DeltaContent.Should().Be("agent-short-circuit");
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenLlmMiddlewareTerminates_ShouldEmitSyntheticContentAndToolCallChunks()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            llmMiddlewares:
+            [
+                new DelegateLlmCallMiddleware((context, _) =>
+                {
+                    context.Terminate = true;
+                    context.Response = new LLMResponse
+                    {
+                        Content = "middleware-content",
+                        ToolCalls =
+                        [
+                            new ToolCall
+                            {
+                                Id = "tool-1",
+                                Name = "search",
+                                ArgumentsJson = "{\"q\":\"aevatar\"}",
+                            },
+                        ],
+                    };
+                    return Task.CompletedTask;
+                }),
+            ]);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().Contain(x => x.DeltaContent == "middleware-content");
+        chunks.Should().Contain(x => x.DeltaToolCall != null && x.DeltaToolCall.Id == "tool-1");
+        chunks.Should().Contain(x => x.IsLast);
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenProviderEmitsEmptyNonTerminalChunk_ShouldFilterItOut()
+    {
+        var provider = new StreamingProvider(
+            chunks: [],
+            streamToolDeltas:
+            [
+                new LLMStreamChunk(),
+            ]);
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Constructor_WhenStreamBufferCapacityIsInvalid_ShouldThrow()
     {
         var provider = new StreamingProvider([]);
@@ -125,7 +285,9 @@ public sealed class ChatRuntimeStreamingBufferTests
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
         int streamBufferCapacity,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        Func<LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var toolLoop = new ToolCallLoop(new ToolManager());
@@ -135,7 +297,8 @@ public sealed class ChatRuntimeStreamingBufferTests
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: () => new LLMRequest { Messages = [] },
+            requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
+            agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares,
             streamBufferCapacity: streamBufferCapacity);
     }
@@ -146,11 +309,15 @@ public sealed class ChatRuntimeStreamingBufferTests
         IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
+        public int ChatCallCount { get; private set; }
         public int StreamCallCount { get; private set; }
+        public LLMRequest? LastStreamRequest { get; private set; }
+        public LLMRequest? LastChatRequest { get; private set; }
 
         public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
         {
-            _ = request;
+            LastChatRequest = request;
+            ChatCallCount++;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(new LLMResponse { Content = string.Concat(chunks) });
         }
@@ -159,7 +326,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
+            LastStreamRequest = request;
             StreamCallCount++;
 
             foreach (var chunk in chunks)
@@ -196,5 +363,33 @@ public sealed class ChatRuntimeStreamingBufferTests
             await next();
             LastResponse = context.Response;
         }
+    }
+
+    private sealed class CaptureLLMMetadataMiddleware : ILLMCallMiddleware
+    {
+        public List<string> RequestIds { get; } = [];
+
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            if (context.Items.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+                requestIdObj is string requestId)
+            {
+                RequestIds.Add(requestId);
+            }
+
+            await next();
+        }
+    }
+
+    private sealed class DelegateAgentRunMiddleware(
+        Func<AgentRunContext, Func<Task>, Task> handler) : IAgentRunMiddleware
+    {
+        public Task InvokeAsync(AgentRunContext context, Func<Task> next) => handler(context, next);
+    }
+
+    private sealed class DelegateLlmCallMiddleware(
+        Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
     }
 }

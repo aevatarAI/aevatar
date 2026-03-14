@@ -50,7 +50,7 @@ public sealed class InMemoryStreamingCoverageTests
             Id = "evt-1",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Self),
         };
 
         await stream.ProduceAsync(envelope);
@@ -239,7 +239,7 @@ public sealed class InMemoryStreamingCoverageTests
             SourceStreamId = "another-source",
             TargetStreamId = "target-stream",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [EventDirection.Up],
+            DirectionFilter = [TopologyAudience.Parent],
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "a" },
             Version = 12,
             LeaseId = "lease-1",
@@ -250,7 +250,7 @@ public sealed class InMemoryStreamingCoverageTests
         saved!.SourceStreamId.Should().Be("source-stream");
         saved.TargetStreamId.Should().Be("target-stream");
         saved.ForwardingMode.Should().Be(StreamForwardingMode.TransitOnly);
-        saved.DirectionFilter.Should().BeEquivalentTo([EventDirection.Up]);
+        saved.DirectionFilter.Should().BeEquivalentTo([TopologyAudience.Parent]);
         saved.EventTypeFilter.Should().BeEquivalentTo(["a"]);
         saved.Version.Should().Be(12);
         saved.LeaseId.Should().Be("lease-1");
@@ -321,7 +321,7 @@ public sealed class InMemoryStreamingCoverageTests
     }
 
     [Fact]
-    public async Task StreamProvider_ShouldForwardToTargetStreamAndSetForwardingMetadata()
+    public async Task StreamProvider_ShouldForwardToTargetStreamAndSetForwardingState()
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var provider = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
@@ -339,17 +339,17 @@ public sealed class InMemoryStreamingCoverageTests
         {
             TargetStreamId = "target",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
 
         await source.ProduceAsync(new StringValue { Value = "relay" });
 
         var forwarded = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
         forwarded.Payload!.Unpack<StringValue>().Value.Should().Be("relay");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey].Should().Be(StreamForwardingEnvelopeMetadata.ForwardedValue);
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey].Should().Be("source");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey].Should().Be("target");
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey].Should().Be(StreamForwardingEnvelopeMetadata.ForwardModeHandle);
+        StreamForwardingEnvelopeState.IsForwarded(forwarded).Should().BeTrue();
+        StreamForwardingEnvelopeState.GetSourceStreamId(forwarded).Should().Be("source");
+        StreamForwardingEnvelopeState.GetTargetStreamId(forwarded).Should().Be("target");
+        StreamForwardingEnvelopeState.GetMode(forwarded).Should().Be(StreamForwardingHandleMode.HandleThenForward);
     }
 
     [Fact]

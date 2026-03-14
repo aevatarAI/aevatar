@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -142,7 +143,7 @@ public class ProjectionSubscriptionRegistryTests
         context.StreamSubscriptionLease.Should().NotBeNull();
         hub.LastActorId.Should().Be("actor-1");
 
-        await hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
+        await hub.EmitAsync(CreateObservedEnvelope("evt-1"));
         dispatcher.DispatchCount.Should().Be(1);
 
         await registry.UnregisterAsync(context, CancellationToken.None);
@@ -176,7 +177,7 @@ public class ProjectionSubscriptionRegistryTests
         var context = new TestProjectionContext("projection-1", "actor-1");
 
         await registry.RegisterAsync(context, CancellationToken.None);
-        await hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
+        await hub.EmitAsync(CreateObservedEnvelope("evt-1"));
 
         dispatcher.LastToken.Should().NotBeNull();
         dispatcher.LastToken!.Value.CanBeCanceled.Should().BeTrue();
@@ -195,7 +196,7 @@ public class ProjectionSubscriptionRegistryTests
             hub,
             reporter);
         var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = new EventEnvelope { Id = "evt-1" };
+        var envelope = CreateObservedEnvelope("evt-1");
 
         await registry.RegisterAsync(context, CancellationToken.None);
         await hub.EmitAsync(envelope);
@@ -246,7 +247,7 @@ public class ProjectionSubscriptionRegistryTests
 
         await registry.RegisterAsync(context, CancellationToken.None);
 
-        Func<Task> act = () => hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
+        Func<Task> act = () => hub.EmitAsync(CreateObservedEnvelope("evt-1"));
         await act.Should().NotThrowAsync();
     }
 
@@ -333,7 +334,7 @@ public class ProjectionSubscriptionRegistryTests
         await registry.RegisterAsync(context, cts.Token);
         cts.Cancel();
 
-        await hub.EmitAsync(new EventEnvelope { Id = "evt-late" });
+        await hub.EmitAsync(CreateObservedEnvelope("evt-late"));
         await registry.UnregisterAsync(context, CancellationToken.None);
 
         dispatcher.DispatchCount.Should().Be(0);
@@ -362,6 +363,13 @@ public class ProjectionSubscriptionRegistryTests
 
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
+    private static EventEnvelope CreateObservedEnvelope(string eventId) =>
+        new()
+        {
+            Id = eventId,
+            Payload = Any.Pack(new StringValue { Value = eventId }),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+        };
 }
 
 public class ActorStreamSubscriptionHubTests

@@ -57,10 +57,10 @@
         </div>
 
         <div class="nav-section">
-          <div class="nav-section-title">agents/</div>
+          <div class="nav-section-title">workflows/</div>
           <div class="nav-item" data-view="agents" id="navAgents">
             <span class="nav-icon">🤖</span>
-            <span class="nav-label">Agent Files</span>
+            <span class="nav-label">Workflow Files</span>
           </div>
         </div>
       </nav>
@@ -487,20 +487,20 @@
       <div id="viewAgents" class="hidden">
         <div class="topbar">
           <button class="icon-btn" id="agentsBackBtn" title="Back">←</button>
-          <div class="title">Agent Files</div>
+          <div class="title">Workflow Files</div>
           <div class="spacer"></div>
           <button class="btn" id="agentsNewBtn" type="button">+ New</button>
           <button class="icon-btn" id="agentsCloseBtn" title="Close">✕</button>
         </div>
         <div class="content">
           <div class="subtitle">
-            YAML configuration files in <span class="mono">~/.aevatar/agents/</span>
+            YAML workflow definition files in <span class="mono">~/.aevatar/workflows/</span>
           </div>
 
           <div class="list" id="agentsList">
             <div class="item placeholder">
               <div class="item-main">
-                <div class="item-desc">Loading agent files...</div>
+                <div class="item-desc">Loading workflow files...</div>
               </div>
             </div>
           </div>
@@ -508,7 +508,7 @@
           <div id="agentsMsg" class="msg"></div>
 
           <div class="hint" style="margin-top: 16px;">
-            Each file defines an agent with persona, tools, skills, and system prompt.
+            Each file defines one workflow YAML that can be loaded by Aevatar runtime.
           </div>
         </div>
       </div>
@@ -517,20 +517,20 @@
       <div id="viewAgentEdit" class="hidden">
         <div class="topbar">
           <button class="icon-btn" id="agentEditBackBtn" title="Back">←</button>
-          <div class="title" id="agentEditTitle">Edit Agent</div>
+          <div class="title" id="agentEditTitle">Edit Workflow</div>
           <div class="spacer"></div>
           <button class="icon-btn" id="agentEditCloseBtn" title="Close">✕</button>
         </div>
         <div class="form json-editor-form">
           <div class="subtitle" id="agentEditSubtitle">
-            Editing agent configuration file
+            Editing workflow YAML file
           </div>
 
           <label>Filename</label>
-          <input id="agentFilenameInput" type="text" placeholder="e.g. coder.yaml" />
+          <input id="agentFilenameInput" type="text" placeholder="e.g. my_workflow.yaml" />
 
           <label>YAML Content</label>
-          <textarea id="agentYamlInput" class="json-textarea yaml-textarea" placeholder="id: my-agent&#10;name: My Agent&#10;provider: default&#10;..."></textarea>
+          <textarea id="agentYamlInput" class="json-textarea yaml-textarea" placeholder="name: my-workflow&#10;description: ...&#10;roles: ...&#10;steps: ..."></textarea>
 
           <div class="actions">
             <button class="btn primary" id="agentSaveBtn" type="button">Save</button>
@@ -541,9 +541,8 @@
           <div id="agentEditMsg" class="msg"></div>
 
           <div class="hint" style="margin-top: 16px;">
-            Reference: <span class="mono">id</span>, <span class="mono">name</span>, <span class="mono">provider</span>, 
-            <span class="mono">model</span>, <span class="mono">temperature</span>, <span class="mono">persona</span>, 
-            <span class="mono">tools</span>, <span class="mono">skills</span>, <span class="mono">system_prompt</span>
+            Reference fields: <span class="mono">name</span>, <span class="mono">description</span>,
+            <span class="mono">configuration</span>, <span class="mono">roles</span>, <span class="mono">steps</span>
           </div>
         </div>
       </div>

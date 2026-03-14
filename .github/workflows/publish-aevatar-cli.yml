@@ -1,0 +1,108 @@
+name: publish-aevatar-cli
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - closed
+
+concurrency:
+  group: publish-aevatar-cli
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TOOL_PROJECT: tools/Aevatar.Tools.Cli/Aevatar.Tools.Cli.csproj
+  PACKAGE_ID: aevatar
+  VERSION_BASE: 0.0
+
+jobs:
+  publish:
+    if: ${{ github.event.pull_request.merged == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Resolve package version
+        id: resolve_version
+        env:
+          NUGET_INDEX_URL: https://api.nuget.org/v3-flatcontainer/${{ env.PACKAGE_ID }}/index.json
+          VERSION_BASE: ${{ env.VERSION_BASE }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+
+          def fail(message: str) -> None:
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          version_base = os.getenv("VERSION_BASE", "0.0").strip()
+          index_url = os.getenv("NUGET_INDEX_URL", "")
+          versions = []
+          if not index_url:
+              fail("NUGET_INDEX_URL is required.")
+
+          try:
+              with urllib.request.urlopen(index_url, timeout=15) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+                  versions = payload.get("versions", [])
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  fail(f"Failed to query NuGet versions: HTTP {exc.code}")
+          except Exception as exc:
+              fail(f"Failed to query NuGet versions: {exc}")
+
+          prefix = f"{version_base}."
+          patch_numbers = []
+          for item in versions:
+              if "-" in item:
+                  continue
+              if not item.startswith(prefix):
+                  continue
+              patch = item[len(prefix):]
+              if patch.isdigit():
+                  patch_numbers.append(int(patch))
+
+          next_patch = (max(patch_numbers) + 1) if patch_numbers else 1
+          version = f"{version_base}.{next_patch}"
+
+          print(f"Resolved version: {version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+          PY
+
+      - name: Pack dotnet tool
+        run: |
+          dotnet pack "${{ env.TOOL_PROJECT }}" \
+            -c Release \
+            --nologo \
+            -p:NuGetAudit=false \
+            -p:Version="${{ steps.resolve_version.outputs.version }}" \
+            -o ./artifacts
+
+      - name: Push package to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "${NUGET_API_KEY}" ]; then
+            echo "::error::Missing NUGET_API_KEY secret."
+            exit 1
+          fi
+
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key "${NUGET_API_KEY}" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --skip-duplicate

@@ -63,7 +63,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             Error = "",
             WorkerId = "worker-1",
         };
-        completed.Metadata["latency_ms"] = "12";
+        completed.Annotations["latency_ms"] = "12";
 
         var parsedRequest = StepRequestEvent.Parser.ParseFrom(request.ToByteArray());
         parsedRequest.StepType.Should().Be("llm_call");
@@ -71,7 +71,7 @@ public class WorkflowAbstractionsProtoCoverageTests
 
         var parsedCompleted = StepCompletedEvent.Parser.ParseFrom(completed.ToByteArray());
         parsedCompleted.WorkerId.Should().Be("worker-1");
-        parsedCompleted.Metadata["latency_ms"].Should().Be("12");
+        parsedCompleted.Annotations["latency_ms"].Should().Be("12");
 
         parsedCompleted.Clone().Should().BeEquivalentTo(parsedCompleted);
     }
@@ -132,7 +132,7 @@ public class WorkflowAbstractionsProtoCoverageTests
             Error = "err",
             WorkerId = "w2",
         };
-        stepCompleted.Metadata["m"] = "n";
+        stepCompleted.Annotations["m"] = "n";
         var mergedStepCompleted = new StepCompletedEvent();
         mergedStepCompleted.MergeFrom(stepCompleted);
         mergedStepCompleted.Should().BeEquivalentTo(stepCompleted);
@@ -159,6 +159,23 @@ public class WorkflowAbstractionsProtoCoverageTests
         setCompletedOutput.Should().Throw<ArgumentNullException>();
         setRequestStepId.Should().Throw<ArgumentNullException>();
         setStepCompletedWorker.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void SecureValueCapturedEvent_ShouldRoundtrip()
+    {
+        var evt = new SecureValueCapturedEvent
+        {
+            RunId = "run-secure",
+            StepId = "step-secure",
+            Variable = "api_key",
+            Value = "secret-value",
+        };
+
+        var parsed = SecureValueCapturedEvent.Parser.ParseFrom(evt.ToByteArray());
+        parsed.Should().BeEquivalentTo(evt);
+        parsed.Clone().Should().BeEquivalentTo(evt);
+        ((IMessage)parsed).Descriptor.Name.Should().Be(nameof(SecureValueCapturedEvent));
     }
 
     [Fact]
@@ -218,6 +235,7 @@ public class WorkflowAbstractionsProtoCoverageTests
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvokeRequestedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowBindingUpsertedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationRegisteredEvent));
+        WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SecureValueCapturedEvent));
         WorkflowExecutionMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(SubWorkflowInvocationCompletedEvent));
     }
 }

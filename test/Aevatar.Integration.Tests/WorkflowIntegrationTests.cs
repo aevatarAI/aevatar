@@ -13,17 +13,18 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -201,8 +202,9 @@ public class WorkflowIntegrationTests
         using var _ = sp;
 
         // 创建 WorkflowGAgent 并通过配置事件注入 YAML
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        await actor.HandleEventAsync(new EventEnvelope
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
@@ -211,13 +213,33 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
-        // 触发一次 ChatRequest，驱动 WorkflowGAgent 创建子角色树
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = ResearchWorkflowYaml,
+                WorkflowName = "research_workflow",
+                RunId = "wf-1-run",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
@@ -226,26 +248,29 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         // Then
         (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:researcher")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:reviewer")).Should().BeTrue();
-        (await runtime.ExistsAsync("wf-1:writer")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
 
         // 验证层级
-        var children = await actor.GetChildrenIdsAsync();
+        var children = await runActor.GetChildrenIdsAsync();
         children.Should().HaveCount(3);
-        children.Should().Contain("wf-1:researcher");
-        children.Should().Contain("wf-1:reviewer");
-        children.Should().Contain("wf-1:writer");
+        children.Should().Contain("wf-1-run:researcher");
+        children.Should().Contain("wf-1-run:reviewer");
+        children.Should().Contain("wf-1-run:writer");
 
         // 验证每个 RoleGAgent 的配置
-        var researcherActor = await runtime.GetAsync("wf-1:researcher");
+        var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
         researcherActor.Should().NotBeNull();
         var researcher = (RoleGAgent)researcherActor!.Agent;
         researcher.RoleName.Should().Be("Researcher");
@@ -328,8 +353,7 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠",
                 SessionId = "test",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Children),
         };
 
         await actor.HandleEventAsync(envelope);
@@ -450,18 +474,17 @@ public class WorkflowIntegrationTests
     //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddAevatarWorkflow();
         using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───
-        factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");
-        factory.TryCreate("conditional", out m).Should().BeTrue(); m!.Name.Should().Be("conditional");
+        factory.TryCreate("conditional", out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
         factory.TryCreate("while", out m).Should().BeTrue(); m!.Name.Should().Be("while");
         factory.TryCreate("workflow_call", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_call");
         factory.TryCreate("checkpoint", out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");

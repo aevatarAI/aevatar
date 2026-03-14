@@ -2,6 +2,9 @@ syntax = "proto3";
 package aevatar.workflow;
 option csharp_namespace = "Aevatar.Workflow.Core";
 
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
 message WorkflowState
 {
   message SubWorkflowBinding
@@ -41,4 +44,358 @@ message WorkflowState
   map<string, string> inline_workflow_yamls = 11;
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 12;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
+}
+
+message WorkflowRunState
+{
+  message SubWorkflowBinding
+  {
+    string workflow_name = 1;
+    string child_actor_id = 2;
+    string lifecycle = 3;
+  }
+
+  message PendingSubWorkflowInvocation
+  {
+    string invocation_id = 1;
+    string parent_run_id = 2;
+    string parent_step_id = 3;
+    string workflow_name = 4;
+    string child_actor_id = 5;
+    string child_run_id = 6;
+    string lifecycle = 7;
+  }
+
+  message ChildRunIdSet
+  {
+    repeated string child_run_ids = 1;
+  }
+
+  string definition_actor_id = 1;
+  string workflow_yaml = 2;
+  string workflow_name = 3;
+  bool compiled = 4;
+  string compilation_error = 5;
+  map<string, string> inline_workflow_yamls = 6;
+  string run_id = 7;
+  string status = 8;
+  string input = 9;
+  string final_output = 10;
+  string final_error = 11;
+  map<string, google.protobuf.Any> execution_states = 12;
+
+  repeated SubWorkflowBinding sub_workflow_bindings = 13;
+  repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 14;
+  map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 15;
+  map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 16;
+}
+
+enum WorkflowRuntimeCallbackBackendState
+{
+  WORKFLOW_RUNTIME_CALLBACK_BACKEND_STATE_IN_MEMORY = 0;
+  WORKFLOW_RUNTIME_CALLBACK_BACKEND_STATE_DEDICATED = 1;
+}
+
+enum ReflectPhaseState
+{
+  REFLECT_PHASE_STATE_CRITIQUE = 0;
+  REFLECT_PHASE_STATE_IMPROVE = 1;
+}
+
+message WorkflowRuntimeCallbackLeaseState
+{
+  string actor_id = 1;
+  string callback_id = 2;
+  int64 generation = 3;
+  WorkflowRuntimeCallbackBackendState backend = 4;
+}
+
+message RetryBackoffState
+{
+  WorkflowRuntimeCallbackLeaseState lease = 1;
+  int32 next_attempt = 2;
+  int32 delay_ms = 3;
+  string callback_id = 4;
+  bool dispatch_pending = 5;
+}
+
+message WorkflowExecutionKernelState
+{
+  bool active = 1;
+  string run_id = 2;
+  string current_step_id = 3;
+  string current_step_input = 4;
+  map<string, string> variables = 5;
+  map<string, int32> retry_attempts_by_step_id = 6;
+  map<string, WorkflowRuntimeCallbackLeaseState> timeouts_by_step_id = 7;
+  map<string, RetryBackoffState> retry_backoffs_by_step_id = 8;
+  bool current_step_dispatch_pending = 9;
+  string current_step_timeout_callback_id = 10;
+}
+
+message PendingDelayState
+{
+  WorkflowRuntimeCallbackLeaseState lease = 1;
+  string input = 2;
+  string callback_id = 3;
+}
+
+message DelayModuleState
+{
+  map<string, PendingDelayState> pending = 1;
+}
+
+message PendingSignalState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string signal_name = 4;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
+  string timeout_callback_id = 6;
+}
+
+message WaitSignalModuleState
+{
+  map<string, PendingSignalState> pending = 1;
+  map<string, BufferedSignalState> buffered = 2;
+}
+
+message BufferedSignalState
+{
+  string payload = 1;
+  int64 received_at_unix_time_ms = 2;
+  int64 expires_at_unix_time_ms = 3;
+}
+
+message PendingHumanInputState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string on_timeout = 4;
+}
+
+message HumanInputModuleState
+{
+  map<string, PendingHumanInputState> pending = 1;
+}
+
+message PendingSecureInputState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string on_timeout = 4;
+  bool allow_empty = 5;
+  string variable_name = 6;
+  string masked_output = 7;
+}
+
+message CapturedSecureInputState
+{
+  string run_id = 1;
+  string variable_name = 2;
+  string value = 3;
+}
+
+message SecureInputModuleState
+{
+  map<string, PendingSecureInputState> pending = 1;
+  map<string, CapturedSecureInputState> captured = 2;
+}
+
+message PendingApprovalState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string input = 3;
+  string on_reject = 4;
+}
+
+message HumanApprovalModuleState
+{
+  map<string, PendingApprovalState> pending = 1;
+}
+
+message WhileRuntimeState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string sub_step_type = 3;
+  string sub_target_role = 4;
+  map<string, string> sub_parameters = 5;
+  int32 iteration = 6;
+  int32 max_iterations = 7;
+  string condition_expression = 8;
+}
+
+message WhileModuleState
+{
+  map<string, WhileRuntimeState> loops = 1;
+}
+
+message ParallelItemResult
+{
+  bool success = 1;
+  string output = 2;
+  string error = 3;
+  string worker_id = 4;
+  map<string, string> annotations = 5;
+  string next_step_id = 6;
+  string branch_key = 7;
+  string assigned_variable = 8;
+  string assigned_value = 9;
+}
+
+message VoteConfigState
+{
+  string step_type = 1;
+  map<string, string> parameters = 2;
+}
+
+message ParallelParentState
+{
+  int32 expected = 1;
+  repeated ParallelItemResult collected = 2;
+  VoteConfigState vote_config = 3;
+}
+
+message ParallelFanOutModuleState
+{
+  map<string, ParallelParentState> parents = 1;
+  map<string, string> vote_step_to_parent = 2;
+  map<string, bool> parent_worker_success = 3;
+}
+
+message ForEachItemResult
+{
+  bool success = 1;
+  string output = 2;
+}
+
+message ForEachParentState
+{
+  int32 expected = 1;
+  repeated ForEachItemResult collected = 2;
+}
+
+message ForEachModuleState
+{
+  map<string, ForEachParentState> parents = 1;
+}
+
+message MapReduceItemResult
+{
+  bool success = 1;
+  string output = 2;
+}
+
+message ActorSendState
+{
+  string target_actor_id = 1;
+  google.protobuf.Any payload = 2;
+}
+
+message MapReduceParentState
+{
+  int32 map_count = 1;
+  repeated MapReduceItemResult results = 2;
+  string reduce_type = 3;
+  string reduce_role = 4;
+  string reduce_prompt_prefix = 5;
+}
+
+message MapReduceModuleState
+{
+  map<string, MapReduceParentState> parents = 1;
+  map<string, string> reduce_step_to_parent = 2;
+}
+
+message RaceState
+{
+  int32 total = 1;
+  int32 received = 2;
+  bool resolved = 3;
+}
+
+message RaceModuleState
+{
+  map<string, RaceState> races = 1;
+}
+
+message PendingLlmCallState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string target_role = 3;
+  WorkflowRuntimeCallbackLeaseState watchdog_lease = 4;
+  bool request_dispatched = 5;
+  string watchdog_callback_id = 6;
+  string dispatch_dedup_id = 7;
+}
+
+message LLMCallModuleState
+{
+  map<string, PendingLlmCallState> pending_by_session_id = 1;
+  map<string, int32> attempts_by_step_id = 2;
+}
+
+message EvalContextState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string original_input = 3;
+  double threshold = 4;
+  string on_below = 5;
+}
+
+message EvaluateModuleState
+{
+  map<string, EvalContextState> pending_by_session_id = 1;
+  map<string, int32> attempts_by_step_id = 2;
+}
+
+message ReflectState
+{
+  string step_id = 1;
+  string run_id = 2;
+  string target_role = 3;
+  string current_draft = 4;
+  string criteria = 5;
+  int32 max_rounds = 6;
+  int32 round = 7;
+  ReflectPhaseState phase = 8;
+  string target_actor_id = 9;
+  map<string, string> chat_metadata_parameters = 10;
+}
+
+message ReflectModuleState
+{
+  map<string, ReflectState> pending_by_session_id = 1;
+}
+
+message CacheEntryState
+{
+  string value = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message CacheWaiterState
+{
+  string run_id = 1;
+  string parent_step_id = 2;
+}
+
+message PendingCacheCallState
+{
+  int32 ttl_seconds = 1;
+  repeated CacheWaiterState waiters = 2;
+}
+
+message CacheModuleState
+{
+  map<string, CacheEntryState> cache_entries = 1;
+  map<string, PendingCacheCallState> pending_by_cache_key = 2;
+  map<string, string> child_step_to_cache_key = 3;
 }

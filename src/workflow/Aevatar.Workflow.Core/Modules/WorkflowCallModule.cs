@@ -11,7 +11,7 @@ using Aevatar.Workflow.Core.Primitives;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>子工作流调用模块。处理 type=workflow_call 的步骤。</summary>
-public sealed class WorkflowCallModule : IEventModule
+public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "workflow_call";
     public int Priority => 5;
@@ -21,7 +21,7 @@ public sealed class WorkflowCallModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -43,7 +43,7 @@ public sealed class WorkflowCallModule : IEventModule
                 RunId = parentRunId,
                 Success = false,
                 Error = "workflow_call missing step_id",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -56,7 +56,7 @@ public sealed class WorkflowCallModule : IEventModule
                 RunId = parentRunId,
                 Success = false,
                 Error = "workflow_call missing workflow parameter",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -70,7 +70,7 @@ public sealed class WorkflowCallModule : IEventModule
                 RunId = parentRunId,
                 Success = false,
                 Error = $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}, got '{invalidLifecycle}'",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -85,6 +85,6 @@ public sealed class WorkflowCallModule : IEventModule
             RequestedByActorId = ctx.AgentId,
         };
 
-        await ctx.PublishAsync(invocation, EventDirection.Self, ct);
+        await ctx.PublishAsync(invocation, TopologyAudience.Self, ct);
     }
 }

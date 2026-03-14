@@ -1,8 +1,8 @@
 # Aevatar.Foundation.Runtime.Implementations.Orleans
 
-`Aevatar.Foundation.Runtime.Implementations.Orleans` 提供 `IActorRuntime` 的 Orleans 并行实现，保持 Foundation 分层不变：
+`Aevatar.Foundation.Runtime.Implementations.Orleans` 提供 `IActorRuntime` 与 `IActorDispatchPort` 的 Orleans 并行实现，保持 Foundation 分层不变：
 
-- `Aevatar.Foundation.Abstractions`：抽象契约（`IActorRuntime/IActor`）。
+- `Aevatar.Foundation.Abstractions`：抽象契约（`IActorRuntime/IActorDispatchPort/IActor`）。
 - `Aevatar.Foundation.Runtime.Implementations.Orleans`：Orleans 基础设施实现（Grain + Runtime 适配）。
 - `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming`：Orleans Stream 适配与拓扑注册能力。
 - `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit`：Orleans MassTransit QueueAdapter（仅 Orleans 流后端适配）。
@@ -13,6 +13,7 @@
 ## 核心组成
 
 - `Actors/OrleansActorRuntime`：`IActorRuntime` 的 Orleans 实现。
+- `Actors/OrleansActorDispatchPort`：`IActorDispatchPort` 的 Orleans 实现。
 - `Actors/OrleansActor`：客户端侧 `IActor` 代理。
 - `Grains/RuntimeActorGrain`：实际承载 `IAgent` 的 Orleans Grain。
 - `DependencyInjection/ServiceCollectionExtensions`：DI 注册入口。

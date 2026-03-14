@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
@@ -256,7 +257,7 @@ public sealed class WorkflowTuringCompletenessTests
         var loop = new WorkflowLoopModule();
         loop.SetWorkflow(workflow);
 
-        var modules = new Dictionary<string, IEventModule>(StringComparer.OrdinalIgnoreCase)
+        var modules = new Dictionary<string, IEventModule<IWorkflowExecutionContext>>(StringComparer.OrdinalIgnoreCase)
         {
             ["assign"] = new AssignModule(),
             ["conditional"] = new ConditionalModule(),
@@ -266,6 +267,7 @@ public sealed class WorkflowTuringCompletenessTests
         };
 
         var queue = new Queue<IMessage>();
+        var workflowRunAgent = new TestWorkflowRunAgent("workflow-turing-proof-agent", "proof-run");
         queue.Enqueue(new StartWorkflowEvent
         {
             RunId = "proof-run",
@@ -280,7 +282,7 @@ public sealed class WorkflowTuringCompletenessTests
             if (message is not StartWorkflowEvent && message is not StepCompletedEvent)
                 continue;
 
-            var loopCtx = CreateContext();
+            var loopCtx = CreateContext(workflowRunAgent);
             await loop.HandleAsync(Envelope(message), loopCtx, CancellationToken.None);
             foreach (var (evt, _) in loopCtx.Published)
             {
@@ -293,7 +295,7 @@ public sealed class WorkflowTuringCompletenessTests
                         break;
                     case StepRequestEvent request:
                     {
-                        var completedStep = await ExecuteStepAsync(request, modules);
+                        var completedStep = await ExecuteStepAsync(request, modules, workflowRunAgent);
                         queue.Enqueue(completedStep);
                         break;
                     }
@@ -306,12 +308,13 @@ public sealed class WorkflowTuringCompletenessTests
 
     private static async Task<StepCompletedEvent> ExecuteStepAsync(
         StepRequestEvent request,
-        IReadOnlyDictionary<string, IEventModule> modules)
+        IReadOnlyDictionary<string, IEventModule<IWorkflowExecutionContext>> modules,
+        TestWorkflowRunAgent workflowRunAgent)
     {
         if (!modules.TryGetValue(request.StepType, out var module))
             throw new InvalidOperationException($"No closed-world executor for step type '{request.StepType}'.");
 
-        var ctx = CreateContext();
+        var ctx = CreateContext(workflowRunAgent);
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         return ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
@@ -324,54 +327,16 @@ public sealed class WorkflowTuringCompletenessTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "workflow-turing-test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("workflow-turing-test", TopologyAudience.Self),
         };
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static TestEventHandlerContext CreateContext(TestWorkflowRunAgent workflowRunAgent)
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("workflow-turing-proof-agent"),
+            workflowRunAgent,
             NullLogger.Instance);
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            Published.Add((evt, direction));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

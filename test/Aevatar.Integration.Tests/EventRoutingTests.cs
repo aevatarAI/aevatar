@@ -121,13 +121,13 @@ public class EventRoutingTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = new Any { TypeUrl = $"type.googleapis.com/{typeUrlSuffix}" },
-        Direction = EventDirection.Down,
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
     };
 }
 
 // ─── 测试用模块 ───
 
-public class TrackingModule : IEventModule
+public class TrackingModule : IEventModule<IEventHandlerContext>
 {
     public string Name { get; }
     public int Priority => 0;
@@ -137,7 +137,7 @@ public class TrackingModule : IEventModule
         => Task.CompletedTask;
 }
 
-public class BypassTrackingModule : IEventModule, IRouteBypassModule
+public class BypassTrackingModule : IEventModule<IEventHandlerContext>, IRouteBypassModule
 {
     public string Name { get; }
     public int Priority => 0;

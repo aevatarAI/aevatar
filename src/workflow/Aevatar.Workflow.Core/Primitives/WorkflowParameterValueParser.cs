@@ -110,6 +110,26 @@ public static class WorkflowParameterValueParser
         return [];
     }
 
+    public static bool GetBool(
+        IReadOnlyDictionary<string, string> parameters,
+        bool fallback,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            if (!parameters.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+                continue;
+
+            if (TryParseBool(raw, out var value))
+                return value;
+        }
+
+        return fallback;
+    }
+
     public static List<string> ParseStringList(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -205,5 +225,33 @@ public static class WorkflowParameterValueParser
             return value[1..^1];
 
         return value;
+    }
+
+    private static bool TryParseBool(string raw, out bool value)
+    {
+        var normalized = raw.Trim();
+        if (bool.TryParse(normalized, out value))
+            return true;
+
+        if (string.Equals(normalized, "1", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "y", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            value = true;
+            return true;
+        }
+
+        if (string.Equals(normalized, "0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "no", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "n", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            value = false;
+            return true;
+        }
+
+        value = false;
+        return false;
     }
 }

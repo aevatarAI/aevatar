@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>变量赋值模块。处理 type=assign 的步骤。</summary>
-public sealed class AssignModule : IEventModule
+public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "assign";
     public int Priority => 5;
@@ -21,7 +21,7 @@ public sealed class AssignModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "assign") return;
@@ -44,10 +44,10 @@ public sealed class AssignModule : IEventModule
         };
         if (!string.IsNullOrWhiteSpace(target))
         {
-            completed.Metadata["assign.target"] = target;
-            completed.Metadata["assign.value"] = resolvedValue;
+            completed.AssignedVariable = target;
+            completed.AssignedValue = resolvedValue;
         }
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

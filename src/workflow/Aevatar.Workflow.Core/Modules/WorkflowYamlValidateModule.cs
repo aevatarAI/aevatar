@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Validates workflow YAML from step input.
 /// Emits success with canonical fenced YAML when valid, or failure with validation details.
 /// </summary>
-public sealed class WorkflowYamlValidateModule : IEventModule
+public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "workflow_yaml_validate";
     public int Priority => 5;
@@ -15,7 +15,7 @@ public sealed class WorkflowYamlValidateModule : IEventModule
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null || !payload.Is(StepRequestEvent.Descriptor))
@@ -35,20 +35,32 @@ public sealed class WorkflowYamlValidateModule : IEventModule
                 RunId = request.RunId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
         var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
         if (errors.Count > 0)
         {
+            var validationDetails = string.Join("; ", errors);
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                Output = $"""
+Previous workflow draft:
+```yaml
+{yaml}
+```
+
+Validation error:
+{validationDetails}
+
+Return a corrected full workflow YAML only in a single ```yaml fenced block.
+""",
                 Success = false,
-                Error = $"Invalid workflow YAML: {string.Join("; ", errors)}",
-            }, EventDirection.Self, ct);
+                Error = $"Invalid workflow YAML: {validationDetails}",
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -58,6 +70,6 @@ public sealed class WorkflowYamlValidateModule : IEventModule
             RunId = request.RunId,
             Success = true,
             Output = $"```yaml\n{yaml}\n```",
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

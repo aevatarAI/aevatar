@@ -16,14 +16,35 @@ public sealed record ChatInput
     /// </summary>
     public string? Workflow { get; init; }
 
+    /// <summary>
+    /// Existing workflow definition source actor id for a new run.
+    /// Resume/signal APIs must target the returned run actor id instead.
+    /// </summary>
     public string? AgentId { get; init; }
+
+    /// Optional client-controlled session identifier for downstream chat correlation.
+    /// When omitted, the server correlation id becomes the chat session id.
+    /// </summary>
+    public string? SessionId { get; init; }
+
+    /// <summary>
+    /// Legacy single inline workflow YAML field.
+    /// Prefer <see cref="WorkflowYamls"/> for new clients.
+    /// </summary>
+    public string? WorkflowYaml { get; init; }
 
     /// <summary>
     /// Inline workflow YAML bundle for this request.
     /// The first item is treated as the entry workflow.
-    /// If present, this field takes precedence over <see cref="Workflow"/>.
+    /// If present, this field is the execution source; when <see cref="Workflow"/> is also provided,
+    /// the entry workflow name must still match that lookup value.
     /// </summary>
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
+
+    /// <summary>
+    /// Optional run metadata passthrough for internal bridge integrations.
+    /// </summary>
+    public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowResumeInput
@@ -42,6 +63,7 @@ public sealed record WorkflowSignalInput
     public required string ActorId { get; init; }
     public required string RunId { get; init; }
     public required string SignalName { get; init; }
+    public string? StepId { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }
 }

@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -33,7 +32,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
         ctx.Published.Should().ContainSingle();
-        ctx.Published[0].direction.Should().Be(EventDirection.Self);
+        ctx.Published[0].direction.Should().Be(TopologyAudience.Self);
         var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("step-1");
         completed.Success.Should().BeFalse();
@@ -277,13 +276,13 @@ public sealed class WorkflowCoreModulesCoverageTests
         secondDispatch.StepId.Should().Be("while-1_iter_1");
         secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
-        deltaEvents[0].direction.Should().Be(EventDirection.Down);
+        deltaEvents[0].direction.Should().Be(TopologyAudience.Children);
 
         var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("while-1");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("DONE");
-        completed.Metadata["while.iterations"].Should().Be("2");
+        completed.Annotations["while.iterations"].Should().Be("2");
     }
 
     [Fact]
@@ -636,8 +635,8 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
 
         var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        completion.Metadata["cache.key"].Should().EndWith("...");
-        completion.Metadata["cache.key"].Length.Should().Be(63);
+        completion.Annotations["cache.key"].Should().EndWith("...");
+        completion.Annotations["cache.key"].Length.Should().Be(63);
     }
 
     [Fact]
@@ -685,8 +684,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         missCompletion.StepId.Should().Be("cache-parent-1");
         missCompletion.Success.Should().BeTrue();
         missCompletion.Output.Should().Be("cached-output");
-        missCompletion.Metadata["cache.hit"].Should().Be("false");
-        missCompletion.Metadata.Should().ContainKey("cache.key");
+        missCompletion.Annotations["cache.hit"].Should().Be("false");
+        missCompletion.Annotations.Should().ContainKey("cache.key");
 
         ctx.Published.Clear();
 
@@ -709,8 +708,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         hitCompletion.StepId.Should().Be("cache-parent-2");
         hitCompletion.Success.Should().BeTrue();
         hitCompletion.Output.Should().Be("cached-output");
-        hitCompletion.Metadata["cache.hit"].Should().Be("true");
-        hitCompletion.Metadata.Should().ContainKey("cache.key");
+        hitCompletion.Annotations["cache.hit"].Should().Be("true");
+        hitCompletion.Annotations.Should().ContainKey("cache.key");
     }
 
     [Fact]
@@ -765,7 +764,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         waiterCompletions.Should().ContainSingle(x => x.StepId == "cache-parent-b" && !x.Success && x.Error == "child failed");
         foreach (var completion in waiterCompletions)
         {
-            completion.Metadata.TryGetValue("cache.hit", out var hit).Should().BeTrue();
+            completion.Annotations.TryGetValue("cache.hit", out var hit).Should().BeTrue();
             hit.Should().Be("false");
         }
 
@@ -849,9 +848,9 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var chat = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
         chat.Prompt.Should().Be("system\n\nquestion");
-        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1"));
-        chat.Metadata["aevatar.llm_timeout_ms"].Should().Be("1800000");
-        ctx.Published.Last().direction.Should().Be(EventDirection.Self);
+        chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
+        chat.TimeoutMs.Should().Be(1800000);
+        ctx.Published.Last().direction.Should().Be(TopologyAudience.Self);
     }
 
     [Fact]
@@ -872,7 +871,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text");
+        var textSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-text", "llm-text", attempt: 1);
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -901,7 +900,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat");
+        var chatSessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-chat", "llm-chat", attempt: 1);
         await module.HandleAsync(
             Envelope(new ChatResponseEvent
             {
@@ -935,7 +934,7 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         ctx.Published.Clear();
 
-        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed");
+        var sessionId = ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-failed", "llm-failed", attempt: 1);
         await module.HandleAsync(
             Envelope(new TextMessageEndEvent
             {
@@ -957,17 +956,6 @@ public sealed class WorkflowCoreModulesCoverageTests
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
-        var timeoutPublished = new TaskCompletionSource<StepCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ctx.OnPublish = (evt, _) =>
-        {
-            if (evt is StepCompletedEvent completed &&
-                completed.StepId == "llm-timeout" &&
-                !completed.Success &&
-                completed.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase))
-            {
-                timeoutPublished.TrySetResult(completed);
-            }
-        };
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -984,7 +972,10 @@ public sealed class WorkflowCoreModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var timeoutEvent = await timeoutPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var scheduled = ctx.Scheduled.Should().ContainSingle(x => x.Event is LlmCallWatchdogTimeoutFiredEvent).Subject;
+        await module.HandleAsync(ctx.CreateScheduledEnvelope(scheduled), ctx, CancellationToken.None);
+
+        var timeoutEvent = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         timeoutEvent.StepId.Should().Be("llm-timeout");
         timeoutEvent.RunId.Should().Be("run-timeout");
         timeoutEvent.Success.Should().BeFalse();
@@ -1193,21 +1184,21 @@ public sealed class WorkflowCoreModulesCoverageTests
 
         var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId, x => x);
         completions["assign-1"].Output.Should().Be("input-value");
-        completions["assign-1"].Metadata["assign.target"].Should().Be("x");
-        completions["assign-1"].Metadata["assign.value"].Should().Be("input-value");
+        completions["assign-1"].AssignedVariable.Should().Be("x");
+        completions["assign-1"].AssignedValue.Should().Be("input-value");
         completions["assign-2"].Output.Should().Be("literal");
         completions["cond-1"].Output.Should().Be("contains KEY text");
-        completions["cond-1"].Metadata["branch"].Should().Be("true");
+        completions["cond-1"].BranchKey.Should().Be("true");
         completions["cond-2"].Output.Should().Be("other text");
-        completions["cond-2"].Metadata["branch"].Should().Be("false");
+        completions["cond-2"].BranchKey.Should().Be("false");
         completions["cp-1"].Output.Should().Be("snapshot");
     }
 
-    private static RecordingEventHandlerContext CreateContext(IServiceProvider? services = null)
+    private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)
     {
-        return new RecordingEventHandlerContext(
+        return new TestEventHandlerContext(
             services ?? new ServiceCollection().BuildServiceProvider(),
-            new StubAgent("module-test-agent"),
+            new TestAgent("module-test-agent"),
             NullLogger.Instance);
     }
 
@@ -1218,54 +1209,8 @@ public sealed class WorkflowCoreModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId ?? "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
-    }
-
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
-    {
-        private readonly Lock _lock = new();
-
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
-        {
-            Services = services;
-            Agent = agent;
-            Logger = logger;
-            InboundEnvelope = new EventEnvelope();
-        }
-
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
-        public Action<IMessage, EventDirection>? OnPublish { get; set; }
-        public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
-        public IServiceProvider Services { get; }
-        public ILogger Logger { get; }
-
-        public Task PublishAsync<TEvent>(
-            TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            lock (_lock)
-            {
-                Published.Add((evt, direction));
-            }
-            OnPublish?.Invoke(evt, direction);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
-        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeAgentTool(string name, Func<string, string> execute) : IAgentTool

@@ -1,3 +1,5 @@
+using Google.Protobuf;
+
 namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
@@ -12,7 +14,17 @@ public interface IProjectionSessionEventCodec<TEvent>
 
     string GetEventType(TEvent evt);
 
-    string Serialize(TEvent evt);
+    ByteString Serialize(TEvent evt);
 
-    TEvent? Deserialize(string eventType, string payload);
+    TEvent? Deserialize(string eventType, ByteString payload);
+}
+
+/// <summary>
+/// Optional compatibility contract for codecs that must keep legacy string transport readable during mixed-version rollout.
+/// </summary>
+public interface ILegacyProjectionSessionEventCodec<TEvent>
+{
+    string? SerializeLegacy(TEvent evt);
+
+    TEvent? DeserializeLegacy(string eventType, string payload);
 }

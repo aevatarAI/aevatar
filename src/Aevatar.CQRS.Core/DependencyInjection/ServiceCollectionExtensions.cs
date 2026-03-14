@@ -9,6 +9,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddCqrsCore(this IServiceCollection services)
     {
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
+        services.TryAddSingleton(typeof(ICommandTargetBinder<,,>), typeof(NoOpCommandTargetBinder<,,>));
         services.TryAddTransient(typeof(IEventOutputStream<,>), typeof(DefaultEventOutputStream<,>));
 
         return services;

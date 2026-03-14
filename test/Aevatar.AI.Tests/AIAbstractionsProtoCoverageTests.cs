@@ -14,8 +14,10 @@ public sealed class AIAbstractionsProtoCoverageTests
             Prompt = "hello",
             SessionId = "session-1",
             Metadata = { ["correlation_id"] = "c-1" },
+            TimeoutMs = 2500,
         }, ChatRequestEvent.Parser);
         request.Metadata["correlation_id"].Should().Be("c-1");
+        request.TimeoutMs.Should().Be(2500);
 
         var response = RoundTrip(new ChatResponseEvent
         {
@@ -69,6 +71,35 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
 
+        var sessionStarted = RoundTrip(new RoleChatSessionStartedEvent
+        {
+            SessionId = "session-1",
+            Prompt = "hello",
+        }, RoleChatSessionStartedEvent.Parser);
+        sessionStarted.Prompt.Should().Be("hello");
+
+        var sessionCompleted = RoundTrip(new RoleChatSessionCompletedEvent
+        {
+            SessionId = "session-1",
+            Content = "done",
+            ReasoningContent = "thinking",
+            Prompt = "hello",
+            ContentEmitted = true,
+            ToolCalls =
+            {
+                new ToolCallEvent
+                {
+                    ToolName = "search",
+                    ArgumentsJson = "{\"q\":\"x\"}",
+                    CallId = "call-1",
+                },
+            },
+        }, RoleChatSessionCompletedEvent.Parser);
+        sessionCompleted.Content.Should().Be("done");
+        sessionCompleted.ReasoningContent.Should().Be("thinking");
+        sessionCompleted.ContentEmitted.Should().BeTrue();
+        sessionCompleted.ToolCalls.Should().ContainSingle();
+
         var initialize = RoundTrip(new InitializeRoleAgentEvent
         {
             RoleName = "assistant",
@@ -104,9 +135,37 @@ public sealed class AIAbstractionsProtoCoverageTests
             RoleName = "assistant",
             MessageCount = 7,
             ConfigOverrides = overrides,
+            EventModules = "demo",
+            EventRoutes = "event.type == X -> demo",
+            Sessions =
+            {
+                ["session-1"] = new RoleChatSessionState
+                {
+                    Prompt = "hello",
+                    Completed = true,
+                    FinalContent = "done",
+                    FinalReasoningContent = "thinking",
+                    Sequence = 7,
+                    ContentEmitted = true,
+                    ToolCalls =
+                    {
+                        new ToolCallEvent
+                        {
+                            ToolName = "search",
+                            ArgumentsJson = "{\"q\":\"x\"}",
+                            CallId = "call-1",
+                        },
+                    },
+                },
+            },
         }, RoleGAgentState.Parser);
         state.RoleName.Should().Be("assistant");
         state.MessageCount.Should().Be(7);
+        state.EventModules.Should().Be("demo");
+        state.EventRoutes.Should().Be("event.type == X -> demo");
+        state.Sessions["session-1"].FinalContent.Should().Be("done");
+        state.Sessions["session-1"].Sequence.Should().Be(7);
+        state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
     }
 
     [Fact]
@@ -136,8 +195,11 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionStartedEvent));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionCompletedEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(InitializeRoleAgentEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));
+        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionState));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
 
@@ -149,6 +211,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         var textStart = new TextMessageStartEvent();
         var toolCall = new ToolCallEvent();
         var toolResult = new ToolResultEvent();
+        var sessionStarted = new RoleChatSessionStartedEvent();
         var initialize = new InitializeRoleAgentEvent();
         var state = new RoleGAgentState();
 
@@ -157,6 +220,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         Action setTextStartSession = () => textStart.SessionId = null!;
         Action setToolCallName = () => toolCall.ToolName = null!;
         Action setToolResultCallId = () => toolResult.CallId = null!;
+        Action setSessionStartedId = () => sessionStarted.SessionId = null!;
         Action setInitRoleName = () => initialize.RoleName = null!;
         Action setStateRoleName = () => state.RoleName = null!;
 
@@ -165,6 +229,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         setTextStartSession.Should().Throw<ArgumentNullException>();
         setToolCallName.Should().Throw<ArgumentNullException>();
         setToolResultCallId.Should().Throw<ArgumentNullException>();
+        setSessionStartedId.Should().Throw<ArgumentNullException>();
         setInitRoleName.Should().Throw<ArgumentNullException>();
         setStateRoleName.Should().Throw<ArgumentNullException>();
     }
@@ -198,6 +263,29 @@ public sealed class AIAbstractionsProtoCoverageTests
             RoleName = "assistant",
             MessageCount = 1,
             ConfigOverrides = overrides,
+            EventModules = "demo",
+            EventRoutes = "event.type == X -> demo",
+            Sessions =
+            {
+                ["session-1"] = new RoleChatSessionState
+                {
+                    Prompt = "hello",
+                    Completed = true,
+                    FinalContent = "done",
+                    FinalReasoningContent = "thinking",
+                    Sequence = 1,
+                    ContentEmitted = true,
+                    ToolCalls =
+                    {
+                        new ToolCallEvent
+                        {
+                            ToolName = "search",
+                            ArgumentsJson = "{\"q\":\"x\"}",
+                            CallId = "call-1",
+                        },
+                    },
+                },
+            },
         };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();

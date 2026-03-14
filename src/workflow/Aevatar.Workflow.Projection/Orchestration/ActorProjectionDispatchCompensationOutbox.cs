@@ -11,13 +11,16 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
     private const string OutboxPublisherId = "projection.compensation.outbox";
     private const string DefaultScopeId = "workflow";
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
 
     public ActorProjectionDispatchCompensationOutbox(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         IAgentTypeVerifier agentTypeVerifier)
     {
         _runtime = runtime;
+        _dispatchPort = dispatchPort;
         _agentTypeVerifier = agentTypeVerifier;
     }
 
@@ -28,7 +31,7 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
         ArgumentNullException.ThrowIfNull(evt);
         var actor = await ResolveOutboxActorAsync(ct);
         var envelope = CreateEnvelope(evt, evt.RecordId);
-        await actor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     public async Task TriggerReplayAsync(
@@ -39,7 +42,7 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
         var envelope = CreateEnvelope(
             new ProjectionCompensationTriggerReplayEvent { BatchSize = batchSize },
             correlationId: "replay");
-        await actor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     private async Task<IActor> ResolveOutboxActorAsync(CancellationToken ct)
@@ -82,8 +85,10 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            PublisherId = OutboxPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = correlationId,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(OutboxPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
         };
 }

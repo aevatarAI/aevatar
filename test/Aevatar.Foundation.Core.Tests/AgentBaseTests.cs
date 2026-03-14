@@ -8,7 +8,7 @@ namespace Aevatar.Foundation.Core.Tests;
 
 // Test agents.
 
-public class AgentBaseCounterAgent : GAgentBase<CounterState>
+public class AgentBaseCounterAgent : TestGAgentBase<CounterState>
 {
     public int HandleCount { get; private set; }
 
@@ -34,7 +34,7 @@ public class AgentBaseCounterAgent : GAgentBase<CounterState>
 
 // Test modules.
 
-public class TestModule : IEventModule
+public class TestModule : IEventModule<IEventHandlerContext>
 {
     public string Name => "test_module";
     public int Priority { get; init; } = 5;

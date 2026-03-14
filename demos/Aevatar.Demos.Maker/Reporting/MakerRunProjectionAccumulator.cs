@@ -30,13 +30,14 @@ public sealed class MakerRunProjectionAccumulator
         if (payload == null) return;
         var typeUrl = payload.TypeUrl ?? "";
         var now = DateTimeOffset.UtcNow;
+        var publisher = envelope.Route?.PublisherActorId ?? string.Empty;
 
         lock (_lock)
         {
             if (payload.Is(StartWorkflowEvent.Descriptor))
             {
                 var evt = payload.Unpack<StartWorkflowEvent>();
-                AddTimeline(now, "workflow.start", "workflow started", envelope.PublisherId, null, null, typeUrl);
+                AddTimeline(now, "workflow.start", "workflow started", publisher, null, null, typeUrl);
                 return;
             }
 
@@ -54,7 +55,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "step.request",
                     $"{evt.StepId} ({evt.StepType})",
-                    envelope.PublisherId,
+                    publisher,
                     evt.StepId,
                     evt.StepType,
                     typeUrl,
@@ -72,27 +73,27 @@ public sealed class MakerRunProjectionAccumulator
                 step.Error = evt.Error ?? "";
                 step.OutputPreview = Truncate(evt.Output ?? "", 240);
                 step.WorkerId = evt.WorkerId ?? "";
-                step.CompletionMetadata = evt.Metadata.ToDictionary(kv => kv.Key, kv => kv.Value);
+                step.CompletionAnnotations = evt.Annotations.ToDictionary(kv => kv.Key, kv => kv.Value);
 
                 AddTimeline(
                     now,
                     "step.completed",
                     $"{evt.StepId} success={evt.Success}",
-                    envelope.PublisherId,
+                    publisher,
                     evt.StepId,
                     step.StepType,
                     typeUrl,
-                    evt.Metadata.ToDictionary(kv => kv.Key, kv => kv.Value));
+                    evt.Annotations.ToDictionary(kv => kv.Key, kv => kv.Value));
 
                 if (step.StepType.Equals("maker_vote", StringComparison.OrdinalIgnoreCase))
                 {
-                    var flagged = evt.Metadata.TryGetValue("maker_vote.red_flagged", out var f) ? f : "0";
-                    var total = evt.Metadata.TryGetValue("maker_vote.total_candidates", out var t) ? t : "0";
+                    var flagged = evt.Annotations.TryGetValue("maker_vote.red_flagged", out var f) ? f : "0";
+                    var total = evt.Annotations.TryGetValue("maker_vote.total_candidates", out var t) ? t : "0";
                     AddTimeline(
                         now,
                         "maker.red_flag",
                         $"{evt.StepId} red_flagged={flagged}/{total}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl);
@@ -100,7 +101,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "maker.vote",
                         $"{evt.StepId} voted success={evt.Success}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl);
@@ -108,12 +109,12 @@ public sealed class MakerRunProjectionAccumulator
 
                 if (step.StepType.Equals("connector_call", StringComparison.OrdinalIgnoreCase))
                 {
-                    var connectorName = evt.Metadata.TryGetValue("connector.name", out var cName) ? cName : "";
-                    var connectorType = evt.Metadata.TryGetValue("connector.type", out var cType) ? cType : "";
-                    var duration = evt.Metadata.TryGetValue("connector.duration_ms", out var cDur) ? cDur : "";
-                    var statusCode = evt.Metadata.TryGetValue("connector.http.status_code", out var code) ? code : "";
-                    var exitCode = evt.Metadata.TryGetValue("connector.cli.exit_code", out var exit) ? exit : "";
-                    var redFlag = evt.Metadata.TryGetValue("red_flag", out var rf) ? rf : "";
+                    var connectorName = evt.Annotations.TryGetValue("connector.name", out var cName) ? cName : "";
+                    var connectorType = evt.Annotations.TryGetValue("connector.type", out var cType) ? cType : "";
+                    var duration = evt.Annotations.TryGetValue("connector.duration_ms", out var cDur) ? cDur : "";
+                    var statusCode = evt.Annotations.TryGetValue("connector.http.status_code", out var code) ? code : "";
+                    var exitCode = evt.Annotations.TryGetValue("connector.cli.exit_code", out var exit) ? exit : "";
+                    var redFlag = evt.Annotations.TryGetValue("red_flag", out var rf) ? rf : "";
 
                     var connectorData = new Dictionary<string, string>
                     {
@@ -129,7 +130,7 @@ public sealed class MakerRunProjectionAccumulator
                         now,
                         "connector.call",
                         $"{evt.StepId} connector={connectorName} type={connectorType}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl,
@@ -138,14 +139,14 @@ public sealed class MakerRunProjectionAccumulator
 
                 if (step.StepType.Equals("maker_recursive", StringComparison.OrdinalIgnoreCase))
                 {
-                    var stage = evt.Metadata.TryGetValue("maker.stage", out var st) ? st : "";
-                    var depth = evt.Metadata.TryGetValue("maker.depth", out var dp) ? dp : "";
-                    var atomic = evt.Metadata.TryGetValue("maker.atomic_decision", out var at) ? at : "";
+                    var stage = evt.Annotations.TryGetValue("maker.stage", out var st) ? st : "";
+                    var depth = evt.Annotations.TryGetValue("maker.depth", out var dp) ? dp : "";
+                    var atomic = evt.Annotations.TryGetValue("maker.atomic_decision", out var at) ? at : "";
                     AddTimeline(
                         now,
                         "maker.recursive",
                         $"{evt.StepId} stage={stage} depth={depth} atomic={atomic}",
-                        envelope.PublisherId,
+                        publisher,
                         evt.StepId,
                         step.StepType,
                         typeUrl,
@@ -167,7 +168,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "llm.start",
                     $"agent={evt.AgentId}, session={evt.SessionId}",
-                    envelope.PublisherId,
+                    publisher,
                     null,
                     null,
                     typeUrl,
@@ -178,14 +179,14 @@ public sealed class MakerRunProjectionAccumulator
             if (payload.Is(TextMessageEndEvent.Descriptor))
             {
                 var evt = payload.Unpack<TextMessageEndEvent>();
-                var publisher = string.IsNullOrWhiteSpace(envelope.PublisherId) ? "(unknown)" : envelope.PublisherId;
+                var replyPublisher = string.IsNullOrWhiteSpace(publisher) ? "(unknown)" : publisher;
 
-                if (!string.Equals(publisher, _rootActorId, StringComparison.Ordinal))
+                if (!string.Equals(replyPublisher, _rootActorId, StringComparison.Ordinal))
                 {
                     _roleReplies.Add(new MakerRoleReply
                     {
                         Timestamp = now,
-                        RoleId = publisher,
+                        RoleId = replyPublisher,
                         SessionId = evt.SessionId ?? "",
                         Content = evt.Content ?? "",
                         ContentLength = (evt.Content ?? "").Length,
@@ -195,8 +196,8 @@ public sealed class MakerRunProjectionAccumulator
                 AddTimeline(
                     now,
                     "llm.end",
-                    $"agent={publisher}, chars={(evt.Content ?? "").Length}",
-                    publisher,
+                    $"agent={replyPublisher}, chars={(evt.Content ?? "").Length}",
+                    replyPublisher,
                     null,
                     null,
                     typeUrl,
@@ -215,7 +216,7 @@ public sealed class MakerRunProjectionAccumulator
                     now,
                     "workflow.completed",
                     $"success={evt.Success}",
-                    envelope.PublisherId,
+                    publisher,
                     null,
                     null,
                     typeUrl,
@@ -250,14 +251,14 @@ public sealed class MakerRunProjectionAccumulator
 
             var connectorTypeCounts = steps
                 .Where(x => string.Equals(x.StepType, "connector_call", StringComparison.OrdinalIgnoreCase))
-                .Select(x => x.CompletionMetadata.TryGetValue("connector.type", out var t) ? t : "")
+                .Select(x => x.CompletionAnnotations.TryGetValue("connector.type", out var t) ? t : "")
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .GroupBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
             var totalRedFlagged = steps
                 .Where(x => string.Equals(x.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
-                .Select(x => TryParseInt(x.CompletionMetadata.GetValueOrDefault("maker_vote.red_flagged")))
+                .Select(x => TryParseInt(x.CompletionAnnotations.GetValueOrDefault("maker_vote.red_flagged")))
                 .Sum();
 
             var report = new MakerRunReport
@@ -352,7 +353,7 @@ public sealed class MakerRunProjectionAccumulator
             .Where(x => string.Equals(x.StepType, "maker_recursive", StringComparison.OrdinalIgnoreCase))
             .ToList();
         var recursiveStages = recursiveSteps
-            .Select(x => x.CompletionMetadata.TryGetValue("maker.stage", out var stage) ? stage : "")
+            .Select(x => x.CompletionAnnotations.TryGetValue("maker.stage", out var stage) ? stage : "")
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -391,7 +392,7 @@ public sealed class MakerRunProjectionAccumulator
 
         var actualRedFlagged = steps
             .Where(x => string.Equals(x.StepType, "maker_vote", StringComparison.OrdinalIgnoreCase))
-            .Select(x => TryParseInt(x.CompletionMetadata.GetValueOrDefault("maker_vote.red_flagged")))
+            .Select(x => TryParseInt(x.CompletionAnnotations.GetValueOrDefault("maker_vote.red_flagged")))
             .Sum();
         AddCheck(
             checks,
@@ -581,9 +582,9 @@ public static class MakerRunReportWriter
         sb.AppendLine("<table><thead><tr><th>StepId</th><th>Type</th><th>TargetRole</th><th>Success</th><th>Worker</th><th>DurationMs</th><th>Metadata</th><th>OutputPreview</th><th>Error</th></tr></thead><tbody>");
         foreach (var step in report.Steps)
         {
-            var metadata = step.CompletionMetadata.Count == 0
+            var metadata = step.CompletionAnnotations.Count == 0
                 ? ""
-                : string.Join("<br/>", step.CompletionMetadata.OrderBy(k => k.Key, StringComparer.Ordinal)
+                : string.Join("<br/>", step.CompletionAnnotations.OrderBy(k => k.Key, StringComparer.Ordinal)
                     .Select(kv => $"{E(kv.Key)}={E(kv.Value)}"));
             sb.AppendLine("<tr>");
             sb.AppendLine($"<td><code>{E(step.StepId)}</code></td>");
@@ -714,7 +715,7 @@ public sealed class MakerStepTrace
     public string OutputPreview { get; set; } = "";
     public string Error { get; set; } = "";
     public Dictionary<string, string> RequestParameters { get; set; } = [];
-    public Dictionary<string, string> CompletionMetadata { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
 
     public double? DurationMs =>
         RequestedAt.HasValue && CompletedAt.HasValue

@@ -57,34 +57,30 @@ public class RunManagerTests
     }
 }
 
-public class AgentContextPropagatorTests
+public class AsyncLocalAgentContextTests
 {
     [Fact]
-    public void InjectAndExtract_Roundtrip_PreservesValues()
+    public void GetAll_ShouldSnapshotCurrentValues()
     {
         var context = new AsyncLocalAgentContext();
         context.Set("traceId", "trace-1");
         context.Set("tenant", "tenant-a");
 
-        var envelope = TestHelper.Envelope(new PingEvent { Message = "hello" });
-        AgentContextPropagator.Inject(context, envelope);
-        var extracted = AgentContextPropagator.Extract(envelope);
+        var snapshot = context.GetAll();
 
-        extracted.Get<string>("traceId").Should().Be("trace-1");
-        extracted.Get<string>("tenant").Should().Be("tenant-a");
+        snapshot.Should().ContainKey("traceId").WhoseValue.Should().Be("trace-1");
+        snapshot.Should().ContainKey("tenant").WhoseValue.Should().Be("tenant-a");
     }
 
     [Fact]
-    public void Extract_IgnoresMetadataWithoutContextPrefix()
+    public void Remove_ShouldDropExistingValue()
     {
-        var envelope = TestHelper.Envelope(new PingEvent { Message = "hello" });
-        envelope.Metadata["plain"] = "value";
-        envelope.Metadata["__ctx_correlationId"] = "corr-1";
+        var context = new AsyncLocalAgentContext();
+        context.Set("correlationId", "corr-1");
 
-        var extracted = AgentContextPropagator.Extract(envelope);
+        context.Remove("correlationId");
 
-        extracted.Get<string>("correlationId").Should().Be("corr-1");
-        extracted.Get<string>("plain").Should().BeNull();
+        context.Get<string>("correlationId").Should().BeNull();
     }
 }
 
@@ -106,7 +102,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "root-t", "mid-t", "leaf-t" })
+        foreach (var id in new[] { "parent-1", "child-1", "restored-1", "root-t", "mid-t", "leaf-t", "collector-dedup" })
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
@@ -141,7 +137,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         var binding = bindings.Should().ContainSingle(x =>
             x.TargetStreamId == child.Id &&
             x.ForwardingMode == StreamForwardingMode.HandleThenForward).Subject;
-        binding.DirectionFilter.SetEquals([EventDirection.Down, EventDirection.Both]).Should().BeTrue();
+        binding.DirectionFilter.SetEquals([TopologyAudience.Children, TopologyAudience.ParentAndChildren]).Should().BeTrue();
 
         await _runtime.UnlinkAsync(child.Id);
 
@@ -158,7 +154,7 @@ public class LocalActorRuntimeTests : IAsyncLifetime
 
         await ((GAgentBase)child.Agent).EventPublisher.PublishAsync(
             new PingEvent { Message = "child-both" },
-            EventDirection.Both,
+            TopologyAudience.ParentAndChildren,
             CancellationToken.None);
 
         var parentCollector = (CollectorAgent)parent.Agent;
@@ -183,15 +179,15 @@ public class LocalActorRuntimeTests : IAsyncLifetime
                 ForwardingMode = StreamForwardingMode.TransitOnly,
                 DirectionFilter =
                 [
-                    EventDirection.Down,
-                    EventDirection.Both,
+                    TopologyAudience.Children,
+                    TopologyAudience.ParentAndChildren,
                 ],
             },
             CancellationToken.None);
 
         await ((GAgentBase)root.Agent).EventPublisher.PublishAsync(
             new PingEvent { Message = "transit" },
-            EventDirection.Down,
+            TopologyAudience.Children,
             CancellationToken.None);
 
         var middleCollector = (CollectorAgent)middle.Agent;
@@ -214,5 +210,25 @@ public class LocalActorRuntimeTests : IAsyncLifetime
         restored.Should().NotBeNull();
         restored!.Id.Should().Be(agentId);
         restored.Agent.Should().BeOfType<CollectorAgent>();
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_ShouldDeduplicateByStableOriginId_ForSameActor()
+    {
+        const string actorId = "collector-dedup";
+        var actor = await _runtime.CreateAsync<CollectorAgent>(actorId);
+        var collector = (CollectorAgent)actor.Agent;
+        var first = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        first.Id = "env-1";
+        first.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
+
+        var second = TestHelper.Envelope(new PingEvent { Message = "dup" }, publisherId: "source-1");
+        second.Id = "env-2";
+        second.EnsureRuntime().EnsureDeduplication().OperationId = "logical-dedup-1";
+
+        await actor.HandleEventAsync(first);
+        await actor.HandleEventAsync(second);
+
+        collector.ReceivedMessages.Should().ContainSingle().Which.Should().Be("dup");
     }
 }

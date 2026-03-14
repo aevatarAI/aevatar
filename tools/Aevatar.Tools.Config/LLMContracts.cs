@@ -14,6 +14,7 @@ sealed record ProbeLLMRequest(string? ProviderType, string? Endpoint, string? Ap
 sealed record RawSecretsRequest(string? Json);
 sealed record SetSecretRequest(string? Key, string? Value);
 sealed record RemoveSecretRequest(string? Key);
+sealed record WorkflowFileRequest(string? Content);
 sealed record AgentFileRequest(string? Content);
 
 enum LLMProviderKind

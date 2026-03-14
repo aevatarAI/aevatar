@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
@@ -18,6 +19,8 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class OrleansGarnetPersistenceIntegrationTests
 {
+    private static readonly TimeSpan HostLifecycleTimeout = TimeSpan.FromSeconds(30);
+
     [GarnetIntegrationFact]
     public async Task GrainState_ShouldPersistAcrossSiloRestart_WhenUsingGarnetStorage()
     {
@@ -52,7 +55,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         }
         finally
         {
-            await firstHost.StopAsync();
+            await firstHost.StopAsync().WaitAsync(HostLifecycleTimeout);
             firstHost.Dispose();
         }
 
@@ -79,7 +82,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         }
         finally
         {
-            await secondHost.StopAsync();
+            await secondHost.StopAsync().WaitAsync(HostLifecycleTimeout);
             secondHost.Dispose();
         }
     }
@@ -108,13 +111,15 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
 
             (await grain.InitializeAgentAsync(agentTypeName)).Should().BeTrue();
+            (await grain.GetDescriptionAsync()).Should().Be("activation-count:0");
+            await grain.HandleEnvelopeAsync(CreateDirectEnvelope(actorId, "activated"));
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
 
             await grain.DeactivateAsync();
         }
         finally
         {
-            await firstHost.StopAsync();
+            await firstHost.StopAsync().WaitAsync(HostLifecycleTimeout);
             firstHost.Dispose();
         }
 
@@ -133,6 +138,8 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
 
             (await grain.IsInitializedAsync()).Should().BeTrue();
+            (await grain.GetDescriptionAsync()).Should().Be("activation-count:1");
+            await grain.HandleEnvelopeAsync(CreateDirectEnvelope(actorId, "activated"));
             (await grain.GetDescriptionAsync()).Should().Be("activation-count:2");
 
             await grain.PurgeAsync();
@@ -140,7 +147,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         }
         finally
         {
-            await secondHost.StopAsync();
+            await secondHost.StopAsync().WaitAsync(HostLifecycleTimeout);
             secondHost.Dispose();
         }
     }
@@ -169,7 +176,7 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
             })
             .Build();
 
-        await host.StartAsync();
+        await host.StartAsync().WaitAsync(HostLifecycleTimeout);
         return host;
     }
 
@@ -179,6 +186,14 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
         listener.Start();
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
+
+    private static byte[] CreateDirectEnvelope(string actorId, string payload) =>
+        new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(new StringValue { Value = payload }),
+            Route = EnvelopeRouteSemantics.CreateDirect("garnet-test", actorId),
+        }.ToByteArray();
 
     private static string RequireGarnetConnectionString() =>
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
@@ -216,8 +231,9 @@ public sealed class OrleansGarnetPersistenceIntegrationTests
 
     private sealed class RecordingGarnetStatefulAgent : GAgentBase<Int32Value>
     {
-        protected override Task OnActivateAsync(CancellationToken ct) =>
-            PersistDomainEventAsync(new StringValue { Value = "activated" }, ct);
+        [EventHandler]
+        public Task HandleActivated(StringValue evt) =>
+            PersistDomainEventAsync(evt.Clone(), CancellationToken.None);
 
         protected override Int32Value TransitionState(Int32Value current, IMessage evt)
             => StateTransitionMatcher

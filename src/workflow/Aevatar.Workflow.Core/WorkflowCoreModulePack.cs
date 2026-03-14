@@ -7,7 +7,6 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
 {
     private static readonly IReadOnlyList<WorkflowModuleRegistration> ModuleRegistrations =
     [
-        WorkflowModuleRegistration.Create<WorkflowLoopModule>("workflow_loop"),
         WorkflowModuleRegistration.Create<ConditionalModule>("conditional"),
         WorkflowModuleRegistration.Create<SwitchModule>("switch"),
         WorkflowModuleRegistration.Create<WhileModule>("while", "loop"),
@@ -21,7 +20,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<MapReduceModule>("map_reduce", "mapreduce"),
         WorkflowModuleRegistration.Create<LLMCallModule>("llm_call"),
         WorkflowModuleRegistration.Create<ToolCallModule>("tool_call"),
-        WorkflowModuleRegistration.Create<ConnectorCallModule>("connector_call", "bridge_call"),
+        WorkflowModuleRegistration.Create<ConnectorCallModule>("connector_call", "bridge_call", "secure_connector_call", "secure_connector"),
         WorkflowModuleRegistration.Create<TransformModule>("transform"),
         WorkflowModuleRegistration.Create<RetrieveFactsModule>("retrieve_facts"),
         WorkflowModuleRegistration.Create<WaitSignalModule>("wait_signal", "wait"),
@@ -30,24 +29,22 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<ReflectModule>("reflect"),
         WorkflowModuleRegistration.Create<DelayModule>("delay", "sleep"),
         WorkflowModuleRegistration.Create<EmitModule>("emit", "publish"),
+        WorkflowModuleRegistration.Create<ActorSendModule>("actor_send"),
         WorkflowModuleRegistration.Create<CacheModule>("cache"),
         WorkflowModuleRegistration.Create<HumanApprovalModule>("human_approval"),
         WorkflowModuleRegistration.Create<HumanInputModule>("human_input"),
+        WorkflowModuleRegistration.Create<SecureInputModule>("secure_input", "secret_input"),
         WorkflowModuleRegistration.Create<WorkflowYamlValidateModule>("workflow_yaml_validate"),
         WorkflowModuleRegistration.Create<DynamicWorkflowModule>("dynamic_workflow"),
     ];
 
     private static readonly IReadOnlyList<IWorkflowModuleDependencyExpander> DependencyExpanderRegistrations =
     [
-        new WorkflowLoopModuleDependencyExpander(),
         new WorkflowStepTypeModuleDependencyExpander(),
         new WorkflowImplicitModuleDependencyExpander(),
     ];
 
-    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations =
-    [
-        new WorkflowLoopModuleConfigurator(),
-    ];
+    private static readonly IReadOnlyList<IWorkflowModuleConfigurator> ConfiguratorRegistrations = [];
 
     public string Name => "workflow.core";
 

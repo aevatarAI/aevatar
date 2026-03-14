@@ -7,7 +7,9 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -32,8 +34,8 @@ public class ActorProjectionOwnershipCoordinatorTests
         evt.SessionId.Should().Be("session-1");
         evt.LeaseTtlMs.Should().Be(ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs);
         evt.OccurredAtUtc.Should().NotBeNull();
-        envelope.CorrelationId.Should().Be("session-1");
-        envelope.Direction.Should().Be(EventDirection.Self);
+        envelope.Propagation!.CorrelationId.Should().Be("session-1");
+        envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
     }
 
     [Fact]
@@ -77,6 +79,81 @@ public class ActorProjectionOwnershipCoordinatorTests
     }
 
     [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnTrue_WhenLeaseMatchesAndNotExpired()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 60_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-1", CancellationToken.None);
+
+        hasActiveLease.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnFalse_WhenLeaseExpired()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 1_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-5)),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-1", CancellationToken.None);
+
+        hasActiveLease.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HasActiveLeaseAsync_ShouldReturnFalse_WhenSessionDoesNotMatch()
+    {
+        var runtime = new OwnershipCoordinatorRuntime();
+        var store = new TestInMemoryEventStore();
+        var coordinator = CreateCoordinator(runtime, eventStore: store);
+        var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
+
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            1,
+            new ProjectionOwnershipAcquireEvent
+            {
+                ScopeId = "scope-1",
+                SessionId = "session-1",
+                LeaseTtlMs = 60_000,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+
+        var hasActiveLease = await coordinator.HasActiveLeaseAsync("scope-1", "session-2", CancellationToken.None);
+
+        hasActiveLease.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task AcquireAsync_ShouldRecover_WhenCreateRaces()
     {
         var runtime = new OwnershipCoordinatorRuntime();
@@ -112,7 +189,9 @@ public class ActorProjectionOwnershipCoordinatorTests
         runtime.SetActor(actorId, new RuntimeActor(actorId, new PlainTestAgent("agent-1")));
         var coordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
-            new DefaultAgentTypeVerifier(new NullActorTypeProbe()));
+            runtime,
+            new DefaultAgentTypeVerifier(new NullActorTypeProbe()),
+            new TestInMemoryEventStore());
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -126,7 +205,7 @@ public class ActorProjectionOwnershipCoordinatorTests
         var actorId = ProjectionOwnershipCoordinatorGAgent.BuildActorId("scope-1");
         runtime.SetActor(actorId, new RuntimeActor(actorId, new ProjectionOwnershipCoordinatorGAgent()));
         var verifier = new DefaultAgentTypeVerifier(new NullActorTypeProbe());
-        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, verifier);
+        var coordinator = new ActorProjectionOwnershipCoordinator(runtime, runtime, verifier, new TestInMemoryEventStore());
 
         Func<Task> act = () => coordinator.AcquireAsync("scope-1", "session-1", CancellationToken.None);
 
@@ -135,11 +214,38 @@ public class ActorProjectionOwnershipCoordinatorTests
 
     private static ActorProjectionOwnershipCoordinator CreateCoordinator(
         IActorRuntime runtime,
-        ProjectionOwnershipCoordinatorOptions? options = null)
+        ProjectionOwnershipCoordinatorOptions? options = null,
+        IEventStore? eventStore = null)
     {
         var verifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime));
-        return new ActorProjectionOwnershipCoordinator(runtime, verifier, options);
+        return new ActorProjectionOwnershipCoordinator(
+            runtime,
+            (IActorDispatchPort)runtime,
+            verifier,
+            eventStore ?? new TestInMemoryEventStore(),
+            options);
     }
+
+    private static Task AppendStateEventAsync(
+        IEventStore store,
+        string agentId,
+        long version,
+        IMessage payload) =>
+        store.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = version,
+                    EventType = payload.Descriptor.FullName,
+                    EventData = Any.Pack(payload),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: version - 1,
+            CancellationToken.None);
 }
 
 public class ProjectionOwnershipCoordinatorGAgentTests
@@ -427,7 +533,12 @@ public class ProjectionSessionEventHubTests
         message.ScopeId.Should().Be("scope-1");
         message.SessionId.Should().Be("session-1");
         message.EventType.Should().Be("string");
-        message.Payload.Should().Be("hello");
+        message.LegacyPayload.Should().Be("hello");
+        message.Payload.Should().NotBeNull();
+        message.Payload.IsEmpty.Should().BeFalse();
+        var payload = Any.Parser.ParseFrom(message.Payload);
+        payload.Is(StringValue.Descriptor).Should().BeTrue();
+        payload.Unpack<StringValue>().Value.Should().Be("hello");
     }
 
     [Fact]
@@ -454,21 +565,21 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-2",
             EventType = "string",
-            Payload = "ignored-by-session",
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-session" }).ToByteString(),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "unknown",
-            Payload = "ignored-by-type",
+            Payload = Any.Pack(new StringValue { Value = "ignored-by-type" }).ToByteString(),
         });
         await stream.EmitAsync(new ProjectionSessionEventTransportMessage
         {
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = "accepted",
+            Payload = Any.Pack(new StringValue { Value = "accepted" }).ToByteString(),
         });
 
         received.Should().Equal("accepted");
@@ -479,9 +590,41 @@ public class ProjectionSessionEventHubTests
             ScopeId = "scope-1",
             SessionId = "session-1",
             EventType = "string",
-            Payload = "after-dispose",
+            Payload = Any.Pack(new StringValue { Value = "after-dispose" }).ToByteString(),
         });
         received.Should().Equal("accepted");
+    }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldFallbackToLegacyPayload_WhenBinaryPayloadMissing()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec);
+        var received = new List<string>();
+
+        await using var subscription = await hub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            evt =>
+            {
+                received.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        var stream = provider.GetStream("projection.session:scope-1:session-1");
+        await stream.EmitAsync(new ProjectionSessionEventTransportMessage
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            EventType = "string",
+            LegacyPayload = "accepted-legacy",
+            Payload = ByteString.Empty,
+        });
+
+        received.Should().Equal("accepted-legacy");
+        await subscription.DisposeAsync();
     }
 
     [Fact]
@@ -542,9 +685,39 @@ public class ProjectionSessionEventHubTests
             .Should()
             .ContainSingle();
     }
+
+    [Fact]
+    public async Task SubscribeAsync_ShouldLogWarning_WhenCodecCannotDecodeMessage()
+    {
+        var provider = new SessionHubStreamProvider();
+        var codec = new StringSessionEventCodec();
+        var logger = new RecordingLogger<ProjectionSessionEventHub<string>>();
+        var hub = new ProjectionSessionEventHub<string>(provider, codec, logger);
+
+        var subscription = await hub.SubscribeAsync(
+            "scope-1",
+            "session-1",
+            _ => ValueTask.CompletedTask,
+            CancellationToken.None);
+
+        var stream = provider.GetStream("projection.session:scope-1:session-1");
+        await stream.EmitAsync(new ProjectionSessionEventTransportMessage
+        {
+            ScopeId = "scope-1",
+            SessionId = "session-1",
+            EventType = "unknown",
+            Payload = Any.Pack(new StringValue { Value = "ignored" }).ToByteString(),
+        });
+
+        logger.Messages.Should().ContainSingle();
+        logger.Messages[0].Should().Contain("Dropping undecodable projection session event");
+        logger.Messages[0].Should().Contain("unknown");
+
+        await subscription.DisposeAsync();
+    }
 }
 
-internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
+internal sealed class OwnershipCoordinatorRuntime : IActorRuntime, IActorDispatchPort
 {
     private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RuntimeActor> _raceCreateActors = new(StringComparer.Ordinal);
@@ -579,7 +752,7 @@ internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
         return Task.FromResult<IActor>(actor);
     }
 
-    public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+    public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
         throw new NotSupportedException();
     }
@@ -590,6 +763,13 @@ internal sealed class OwnershipCoordinatorRuntime : IActorRuntime
     {
         _actors.TryGetValue(id, out var actor);
         return Task.FromResult(actor);
+    }
+
+    public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
+        await actor.HandleEventAsync(envelope, ct);
     }
 
     public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
@@ -640,23 +820,45 @@ internal sealed class PlainTestAgent : IAgent
 
     public Task<string> GetDescriptionAsync() => Task.FromResult("plain");
 
-    public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+    public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
 
     public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
-internal sealed class StringSessionEventCodec : IProjectionSessionEventCodec<string>
+internal sealed class StringSessionEventCodec
+    : IProjectionSessionEventCodec<string>,
+      ILegacyProjectionSessionEventCodec<string>
 {
     public string Channel => "projection.session";
 
     public string GetEventType(string evt) => "string";
 
-    public string Serialize(string evt) => evt;
+    public ByteString Serialize(string evt) => Any.Pack(new StringValue { Value = evt }).ToByteString();
 
-    public string? Deserialize(string eventType, string payload) =>
-        string.Equals(eventType, "string", StringComparison.Ordinal) ? payload : null;
+    public string SerializeLegacy(string evt) => evt;
+
+    public string? Deserialize(string eventType, ByteString payload)
+    {
+        if (!string.Equals(eventType, "string", StringComparison.Ordinal) ||
+            payload == null ||
+            payload.IsEmpty)
+        {
+            return null;
+        }
+
+        var envelope = Any.Parser.ParseFrom(payload);
+        if (!envelope.Is(StringValue.Descriptor))
+            return null;
+
+        return envelope.Unpack<StringValue>().Value;
+    }
+
+    public string? DeserializeLegacy(string eventType, string payload) =>
+        string.Equals(eventType, "string", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(payload)
+            ? payload
+            : null;
 }
 
 internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCodec<string>
@@ -665,9 +867,19 @@ internal sealed class EmptyChannelSessionEventCodec : IProjectionSessionEventCod
 
     public string GetEventType(string evt) => "string";
 
-    public string Serialize(string evt) => evt;
+    public ByteString Serialize(string evt) => Any.Pack(new StringValue { Value = evt }).ToByteString();
 
-    public string? Deserialize(string eventType, string payload) => payload;
+    public string? Deserialize(string eventType, ByteString payload)
+    {
+        _ = eventType;
+        if (payload == null || payload.IsEmpty)
+            return null;
+
+        var envelope = Any.Parser.ParseFrom(payload);
+        return envelope.Is(StringValue.Descriptor)
+            ? envelope.Unpack<StringValue>().Value
+            : null;
+    }
 }
 
 internal sealed class TestInMemoryEventStore : IEventStore
@@ -676,7 +888,7 @@ internal sealed class TestInMemoryEventStore : IEventStore
     private readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
     private readonly object _sync = new();
 
-    public Task<long> AppendAsync(
+    public Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,
@@ -703,7 +915,12 @@ internal sealed class TestInMemoryEventStore : IEventStore
             stream.AddRange(appended.Select(x => x.Clone()));
             var latest = appended.Count == 0 ? currentVersion : appended[^1].Version;
             _versions[agentId] = latest;
-            return Task.FromResult(latest);
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = agentId,
+                LatestVersion = latest,
+                CommittedEvents = { appended.Select(x => x.Clone()) },
+            });
         }
     }
 
@@ -872,5 +1089,29 @@ internal sealed class SessionHubSubscription : IAsyncDisposable
 
         _disposeAction();
         return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class RecordingLogger<T> : ILogger<T>
+{
+    public List<string> Messages { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        _ = eventId;
+        _ = exception;
+        if (logLevel < LogLevel.Warning)
+            return;
+
+        Messages.Add(formatter(state, exception));
     }
 }

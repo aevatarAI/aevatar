@@ -125,7 +125,10 @@ public class AIProjectionApplierTests
     {
         return new EventEnvelope
         {
-            PublisherId = publisherId,
+            Route = new EnvelopeRoute
+            {
+                PublisherActorId = publisherId,
+            },
             Payload = new Any { TypeUrl = typeUrl },
         };
     }

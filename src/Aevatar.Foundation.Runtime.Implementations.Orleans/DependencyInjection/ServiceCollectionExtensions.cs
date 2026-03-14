@@ -7,8 +7,12 @@ using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Orleans.Hosting;
 using Orleans.Streams;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
+using Aevatar.Foundation.Runtime.Streaming;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 
@@ -26,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
+        services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
         services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));
@@ -57,6 +62,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
+        services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
+        services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 
@@ -74,6 +81,7 @@ public static class ServiceCollectionExtensions
         ValidateOptions(options);
 
         ConfigureGrainStateStorage(builder, options);
+        ConfigureReminderService(builder, options);
         EnsurePersistentStreamPubSubStorage(builder, options);
 
         if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter))
@@ -148,6 +156,19 @@ public static class ServiceCollectionExtensions
         }
 
         builder.AddMemoryGrainStorage("PubSubStore");
+    }
+
+    private static void ConfigureReminderService(ISiloBuilder builder, AevatarOrleansRuntimeOptions options)
+    {
+        if (IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet))
+        {
+            builder.UseRedisReminderService(
+                redisOptions => redisOptions.ConfigurationOptions =
+                    StackExchange.Redis.ConfigurationOptions.Parse(options.GarnetConnectionString));
+            return;
+        }
+
+        builder.UseInMemoryReminderService();
     }
 
     private static bool IsStreamBackend(AevatarOrleansRuntimeOptions options, string expectedBackend)

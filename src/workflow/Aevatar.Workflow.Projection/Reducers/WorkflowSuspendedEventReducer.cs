@@ -13,23 +13,26 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
         DateTimeOffset now)
     {
         var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
-        step.CompletionMetadata["suspension_type"] = evt.SuspensionType;
-        step.CompletionMetadata["suspension_prompt"] = evt.Prompt;
-        step.CompletionMetadata["suspension_timeout"] = evt.TimeoutSeconds.ToString();
+        step.SuspensionType = evt.SuspensionType ?? string.Empty;
+        step.SuspensionPrompt = evt.Prompt ?? string.Empty;
+        step.SuspensionTimeoutSeconds = evt.TimeoutSeconds;
+        step.RequestedVariableName = evt.VariableName ?? string.Empty;
 
         var data = new Dictionary<string, string>
         {
-            ["suspension_type"] = evt.SuspensionType,
-            ["prompt"] = evt.Prompt,
+            ["suspension_type"] = evt.SuspensionType ?? string.Empty,
+            ["prompt"] = evt.Prompt ?? string.Empty,
             ["timeout_seconds"] = evt.TimeoutSeconds.ToString(),
         };
+        if (!string.IsNullOrWhiteSpace(evt.VariableName))
+            data["variable_name"] = evt.VariableName;
 
         WorkflowExecutionProjectionMutations.AddTimeline(
             report,
             now,
             "workflow.suspended",
             $"Workflow suspended at step {evt.StepId}: {evt.SuspensionType}",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             evt.StepId,
             evt.SuspensionType,
             envelope.Payload?.TypeUrl ?? "",

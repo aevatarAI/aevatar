@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Foundation.Core.Tests;
 
 // Module that tracks execution order
-public class OrderTrackingModule : IEventModule
+public class OrderTrackingModule : IEventModule<IEventHandlerContext>
 {
     private readonly List<string> _log;
     public string Name { get; }

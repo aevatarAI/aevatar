@@ -39,10 +39,10 @@ public class ConnectorCallIntegrationTests
         var step = result.StepCompletions.Single(x => x.StepId == "connector_step");
         step.Success.Should().BeTrue();
         step.Output.Should().Be("echo://done:hello connector");
-        step.Metadata["connector.name"].Should().Be("fake_connector");
-        step.Metadata["connector.type"].Should().Be("fake");
-        step.Metadata["connector.operation"].Should().Be("summarize");
-        step.Metadata["connector.fake.marker"].Should().Be("ok");
+        step.Annotations["connector.name"].Should().Be("fake_connector");
+        step.Annotations["connector.type"].Should().Be("fake");
+        step.Annotations["connector.operation"].Should().Be("summarize");
+        step.Annotations["connector.fake.marker"].Should().Be("ok");
 
         result.WorkflowCompleted.Should().NotBeNull();
         result.WorkflowCompleted!.Success.Should().BeTrue();
@@ -68,8 +68,8 @@ public class ConnectorCallIntegrationTests
         var step = result.StepCompletions.Single(x => x.StepId == "connector_step");
         step.Success.Should().BeTrue();
         step.Output.Should().Be("original-input");
-        step.Metadata["connector.skipped"].Should().Be("true");
-        step.Metadata["connector.skip_reason"].Should().Be("connector_not_found");
+        step.Annotations["connector.skipped"].Should().Be("true");
+        step.Annotations["connector.skip_reason"].Should().Be("connector_not_found");
 
         result.WorkflowCompleted.Should().NotBeNull();
         result.WorkflowCompleted!.Success.Should().BeTrue();
@@ -97,8 +97,8 @@ public class ConnectorCallIntegrationTests
         var step = result.StepCompletions.Single(x => x.StepId == "connector_step");
         step.Success.Should().BeTrue();
         step.Output.Should().Be("input-keep");
-        step.Metadata["connector.continued_on_error"].Should().Be("true");
-        step.Metadata["connector.error"].Should().Be("boom");
+        step.Annotations["connector.continued_on_error"].Should().Be("true");
+        step.Annotations["connector.error"].Should().Be("boom");
 
         result.WorkflowCompleted.Should().NotBeNull();
         result.WorkflowCompleted!.Success.Should().BeTrue();
@@ -186,8 +186,10 @@ public class ConnectorCallIntegrationTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-" + Guid.NewGuid().ToString("N")[..8]);
-        await actor.HandleEventAsync(new EventEnvelope
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-root-definition-" + Guid.NewGuid().ToString("N")[..8]);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-root-run-" + Guid.NewGuid().ToString("N")[..8]);
+
+        await definitionActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -196,12 +198,32 @@ public class ConnectorCallIntegrationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "connector_flow",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
-        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "connector_flow",
+                RunId = "connector-flow-run",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
         var workflowCompleted = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -222,18 +244,18 @@ public class ConnectorCallIntegrationTests
             return Task.CompletedTask;
         });
 
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "test-session" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var completed = await workflowCompleted.Task.WaitAsync(timeout.Token);
-        await runtime.DestroyAsync(actor.Id);
+        await runtime.DestroyAsync(runActor.Id);
+        await runtime.DestroyAsync(definitionActor.Id);
         return new WorkflowRunResult(completed, stepCompletions);
     }
 

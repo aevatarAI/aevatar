@@ -1,46 +1,66 @@
 # Aevatar.Workflow.Projection
 
-`Aevatar.Workflow.Projection` 是 Workflow 领域的 CQRS 读侧实现层。
+Workflow 领域的 CQRS 读侧实现。当前投影已经切到 run-isolated 语义：
 
-## 职责
+- Projection root 是 `WorkflowRunGAgent` actor id
+- `WorkflowExecutionReport.ProjectionScope = RunIsolated`
+- ReadModel / Graph / AGUI 都消费同一条 run actor envelope 流
 
-- Workflow ReadModel 与 Reducer/Projector
-- Projection 生命周期编排（启动、订阅、释放）
-- Query 映射（Snapshot/Timeline/Graph）
-- 与 Runtime Store Dispatcher 集成
+口径说明：
 
-## 统一投影链路
+- 这里消费的是 run actor 的 runtime message stream。
+- `EventEnvelope` 不是 Event Sourcing 的 `StateEvent`；Projection 当前面向的是运行时 envelope 主链路。
+
+## 组成
+
+- `WorkflowExecutionReadModelProjector`
+- `WorkflowExecutionAGUIEventProjector`
+- `WorkflowProjectionActivationService`
+- `WorkflowProjectionReleaseService`
+- `WorkflowProjectionQueryReader`
+- `WorkflowProjectionReadModelUpdater`
+
+## 主链路
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  E["EventEnvelope Stream"] --> C["ProjectionCoordinator"]
-  C --> P["WorkflowExecutionReadModelProjector"]
-  P --> D["IProjectionStoreDispatcher<WorkflowExecutionReport,string>"]
-  D --> DS["ProjectionDocumentStoreBinding -> IProjectionDocumentStore"]
-  D --> GS["ProjectionGraphStoreBinding -> IProjectionGraphStore"]
-  Q["WorkflowProjectionQueryReader"] --> DS
-  Q --> GS
+  ES["WorkflowRunGAgent Envelope Stream"]
+  COOR["ProjectionCoordinator"]
+  RM["WorkflowExecutionReadModelProjector"]
+  AG["WorkflowExecutionAGUIEventProjector"]
+  DOC["Document Store"]
+  GRAPH["Graph Store"]
+  HUB["ProjectionSessionEventHub<WorkflowRunEvent>"]
+
+  ES --> COOR
+  COOR --> RM
+  COOR --> AG
+  RM --> DOC
+  RM --> GRAPH
+  AG --> HUB
 ```
 
 ## 关键约束
 
-1. `WorkflowExecutionReadModelProjector` 通过 `IProjectionStoreDispatcher` 同步写入 Document + Graph。
-2. Query 来源是 Document Store（`Get/List`）；Graph 用于关系查询与子图遍历。
-3. Document 与 Graph Provider 为平行关系，不存在主从继承关系。
+- 不新增第二条 workflow read-side pipeline
+- 不使用中间层进程内事实映射管理投影生命周期
+- projection ownership 继续由 coordinator actor/分布式状态串行裁决
+- query 返回的是 run actor 快照，不再是 definition actor 共享会话
 
-## Provider 组合（Host 层）
+## ReadModel 语义
 
-- 由 `Aevatar.Workflow.Extensions.Hosting` 装配。
-- 同类 Provider 只允许一个：
-  - Document: `Elasticsearch` 或 `InMemory`
-  - Graph: `Neo4j` 或 `InMemory`
-- 一个 ReadModel 同时写入 Document + Graph（一对多）。
+`WorkflowExecutionReport` 当前表达的是单次 run：
 
-## 配置
+- `Id = RootActorId = run actor id`
+- `CommandId` 标识该次启动请求
+- `Topology` 记录 run actor 与角色/子 workflow actor 的关系
+- `Steps` / `Timeline` / `RoleReplies` 记录该 run 的执行过程
 
-- `Projection:Document:Providers:Elasticsearch:Enabled`
-- `Projection:Document:Providers:InMemory:Enabled`
-- `Projection:Graph:Providers:Neo4j:Enabled`
-- `Projection:Graph:Providers:InMemory:Enabled`
-- `Projection:Policies:DenyInMemoryGraphFactStore`
+## Query
+
+Query reader 对外仍保留 `/api/actors/*` 这组接口名，但语义已经切成：
+
+- actor = run actor
+- graph root = run actor
+- snapshot/timeline/subgraph 全部按 run-isolated 返回

@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
@@ -15,18 +16,21 @@ namespace Aevatar.Foundation.Core.Pipeline;
 internal sealed class EventHandlerContext : IEventHandlerContext
 {
     private readonly IEventPublisher _publisher;
+    private readonly IActorRuntimeCallbackScheduler _durableCallbackScheduler;
     public EventEnvelope InboundEnvelope { get; }
 
     /// <summary>Builds context with agent, publisher, services, and logger.</summary>
     public EventHandlerContext(
         IAgent agent,
         IEventPublisher publisher,
+        IActorRuntimeCallbackScheduler durableCallbackScheduler,
         IServiceProvider services,
         ILogger logger,
         EventEnvelope inboundEnvelope)
     {
         Agent = agent;
         _publisher = publisher;
+        _durableCallbackScheduler = durableCallbackScheduler ?? throw new ArgumentNullException(nameof(durableCallbackScheduler));
         Services = services;
         Logger = logger;
         InboundEnvelope = inboundEnvelope;
@@ -44,13 +48,64 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     /// <summary>Logger.</summary>
     public ILogger Logger { get; }
 
-    /// <summary>Publishes an event to stream routing.</summary>
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default) where TEvent : IMessage =>
-        _publisher.PublishAsync(evt, direction, ct, InboundEnvelope);
+    /// <summary>Publishes an event to topology publication routing.</summary>
+    public Task PublishAsync<TEvent>(TEvent evt, TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
+        _publisher.PublishAsync(evt, audience, ct, InboundEnvelope, options);
 
     /// <summary>Sends an event directly to the target actor.</summary>
     public Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
-        CancellationToken ct = default) where TEvent : IMessage =>
-        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope);
+        CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
+        _publisher.SendToAsync(targetActorId, evt, ct, InboundEnvelope, options);
+
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default)
+    {
+        return _durableCallbackScheduler.ScheduleTimeoutAsync(
+            new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = AgentId,
+                CallbackId = callbackId,
+                TriggerEnvelope = BuildSelfEnvelope(evt, options),
+                DueTime = dueTime,
+            },
+            ct);
+    }
+
+    public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default)
+    {
+        return _durableCallbackScheduler.ScheduleTimerAsync(
+            new RuntimeCallbackTimerRequest
+            {
+                ActorId = AgentId,
+                CallbackId = callbackId,
+                TriggerEnvelope = BuildSelfEnvelope(evt, options),
+                DueTime = dueTime,
+                Period = period,
+            },
+            ct);
+    }
+
+    public Task CancelDurableCallbackAsync(
+        RuntimeCallbackLease lease,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return _durableCallbackScheduler.CancelAsync(lease, ct);
+    }
+
+    private EventEnvelope BuildSelfEnvelope(
+        IMessage evt,
+        EventEnvelopePublishOptions? options) =>
+        SelfEventEnvelopeFactory.Create(AgentId, evt, InboundEnvelope, options);
 }

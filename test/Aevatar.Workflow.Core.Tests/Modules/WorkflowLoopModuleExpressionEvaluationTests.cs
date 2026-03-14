@@ -1,8 +1,9 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
@@ -44,10 +45,8 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             ],
         };
 
-        var module = new WorkflowLoopModule();
-        module.SetWorkflow(workflow);
-
         var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
         const string runId = "run-1";
 
         await module.HandleAsync(Wrap(new StartWorkflowEvent
@@ -85,8 +84,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = "test",
-        Direction = EventDirection.Self,
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
     };
 
     private sealed class CapturingContext : IEventHandlerContext
@@ -98,23 +96,89 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         };
 
         public string AgentId => "agent-1";
-        public IAgent Agent { get; } = new StubAgent();
+        public IAgent Agent { get; } = new StubWorkflowRunAgent("agent-1", "run-1");
         public IServiceProvider Services { get; } = new NullServiceProvider();
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
-        public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
+        public Task PublishAsync<TEvent>(TEvent evt, TopologyAudience direction = TopologyAudience.Children, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = period;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task CancelDurableCallbackAsync(
+            RuntimeCallbackLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
     }
 
-    private sealed class StubAgent : IAgent
+    private sealed class StubWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
     {
-        public string Id => "agent-1";
+        private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+
+        public string Id => id;
+
+        public string RunId { get; } = runId;
+
+        public Any? GetExecutionState(string scopeKey) =>
+            _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
+
+        public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
+            _executionStates.ToList();
+
+        public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default)
+        {
+            _ = ct;
+            _executionStates[scopeKey] = state;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default)
+        {
+            _ = ct;
+            _executionStates.Remove(scopeKey);
+            return Task.CompletedTask;
+        }
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -133,4 +197,3 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         public object? GetService(System.Type serviceType) => null;
     }
 }
-

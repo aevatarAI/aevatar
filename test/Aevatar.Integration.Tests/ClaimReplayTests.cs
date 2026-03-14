@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
@@ -26,6 +27,7 @@ public class ClaimReplayTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "claim-recompile-definition";
         const string runtimeActorId = "claim-recompile-runtime";
@@ -83,26 +85,27 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
 }
 """;
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "claim-recompile-script",
-                    ScriptRevision: scriptRevision,
-                    SourceText: persistedDefinitionSource,
-                    SourceHash: "hash-claim-recompile-v1"),
-                definitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "claim-recompile-script",
+                scriptRevision,
+                persistedDefinitionSource,
+                "hash-claim-recompile-v1"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
-        await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-recompile-1",
-                    InputPayload: Any.Pack(new Struct()),
-                    ScriptRevision: scriptRevision,
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-recompile-1",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-recompile-1",
+                    Any.Pack(new Struct()),
+                    scriptRevision,
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var firstRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
@@ -120,14 +123,18 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
             StringComparison.Ordinal);
         externalUpdatedSourceButNotPersisted.Should().Contain("definition-source-v2");
 
-        await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-recompile-2",
-                    InputPayload: Any.Pack(new Struct()),
-                    ScriptRevision: scriptRevision,
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-recompile-2",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-recompile-2",
+                    Any.Pack(new Struct()),
+                    scriptRevision,
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var secondRunState = ((ScriptRuntimeGAgent)runtimeActor.Agent).State;
@@ -148,19 +155,19 @@ public sealed class PersistedDefinitionSourceScript : IScriptPackageRuntime
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "claim-replay-definition";
         const string runtimeActorId = "claim-replay-runtime";
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "claim-script",
-                    ScriptRevision: "rev-claim-replay",
-                    SourceText: """
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "claim-script",
+                "rev-claim-replay",
+                """
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -209,22 +216,24 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
             });
 }
 """,
-                    SourceHash: "hash-claim-replay"),
-                definitionActorId),
+                "hash-claim-replay"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
-        await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-replay-case-b",
-                    InputPayload: Any.Pack(new Struct
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-replay-case-b",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-replay-case-b",
+                    Any.Pack(new Struct
                     {
                         Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
                     }),
-                    ScriptRevision: "rev-claim-replay",
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+                    "rev-claim-replay",
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var before = (ScriptRuntimeGAgent)runtimeActor.Agent;
@@ -249,19 +258,19 @@ public sealed class ClaimReplayScript : IScriptPackageRuntime
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var streams = provider.GetRequiredService<IStreamProvider>();
 
         const string definitionActorId = "claim-readmodel-definition";
         const string runtimeActorId = "claim-readmodel-runtime";
         var definitionActor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
         var runtimeActor = await runtime.CreateAsync<ScriptRuntimeGAgent>(runtimeActorId);
 
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await definitionActor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: "claim-script-rm",
-                    ScriptRevision: "rev-claim-rm",
-                    SourceText: """
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                "claim-script-rm",
+                "rev-claim-rm",
+                """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -304,22 +313,24 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             });
 }
 """,
-                    SourceHash: "hash-claim-rm"),
-                definitionActorId),
+                "hash-claim-rm"),
             CancellationToken.None);
 
-        var run = new RunScriptActorRequestAdapter();
-        await runtimeActor.HandleEventAsync(
-            run.Map(
-                new RunScriptActorRequest(
-                    RunId: "run-readmodel",
-                    InputPayload: Any.Pack(new Struct
+        await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            streams,
+            runtimeActorId,
+            "run-readmodel",
+            () => runtimeActor.HandleEventAsync(
+                ScriptingCommandEnvelopeTestKit.CreateRunScript(
+                    runtimeActorId,
+                    "run-readmodel",
+                    Any.Pack(new Struct
                     {
                         Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-B") },
                     }),
-                    ScriptRevision: "rev-claim-rm",
-                    DefinitionActorId: definitionActorId),
-                runtimeActorId),
+                    "rev-claim-rm",
+                    definitionActorId),
+                CancellationToken.None),
             CancellationToken.None);
 
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
@@ -330,9 +341,11 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
                 Id = x.EventId,
                 Timestamp = x.Timestamp,
                 Payload = x.EventData,
-                PublisherId = runtimeActorId,
-                Direction = EventDirection.Self,
-                CorrelationId = "run-readmodel",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication(runtimeActorId),
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "run-readmodel",
+                },
             })
             .ToArray();
 
@@ -343,10 +356,11 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
             ScriptId = "claim-script-rm",
         };
 
+        var projectionNow = DateTimeOffset.UtcNow;
         var dispatcher1 = new InMemoryScriptProjectionStoreDispatcher();
         var projector1 = new ScriptExecutionReadModelProjector(
             dispatcher1,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
+            new FixedProjectionClock(projectionNow),
             [new ScriptRunDomainEventCommittedReducer()]);
         await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
@@ -356,7 +370,7 @@ public sealed class ClaimReadModelScript : IScriptPackageRuntime
         var dispatcher2 = new InMemoryScriptProjectionStoreDispatcher();
         var projector2 = new ScriptExecutionReadModelProjector(
             dispatcher2,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
+            new FixedProjectionClock(projectionNow),
             [new ScriptRunDomainEventCommittedReducer()]);
         await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)

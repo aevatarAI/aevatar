@@ -1,7 +1,8 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Extensions.Maker.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -69,8 +70,8 @@ public class MakerRecursiveModuleCoverageTests
         final.RunId.Should().Be(runId);
         final.Success.Should().BeTrue();
         final.Output.Should().Be("LEAF_ANSWER");
-        final.Metadata["maker.recursive"].Should().Be("true");
-        final.Metadata["maker.stage"].Should().Be("leaf");
+        final.Annotations["maker.recursive"].Should().Be("true");
+        final.Annotations["maker.stage"].Should().Be("leaf");
     }
 
     [Fact]
@@ -174,9 +175,9 @@ public class MakerRecursiveModuleCoverageTests
         finalA.Output.Should().Be("ANSWER_A");
     }
 
-    private static RecordingEventHandlerContext CreateContext()
+    private static RecordingWorkflowExecutionContext CreateContext()
     {
-        return new RecordingEventHandlerContext(
+        return new RecordingWorkflowExecutionContext(
             new ServiceCollection().BuildServiceProvider(),
             new StubAgent("maker-recursive-test"),
             NullLogger.Instance);
@@ -189,36 +190,117 @@ public class MakerRecursiveModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 
-    private sealed class RecordingEventHandlerContext : IEventHandlerContext
+    private sealed class RecordingWorkflowExecutionContext : IWorkflowExecutionContext
     {
-        public RecordingEventHandlerContext(IServiceProvider services, IAgent agent, ILogger logger)
+        public RecordingWorkflowExecutionContext(IServiceProvider services, IAgent agent, ILogger logger)
         {
             Services = services;
-            Agent = agent;
+            AgentId = agent.Id;
             Logger = logger;
             InboundEnvelope = new EventEnvelope();
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
-        public string AgentId => Agent.Id;
-        public IAgent Agent { get; }
+        public string AgentId { get; }
+        public string RunId => AgentId;
         public IServiceProvider Services { get; }
         public ILogger Logger { get; }
 
+        public TState LoadState<TState>(string scopeKey)
+            where TState : class, IMessage<TState>, new()
+        {
+            _ = scopeKey;
+            return new TState();
+        }
+
+        public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
+            where TState : class, IMessage<TState>, new()
+        {
+            _ = scopeKeyPrefix;
+            return [];
+        }
+
+        public Task SaveStateAsync<TState>(string scopeKey, TState state, CancellationToken ct = default)
+            where TState : class, IMessage<TState>
+        {
+            _ = scopeKey;
+            _ = state;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task ClearStateAsync(string scopeKey, CancellationToken ct = default)
+        {
+            _ = scopeKey;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = options;
+            return PublishAsync(evt, TopologyAudience.Self, ct);
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default)
+        {
+            _ = callbackId;
+            _ = dueTime;
+            _ = period;
+            _ = evt;
+            _ = options;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
+        }
+
+        public Task CancelDurableCallbackAsync(
+            RuntimeCallbackLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            throw new NotSupportedException("This test context does not support scheduling.");
         }
     }
 

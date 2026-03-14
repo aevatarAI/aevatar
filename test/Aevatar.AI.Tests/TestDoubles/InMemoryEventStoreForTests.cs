@@ -7,7 +7,7 @@ internal sealed class InMemoryEventStoreForTests : IEventStore
 {
     private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
 
-    public Task<long> AppendAsync(
+    public Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,
@@ -24,8 +24,15 @@ internal sealed class InMemoryEventStoreForTests : IEventStore
         if (currentVersion != expectedVersion)
             throw new InvalidOperationException($"Optimistic concurrency conflict: expected {expectedVersion}, actual {currentVersion}");
 
-        stream.AddRange(events.Select(x => x.Clone()));
-        return Task.FromResult(stream.Count == 0 ? 0 : stream[^1].Version);
+        var appended = events.Select(x => x.Clone()).ToList();
+        stream.AddRange(appended);
+        var latest = stream.Count == 0 ? 0 : stream[^1].Version;
+        return Task.FromResult(new EventStoreCommitResult
+        {
+            AgentId = agentId,
+            LatestVersion = latest,
+            CommittedEvents = { appended.Select(x => x.Clone()) },
+        });
     }
 
     public Task<IReadOnlyList<StateEvent>> GetEventsAsync(

@@ -16,9 +16,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Human approval module. Handles step_type == "human_approval".
 /// Suspends workflow and waits for a WorkflowResumedEvent.
 /// </summary>
-public sealed class HumanApprovalModule : IEventModule
+public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<(string RunId, string StepId), StepRequestEvent> _pending = [];
+    private const string ModuleStateKey = "human_approval";
 
     public string Name => "human_approval";
     public int Priority => 5;
@@ -31,7 +31,7 @@ public sealed class HumanApprovalModule : IEventModule
                 payload.Is(WorkflowResumedEvent.Descriptor));
     }
 
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -52,7 +52,15 @@ public sealed class HumanApprovalModule : IEventModule
                 request.Parameters,
                 defaultSeconds: 3600);
 
-            _pending[(runId, request.StepId)] = request;
+            var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
+            state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
+            {
+                StepId = request.StepId,
+                RunId = runId,
+                Input = request.Input ?? string.Empty,
+                OnReject = request.Parameters.GetValueOrDefault("on_reject", "fail"),
+            };
+            await SaveStateAsync(state, ctx, ct);
 
             ctx.Logger.LogInformation(
                 "HumanApproval: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
@@ -65,7 +73,7 @@ public sealed class HumanApprovalModule : IEventModule
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -73,11 +81,11 @@ public sealed class HumanApprovalModule : IEventModule
         if (payload.Is(WorkflowResumedEvent.Descriptor))
         {
             var resumed = payload.Unpack<WorkflowResumedEvent>();
-            if (!TryResolvePending(resumed, out var pendingKey, out var pending))
+            var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
+            if (!TryResolvePending(state, resumed, out var pendingKey, out var pending))
                 return;
-            _pending.Remove(pendingKey);
 
-            var onReject = pending.Parameters.GetValueOrDefault("on_reject", "fail");
+            var onReject = pending.OnReject;
 
             if (resumed.Approved)
             {
@@ -91,9 +99,11 @@ public sealed class HumanApprovalModule : IEventModule
                     RunId = pending.RunId,
                     Success = true,
                     Output = string.IsNullOrEmpty(resumed.UserInput) ? pending.Input : resumed.UserInput,
+                    BranchKey = "true",
                 };
-                approved.Metadata["branch"] = "true";
-                await ctx.PublishAsync(approved, EventDirection.Self, ct);
+                await ctx.PublishAsync(approved, TopologyAudience.Self, ct);
+                state.Pending.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
             }
             else
             {
@@ -114,42 +124,51 @@ public sealed class HumanApprovalModule : IEventModule
                     Success = onReject != "fail",
                     Output = rejectionOutput,
                     Error = onReject == "fail" ? "Human approval rejected" : "",
+                    BranchKey = "false",
                 };
-                rejected.Metadata["branch"] = "false";
-                await ctx.PublishAsync(rejected, EventDirection.Self, ct);
+                await ctx.PublishAsync(rejected, TopologyAudience.Self, ct);
+                state.Pending.Remove(pendingKey);
+                await SaveStateAsync(state, ctx, ct);
             }
         }
     }
 
     private bool TryResolvePending(
+        HumanApprovalModuleState state,
         WorkflowResumedEvent resumed,
-        out (string RunId, string StepId) pendingKey,
-        out StepRequestEvent pending)
+        out string pendingKey,
+        out PendingApprovalState pending)
     {
-        if (!string.IsNullOrWhiteSpace(resumed.RunId))
-        {
-            pendingKey = (WorkflowRunIdNormalizer.Normalize(resumed.RunId), resumed.StepId);
-            return _pending.TryGetValue(pendingKey, out pending!);
-        }
+        pendingKey = string.Empty;
+        pending = new PendingApprovalState();
+        if (string.IsNullOrWhiteSpace(resumed.RunId))
+            return false;
 
-        // Backward compatibility: old clients may omit run_id.
-        var matchCount = 0;
-        pendingKey = default;
-        pending = default!;
-        foreach (var entry in _pending)
-        {
-            if (!entry.Key.StepId.Equals(resumed.StepId, StringComparison.Ordinal))
-                continue;
+        pendingKey = BuildPendingKey(
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            resumed.StepId ?? string.Empty);
+        if (!state.Pending.TryGetValue(pendingKey, out var resolvedPending))
+            return false;
 
-            matchCount++;
-            if (matchCount > 1)
-                return false;
+        pending = resolvedPending;
+        return string.Equals(
+            pending.RunId,
+            WorkflowRunIdNormalizer.Normalize(resumed.RunId),
+            StringComparison.Ordinal);
+    }
 
-            pendingKey = entry.Key;
-            pending = entry.Value;
-        }
+    private static string BuildPendingKey(string runId, string stepId) =>
+        $"{WorkflowRunIdNormalizer.Normalize(runId)}::{stepId}";
 
-        return matchCount == 1;
+    private static Task SaveStateAsync(
+        HumanApprovalModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Pending.Count == 0)
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
 }

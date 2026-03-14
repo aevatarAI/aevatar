@@ -42,7 +42,7 @@ public class MakerRunReportWriterTests
                     Success = true,
                     WorkerId = "worker-1",
                     OutputPreview = "preview",
-                    CompletionMetadata = new Dictionary<string, string>
+                    CompletionAnnotations = new Dictionary<string, string>
                     {
                         ["maker_vote.red_flagged"] = "1",
                     },

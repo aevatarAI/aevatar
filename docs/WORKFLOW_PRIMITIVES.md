@@ -206,6 +206,7 @@ steps:
 - 作用：等待外部信号（可设置超时）。
 - 常用参数：`signal_name`、`prompt`、`timeout_ms`。
 - 运行时事件：`WaitingForSignalEvent` 会显式携带 `run_id + step_id + signal_name`，用于无状态 UI 回传。
+- 回传约束：`SignalReceivedEvent` 必须携带 `run_id`；若同一 run 下同名 signal 有多个 waiter，还必须携带 `step_id` 以消歧。
 
 ```yaml
 steps:
@@ -387,7 +388,7 @@ steps:
 
 ### `dynamic_workflow`
 
-- 作用：从上一步输出中提取 YAML 代码块，动态重配当前 workflow actor 后继续执行。
+- 作用：从上一步输出中提取 YAML 代码块，动态重配当前 workflow run actor 后继续执行。
 - 常用参数：`original_input`（可选，作为动态流程启动输入）。
 - 说明：仅在非 `closed_world_mode` 下可用；若输入中无 YAML 代码块则返回失败 `StepCompletedEvent`。
 
@@ -503,6 +504,11 @@ steps:
 
 - `human_input` / `human_approval`：`WorkflowSuspendedEvent` -> `WorkflowResumedEvent`
 - `wait_signal`：`WaitingForSignalEvent(run_id, step_id, signal_name, ...)` -> `SignalReceivedEvent`
+
+约束补充：
+
+- `WorkflowResumedEvent` 与 `SignalReceivedEvent` 都必须显式携带 `run_id`；运行时不再对缺失 `run_id` 做 best-effort 猜测。
+- `SignalReceivedEvent.step_id` 在“同一 run + 同一 signal_name”存在多个 waiter 时必填，用于精确命中 waiter。
 
 建议的请求契约（以 Web API 为例）：
 

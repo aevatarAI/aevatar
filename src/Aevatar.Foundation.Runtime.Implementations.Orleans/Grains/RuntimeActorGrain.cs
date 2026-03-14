@@ -1,3 +1,6 @@
+using System.Globalization;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Runtime;
@@ -5,8 +8,11 @@ using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Callbacks;
+using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
@@ -14,9 +20,6 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 [ImplicitStreamSubscription(OrleansRuntimeConstants.ActorEventStreamNamespace)]
 public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 {
-    private const string RetryAttemptMetadataKey = "aevatar.retry.attempt";
-    private const string RetryOriginEventIdMetadataKey = "aevatar.retry.origin_event_id";
-
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private IEventDeduplicator? _deduplicator;
@@ -102,7 +105,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     public Task<bool> IsInitializedAsync() =>
         Task.FromResult(_agent != null || !string.IsNullOrWhiteSpace(_state.State.AgentTypeName));
 
-    public async Task HandleEnvelopeAsync(byte[] envelopeBytes)
+    public Task HandleEnvelopeAsync(byte[] envelopeBytes) =>
+        HandleEnvelopeAsyncCore(envelopeBytes, propagateFailure: false);
+
+    private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
         if (_agent == null)
         {
@@ -123,42 +129,54 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
-        if (await TryHandleCompatibilityRetryAsync(envelope))
+        propagateFailure = propagateFailure || ShouldPropagateDirectDispatchFailure(envelope);
+        if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
 
-        if (!string.IsNullOrWhiteSpace(envelope.Id) && _deduplicator != null)
+        if (_deduplicator != null &&
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
         {
-            var dedupKey = BuildDedupKey(envelope);
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
 
-        if (PublisherChainMetadata.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
+        if (VisitedActorChain.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
 
         var selfActorId = this.GetPrimaryKeyString();
-        switch (envelope.Direction)
-        {
-            case EventDirection.Self:
-            case EventDirection.Up:
-                break;
-            case EventDirection.Down:
-            case EventDirection.Both:
-                if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                {
-                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                        return;
-                    break;
-                }
+        var route = envelope.Route;
+        if (route.IsObserverPublication())
+            return;
 
-                if (envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.SourceActorId, out var sourceActorId) &&
-                    string.Equals(sourceActorId, selfActorId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-                break;
-            default:
+        if (route.IsDirect())
+        {
+            if (!string.Equals(route.GetTargetActorId(), selfActorId, StringComparison.Ordinal))
                 return;
+        }
+        else
+        {
+            switch (route.GetTopologyAudience())
+            {
+                case TopologyAudience.Self:
+                case TopologyAudience.Parent:
+                    break;
+                case TopologyAudience.Children:
+                case TopologyAudience.ParentAndChildren:
+                    if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
+                    {
+                        if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                            return;
+                        break;
+                    }
+
+                    if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                    break;
+                default:
+                    return;
+            }
         }
 
         using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
@@ -179,6 +197,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
+
+            if (propagateFailure)
+                throw;
         }
     }
 
@@ -320,12 +341,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var agentLogger = loggerFactory?.CreateLogger(agent.GetType().Name) ?? NullLogger.Instance;
 
         gAgent.SetId(actorId);
-        gAgent.EventPublisher = new Actors.OrleansGrainEventPublisher(
+        var publisher = new Actors.OrleansGrainEventPublisher(
             actorId,
             () => _state.State.ParentId,
-            envelope => HandleEnvelopeAsync(envelope.ToByteArray()),
             _propagationPolicy,
             _streams);
+        gAgent.EventPublisher = publisher;
+        gAgent.CommittedStateEventPublisher = publisher;
         gAgent.Logger = agentLogger;
         gAgent.Services = ServiceProvider;
         if (gAgent is IEventSourcingFactoryBinding statefulBinding)
@@ -348,6 +370,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private Task OnSelfStreamEventAsync(EventEnvelope envelope, StreamSequenceToken? token = null)
     {
         _ = token;
+        if (envelope.Route.IsObserverPublication())
+            return Task.CompletedTask;
+
         return HandleEnvelopeAsync(envelope.ToByteArray());
     }
 
@@ -369,9 +394,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return false;
 
         if (_runtimeEnvelopeRetryPolicy.RetryDelayMs > 0)
-            await Task.Delay(_runtimeEnvelopeRetryPolicy.RetryDelayMs);
+        {
+            var scheduler = ServiceProvider.GetRequiredService<IActorRuntimeCallbackScheduler>();
+            await scheduler.ScheduleTimeoutAsync(
+                new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = this.GetPrimaryKeyString(),
+                    CallbackId = BuildRuntimeRetryCallbackId(envelope, nextAttempt),
+                    DueTime = TimeSpan.FromMilliseconds(_runtimeEnvelopeRetryPolicy.RetryDelayMs),
+                    TriggerEnvelope = retryEnvelope,
+                    DeliveryMode = RuntimeCallbackDeliveryMode.EnvelopeRedelivery,
+                });
+        }
+        else
+        {
+            await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
+        }
 
-        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(retryEnvelope);
         _logger.LogWarning(
             ex,
             "Runtime envelope retry scheduled for actor {ActorId}, attempt {Attempt}/{MaxAttempts}.",
@@ -381,28 +420,20 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         return true;
     }
 
-    private string BuildDedupKey(EventEnvelope envelope)
+    private string BuildRuntimeRetryCallbackId(EventEnvelope envelope, int nextAttempt)
     {
-        var originId = envelope.Metadata.TryGetValue(RetryOriginEventIdMetadataKey, out var metadataOriginId) &&
-                       !string.IsNullOrWhiteSpace(metadataOriginId)
-            ? metadataOriginId
-            : envelope.Id;
+        var originId = RuntimeEnvelopeDeduplication.ResolveOriginId(envelope) ?? envelope.Id;
 
         if (string.IsNullOrWhiteSpace(originId))
-            originId = envelope.Id ?? string.Empty;
+            originId = envelope.Id ?? Guid.NewGuid().ToString("N");
 
-        var attempt = 0;
-        if (envelope.Metadata.TryGetValue(RetryAttemptMetadataKey, out var metadataAttempt) &&
-            int.TryParse(metadataAttempt, out var parsedAttempt) &&
-            parsedAttempt > 0)
-        {
-            attempt = parsedAttempt;
-        }
-
-        return $"{this.GetPrimaryKeyString()}:{originId}:{attempt}";
+        return RuntimeCallbackKeyComposer.BuildCallbackId(
+            "runtime-envelope-retry",
+            originId,
+            nextAttempt.ToString(CultureInfo.InvariantCulture));
     }
 
-    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope)
+    private async Task<bool> TryHandleCompatibilityRetryAsync(EventEnvelope envelope, bool propagateFailure)
     {
         if (!_compatibilityFailureInjectionPolicy.ShouldInject(envelope.Payload?.TypeUrl))
             return false;
@@ -423,7 +454,13 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             this.GetPrimaryKeyString(),
             envelope.Id,
             envelope.Payload?.TypeUrl ?? "(none)");
+
+        if (propagateFailure)
+            throw compatibilityException;
+
         return true;
     }
 
+    private static bool ShouldPropagateDirectDispatchFailure(EventEnvelope envelope) =>
+        envelope.Runtime?.Dispatch?.PropagateFailure == true;
 }
