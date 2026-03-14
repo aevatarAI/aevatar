@@ -1,0 +1,137 @@
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Infrastructure.Activation;
+using Aevatar.GAgentService.Infrastructure.Adapters;
+using Aevatar.GAgentService.Infrastructure.Artifacts;
+using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Projection.DependencyInjection;
+using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+namespace Aevatar.GAgentService.Hosting.DependencyInjection;
+
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddGAgentServiceCapability(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddScriptCapability(configuration);
+        services.AddWorkflowCapability(configuration);
+        services.AddGAgentServiceProjection();
+        services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
+        services.TryAddSingleton<IServiceRevisionArtifactStore, InMemoryServiceRevisionArtifactStore>();
+        services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
+        services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
+        services.TryAddSingleton<ServiceInvocationResolutionService>();
+        services.TryAddSingleton<IServiceCommandPort, ServiceCommandApplicationService>();
+        services.TryAddSingleton<IServiceQueryPort, ServiceQueryApplicationService>();
+        services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        return services;
+    }
+
+    public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        if (services.Any(x => x.ServiceType == typeof(GAgentServiceProjectionProviderRegistrationsMarker)))
+            return services;
+
+        services.AddSingleton<GAgentServiceProjectionProviderRegistrationsMarker>();
+        var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
+        var inMemoryEnabled = ResolveOptionalBool(
+            configuration["Projection:Document:Providers:InMemory:Enabled"],
+            fallbackValue: !elasticsearchEnabled);
+        var providerCount = (elasticsearchEnabled ? 1 : 0) + (inMemoryEnabled ? 1 : 0);
+        if (providerCount != 1)
+        {
+            throw new InvalidOperationException(
+                "Exactly one document projection provider must be enabled for GAgentService.");
+        }
+
+        if (elasticsearchEnabled)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ServiceCatalogReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceCatalogReadModel>(),
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ServiceRevisionCatalogReadModel>(),
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+        }
+
+        return services;
+    }
+
+    private static bool ResolveElasticsearchDocumentEnabled(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
+        var explicitEnabled = section["Enabled"];
+        var hasEndpoints = section
+            .GetSection("Endpoints")
+            .GetChildren()
+            .Select(x => x.Value?.Trim() ?? string.Empty)
+            .Any(x => x.Length > 0);
+        return ResolveOptionalBool(explicitEnabled, hasEndpoints);
+    }
+
+    private static ElasticsearchProjectionDocumentStoreOptions BuildElasticsearchDocumentOptions(
+        IConfiguration configuration)
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions();
+        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
+        if (options.Endpoints.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Projection:Document:Providers:Elasticsearch is enabled but Endpoints is empty.");
+        }
+
+        return options;
+    }
+
+    private static bool ResolveOptionalBool(string? rawValue, bool fallbackValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return fallbackValue;
+        if (!bool.TryParse(rawValue, out var parsed))
+            throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
+
+        return parsed;
+    }
+
+    private sealed class GAgentServiceProjectionProviderRegistrationsMarker;
+}

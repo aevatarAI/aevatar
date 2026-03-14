@@ -1,0 +1,13 @@
+namespace Aevatar.GAgentService.Abstractions.Services;
+
+public static class ServiceActorIds
+{
+    public static string Definition(ServiceIdentity identity) => Build("definition", identity);
+
+    public static string RevisionCatalog(ServiceIdentity identity) => Build("revisions", identity);
+
+    public static string Deployment(ServiceIdentity identity) => Build("deployment", identity);
+
+    private static string Build(string prefix, ServiceIdentity identity) =>
+        $"gagent-service:{prefix}:{ServiceKeys.Build(identity)}";
+}
