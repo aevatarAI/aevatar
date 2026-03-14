@@ -112,11 +112,11 @@ public sealed class ScriptReadModelQueryReaderTests
 
         var act = () => reader.ExecuteDeclaredQueryAsync(
             "runtime-2",
-            Any.Pack(new Struct()),
+            Any.Pack(new SimpleTextSignal { Value = "wrong-query-type" }),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*rejected query payload type*google.protobuf.Struct*");
+            .WithMessage("*rejected query payload type*aevatar.scripting.tests.SimpleTextSignal*");
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class ScriptReadModelQueryReaderTests
         }, CancellationToken.None);
         var source = CreateDeclaredQueryBehaviorSource(
             resultTypeName: nameof(ScriptProfileQueryResponded),
-            resultExpression: "new Struct()");
+            resultExpression: "new SimpleTextEvent()");
         var reader = new ScriptReadModelQueryReader(
             store,
             new StaticDefinitionSnapshotPort(
@@ -150,7 +150,7 @@ public sealed class ScriptReadModelQueryReaderTests
 
         var act = () => reader.ExecuteDeclaredQueryAsync(
             "runtime-3",
-            Any.Pack(new Empty()),
+            Any.Pack(new ScriptProfileQueryRequested { RequestId = "request-3" }),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -235,7 +235,6 @@ public sealed class ScriptReadModelQueryReaderTests
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Core.Tests.Messages;
-        using Google.Protobuf.WellKnownTypes;
 
         public sealed class DeclaredQueryBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
         {

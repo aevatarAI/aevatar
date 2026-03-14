@@ -42,19 +42,6 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
         ValidateInboundContract(request, artifact.Descriptor, inbound.PayloadTypeUrl);
         var correlationId = request.Envelope.Propagation?.CorrelationId ?? ResolveRunId(request.Envelope);
         var currentState = _codec.Unpack(request.CurrentStateRoot, artifact.Descriptor.StateClrType);
-        var context = new ScriptDispatchContext(
-            ActorId: request.ActorId,
-            ScriptId: request.ScriptId,
-            Revision: request.Revision,
-            RunId: ResolveRunId(request.Envelope),
-            MessageType: inbound.MessageType,
-            MessageId: inbound.MessageId,
-            CommandId: request.Envelope.Id ?? string.Empty,
-            CorrelationId: correlationId,
-            CausationId: inbound.CausationId,
-            DefinitionActorId: request.DefinitionActorId,
-            CurrentState: currentState,
-            RuntimeCapabilities: request.Capabilities);
 
         var behavior = artifact.CreateBehavior();
         try
@@ -62,6 +49,33 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             var inboundMessageClrType = ResolveInboundMessageClrType(request.Envelope, artifact.Descriptor, inbound.PayloadTypeUrl);
             var typedInbound = _codec.Unpack(inbound.Payload, inboundMessageClrType)
                 ?? throw new InvalidOperationException($"Failed to unpack inbound payload type `{inbound.PayloadTypeUrl}`.");
+            var inboundSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(
+                inbound.PayloadTypeUrl,
+                ResolveInboundExpectedKind(request.Envelope, artifact.Descriptor, inbound.PayloadTypeUrl));
+            var resolvedCommandId = ResolveSemanticIdentity(typedInbound, inboundSemantics.CommandIdField)
+                ?? inbound.CommandId
+                ?? request.Envelope.Id
+                ?? string.Empty;
+            var resolvedCorrelationId = ResolveSemanticIdentity(typedInbound, inboundSemantics.CorrelationIdField)
+                ?? inbound.CorrelationId
+                ?? correlationId;
+            var resolvedCausationId = ResolveSemanticIdentity(typedInbound, inboundSemantics.CausationIdField)
+                ?? inbound.CausationId
+                ?? request.Envelope.Id
+                ?? string.Empty;
+            var context = new ScriptDispatchContext(
+                ActorId: request.ActorId,
+                ScriptId: request.ScriptId,
+                Revision: request.Revision,
+                RunId: ResolveRunId(request.Envelope),
+                MessageType: inbound.MessageType,
+                MessageId: inbound.MessageId,
+                CommandId: resolvedCommandId,
+                CorrelationId: resolvedCorrelationId,
+                CausationId: resolvedCausationId,
+                DefinitionActorId: request.DefinitionActorId,
+                CurrentState: currentState,
+                RuntimeCapabilities: request.Capabilities);
             var domainEvents = NormalizeDomainEvents(await behavior.DispatchAsync(typedInbound, context, ct));
             if (domainEvents.Count == 0)
                 return [];
@@ -73,6 +87,8 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             for (var i = 0; i < domainEvents.Count; i++)
             {
                 var domainEvent = domainEvents[i];
+                var eventTypeUrl = ScriptMessageTypes.GetTypeUrl(domainEvent);
+                var eventSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(eventTypeUrl, ScriptMessageKind.DomainEvent);
                 var sequence = i + 1L;
                 var domainEventPayload = _codec.Pack(domainEvent)
                     ?? throw new InvalidOperationException("Script domain event cannot be null.");
@@ -83,10 +99,10 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     ScriptId = request.ScriptId,
                     Revision = request.Revision,
                     RunId = ResolveRunId(request.Envelope),
-                    CommandId = request.Envelope.Id ?? string.Empty,
-                    CorrelationId = correlationId,
+                    CommandId = ResolveSemanticIdentity(domainEvent, eventSemantics.CommandIdField) ?? context.CommandId,
+                    CorrelationId = ResolveSemanticIdentity(domainEvent, eventSemantics.CorrelationIdField) ?? context.CorrelationId,
                     EventSequence = sequence,
-                    EventType = domainEventPayload.TypeUrl ?? string.Empty,
+                    EventType = eventTypeUrl,
                     DomainEventPayload = domainEventPayload,
                     StateTypeUrl = artifact.Contract.StateTypeUrl ?? request.StateTypeUrl ?? string.Empty,
                     ReadModelTypeUrl = artifact.Contract.ReadModelTypeUrl ?? request.ReadModelTypeUrl ?? string.Empty,
@@ -165,19 +181,43 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 
         if (request.Envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true)
         {
-            if (descriptor.Commands.ContainsKey(actualPayloadTypeUrl))
-                return;
+            if (descriptor.Commands.ContainsKey(actualPayloadTypeUrl) || descriptor.Signals.ContainsKey(actualPayloadTypeUrl))
+            {
+                if (descriptor.RuntimeSemantics.TryGetMessageSemantics(actualPayloadTypeUrl, ScriptMessageKind.Command, out var commandSemantics) &&
+                    commandSemantics.Kind == ScriptMessageKind.Command)
+                {
+                    return;
+                }
+
+                if (descriptor.RuntimeSemantics.TryGetMessageSemantics(actualPayloadTypeUrl, ScriptMessageKind.InternalSignal, out var signalSemantics) &&
+                    signalSemantics.Kind == ScriptMessageKind.InternalSignal)
+                {
+                    return;
+                }
+            }
 
             throw new InvalidOperationException(
                 $"Script behavior actor `{request.ActorId}` rejected command payload type `{actualPayloadTypeUrl}`. " +
-                $"Declared command types: {string.Join(", ", descriptor.Commands.Keys)}.");
+                $"Declared command types: {string.Join(", ", descriptor.Commands.Keys)}. " +
+                $"Declared internal signal types: {string.Join(", ", descriptor.Signals.Keys)}.");
         }
 
         if (descriptor.Commands.Count == 0 && descriptor.Signals.Count == 0)
             return;
 
-        if (descriptor.Commands.ContainsKey(actualPayloadTypeUrl) || descriptor.Signals.ContainsKey(actualPayloadTypeUrl))
-            return;
+        if (descriptor.Commands.ContainsKey(actualPayloadTypeUrl))
+        {
+            var semantics = descriptor.RuntimeSemantics.GetRequiredMessageSemantics(actualPayloadTypeUrl, ScriptMessageKind.Command);
+            if (semantics.Kind == ScriptMessageKind.Command)
+                return;
+        }
+
+        if (descriptor.Signals.ContainsKey(actualPayloadTypeUrl))
+        {
+            var semantics = descriptor.RuntimeSemantics.GetRequiredMessageSemantics(actualPayloadTypeUrl, ScriptMessageKind.InternalSignal);
+            if (semantics.Kind == ScriptMessageKind.InternalSignal)
+                return;
+        }
 
         throw new InvalidOperationException(
             $"Script behavior actor `{request.ActorId}` rejected inbound payload type `{actualPayloadTypeUrl}`. " +
@@ -201,12 +241,41 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
         {
             var typeUrl = ScriptMessageTypes.GetTypeUrl(domainEvent);
             if (descriptor.DomainEvents.ContainsKey(typeUrl))
-                continue;
+            {
+                var semantics = descriptor.RuntimeSemantics.GetRequiredMessageSemantics(typeUrl, ScriptMessageKind.DomainEvent);
+                if (semantics.Kind == ScriptMessageKind.DomainEvent)
+                    continue;
+            }
 
             throw new InvalidOperationException(
                 $"Script behavior actor `{request.ActorId}` emitted undeclared domain event type `{typeUrl}`. " +
                 $"Declared domain event types: {string.Join(", ", descriptor.DomainEvents.Keys)}.");
         }
+    }
+
+    private static string? ResolveSemanticIdentity(
+        IMessage message,
+        string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+            return null;
+
+        var value = ScriptMessageFieldAccessor.ReadScalarString(message, fieldName);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static ScriptMessageKind ResolveInboundExpectedKind(
+        EventEnvelope envelope,
+        ScriptBehaviorDescriptor descriptor,
+        string payloadTypeUrl)
+    {
+        if (descriptor.Commands.ContainsKey(payloadTypeUrl))
+            return ScriptMessageKind.Command;
+        if (descriptor.Signals.ContainsKey(payloadTypeUrl))
+            return ScriptMessageKind.InternalSignal;
+        return envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true
+            ? ScriptMessageKind.Command
+            : ScriptMessageKind.Unspecified;
     }
 
     private static System.Type ResolveInboundMessageClrType(

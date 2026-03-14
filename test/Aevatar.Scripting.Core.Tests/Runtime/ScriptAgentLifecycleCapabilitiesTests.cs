@@ -5,6 +5,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -77,13 +78,13 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                 return Task.CompletedTask;
             });
 
-        await capabilities.PublishAsync(new StringValue { Value = "published" }, TopologyAudience.Parent, CancellationToken.None);
-        await capabilities.SendToAsync("target-1", new StringValue { Value = "sent" }, CancellationToken.None);
-        await capabilities.PublishToSelfAsync(new StringValue { Value = "self" }, CancellationToken.None);
+        await capabilities.PublishAsync(new SimpleTextSignal { Value = "published" }, TopologyAudience.Parent, CancellationToken.None);
+        await capabilities.SendToAsync("target-1", new SimpleTextSignal { Value = "sent" }, CancellationToken.None);
+        await capabilities.PublishToSelfAsync(new SimpleTextSignal { Value = "self" }, CancellationToken.None);
         var lease = await capabilities.ScheduleSelfDurableSignalAsync(
             "cb-1",
             TimeSpan.FromSeconds(5),
-            new Empty(),
+            new SimpleTextSignal { Value = "scheduled" },
             CancellationToken.None);
         await capabilities.CancelDurableCallbackAsync(lease, CancellationToken.None);
 
@@ -115,7 +116,10 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
 
         var aiResponse = await capabilities.AskAIAsync("hello", CancellationToken.None);
         var snapshot = await capabilities.GetReadModelSnapshotAsync("runtime-1", CancellationToken.None);
-        var queryResult = await capabilities.ExecuteReadModelQueryAsync("runtime-1", Any.Pack(new Empty()), CancellationToken.None);
+        var queryResult = await capabilities.ExecuteReadModelQueryAsync(
+            "runtime-1",
+            Any.Pack(new SimpleTextQueryRequested { RequestId = "request-1" }),
+            CancellationToken.None);
         var decision = await capabilities.ProposeScriptEvolutionAsync(
             new ScriptEvolutionProposal(
                 ProposalId: "proposal-1",
@@ -141,7 +145,11 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         await capabilities.RunScriptInstanceAsync(
             "runtime-1",
             "run-1",
-            Any.Pack(new Empty()),
+            Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             "rev-2",
             "definition-1",
             "integration.requested",
@@ -166,7 +174,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("runtime-1");
         queryResult.Should().NotBeNull();
-        queryResult!.Unpack<StringValue>().Value.Should().Be("query-result");
+        queryResult!.Unpack<SimpleTextQueryResponded>().Current.Value.Should().Be("query-result");
         decision.Accepted.Should().BeTrue();
         definitionActorId.Should().Be("definition-1");
         runtimeActorId.Should().Be("runtime-1");
@@ -293,8 +301,12 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
                 ScriptId: "script-1",
                 DefinitionActorId: "definition-1",
                 Revision: "rev-1",
-                ReadModelTypeUrl: Any.Pack(new StringValue()).TypeUrl,
-                ReadModelPayload: Any.Pack(new StringValue { Value = "snapshot" }),
+                ReadModelTypeUrl: Any.Pack(new SimpleTextReadModel()).TypeUrl,
+                ReadModelPayload: Any.Pack(new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "snapshot",
+                }),
                 StateVersion: 1,
                 LastEventId: "evt-1",
                 UpdatedAt: DateTimeOffset.UtcNow));
@@ -311,8 +323,17 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         {
             ct.ThrowIfCancellationRequested();
             LastActorId = actorId;
-            queryPayload.Is(Empty.Descriptor).Should().BeTrue();
-            return Task.FromResult<Any?>(Any.Pack(new StringValue { Value = "query-result" }));
+            queryPayload.Is(SimpleTextQueryRequested.Descriptor).Should().BeTrue();
+            var requested = queryPayload.Unpack<SimpleTextQueryRequested>();
+            return Task.FromResult<Any?>(Any.Pack(new SimpleTextQueryResponded
+            {
+                RequestId = requested.RequestId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "query-result",
+                },
+            }));
         }
     }
 

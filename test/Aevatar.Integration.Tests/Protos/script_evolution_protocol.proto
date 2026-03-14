@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package aevatar.evolution;
+
+option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
+
+import "scripting_schema_options.proto";
+import "scripting_runtime_options.proto";
+
+message ScriptOnlyEvolutionState {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "script_only_evolution"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string temp_runtime_id = 1;
+  string new_runtime_id = 2;
+  string evolved_runtime_id = 3;
+  string new_definition_actor_id = 4;
+  string decision_status = 5;
+}
+
+message ScriptOnlyEvolutionRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string new_script_source = 1;
+  string worker_v2_source = 2;
+}
+
+message ScriptOnlyEvolutionCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.ScriptOnlyEvolutionState"
+  };
+  ScriptOnlyEvolutionState current = 1;
+}
+
+message MultiScriptEvolutionState {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "multi_script_evolution"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string lifecycle_actor_id = 1;
+  string temp_a_runtime_id = 2;
+  string temp_b_runtime_id = 3;
+  string generated_runtime_id_1 = 4;
+  string generated_runtime_id_2 = 5;
+  string evolved_a_runtime_id = 6;
+  string evolved_b_runtime_id = 7;
+  string decision_a2 = 8;
+  string decision_a3 = 9;
+  string decision_b2 = 10;
+  string decision_b3 = 11;
+}
+
+message MultiScriptEvolutionRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string worker_a_v2_source = 1;
+  string worker_a_v3_source = 2;
+  string worker_b_v2_source = 3;
+  string worker_b_v3_source = 4;
+  string generated_source_1 = 5;
+  string generated_source_2 = 6;
+  string runtime_agent_type = 7;
+}
+
+message MultiScriptEvolutionCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.MultiScriptEvolutionState"
+  };
+  MultiScriptEvolutionState current = 1;
+}
+
+message SelfEvolutionV1State {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "self_evolution_v1"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string decision_v2 = 1;
+  string v2_runtime_id = 2;
+  string generated_runtime_id = 3;
+}
+
+message SelfEvolutionV1Requested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string next_v2_source = 1;
+  string next_v3_source = 2;
+  string generated_source = 3;
+}
+
+message SelfEvolutionV1Completed {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.SelfEvolutionV1State"
+  };
+  SelfEvolutionV1State current = 1;
+}
+
+message SelfEvolutionV2State {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "self_evolution_v2"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string decision_v3 = 1;
+  string v3_runtime_id = 2;
+}
+
+message SelfEvolutionV2Requested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string next_v3_source = 1;
+}
+
+message SelfEvolutionV2Completed {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.SelfEvolutionV2State"
+  };
+  SelfEvolutionV2State current = 1;
+}
+
+message CatalogControlState {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "catalog_control"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string manual_definition_actor_id_v1 = 1;
+  string manual_definition_actor_id_v2 = 2;
+  string manual_runtime_id = 3;
+}
+
+message CatalogControlRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string manual_v1_source = 1;
+  string manual_v2_source = 2;
+}
+
+message CatalogControlCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.CatalogControlState"
+  };
+  CatalogControlState current = 1;
+}
+
+message InteractionUpsertState {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "interaction_upsert"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string ai_response_length = 1;
+  string published_definition_actor_id = 2;
+  string sendto_definition_actor_id = 3;
+  string upsert_definition_actor_id = 4;
+}
+
+message InteractionUpsertRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string definition_agent_type = 1;
+  string publish_source = 2;
+  string sendto_source = 3;
+  string invoke_source = 4;
+}
+
+message InteractionUpsertCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.InteractionUpsertState"
+  };
+  InteractionUpsertState current = 1;
+}
+
+message InteractionPublishSignal {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_INTERNAL_SIGNAL
+  };
+  string value = 1;
+}
+
+message OrleansClusterState {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "orleans_cluster_evolution"
+    schema_version: "1"
+    store_kinds: "document"
+  };
+  string temp_a_runtime_id = 1;
+  string temp_b_runtime_id = 2;
+  string generated_runtime_id = 3;
+  string generated_definition_actor_id = 4;
+}
+
+message OrleansClusterRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+  };
+  string worker_a_definition_actor_id = 1;
+  string worker_b_definition_actor_id = 2;
+  string new_script_id = 3;
+  string new_script_source = 4;
+  string temp_a_runtime_id = 5;
+  string temp_b_runtime_id = 6;
+  string generated_runtime_id = 7;
+  string generated_definition_actor_id = 8;
+}
+
+message OrleansClusterCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    read_model_scope: "aevatar.evolution.OrleansClusterState"
+  };
+  OrleansClusterState current = 1;
+}

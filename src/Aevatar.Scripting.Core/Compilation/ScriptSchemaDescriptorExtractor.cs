@@ -33,6 +33,8 @@ internal static class ScriptSchemaDescriptorExtractor
             return false;
         }
 
+        ScriptReadModelDescriptorPolicy.ValidateNoUnsupportedWrapperFields(readModelDescriptor);
+
         var readModelOptions = readModelDescriptor.GetOptions();
         if (readModelOptions == null ||
             !readModelOptions.HasExtension(ScriptingSchemaOptionsExtensions.ScriptingReadModel))
@@ -101,7 +103,16 @@ internal static class ScriptSchemaDescriptorExtractor
 
             if (field.FieldType == FieldType.Message &&
                 field.MessageType != null &&
-                !IsLeafMessage(field.MessageType))
+                ScriptReadModelDescriptorPolicy.IsUnsupportedWrapperLeaf(field.MessageType))
+            {
+                throw new InvalidOperationException(
+                    $"Read model field `{descriptor.FullName}.{field.Name}` uses unsupported protobuf wrapper type `{field.MessageType.FullName}`. " +
+                    "Use scalar or proto3 optional fields inside scripting read model contracts.");
+            }
+
+            if (field.FieldType == FieldType.Message &&
+                field.MessageType != null &&
+                !ScriptReadModelDescriptorPolicy.IsSupportedLeafMessage(field.MessageType))
             {
                 if (field.IsRepeated)
                 {
@@ -157,38 +168,11 @@ internal static class ScriptSchemaDescriptorExtractor
 
     private static string ResolveLeafMessageStorageType(MessageDescriptor descriptor)
     {
-        return descriptor.FullName switch
-        {
-            "google.protobuf.Timestamp" => "timestamp",
-            "google.protobuf.StringValue" => "keyword",
-            "google.protobuf.BoolValue" => "boolean",
-            "google.protobuf.Int32Value" => "int32",
-            "google.protobuf.Int64Value" => "int64",
-            "google.protobuf.UInt32Value" => "int64",
-            "google.protobuf.UInt64Value" => "int64",
-            "google.protobuf.DoubleValue" => "double",
-            "google.protobuf.FloatValue" => "double",
-            "google.protobuf.BytesValue" => "keyword",
-            _ => "keyword",
-        };
-    }
-
-    private static bool IsLeafMessage(MessageDescriptor descriptor)
-    {
-        return descriptor.FullName switch
-        {
-            "google.protobuf.Timestamp" => true,
-            "google.protobuf.StringValue" => true,
-            "google.protobuf.BoolValue" => true,
-            "google.protobuf.Int32Value" => true,
-            "google.protobuf.Int64Value" => true,
-            "google.protobuf.UInt32Value" => true,
-            "google.protobuf.UInt64Value" => true,
-            "google.protobuf.DoubleValue" => true,
-            "google.protobuf.FloatValue" => true,
-            "google.protobuf.BytesValue" => true,
-            _ => false,
-        };
+        return ScriptReadModelDescriptorPolicy.IsSupportedLeafMessage(descriptor)
+            ? "timestamp"
+            : throw new InvalidOperationException(
+                $"Read model leaf message `{descriptor.FullName}` is unsupported. " +
+                "Only google.protobuf.Timestamp is supported as a non-scalar scripting read model field.");
     }
 
     private static IReadOnlyList<string> ResolveStoreCapabilities(ScriptingReadModelOptions options)
@@ -235,9 +219,9 @@ internal sealed record ScriptSchemaDescriptorExtraction(
     public bool RequiresGraphStore => SchemaSpec.Relations.Count > 0;
 
     public static ScriptSchemaDescriptorExtraction Empty { get; } = new(
-        StringValue.Descriptor,
+        Google.Protobuf.WellKnownTypes.Empty.Descriptor,
         new ScriptReadModelSchemaSpec(),
-        Any.Pack(new Empty()),
+        Any.Pack(new Google.Protobuf.WellKnownTypes.Empty()),
         string.Empty,
         string.Empty,
         Array.Empty<string>());

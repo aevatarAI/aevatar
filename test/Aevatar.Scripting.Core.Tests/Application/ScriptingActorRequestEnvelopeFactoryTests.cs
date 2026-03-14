@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -45,9 +46,10 @@ public class ScriptingActorRequestEnvelopeFactoryTests
             new RunScriptRequestedEvent
             {
                 RunId = "run-1",
-                InputPayload = Any.Pack(new Struct
+                InputPayload = Any.Pack(new SimpleTextCommand
                 {
-                    Fields = { ["caseId"] = Google.Protobuf.WellKnownTypes.Value.ForString("Case-1") },
+                    CommandId = "command-1",
+                    Value = "Case-1",
                 }),
                 ScriptRevision = "rev-1",
                 DefinitionActorId = "definition-1",
@@ -65,6 +67,6 @@ public class ScriptingActorRequestEnvelopeFactoryTests
         payload.ScriptRevision.Should().Be("rev-1");
         payload.DefinitionActorId.Should().Be("definition-1");
         payload.InputPayload.Should().NotBeNull();
-        payload.InputPayload.Is(Struct.Descriptor).Should().BeTrue();
+        payload.InputPayload.Is(SimpleTextCommand.Descriptor).Should().BeTrue();
     }
 }

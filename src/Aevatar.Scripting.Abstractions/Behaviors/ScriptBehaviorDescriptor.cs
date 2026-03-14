@@ -14,12 +14,19 @@ public sealed record ScriptBehaviorDescriptor(
     IReadOnlyDictionary<string, ScriptSignalRegistration> Signals,
     IReadOnlyDictionary<string, ScriptDomainEventRegistration> DomainEvents,
     IReadOnlyDictionary<string, ScriptQueryRegistration> Queries,
-    ByteString? ProtocolDescriptorSet)
+    ByteString? ProtocolDescriptorSet,
+    ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
 {
     public ScriptBehaviorDescriptor WithProtocolDescriptorSet(ByteString descriptorSet) =>
         this with
         {
             ProtocolDescriptorSet = descriptorSet ?? ByteString.Empty,
+        };
+
+    public ScriptBehaviorDescriptor WithRuntimeSemantics(ScriptRuntimeSemanticsSpec runtimeSemantics) =>
+        this with
+        {
+            RuntimeSemantics = runtimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
         };
 
     public ScriptGAgentContract ToContract()
@@ -39,6 +46,7 @@ public sealed record ScriptBehaviorDescriptor(
             InternalSignalTypeUrls: Signals.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
             StateDescriptorFullName: StateDescriptor.FullName ?? string.Empty,
             ReadModelDescriptorFullName: ReadModelDescriptor.FullName ?? string.Empty,
-            ProtocolDescriptorSet: ProtocolDescriptorSet ?? ByteString.Empty);
+            ProtocolDescriptorSet: ProtocolDescriptorSet ?? ByteString.Empty,
+            RuntimeSemantics: RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec());
     }
 }

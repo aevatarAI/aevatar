@@ -85,6 +85,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ProtocolDescriptorSet = evt.ProtocolDescriptorSet,
             StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
             ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
+            RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
         }, ct);
     }
 
@@ -110,6 +111,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
             StateDescriptorFullName = State.StateDescriptorFullName ?? string.Empty,
             ReadModelDescriptorFullName = State.ReadModelDescriptorFullName ?? string.Empty,
+            RuntimeSemantics = State.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
             FailureReason = found ? string.Empty : "Script behavior actor is not bound.",
         }, ct, sourceEnvelope: null);
     }
@@ -194,6 +196,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
+        next.RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(evt.Revision ?? string.Empty, ":binding");
         return next;

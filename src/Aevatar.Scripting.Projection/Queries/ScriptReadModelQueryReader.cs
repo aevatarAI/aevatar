@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Artifacts;
@@ -74,6 +75,24 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
                 $"Declared query types: {string.Join(", ", artifact.Descriptor.Queries.Keys)}.");
         }
 
+        var querySemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredQuerySemantics(queryRegistration.TypeUrl);
+        var queryMessageSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(
+            queryRegistration.TypeUrl,
+            ScriptMessageKind.QueryRequest);
+        if (queryMessageSemantics.Kind != ScriptMessageKind.QueryRequest)
+        {
+            throw new InvalidOperationException(
+                $"Script read model `{actorId}` rejected query payload type `{queryPayload.TypeUrl}` because runtime kind is `{queryMessageSemantics.Kind}`.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(querySemantics.ReadModelScope) &&
+            !string.Equals(querySemantics.ReadModelScope, artifact.Descriptor.ReadModelDescriptor.FullName, StringComparison.Ordinal) &&
+            !string.Equals(querySemantics.ReadModelScope, snapshot.ReadModelTypeUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script read model `{actorId}` rejected query `{queryRegistration.TypeUrl}` because read model scope `{querySemantics.ReadModelScope}` does not match `{artifact.Descriptor.ReadModelDescriptor.FullName}`.");
+        }
+
         var behavior = artifact.CreateBehavior();
         try
         {
@@ -93,7 +112,12 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
                     snapshot.LastEventId,
                     snapshot.UpdatedAt),
                 ct);
-            ValidateQueryResultContract(actorId, queryRegistration, result);
+            ValidateQueryResultContract(
+                actorId,
+                queryRegistration,
+                querySemantics,
+                artifact.Descriptor.RuntimeSemantics ?? new ScriptRuntimeSemanticsSpec(),
+                result);
             return _codec.Pack(result)?.Clone();
         }
         finally
@@ -122,21 +146,40 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
     private static void ValidateQueryResultContract(
         string actorId,
         ScriptQueryRegistration queryRegistration,
+        global::Aevatar.Scripting.Abstractions.ScriptQuerySemanticsSpec querySemantics,
+        global::Aevatar.Scripting.Abstractions.ScriptRuntimeSemanticsSpec runtimeSemantics,
         IMessage? result)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(queryRegistration);
+        ArgumentNullException.ThrowIfNull(querySemantics);
+        ArgumentNullException.ThrowIfNull(runtimeSemantics);
 
         if (result == null)
             return;
 
         var expectedTypeUrl = ScriptMessageTypes.GetTypeUrl(queryRegistration.ResultClrType);
         var actualTypeUrl = ScriptMessageTypes.GetTypeUrl(result);
-        if (string.Equals(expectedTypeUrl, actualTypeUrl, StringComparison.Ordinal))
-            return;
+        if (!string.Equals(expectedTypeUrl, actualTypeUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script read model `{actorId}` returned `{actualTypeUrl}` for query `{queryRegistration.TypeUrl}`, " +
+                $"but the declared result type is `{expectedTypeUrl}`.");
+        }
 
-        throw new InvalidOperationException(
-            $"Script read model `{actorId}` returned `{actualTypeUrl}` for query `{queryRegistration.TypeUrl}`, " +
-            $"but the declared result type is `{expectedTypeUrl}`.");
+        if (!string.Equals(querySemantics.ResultTypeUrl, actualTypeUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script read model `{actorId}` returned `{actualTypeUrl}` for query `{queryRegistration.TypeUrl}`, " +
+                $"but runtime semantics declare `{querySemantics.ResultTypeUrl}`.");
+        }
+
+        var resultSemantics = runtimeSemantics.GetRequiredMessageSemantics(actualTypeUrl, ScriptMessageKind.QueryResult);
+        if (resultSemantics.Kind != ScriptMessageKind.QueryResult)
+        {
+            throw new InvalidOperationException(
+                $"Script read model `{actorId}` returned `{actualTypeUrl}` for query `{queryRegistration.TypeUrl}`, " +
+                $"but runtime kind is `{resultSemantics.Kind}`.");
+        }
     }
 }

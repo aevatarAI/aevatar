@@ -41,7 +41,18 @@ public class ScriptDefinitionGAgentReplayContractTests
         agent.State.CommandTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl);
         agent.State.DomainEventTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
         agent.State.QueryTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
-        agent.State.InternalSignalTypeUrls.Should().ContainSingle("type.googleapis.com/google.protobuf.Empty");
+        agent.State.InternalSignalTypeUrls.Should().ContainSingle(Any.Pack(new SimpleTextSignal()).TypeUrl);
+        agent.State.RuntimeSemantics.Should().NotBeNull();
+        agent.State.RuntimeSemantics.Messages.Should().Contain(x =>
+            x.TypeUrl == Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl &&
+            x.Kind == ScriptMessageKind.Command);
+        agent.State.RuntimeSemantics.Messages.Should().Contain(x =>
+            x.TypeUrl == Any.Pack(new ScriptProfileUpdated()).TypeUrl &&
+            x.Kind == ScriptMessageKind.DomainEvent &&
+            x.Projectable);
+        agent.State.RuntimeSemantics.Queries.Should().Contain(x =>
+            x.QueryTypeUrl == Any.Pack(new ScriptProfileQueryRequested()).TypeUrl &&
+            x.ResultTypeUrl == Any.Pack(new ScriptProfileQueryResponded()).TypeUrl);
         agent.State.ReadModelSchemaVersion.Should().Be("3");
         agent.State.ReadModelSchema.Should().NotBeNull();
         agent.State.ReadModelSchemaHash.Should().NotBeNullOrWhiteSpace();
@@ -345,6 +356,7 @@ public class ScriptDefinitionGAgentReplayContractTests
             option csharp_namespace = "Dynamic.InvalidSchema";
 
             import "scripting_schema_options.proto";
+            import "scripting_runtime_options.proto";
 
             message InvalidProfileState {
               int32 command_count = 1;
@@ -371,20 +383,43 @@ public class ScriptDefinitionGAgentReplayContractTests
             }
 
             message InvalidProfileCommand {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                command_id_field: "command_id"
+                aggregate_id_field: "actor_id"
+              };
               string command_id = 1;
               string actor_id = 2;
             }
 
             message InvalidProfileUpdated {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+                projectable: true
+                replay_safe: true
+                command_id_field: "command_id"
+                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
+              };
               string command_id = 1;
               InvalidProfileReadModel current = 2;
             }
 
             message InvalidProfileQueryRequested {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
+              };
+              option (aevatar.scripting.runtime.scripting_query) = {
+                result_full_name: "dynamic.invalidschema.InvalidProfileQueryResponded"
+              };
               string request_id = 1;
             }
 
             message InvalidProfileQueryResponded {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
+              };
               string request_id = 1;
               InvalidProfileReadModel current = 2;
             }
@@ -418,7 +453,6 @@ public class ScriptDefinitionGAgentReplayContractTests
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Core.Tests.Messages;
-        using Google.Protobuf.WellKnownTypes;
 
         public sealed class DefinitionReplayBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
         {
@@ -426,7 +460,7 @@ public class ScriptDefinitionGAgentReplayContractTests
             {
                 builder
                     .OnCommand<ScriptProfileUpdateCommand>(HandleAsync)
-                    .OnSignal<Empty>(HandleSignalAsync)
+                    .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                     .OnEvent<ScriptProfileUpdated>(
                         apply: static (state, evt, _) => new ScriptProfileState
                         {
@@ -473,7 +507,7 @@ public class ScriptDefinitionGAgentReplayContractTests
             }
 
             private static Task HandleSignalAsync(
-                Empty signal,
+                SimpleTextSignal signal,
                 ScriptCommandContext<ScriptProfileState> context,
                 CancellationToken ct)
             {

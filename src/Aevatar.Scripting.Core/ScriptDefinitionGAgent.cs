@@ -99,6 +99,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
                 StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
                 ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
+                RuntimeSemantics = compilation.Artifact.Contract.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
             });
 
             if (!hasReadModelSchema)
@@ -204,6 +205,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             ProtocolDescriptorSet = State.ProtocolDescriptorSet,
             StateDescriptorFullName = State.StateDescriptorFullName ?? string.Empty,
             ReadModelDescriptorFullName = State.ReadModelDescriptorFullName ?? string.Empty,
+            RuntimeSemantics = State.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
             FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
                 ? "Script source text is empty."
                 : string.Empty,
@@ -261,6 +263,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
+        next.RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
         next.ReadModelSchemaStatus = next.ReadModelSchema == null || next.ReadModelSchema.Is(Empty.Descriptor)
             ? string.Empty
             : SchemaStatusPending;

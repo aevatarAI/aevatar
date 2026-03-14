@@ -64,6 +64,21 @@ public sealed class ScriptReadModelMaterializationCompilerTests
             .WithMessage("*references path `search.lookup`*");
     }
 
+    [Fact]
+    public void Compile_ShouldRejectWrapperField_WhenReadModelUsesProtobufWrapperLeaf()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            "script-profile",
+            "rev-wrapper",
+            CreateWrapperReadModelPackage()));
+
+        compilation.IsSuccess.Should().BeFalse();
+        compilation.Diagnostics.Should().ContainSingle(x =>
+            x.Contains("must not reference protobuf wrapper leaf types", StringComparison.Ordinal) &&
+            x.Contains("wrapper_profile.proto", StringComparison.Ordinal));
+    }
+
     private static ScriptSourcePackage CreateInvalidIndexedPathPackage()
     {
         const string behaviorSource =
@@ -133,6 +148,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
             option csharp_namespace = "Aevatar.Scripting.Core.Tests.InvalidMessages";
 
             import "scripting_schema_options.proto";
+            import "scripting_runtime_options.proto";
 
             message InvalidProfileState {
               string last_command_id = 1;
@@ -158,19 +174,41 @@ public sealed class ScriptReadModelMaterializationCompilerTests
             }
 
             message InvalidProfileCommand {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                command_id_field: "command_id"
+              };
               string command_id = 1;
             }
 
             message InvalidProfileUpdated {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+                projectable: true
+                replay_safe: true
+                command_id_field: "command_id"
+                read_model_scope: "aevatar.scripting.tests.invalid.InvalidProfileReadModel"
+              };
               string command_id = 1;
               InvalidProfileReadModel current = 2;
             }
 
             message InvalidProfileQueryRequested {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+                read_model_scope: "aevatar.scripting.tests.invalid.InvalidProfileReadModel"
+              };
+              option (aevatar.scripting.runtime.scripting_query) = {
+                result_full_name: "aevatar.scripting.tests.invalid.InvalidProfileQueryResponded"
+              };
               string request_id = 1;
             }
 
             message InvalidProfileQueryResponded {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+                read_model_scope: "aevatar.scripting.tests.invalid.InvalidProfileReadModel"
+              };
               string request_id = 1;
               InvalidProfileReadModel current = 2;
             }
@@ -181,5 +219,135 @@ public sealed class ScriptReadModelMaterializationCompilerTests
             [new ScriptSourceFile("Behavior.cs", behaviorSource)],
             [new ScriptSourceFile("invalid_profile.proto", protoSource)],
             "InvalidIndexedPathBehavior");
+    }
+
+    private static ScriptSourcePackage CreateWrapperReadModelPackage()
+    {
+        const string behaviorSource =
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Aevatar.Scripting.Abstractions.Behaviors;
+            using Aevatar.Scripting.Core.Tests.WrapperMessages;
+            using Google.Protobuf.WellKnownTypes;
+
+            public sealed class WrapperReadModelBehavior : ScriptBehavior<WrapperProfileState, WrapperProfileReadModel>
+            {
+                protected override void Configure(IScriptBehaviorBuilder<WrapperProfileState, WrapperProfileReadModel> builder)
+                {
+                    builder
+                        .OnCommand<WrapperProfileCommand>(HandleAsync)
+                        .OnEvent<WrapperProfileUpdated>(
+                            apply: static (_, evt, _) => evt.Current == null
+                                ? new WrapperProfileState()
+                                : new WrapperProfileState { LastCommandId = evt.CommandId ?? string.Empty },
+                            reduce: static (_, evt, _) => evt.Current)
+                        .OnQuery<WrapperProfileQueryRequested, WrapperProfileQueryResponded>(HandleQueryAsync);
+                }
+
+                private static Task HandleAsync(
+                    WrapperProfileCommand command,
+                    ScriptCommandContext<WrapperProfileState> context,
+                    CancellationToken ct)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var current = new WrapperProfileReadModel
+                    {
+                        ExternalKey = new StringValue { Value = command.CommandId ?? string.Empty },
+                    };
+                    context.Emit(new WrapperProfileUpdated
+                    {
+                        CommandId = command.CommandId ?? string.Empty,
+                        Current = current,
+                    });
+                    return Task.CompletedTask;
+                }
+
+                private static Task<WrapperProfileQueryResponded?> HandleQueryAsync(
+                    WrapperProfileQueryRequested query,
+                    ScriptQueryContext<WrapperProfileReadModel> snapshot,
+                    CancellationToken ct)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    return Task.FromResult<WrapperProfileQueryResponded?>(new WrapperProfileQueryResponded
+                    {
+                        RequestId = query.RequestId ?? string.Empty,
+                        Current = snapshot.CurrentReadModel ?? new WrapperProfileReadModel(),
+                    });
+                }
+            }
+            """;
+
+        const string protoSource =
+            """
+            syntax = "proto3";
+
+            package aevatar.scripting.tests.wrapper;
+
+            option csharp_namespace = "Aevatar.Scripting.Core.Tests.WrapperMessages";
+
+            import "google/protobuf/wrappers.proto";
+            import "scripting_schema_options.proto";
+            import "scripting_runtime_options.proto";
+
+            message WrapperProfileState {
+              string last_command_id = 1;
+            }
+
+            message WrapperProfileReadModel {
+              option (aevatar.scripting.schema.scripting_read_model) = {
+                schema_id: "wrapper_profile"
+                schema_version: "1"
+                store_kinds: "document"
+              };
+              google.protobuf.StringValue external_key = 1;
+            }
+
+            message WrapperProfileCommand {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_COMMAND
+                command_id_field: "command_id"
+              };
+              string command_id = 1;
+            }
+
+            message WrapperProfileUpdated {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+                projectable: true
+                replay_safe: true
+                command_id_field: "command_id"
+                read_model_scope: "aevatar.scripting.tests.wrapper.WrapperProfileReadModel"
+              };
+              string command_id = 1;
+              WrapperProfileReadModel current = 2;
+            }
+
+            message WrapperProfileQueryRequested {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+                read_model_scope: "aevatar.scripting.tests.wrapper.WrapperProfileReadModel"
+              };
+              option (aevatar.scripting.runtime.scripting_query) = {
+                result_full_name: "aevatar.scripting.tests.wrapper.WrapperProfileQueryResponded"
+              };
+              string request_id = 1;
+            }
+
+            message WrapperProfileQueryResponded {
+              option (aevatar.scripting.runtime.scripting_runtime) = {
+                kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+                read_model_scope: "aevatar.scripting.tests.wrapper.WrapperProfileReadModel"
+              };
+              string request_id = 1;
+              WrapperProfileReadModel current = 2;
+            }
+            """;
+
+        return new ScriptSourcePackage(
+            ScriptSourcePackage.CurrentFormat,
+            [new ScriptSourceFile("Behavior.cs", behaviorSource)],
+            [new ScriptSourceFile("wrapper_profile.proto", protoSource)],
+            "WrapperReadModelBehavior");
     }
 }

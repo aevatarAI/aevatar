@@ -83,24 +83,24 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class ScriptOnlyOrchestrator : ScriptBehavior<Struct, Struct>
+        public sealed class ScriptOnlyOrchestrator : ScriptBehavior<ScriptOnlyEvolutionState, ScriptOnlyEvolutionState>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<ScriptOnlyEvolutionState, ScriptOnlyEvolutionState> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<ScriptOnlyEvolutionRequested>(HandleAsync)
+                    .OnEvent<ScriptOnlyEvolutionCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                ScriptOnlyEvolutionRequested input,
+                ScriptCommandContext<ScriptOnlyEvolutionState> context,
                 CancellationToken ct)
             {
-                var newScriptSource = input.Fields["newScriptSource"].StringValue;
-                var workerV2Source = input.Fields["workerV2Source"].StringValue;
+                var newScriptSource = input.NewScriptSource ?? string.Empty;
+                var workerV2Source = input.WorkerV2Source ?? string.Empty;
 
                 var tempRuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
                     "worker-definition",
@@ -178,15 +178,15 @@ internal static class ScriptEvolutionIntegrationSources
                         ct);
                 }
 
-                context.Emit(new Struct
+                context.Emit(new ScriptOnlyEvolutionCompleted
                 {
-                    Fields =
+                    Current = new ScriptOnlyEvolutionState
                     {
-                        ["temp_runtime_id"] = Value.ForString(tempRuntimeId),
-                        ["new_runtime_id"] = Value.ForString(newRuntimeId),
-                        ["evolved_runtime_id"] = Value.ForString(evolvedRuntimeId),
-                        ["new_definition_actor_id"] = Value.ForString(newDefinitionActorId),
-                        ["decision_status"] = Value.ForString(decision.Status),
+                        TempRuntimeId = tempRuntimeId,
+                        NewRuntimeId = newRuntimeId,
+                        EvolvedRuntimeId = evolvedRuntimeId,
+                        NewDefinitionActorId = newDefinitionActorId,
+                        DecisionStatus = decision.Status,
                     },
                 });
             }
@@ -211,29 +211,29 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class MultiScriptEvolutionOrchestrator : ScriptBehavior<Struct, Struct>
+        public sealed class MultiScriptEvolutionOrchestrator : ScriptBehavior<MultiScriptEvolutionState, MultiScriptEvolutionState>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<MultiScriptEvolutionState, MultiScriptEvolutionState> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<MultiScriptEvolutionRequested>(HandleAsync)
+                    .OnEvent<MultiScriptEvolutionCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                MultiScriptEvolutionRequested input,
+                ScriptCommandContext<MultiScriptEvolutionState> context,
                 CancellationToken ct)
             {
-                var workerAV2Source = input.Fields["worker_a_v2_source"].StringValue;
-                var workerAV3Source = input.Fields["worker_a_v3_source"].StringValue;
-                var workerBV2Source = input.Fields["worker_b_v2_source"].StringValue;
-                var workerBV3Source = input.Fields["worker_b_v3_source"].StringValue;
-                var generatedSource1 = input.Fields["generated_source_1"].StringValue;
-                var generatedSource2 = input.Fields["generated_source_2"].StringValue;
-                var runtimeAgentType = input.Fields["runtime_agent_type"].StringValue;
+                var workerAV2Source = input.WorkerAV2Source ?? string.Empty;
+                var workerAV3Source = input.WorkerAV3Source ?? string.Empty;
+                var workerBV2Source = input.WorkerBV2Source ?? string.Empty;
+                var workerBV3Source = input.WorkerBV3Source ?? string.Empty;
+                var generatedSource1 = input.GeneratedSource1 ?? string.Empty;
+                var generatedSource2 = input.GeneratedSource2 ?? string.Empty;
+                var runtimeAgentType = input.RuntimeAgentType ?? string.Empty;
 
                 var lifecycleActorId = await context.RuntimeCapabilities.CreateAgentAsync(
                     runtimeAgentType,
@@ -415,21 +415,21 @@ internal static class ScriptEvolutionIntegrationSources
 
                 await context.RuntimeCapabilities.DestroyAgentAsync(lifecycleActorId, ct);
 
-                context.Emit(new Struct
+                context.Emit(new MultiScriptEvolutionCompleted
                 {
-                    Fields =
+                    Current = new MultiScriptEvolutionState
                     {
-                        ["lifecycle_actor_id"] = Value.ForString(lifecycleActorId),
-                        ["temp_a_runtime_id"] = Value.ForString(tempARuntimeId),
-                        ["temp_b_runtime_id"] = Value.ForString(tempBRuntimeId),
-                        ["generated_runtime_id_1"] = Value.ForString(generatedRuntimeId1),
-                        ["generated_runtime_id_2"] = Value.ForString(generatedRuntimeId2),
-                        ["evolved_a_runtime_id"] = Value.ForString(evolvedARuntimeId),
-                        ["evolved_b_runtime_id"] = Value.ForString(evolvedBRuntimeId),
-                        ["decision_a2"] = Value.ForString(decisionA2.Status),
-                        ["decision_a3"] = Value.ForString(decisionA3.Status),
-                        ["decision_b2"] = Value.ForString(decisionB2.Status),
-                        ["decision_b3"] = Value.ForString(decisionB3.Status),
+                        LifecycleActorId = lifecycleActorId,
+                        TempARuntimeId = tempARuntimeId,
+                        TempBRuntimeId = tempBRuntimeId,
+                        GeneratedRuntimeId1 = generatedRuntimeId1,
+                        GeneratedRuntimeId2 = generatedRuntimeId2,
+                        EvolvedARuntimeId = evolvedARuntimeId,
+                        EvolvedBRuntimeId = evolvedBRuntimeId,
+                        DecisionA2 = decisionA2.Status,
+                        DecisionA3 = decisionA3.Status,
+                        DecisionB2 = decisionB2.Status,
+                        DecisionB3 = decisionB3.Status,
                     },
                 });
             }
@@ -454,25 +454,25 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class SelfEvolutionV1Runtime : ScriptBehavior<Struct, Struct>
+        public sealed class SelfEvolutionV1Runtime : ScriptBehavior<SelfEvolutionV1State, SelfEvolutionV1State>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<SelfEvolutionV1State, SelfEvolutionV1State> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<SelfEvolutionV1Requested>(HandleAsync)
+                    .OnEvent<SelfEvolutionV1Completed>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                SelfEvolutionV1Requested input,
+                ScriptCommandContext<SelfEvolutionV1State> context,
                 CancellationToken ct)
             {
-                var nextV2Source = input.Fields["next_v2_source"].StringValue;
-                var nextV3Source = input.Fields["next_v3_source"].StringValue;
-                var generatedSource = input.Fields["generated_source"].StringValue;
+                var nextV2Source = input.NextV2Source ?? string.Empty;
+                var nextV3Source = input.NextV3Source ?? string.Empty;
+                var generatedSource = input.GeneratedSource ?? string.Empty;
 
                 var generatedDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "self-generated-script",
@@ -521,12 +521,9 @@ internal static class ScriptEvolutionIntegrationSources
                     await context.RuntimeCapabilities.RunScriptInstanceAsync(
                         v2RuntimeId,
                         "self-v2-run-" + context.RunId,
-                        Any.Pack(new Struct
+                        Any.Pack(new SelfEvolutionV2Requested
                         {
-                            Fields =
-                            {
-                                ["next_v3_source"] = Value.ForString(nextV3Source),
-                            },
+                            NextV3Source = nextV3Source,
                         }),
                         decisionV2.CandidateRevision,
                         decisionV2.DefinitionActorId,
@@ -534,13 +531,13 @@ internal static class ScriptEvolutionIntegrationSources
                         ct);
                 }
 
-                context.Emit(new Struct
+                context.Emit(new SelfEvolutionV1Completed
                 {
-                    Fields =
+                    Current = new SelfEvolutionV1State
                     {
-                        ["decision_v2"] = Value.ForString(decisionV2.Status),
-                        ["v2_runtime_id"] = Value.ForString(v2RuntimeId),
-                        ["generated_runtime_id"] = Value.ForString(generatedRuntimeId),
+                        DecisionV2 = decisionV2.Status,
+                        V2RuntimeId = v2RuntimeId,
+                        GeneratedRuntimeId = generatedRuntimeId,
                     },
                 });
             }
@@ -565,23 +562,23 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class SelfEvolutionV2Runtime : ScriptBehavior<Struct, Struct>
+        public sealed class SelfEvolutionV2Runtime : ScriptBehavior<SelfEvolutionV2State, SelfEvolutionV2State>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<SelfEvolutionV2State, SelfEvolutionV2State> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<SelfEvolutionV2Requested>(HandleAsync)
+                    .OnEvent<SelfEvolutionV2Completed>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                SelfEvolutionV2Requested input,
+                ScriptCommandContext<SelfEvolutionV2State> context,
                 CancellationToken ct)
             {
-                var nextV3Source = input.Fields["next_v3_source"].StringValue;
+                var nextV3Source = input.NextV3Source ?? string.Empty;
 
                 var decisionV3 = await context.RuntimeCapabilities.ProposeScriptEvolutionAsync(
                     new ScriptEvolutionProposal(
@@ -616,12 +613,12 @@ internal static class ScriptEvolutionIntegrationSources
                         ct);
                 }
 
-                context.Emit(new Struct
+                context.Emit(new SelfEvolutionV2Completed
                 {
-                    Fields =
+                    Current = new SelfEvolutionV2State
                     {
-                        ["decision_v3"] = Value.ForString(decisionV3.Status),
-                        ["v3_runtime_id"] = Value.ForString(v3RuntimeId),
+                        DecisionV3 = decisionV3.Status,
+                        V3RuntimeId = v3RuntimeId,
                     },
                 });
             }
@@ -646,24 +643,24 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class CatalogControlOrchestrator : ScriptBehavior<Struct, Struct>
+        public sealed class CatalogControlOrchestrator : ScriptBehavior<CatalogControlState, CatalogControlState>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<CatalogControlState, CatalogControlState> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<CatalogControlRequested>(HandleAsync)
+                    .OnEvent<CatalogControlCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                CatalogControlRequested input,
+                ScriptCommandContext<CatalogControlState> context,
                 CancellationToken ct)
             {
-                var manualV1Source = input.Fields["manual_v1_source"].StringValue;
-                var manualV2Source = input.Fields["manual_v2_source"].StringValue;
+                var manualV1Source = input.ManualV1Source ?? string.Empty;
+                var manualV2Source = input.ManualV2Source ?? string.Empty;
 
                 var manualDefinitionActorIdV1 = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "manual-catalog-script",
@@ -723,13 +720,13 @@ internal static class ScriptEvolutionIntegrationSources
                     "manual-rollback-" + context.RunId,
                     ct);
 
-                context.Emit(new Struct
+                context.Emit(new CatalogControlCompleted
                 {
-                    Fields =
+                    Current = new CatalogControlState
                     {
-                        ["manual_definition_actor_id_v1"] = Value.ForString(manualDefinitionActorIdV1),
-                        ["manual_definition_actor_id_v2"] = Value.ForString(manualDefinitionActorIdV2),
-                        ["manual_runtime_id"] = Value.ForString(manualRuntimeId),
+                        ManualDefinitionActorIdV1 = manualDefinitionActorIdV1,
+                        ManualDefinitionActorIdV2 = manualDefinitionActorIdV2,
+                        ManualRuntimeId = manualRuntimeId,
                     },
                 });
             }
@@ -750,31 +747,31 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Threading;
         using System.Threading.Tasks;
         using Aevatar.Foundation.Abstractions;
+        using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Abstractions.Definitions;
-        using Google.Protobuf.WellKnownTypes;
 
-        public sealed class InteractionUpsertOrchestrator : ScriptBehavior<Struct, Struct>
+        public sealed class InteractionUpsertOrchestrator : ScriptBehavior<InteractionUpsertState, InteractionUpsertState>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<InteractionUpsertState, InteractionUpsertState> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<InteractionUpsertRequested>(HandleAsync)
+                    .OnEvent<InteractionUpsertCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                InteractionUpsertRequested input,
+                ScriptCommandContext<InteractionUpsertState> context,
                 CancellationToken ct)
             {
-                var definitionType = input.Fields["definition_agent_type"].StringValue;
-                var publishSource = input.Fields["publish_source"].StringValue;
-                var sendToSource = input.Fields["sendto_source"].StringValue;
-                var invokeSource = input.Fields["invoke_source"].StringValue;
+                var definitionType = input.DefinitionAgentType ?? string.Empty;
+                var publishSource = input.PublishSource ?? string.Empty;
+                var sendToSource = input.SendtoSource ?? string.Empty;
+                var invokeSource = input.InvokeSource ?? string.Empty;
 
                 var aiResponse = await context.RuntimeCapabilities.AskAIAsync("health-check", ct);
 
@@ -784,7 +781,7 @@ internal static class ScriptEvolutionIntegrationSources
                     ct);
                 await context.RuntimeCapabilities.LinkAgentsAsync(context.ActorId, publishedDefinitionActorId, ct);
                 await context.RuntimeCapabilities.PublishAsync(
-                    new StringValue
+                    new InteractionPublishSignal
                     {
                         Value = "interaction.publish.signal",
                     },
@@ -821,14 +818,14 @@ internal static class ScriptEvolutionIntegrationSources
 
                 _ = publishSource;
 
-                context.Emit(new Struct
+                context.Emit(new InteractionUpsertCompleted
                 {
-                    Fields =
+                    Current = new InteractionUpsertState
                     {
-                        ["ai_response_length"] = Value.ForString((aiResponse ?? string.Empty).Length.ToString()),
-                        ["published_definition_actor_id"] = Value.ForString(publishedDefinitionActorId),
-                        ["sendto_definition_actor_id"] = Value.ForString(sendToDefinitionActorId),
-                        ["upsert_definition_actor_id"] = Value.ForString(upsertDefinitionActorId),
+                        AiResponseLength = (aiResponse ?? string.Empty).Length.ToString(),
+                        PublishedDefinitionActorId = publishedDefinitionActorId,
+                        SendtoDefinitionActorId = sendToDefinitionActorId,
+                        UpsertDefinitionActorId = upsertDefinitionActorId,
                     },
                 });
             }
@@ -853,30 +850,30 @@ internal static class ScriptEvolutionIntegrationSources
         using Aevatar.Scripting.Abstractions.Definitions;
         using Google.Protobuf.WellKnownTypes;
 
-        public sealed class OrleansClusterScriptOrchestrator : ScriptBehavior<Struct, Struct>
+        public sealed class OrleansClusterScriptOrchestrator : ScriptBehavior<OrleansClusterState, OrleansClusterState>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Struct, Struct> builder)
+            protected override void Configure(IScriptBehaviorBuilder<OrleansClusterState, OrleansClusterState> builder)
             {
                 builder
-                    .OnCommand<Struct>(HandleAsync)
-                    .OnEvent<Struct>(
-                        apply: static (_, evt, _) => evt,
-                        reduce: static (_, evt, _) => evt);
+                    .OnCommand<OrleansClusterRequested>(HandleAsync)
+                    .OnEvent<OrleansClusterCompleted>(
+                        apply: static (_, evt, _) => evt.Current,
+                        reduce: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
-                Struct input,
-                ScriptCommandContext<Struct> context,
+                OrleansClusterRequested input,
+                ScriptCommandContext<OrleansClusterState> context,
                 CancellationToken ct)
             {
-                var workerADefinitionActorId = input.Fields["worker_a_definition_actor_id"].StringValue;
-                var workerBDefinitionActorId = input.Fields["worker_b_definition_actor_id"].StringValue;
-                var newScriptId = input.Fields["new_script_id"].StringValue;
-                var newScriptSource = input.Fields["new_script_source"].StringValue;
-                var tempARuntimeId = input.Fields["temp_a_runtime_id"].StringValue;
-                var tempBRuntimeId = input.Fields["temp_b_runtime_id"].StringValue;
-                var generatedRuntimeId = input.Fields["generated_runtime_id"].StringValue;
-                var generatedDefinitionActorId = input.Fields["generated_definition_actor_id"].StringValue;
+                var workerADefinitionActorId = input.WorkerADefinitionActorId ?? string.Empty;
+                var workerBDefinitionActorId = input.WorkerBDefinitionActorId ?? string.Empty;
+                var newScriptId = input.NewScriptId ?? string.Empty;
+                var newScriptSource = input.NewScriptSource ?? string.Empty;
+                var tempARuntimeId = input.TempARuntimeId ?? string.Empty;
+                var tempBRuntimeId = input.TempBRuntimeId ?? string.Empty;
+                var generatedRuntimeId = input.GeneratedRuntimeId ?? string.Empty;
+                var generatedDefinitionActorId = input.GeneratedDefinitionActorId ?? string.Empty;
 
                 tempARuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
                     workerADefinitionActorId,
@@ -939,14 +936,14 @@ internal static class ScriptEvolutionIntegrationSources
                     "generated.run",
                     ct);
 
-                context.Emit(new Struct
+                context.Emit(new OrleansClusterCompleted
                 {
-                    Fields =
+                    Current = new OrleansClusterState
                     {
-                        ["temp_a_runtime_id"] = Value.ForString(tempARuntimeId),
-                        ["temp_b_runtime_id"] = Value.ForString(tempBRuntimeId),
-                        ["generated_runtime_id"] = Value.ForString(generatedRuntimeId),
-                        ["generated_definition_actor_id"] = Value.ForString(generatedDefinitionActorId),
+                        TempARuntimeId = tempARuntimeId,
+                        TempBRuntimeId = tempBRuntimeId,
+                        GeneratedRuntimeId = generatedRuntimeId,
+                        GeneratedDefinitionActorId = generatedDefinitionActorId,
                     },
                 });
             }

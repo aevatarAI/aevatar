@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Materialization;
@@ -67,6 +68,16 @@ public sealed class ScriptNativeDocumentProjector
             snapshot.Revision,
             scriptPackage,
             snapshot.SourceHash));
+        var eventTypeUrl = fact.DomainEventPayload?.TypeUrl ?? string.Empty;
+        var eventSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(eventTypeUrl, ScriptMessageKind.DomainEvent);
+        if (eventSemantics.Kind != ScriptMessageKind.DomainEvent || !eventSemantics.Projectable)
+            return;
+        if (!string.IsNullOrWhiteSpace(eventSemantics.ReadModelScope) &&
+            !string.Equals(eventSemantics.ReadModelScope, artifact.Descriptor.ReadModelDescriptor.FullName, StringComparison.Ordinal) &&
+            !string.Equals(eventSemantics.ReadModelScope, fact.ReadModelTypeUrl, StringComparison.Ordinal))
+        {
+            return;
+        }
         var plan = _materializationCompiler.GetOrCompile(
             artifact,
             snapshot.ReadModelSchemaHash,

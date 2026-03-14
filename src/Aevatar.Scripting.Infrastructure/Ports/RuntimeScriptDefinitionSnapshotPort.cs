@@ -63,7 +63,8 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
             response.ReadModelSchemaHash ?? string.Empty,
             response.ProtocolDescriptorSet,
             response.StateDescriptorFullName ?? string.Empty,
-            response.ReadModelDescriptorFullName ?? string.Empty);
+            response.ReadModelDescriptorFullName ?? string.Empty,
+            response.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec());
 
         if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
             throw new InvalidOperationException(

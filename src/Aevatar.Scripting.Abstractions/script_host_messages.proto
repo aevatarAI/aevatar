@@ -48,6 +48,42 @@ message ScriptReadModelSchemaSpec {
   repeated ScriptReadModelRelationSpec relations = 5;
 }
 
+enum ScriptMessageKind {
+  SCRIPT_MESSAGE_KIND_UNSPECIFIED = 0;
+  SCRIPT_MESSAGE_KIND_COMMAND = 1;
+  SCRIPT_MESSAGE_KIND_INTERNAL_SIGNAL = 2;
+  SCRIPT_MESSAGE_KIND_DOMAIN_EVENT = 3;
+  SCRIPT_MESSAGE_KIND_QUERY_REQUEST = 4;
+  SCRIPT_MESSAGE_KIND_QUERY_RESULT = 5;
+}
+
+message ScriptMessageSemanticsSpec {
+  string type_url = 1;
+  string descriptor_full_name = 2;
+  ScriptMessageKind kind = 3;
+  bool projectable = 4;
+  bool replay_safe = 5;
+  bool snapshot_candidate = 6;
+  string read_model_scope = 7;
+  string aggregate_id_field = 8;
+  string command_id_field = 9;
+  string correlation_id_field = 10;
+  string causation_id_field = 11;
+}
+
+message ScriptQuerySemanticsSpec {
+  string query_type_url = 1;
+  string query_descriptor_full_name = 2;
+  string result_type_url = 3;
+  string result_descriptor_full_name = 4;
+  string read_model_scope = 5;
+}
+
+message ScriptRuntimeSemanticsSpec {
+  repeated ScriptMessageSemanticsSpec messages = 1;
+  repeated ScriptQuerySemanticsSpec queries = 2;
+}
+
 message ScriptDefinitionState {
   string script_id = 1;
   string revision = 2;
@@ -71,6 +107,7 @@ message ScriptDefinitionState {
   bytes protocol_descriptor_set = 20;
   string state_descriptor_full_name = 21;
   string read_model_descriptor_full_name = 22;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 23;
 }
 
 message ScriptBehaviorState {
@@ -91,6 +128,7 @@ message ScriptBehaviorState {
   bytes protocol_descriptor_set = 15;
   string state_descriptor_full_name = 16;
   string read_model_descriptor_full_name = 17;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 18;
 }
 
 message ScriptCatalogEntryState {
@@ -180,6 +218,7 @@ message ScriptDefinitionUpsertedEvent {
   bytes protocol_descriptor_set = 16;
   string state_descriptor_full_name = 17;
   string read_model_descriptor_full_name = 18;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 19;
 }
 
 message ScriptReadModelSchemaDeclaredEvent {
@@ -229,6 +268,7 @@ message BindScriptBehaviorRequestedEvent {
   bytes protocol_descriptor_set = 11;
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 14;
 }
 
 message ScriptBehaviorBoundEvent {
@@ -245,6 +285,7 @@ message ScriptBehaviorBoundEvent {
   bytes protocol_descriptor_set = 11;
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 14;
 }
 
 message QueryScriptBehaviorBindingRequestedEvent {
@@ -266,6 +307,7 @@ message ScriptBehaviorBindingRespondedEvent {
   string failure_reason = 11;
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 14;
 }
 
 message ScriptDomainFactCommitted {
@@ -357,6 +399,7 @@ message ScriptDefinitionSnapshotRespondedEvent {
   bytes protocol_descriptor_set = 13;
   string state_descriptor_full_name = 14;
   string read_model_descriptor_full_name = 15;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 16;
 }
 
 message QueryScriptCatalogEntryRequestedEvent {

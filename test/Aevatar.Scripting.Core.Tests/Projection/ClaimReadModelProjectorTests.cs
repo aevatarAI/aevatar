@@ -88,7 +88,11 @@ public class ClaimReadModelProjectorTests
             new EventEnvelope
             {
                 Id = "evt-noop",
-                Payload = Any.Pack(new StringValue { Value = "not-a-fact" }),
+                Payload = Any.Pack(new SimpleTextCommand
+                {
+                    CommandId = "noop",
+                    Value = "not-a-fact",
+                }),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
                 Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
             },

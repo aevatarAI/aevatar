@@ -2,6 +2,7 @@ using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using System.Collections;
+using Aevatar.Scripting.Abstractions.Schema;
 
 namespace Aevatar.Scripting.Core.Materialization;
 
@@ -146,11 +147,18 @@ public sealed class ScriptReadModelPathAccessor
                         $"Read model path `{path}` traverses non-message field `{fieldName}`.");
                 }
 
+                if (ScriptReadModelDescriptorPolicy.IsUnsupportedWrapperLeaf(field.MessageType))
+                {
+                    throw new InvalidOperationException(
+                        $"Read model path `{path}` references protobuf wrapper field `{fieldName}` ({field.MessageType.FullName}). " +
+                        "Use scalar or proto3 optional fields inside scripting read model contracts.");
+                }
+
                 currentDescriptor = field.MessageType;
             }
             else if (field.FieldType == FieldType.Message &&
                      field.MessageType != null &&
-                     !IsSupportedLeafMessage(field.MessageType))
+                     !ScriptReadModelDescriptorPolicy.IsSupportedLeafMessage(field.MessageType))
             {
                 throw new InvalidOperationException(
                     $"Read model path `{path}` ends on unsupported message field `{fieldName}` ({field.MessageType.FullName}).");
@@ -160,24 +168,6 @@ public sealed class ScriptReadModelPathAccessor
         }
 
         return new ScriptReadModelPathAccessor(path, compiled);
-    }
-
-    private static bool IsSupportedLeafMessage(MessageDescriptor descriptor)
-    {
-        return descriptor.FullName switch
-        {
-            "google.protobuf.Timestamp" => true,
-            "google.protobuf.StringValue" => true,
-            "google.protobuf.BoolValue" => true,
-            "google.protobuf.Int32Value" => true,
-            "google.protobuf.Int64Value" => true,
-            "google.protobuf.UInt32Value" => true,
-            "google.protobuf.UInt64Value" => true,
-            "google.protobuf.DoubleValue" => true,
-            "google.protobuf.FloatValue" => true,
-            "google.protobuf.BytesValue" => true,
-            _ => false,
-        };
     }
 
     private static object? ConvertLeafValue(object? value)
@@ -200,15 +190,6 @@ public sealed class ScriptReadModelPathAccessor
             decimal decimalValue => decimalValue,
             System.Enum enumValue => enumValue.ToString(),
             Timestamp timestamp => timestamp.ToDateTimeOffset(),
-            StringValue wrapper => wrapper.Value,
-            BoolValue wrapper => wrapper.Value,
-            Int32Value wrapper => wrapper.Value,
-            Int64Value wrapper => wrapper.Value,
-            UInt32Value wrapper => wrapper.Value,
-            UInt64Value wrapper => (long)wrapper.Value,
-            DoubleValue wrapper => wrapper.Value,
-            FloatValue wrapper => wrapper.Value,
-            BytesValue wrapper => Convert.ToBase64String(wrapper.Value.ToByteArray()),
             ByteString byteString => Convert.ToBase64String(byteString.ToByteArray()),
             _ => throw new InvalidOperationException(
                 $"Read model path `{nameof(ConvertLeafValue)}` encountered unsupported value type `{value.GetType().FullName}`."),

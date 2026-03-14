@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v13`
+- 文档版本：`v15`
 - 更新时间：`2026-03-14`
 - 适用范围：`src/Aevatar.Scripting.*` 与相关 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests`
 - 非范围：`Aevatar.Foundation.*` 的内部 runtime 实现细节；本文只说明当前生效的 scripting 主链与文档入口
@@ -16,9 +16,10 @@
    - `docs/architecture/2026-03-14-scripting-gagent-behavior-parity-implementation-closeout.md`
 2. 当前 typed authoring 设计：
    - `docs/architecture/2026-03-14-scripting-typed-authoring-surface-detailed-design.md`
-3. 后续定义源与原生物化提案：
+3. 后续定义源、原生物化与运行语义提案：
    - `docs/architecture/2026-03-14-scripting-native-readmodel-materialization-detailed-design.md`
    - `docs/architecture/2026-03-14-scripting-protobuf-definition-source-detailed-design.md`
+   - `docs/architecture/2026-03-14-scripting-runtime-semantics-protobuf-options-detailed-design.md`
 4. 本文：
    - 作为 scripting 总览与文档索引，帮助快速定位当前主链
 
@@ -29,7 +30,7 @@
 
 若本文与 `implementation-closeout` 发生冲突，以 `implementation-closeout` 和实际代码为准。
 
-上面两份 `2026-03-14` 提案文档讨论的是后续方向，不代表当前代码已经切到 `script package(cs + proto)`。它们的编译模型明确是“definition/provisioning 阶段的动态包编译”，不是解决方案构建期静态预编译。
+上面三份 `2026-03-14` 提案文档讨论的是后续方向，不代表当前代码已经切到 `script package(cs + proto)`。它们的编译模型明确是“definition/provisioning 阶段的动态包编译”，不是解决方案构建期静态预编译。
 
 ## 3. 当前结论
 
@@ -43,6 +44,20 @@
 4. 读侧由 `ScriptReadModelProjector` 基于 committed fact 构建 `ScriptReadModelDocument`。
 5. 查询通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 对外暴露。
 6. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
+
+当前 runtime semantics 也已经明确收紧：
+
+1. 所有 scripting 行为契约消息都必须显式声明 `(aevatar.scripting.runtime.scripting_runtime)`。
+2. 所有 declared query 都必须显式声明 `(aevatar.scripting.runtime.scripting_query)` 的结果绑定。
+3. 不再接受 `google.protobuf.Empty / StringValue / Struct` 这类 wrapper message 的宿主自动兜底语义。
+4. wrapper 类型仍可作为普通 protobuf 载荷存在于宿主边界，但不能再充当 scripting command / signal / event / query 的隐式协议定义。
+
+当前 read model schema/materialization 也已经同步收紧：
+
+1. scripting 内核只接受 protobuf scalar、proto3 optional、子消息和 `google.protobuf.Timestamp` 作为 read model 结构。
+2. `google.protobuf.StringValue / Int32Value / BoolValue / BytesValue` 等 wrapper field 不再允许出现在 scripting read model schema 中。
+3. 需要表达“可空标量”时，应优先使用 proto3 `optional` 或显式子消息，而不是 wrapper leaf。
+4. 动态 script package 的 `.proto` 冷编译阶段也会直接拒绝 `wrappers.proto` 和 `google.protobuf.*Value` 引用，避免把 wrapper 重新带回脚本协议。
 
 ## 4. 当前生效架构
 
@@ -149,6 +164,7 @@ flowchart LR
 3. 运行期 `publish/send/self-signal/durable-timeout` 语义必须保持 runtime-neutral。
 4. 影响业务语义、控制流、稳定读取的数据必须强类型建模，不重新退回 bag。
 5. Scripting 与 Workflow/CQRS Core 继续共享统一 envelope / projection 主链，不引入第二套 read-side pipeline。
+6. runtime semantics 必须 descriptor-first，禁止再依赖 `google.protobuf.*` wrapper fallback 推断 command / signal / event / query 语义。
 
 ## 9. 历史文档整理结论
 

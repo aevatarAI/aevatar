@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
@@ -13,8 +14,12 @@ public sealed class ScriptReadModelDocumentJsonConverterTests
         var document = new ScriptReadModelDocument
         {
             Id = "runtime-1",
-            ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
-            ReadModelPayload = Any.Pack(new StringValue { Value = "HELLO" }),
+            ReadModelTypeUrl = Any.Pack(new SimpleTextReadModel()).TypeUrl,
+            ReadModelPayload = Any.Pack(new SimpleTextReadModel
+            {
+                HasValue = true,
+                Value = "HELLO",
+            }),
             StateVersion = 3,
         };
 
@@ -25,6 +30,6 @@ public sealed class ScriptReadModelDocumentJsonConverterTests
         json.Should().Contain("\"payload_base64\"");
         restored.Should().NotBeNull();
         restored!.ReadModelPayload.Should().NotBeNull();
-        restored.ReadModelPayload!.Unpack<StringValue>().Value.Should().Be("HELLO");
+        restored.ReadModelPayload!.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
     }
 }

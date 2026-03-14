@@ -60,14 +60,14 @@ public class RoslynScriptBehaviorCompilerTests
         await using var artifact = result.Artifact!;
         artifact.ScriptId.Should().Be("script-1");
         artifact.Revision.Should().Be("rev-3");
-        artifact.Contract.StateTypeUrl.Should().Be("type.googleapis.com/google.protobuf.StringValue");
-        artifact.Contract.ReadModelTypeUrl.Should().Be("type.googleapis.com/google.protobuf.StringValue");
+        artifact.Contract.StateTypeUrl.Should().Be(Any.Pack(new SimpleTextState()).TypeUrl);
+        artifact.Contract.ReadModelTypeUrl.Should().Be(Any.Pack(new SimpleTextReadModel()).TypeUrl);
 
         var behavior = artifact.CreateBehavior();
         try
         {
             behavior.Should().BeAssignableTo<IScriptBehaviorBridge>();
-            behavior.Descriptor.DomainEvents.Keys.Should().ContainSingle("type.googleapis.com/google.protobuf.StringValue");
+            behavior.Descriptor.DomainEvents.Keys.Should().ContainSingle(Any.Pack(new SimpleTextEvent()).TypeUrl);
         }
         finally
         {
@@ -112,17 +112,28 @@ public class RoslynScriptBehaviorCompilerTests
         result.Artifact.Should().NotBeNull();
 
         await using var artifact = result.Artifact!;
-        artifact.Contract.StateTypeUrl.Should().Be("type.googleapis.com/google.protobuf.Int32Value");
+        artifact.Contract.StateTypeUrl.Should().Be(Any.Pack(new ScriptProfileState()).TypeUrl);
         artifact.Contract.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
         artifact.Contract.CommandTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl);
         artifact.Contract.DomainEventTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
         artifact.Contract.QueryTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
         artifact.Contract.QueryResultTypeUrls.Should().ContainKey(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
-        artifact.Contract.InternalSignalTypeUrls.Should().ContainSingle("type.googleapis.com/google.protobuf.Empty");
-        artifact.Contract.StateDescriptorFullName.Should().Be(Int32Value.Descriptor.FullName);
+        artifact.Contract.InternalSignalTypeUrls.Should().ContainSingle(Any.Pack(new SimpleTextSignal()).TypeUrl);
+        artifact.Contract.StateDescriptorFullName.Should().Be(ScriptProfileState.Descriptor.FullName);
         artifact.Contract.ReadModelDescriptorFullName.Should().Be(ScriptProfileReadModel.Descriptor.FullName);
         artifact.Contract.ProtocolDescriptorSet.Should().NotBeNull();
         artifact.Contract.ProtocolDescriptorSet!.IsEmpty.Should().BeFalse();
+        artifact.Contract.RuntimeSemantics.Should().NotBeNull();
+        artifact.Contract.RuntimeSemantics!.Messages.Should().Contain(x =>
+            x.TypeUrl == Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl &&
+            x.Kind == ScriptMessageKind.Command);
+        artifact.Contract.RuntimeSemantics.Messages.Should().Contain(x =>
+            x.TypeUrl == Any.Pack(new ScriptProfileUpdated()).TypeUrl &&
+            x.Kind == ScriptMessageKind.DomainEvent &&
+            x.Projectable);
+        artifact.Contract.RuntimeSemantics.Queries.Should().Contain(x =>
+            x.QueryTypeUrl == Any.Pack(new ScriptProfileQueryRequested()).TypeUrl &&
+            x.ResultTypeUrl == Any.Pack(new ScriptProfileQueryResponded()).TypeUrl);
 
         var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
             artifact,
@@ -131,6 +142,21 @@ public class RoslynScriptBehaviorCompilerTests
         plan.SchemaId.Should().Be("script_profile");
         plan.DocumentFields.Should().Contain(x => x.Path == "search.lookup_key");
         plan.GraphRelations.Should().ContainSingle(x => x.Name == "rel_policy");
+    }
+
+    [Fact]
+    public void Compile_ShouldReject_WhenLocalProtoMessageMissesRuntimeOptions()
+    {
+        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
+        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
+            ScriptId: "script-missing-runtime-options",
+            Revision: "rev-missing-runtime-options",
+            Package: CreatePackageMissingRuntimeOptions()));
+
+        result.IsSuccess.Should().BeFalse();
+        result.Artifact.Should().BeNull();
+        result.Diagnostics.Should().Contain(x =>
+            x.Contains("Runtime semantics are missing", StringComparison.Ordinal));
     }
 
     private const string ContractBehaviorSource =
@@ -142,24 +168,28 @@ public class RoslynScriptBehaviorCompilerTests
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
         using Aevatar.Scripting.Core.Tests.Messages;
-        using Google.Protobuf.WellKnownTypes;
 
-        public sealed class ContractBehavior : ScriptBehavior<Int32Value, ScriptProfileReadModel>
+        public sealed class ContractBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
         {
-            protected override void Configure(IScriptBehaviorBuilder<Int32Value, ScriptProfileReadModel> builder)
+            protected override void Configure(IScriptBehaviorBuilder<ScriptProfileState, ScriptProfileReadModel> builder)
             {
                 builder
                     .OnCommand<ScriptProfileUpdateCommand>(HandleAsync)
-                    .OnSignal<Empty>(HandleAsync)
+                    .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                     .OnEvent<ScriptProfileUpdated>(
-                        apply: static (_, evt, _) => new Int32Value { Value = 1 },
+                        apply: static (state, evt, _) => new ScriptProfileState
+                        {
+                            CommandCount = (state?.CommandCount ?? 0) + 1,
+                            LastCommandId = evt.CommandId ?? string.Empty,
+                            NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
+                        },
                         reduce: static (_, evt, _) => evt.Current)
                     .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleAsync(
                 ScriptProfileUpdateCommand inbound,
-                ScriptCommandContext<Int32Value> context,
+                ScriptCommandContext<ScriptProfileState> context,
                 CancellationToken ct)
             {
                 ct.ThrowIfCancellationRequested();
@@ -189,9 +219,9 @@ public class RoslynScriptBehaviorCompilerTests
                 return Task.CompletedTask;
             }
 
-            private static Task HandleAsync(
-                Empty inbound,
-                ScriptCommandContext<Int32Value> context,
+            private static Task HandleSignalAsync(
+                SimpleTextSignal inbound,
+                ScriptCommandContext<ScriptProfileState> context,
                 CancellationToken ct)
             {
                 _ = inbound;
@@ -236,4 +266,66 @@ public class RoslynScriptBehaviorCompilerTests
             }
         }
         """;
+
+    private static ScriptSourcePackage CreatePackageMissingRuntimeOptions()
+    {
+        const string behaviorSource =
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Aevatar.Scripting.Abstractions.Behaviors;
+            using Dynamic.MissingRuntime;
+
+            public sealed class MissingRuntimeBehavior : ScriptBehavior<MissingRuntimeState, MissingRuntimeReadModel>
+            {
+                protected override void Configure(IScriptBehaviorBuilder<MissingRuntimeState, MissingRuntimeReadModel> builder)
+                {
+                    builder.OnCommand<MissingRuntimeCommand>(HandleAsync);
+                }
+
+                private static Task HandleAsync(
+                    MissingRuntimeCommand command,
+                    ScriptCommandContext<MissingRuntimeState> context,
+                    CancellationToken ct)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                }
+            }
+            """;
+
+        const string protoSource =
+            """
+            syntax = "proto3";
+
+            package dynamic.missingruntime;
+
+            option csharp_namespace = "Dynamic.MissingRuntime";
+
+            import "scripting_schema_options.proto";
+
+            message MissingRuntimeState {
+              string value = 1;
+            }
+
+            message MissingRuntimeReadModel {
+              option (aevatar.scripting.schema.scripting_read_model) = {
+                schema_id: "missing_runtime"
+                schema_version: "1"
+                store_kinds: "document"
+              };
+              string value = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+            }
+
+            message MissingRuntimeCommand {
+              string command_id = 1;
+            }
+            """;
+
+        return new ScriptSourcePackage(
+            ScriptSourcePackage.CurrentFormat,
+            [new ScriptSourceFile("Behavior.cs", behaviorSource)],
+            [new ScriptSourceFile("missing_runtime.proto", protoSource)],
+            "MissingRuntimeBehavior");
+    }
 }

@@ -12,6 +12,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
@@ -64,7 +65,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: string.Empty,
             runId: "run-1",
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -82,7 +87,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
             runId: string.Empty,
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -100,7 +109,11 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => service.RunRuntimeAsync(
             runtimeActorId: "runtime-missing",
             runId: "run-1",
-            inputPayload: Any.Pack(new Struct()),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -126,7 +139,11 @@ public class RuntimeScriptInfrastructurePortsTests
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
             runId: "run-1",
-            inputPayload: Any.Pack(new StringValue { Value = "input" }),
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
             scriptRevision: "rev-1",
             definitionActorId: "definition-1",
             requestedEventType: "chat.requested",
@@ -682,23 +699,26 @@ public class RuntimeScriptInfrastructurePortsTests
                         using System.Threading.Tasks;
                         using Aevatar.Scripting.Abstractions;
                         using Aevatar.Scripting.Abstractions.Behaviors;
-                        using Google.Protobuf.WellKnownTypes;
+                        using Aevatar.Scripting.Core.Tests.Messages;
 
-                        public sealed class ProvisioningBehavior : ScriptBehavior<StringValue, StringValue>
+                        public sealed class ProvisioningBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
                         {
-                            protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+                            protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
                             {
-                                builder.OnQuery<Empty, StringValue>(HandleQueryAsync);
+                                builder.OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
                             }
 
-                            private static Task<StringValue?> HandleQueryAsync(
-                                Empty queryPayload,
-                                ScriptQueryContext<StringValue> snapshot,
+                            private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+                                SimpleTextQueryRequested queryPayload,
+                                ScriptQueryContext<SimpleTextReadModel> snapshot,
                                 CancellationToken ct)
                             {
-                                _ = queryPayload;
                                 ct.ThrowIfCancellationRequested();
-                                return Task.FromResult<StringValue?>(snapshot.CurrentReadModel);
+                                return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+                                {
+                                    RequestId = queryPayload.RequestId ?? string.Empty,
+                                    Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+                                });
                             }
                         }
                         """,

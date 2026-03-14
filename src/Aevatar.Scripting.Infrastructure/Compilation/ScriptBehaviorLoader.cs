@@ -1,4 +1,5 @@
 using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Scripting.Abstractions.Schema;
 using Aevatar.Scripting.Core.Compilation;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -59,7 +60,9 @@ internal static class ScriptBehaviorLoader
             var effectiveDescriptorSet = descriptorSet == null || descriptorSet.IsEmpty
                 ? ScriptDescriptorSetBuilder.BuildFromDescriptors(EnumerateProtocolDescriptors(rawDescriptor))
                 : descriptorSet;
-            var descriptor = rawDescriptor.WithProtocolDescriptorSet(effectiveDescriptorSet);
+            var descriptor = ScriptBehaviorRuntimeSemanticsCompiler.Attach(
+                rawDescriptor.WithProtocolDescriptorSet(effectiveDescriptorSet));
+            ScriptReadModelDescriptorPolicy.ValidateNoUnsupportedWrapperFields(descriptor.ReadModelDescriptor);
             var contract = descriptor.ToContract();
             DisposeBehavior(behavior);
             return new LoadedScriptBehavior(behaviorType, descriptor, contract, loadContext);

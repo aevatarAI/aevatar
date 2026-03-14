@@ -83,6 +83,7 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
                     ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
                     StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
                     ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
+                    RuntimeSemantics = compilation.Artifact.Contract.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
                 }),
             ct);
         await _projectionPort.EnsureActorProjectionAsync(actorId, ct);

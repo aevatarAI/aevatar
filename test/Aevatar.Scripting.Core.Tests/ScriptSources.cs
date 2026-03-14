@@ -14,41 +14,49 @@ internal static class ScriptSources
         using System.Threading.Tasks;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Google.Protobuf;
-        using Google.Protobuf.WellKnownTypes;
+        using Aevatar.Scripting.Core.Tests.Messages;
 
-        public sealed class UppercaseBehavior : ScriptBehavior<StringValue, StringValue>
+        public sealed class UppercaseBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
         {
-            protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+            protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
             {
                 builder
-                    .OnCommand<StringValue>(HandleCommandAsync)
-                    .OnEvent<StringValue>(
-                        apply: static (_, evt, _) => new StringValue { Value = evt.Value },
-                        reduce: static (_, evt, _) => new StringValue { Value = evt.Value })
-                    .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                    .OnCommand<SimpleTextCommand>(HandleCommandAsync)
+                    .OnEvent<SimpleTextEvent>(
+                        apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                        reduce: static (_, evt, _) => evt.Current)
+                    .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleCommandAsync(
-                StringValue command,
-                ScriptCommandContext<StringValue> context,
+                SimpleTextCommand command,
+                ScriptCommandContext<SimpleTextState> context,
                 CancellationToken ct)
             {
                 ct.ThrowIfCancellationRequested();
-                context.Emit(new StringValue { Value = (command.Value ?? string.Empty).Trim().ToUpperInvariant() });
+                context.Emit(new SimpleTextEvent
+                {
+                    CommandId = command.CommandId ?? string.Empty,
+                    Current = new SimpleTextReadModel
+                    {
+                        HasValue = true,
+                        Value = (command.Value ?? string.Empty).Trim().ToUpperInvariant(),
+                    },
+                });
                 return Task.CompletedTask;
             }
 
-            private static Task<StringValue?> HandleQueryAsync(
-                Empty query,
-                ScriptQueryContext<StringValue> snapshot,
+            private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+                SimpleTextQueryRequested query,
+                ScriptQueryContext<SimpleTextReadModel> snapshot,
                 CancellationToken ct)
             {
-                _ = query;
                 ct.ThrowIfCancellationRequested();
-                return Task.FromResult<StringValue?>(snapshot.CurrentReadModel == null
-                    ? null
-                    : new StringValue { Value = snapshot.CurrentReadModel.Value });
+                return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+                {
+                    RequestId = query.RequestId ?? string.Empty,
+                    Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+                });
             }
         }
         """;
@@ -138,6 +146,14 @@ internal static class ScriptSources
         """;
 
     public static readonly string StructuredProfileBehaviorHash = ComputeSourceHash(StructuredProfileBehavior);
+
+    public static readonly string UppercaseStateTypeUrl = Any.Pack(new SimpleTextState()).TypeUrl;
+    public static readonly string UppercaseReadModelTypeUrl = Any.Pack(new SimpleTextReadModel()).TypeUrl;
+    public static readonly string UppercaseCommandTypeUrl = Any.Pack(new SimpleTextCommand()).TypeUrl;
+    public static readonly string UppercaseSignalTypeUrl = Any.Pack(new SimpleTextSignal()).TypeUrl;
+    public static readonly string UppercaseEventTypeUrl = Any.Pack(new SimpleTextEvent()).TypeUrl;
+    public static readonly string UppercaseQueryTypeUrl = Any.Pack(new SimpleTextQueryRequested()).TypeUrl;
+    public static readonly string UppercaseQueryResultTypeUrl = Any.Pack(new SimpleTextQueryResponded()).TypeUrl;
 
     public static readonly string StructuredProfileStateTypeUrl = Any.Pack(new ScriptProfileState()).TypeUrl;
     public static readonly string StructuredProfileReadModelTypeUrl = Any.Pack(new ScriptProfileReadModel()).TypeUrl;

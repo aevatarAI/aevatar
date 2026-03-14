@@ -4,7 +4,6 @@ using Aevatar.Scripting.Core;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
-using PbValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Integration.Tests;
 
@@ -60,42 +59,39 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
 
         var runtimeAgentType = typeof(ScriptBehaviorGAgent).AssemblyQualifiedName
             ?? throw new InvalidOperationException("ScriptBehaviorGAgent type name is required.");
-        var input = new Struct
+        var input = new MultiScriptEvolutionRequested
         {
-            Fields =
-            {
-                ["worker_a_v2_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "WorkerARev2Runtime",
-                    "WORKER-A-V2",
-                    "worker_a",
-                    "2")),
-                ["worker_a_v3_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "WorkerARev3Runtime",
-                    "WORKER-A-V3",
-                    "worker_a",
-                    "3")),
-                ["worker_b_v2_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "WorkerBRev2Runtime",
-                    "WORKER-B-V2",
-                    "worker_b",
-                    "2")),
-                ["worker_b_v3_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "WorkerBRev3Runtime",
-                    "WORKER-B-V3",
-                    "worker_b",
-                    "3")),
-                ["generated_source_1"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "GeneratedRound1Runtime",
-                    "GENERATED-1",
-                    "generated_round",
-                    "1")),
-                ["generated_source_2"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "GeneratedRound2Runtime",
-                    "GENERATED-2",
-                    "generated_round",
-                    "2")),
-                ["runtime_agent_type"] = PbValue.ForString(runtimeAgentType),
-            },
+            WorkerAV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "WorkerARev2Runtime",
+                "WORKER-A-V2",
+                "worker_a",
+                "2"),
+            WorkerAV3Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "WorkerARev3Runtime",
+                "WORKER-A-V3",
+                "worker_a",
+                "3"),
+            WorkerBV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "WorkerBRev2Runtime",
+                "WORKER-B-V2",
+                "worker_b",
+                "2"),
+            WorkerBV3Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "WorkerBRev3Runtime",
+                "WORKER-B-V3",
+                "worker_b",
+                "3"),
+            GeneratedSource1 = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "GeneratedRound1Runtime",
+                "GENERATED-1",
+                "generated_round",
+                "1"),
+            GeneratedSource2 = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "GeneratedRound2Runtime",
+                "GENERATED-2",
+                "generated_round",
+                "2"),
+            RuntimeAgentType = runtimeAgentType,
         };
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
@@ -108,19 +104,19 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             "script.autonomous.multi.orchestrate",
             CancellationToken.None);
 
-        var summary = snapshot.ReadModelPayload!.Unpack<Struct>();
-        summary.Fields["decision_a2"].StringValue.Should().Be("promoted");
-        summary.Fields["decision_a3"].StringValue.Should().Be("promoted");
-        summary.Fields["decision_b2"].StringValue.Should().Be("promoted");
-        summary.Fields["decision_b3"].StringValue.Should().Be("promoted");
+        var summary = snapshot.ReadModelPayload!.Unpack<MultiScriptEvolutionState>();
+        summary.DecisionA2.Should().Be("promoted");
+        summary.DecisionA3.Should().Be("promoted");
+        summary.DecisionB2.Should().Be("promoted");
+        summary.DecisionB3.Should().Be("promoted");
 
-        var lifecycleActorId = summary.Fields["lifecycle_actor_id"].StringValue;
-        var tempARuntimeId = summary.Fields["temp_a_runtime_id"].StringValue;
-        var tempBRuntimeId = summary.Fields["temp_b_runtime_id"].StringValue;
-        var generatedRuntimeId1 = summary.Fields["generated_runtime_id_1"].StringValue;
-        var generatedRuntimeId2 = summary.Fields["generated_runtime_id_2"].StringValue;
-        var evolvedARuntimeId = summary.Fields["evolved_a_runtime_id"].StringValue;
-        var evolvedBRuntimeId = summary.Fields["evolved_b_runtime_id"].StringValue;
+        var lifecycleActorId = summary.LifecycleActorId;
+        var tempARuntimeId = summary.TempARuntimeId;
+        var tempBRuntimeId = summary.TempBRuntimeId;
+        var generatedRuntimeId1 = summary.GeneratedRuntimeId1;
+        var generatedRuntimeId2 = summary.GeneratedRuntimeId2;
+        var evolvedARuntimeId = summary.EvolvedARuntimeId;
+        var evolvedBRuntimeId = summary.EvolvedBRuntimeId;
 
         (await runtime.ExistsAsync(lifecycleActorId)).Should().BeFalse();
         (await runtime.ExistsAsync(tempARuntimeId)).Should().BeTrue();
@@ -211,22 +207,19 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             runtimeActorId,
             CancellationToken.None);
 
-        var input = new Struct
+        var input = new SelfEvolutionV1Requested
         {
-            Fields =
-            {
-                ["next_v2_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.SelfEvolutionV2Source),
-                ["next_v3_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "SelfEvolutionV3Runtime",
-                    "SELF-V3",
-                    "self_evolution",
-                    "3")),
-                ["generated_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "SelfGeneratedRuntime",
-                    "SELF-GEN",
-                    "self_generated",
-                    "1")),
-            },
+            NextV2Source = ScriptEvolutionIntegrationSources.SelfEvolutionV2Source,
+            NextV3Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "SelfEvolutionV3Runtime",
+                "SELF-V3",
+                "self_evolution",
+                "3"),
+            GeneratedSource = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "SelfGeneratedRuntime",
+                "SELF-GEN",
+                "self_generated",
+                "1"),
         };
 
         var (_, rootSnapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
@@ -239,10 +232,10 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             "script.self.evolve",
             CancellationToken.None);
 
-        var v1Summary = rootSnapshot.ReadModelPayload!.Unpack<Struct>();
-        v1Summary.Fields["decision_v2"].StringValue.Should().Be("promoted");
-        var v2RuntimeId = v1Summary.Fields["v2_runtime_id"].StringValue;
-        var generatedRuntimeId = v1Summary.Fields["generated_runtime_id"].StringValue;
+        var v1Summary = rootSnapshot.ReadModelPayload!.Unpack<SelfEvolutionV1State>();
+        v1Summary.DecisionV2.Should().Be("promoted");
+        var v2RuntimeId = v1Summary.V2RuntimeId;
+        var generatedRuntimeId = v1Summary.GeneratedRuntimeId;
         (await runtime.ExistsAsync(v2RuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(generatedRuntimeId)).Should().BeTrue();
 
@@ -253,12 +246,12 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             CancellationToken.None);
         generatedResult.NormalizedText.Should().Be("SELF-GEN:GENERATED");
 
-        var v2Summary = await ScriptEvolutionIntegrationTestKit.GetSummaryAsync(
+        var v2Summary = await ScriptEvolutionIntegrationTestKit.GetStateAsync<SelfEvolutionV2State>(
             provider,
             v2RuntimeId,
             CancellationToken.None);
-        v2Summary.Fields["decision_v3"].StringValue.Should().Be("promoted");
-        var v3RuntimeId = v2Summary.Fields["v3_runtime_id"].StringValue;
+        v2Summary.DecisionV3.Should().Be("promoted");
+        var v3RuntimeId = v2Summary.V3RuntimeId;
         (await runtime.ExistsAsync(v3RuntimeId)).Should().BeTrue();
 
         var v3Result = await ScriptEvolutionIntegrationTestKit.QueryNormalizationAsync(
@@ -306,21 +299,18 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             controllerRuntimeActorId,
             CancellationToken.None);
 
-        var input = new Struct
+        var input = new CatalogControlRequested
         {
-            Fields =
-            {
-                ["manual_v1_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "ManualCatalogRev1Runtime",
-                    "MANUAL-V1",
-                    "manual_catalog",
-                    "1")),
-                ["manual_v2_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "ManualCatalogRev2Runtime",
-                    "MANUAL-V2",
-                    "manual_catalog",
-                    "2")),
-            },
+            ManualV1Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "ManualCatalogRev1Runtime",
+                "MANUAL-V1",
+                "manual_catalog",
+                "1"),
+            ManualV2Source = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "ManualCatalogRev2Runtime",
+                "MANUAL-V2",
+                "manual_catalog",
+                "2"),
         };
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
@@ -333,10 +323,10 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             "script.catalog.control",
             CancellationToken.None);
 
-        var summary = snapshot.ReadModelPayload!.Unpack<Struct>();
-        var manualRuntimeId = summary.Fields["manual_runtime_id"].StringValue;
-        var manualDefinitionActorIdV1 = summary.Fields["manual_definition_actor_id_v1"].StringValue;
-        var manualDefinitionActorIdV2 = summary.Fields["manual_definition_actor_id_v2"].StringValue;
+        var summary = snapshot.ReadModelPayload!.Unpack<CatalogControlState>();
+        var manualRuntimeId = summary.ManualRuntimeId;
+        var manualDefinitionActorIdV1 = summary.ManualDefinitionActorIdV1;
+        var manualDefinitionActorIdV2 = summary.ManualDefinitionActorIdV2;
 
         (await runtime.ExistsAsync(manualRuntimeId)).Should().BeTrue();
         (await runtime.ExistsAsync(manualDefinitionActorIdV1)).Should().BeTrue();
@@ -401,19 +391,16 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             "interaction_invoked",
             "1");
 
-        var input = new Struct
+        var input = new InteractionUpsertRequested
         {
-            Fields =
-            {
-                ["definition_agent_type"] = PbValue.ForString(definitionType),
-                ["publish_source"] = PbValue.ForString(ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
-                    "PublishedDefinitionRuntime",
-                    "PUBLISHED",
-                    "interaction_published",
-                    "1")),
-                ["sendto_source"] = PbValue.ForString(sendToSource),
-                ["invoke_source"] = PbValue.ForString(invokeSource),
-            },
+            DefinitionAgentType = definitionType,
+            PublishSource = ScriptEvolutionIntegrationSources.BuildNormalizationBehaviorSource(
+                "PublishedDefinitionRuntime",
+                "PUBLISHED",
+                "interaction_published",
+                "1"),
+            SendtoSource = sendToSource,
+            InvokeSource = invokeSource,
         };
 
         var (_, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
@@ -426,12 +413,12 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             "script.interaction.exercise",
             CancellationToken.None);
 
-        var summary = snapshot.ReadModelPayload!.Unpack<Struct>();
-        summary.Fields["ai_response_length"].StringValue.Should().Be("0");
+        var summary = snapshot.ReadModelPayload!.Unpack<InteractionUpsertState>();
+        summary.AiResponseLength.Should().Be("0");
 
-        var publishedDefinitionId = summary.Fields["published_definition_actor_id"].StringValue;
-        var sendToDefinitionId = summary.Fields["sendto_definition_actor_id"].StringValue;
-        var upsertDefinitionId = summary.Fields["upsert_definition_actor_id"].StringValue;
+        var publishedDefinitionId = summary.PublishedDefinitionActorId;
+        var sendToDefinitionId = summary.SendtoDefinitionActorId;
+        var upsertDefinitionId = summary.UpsertDefinitionActorId;
 
         (await runtime.ExistsAsync(publishedDefinitionId)).Should().BeTrue();
         (await runtime.ExistsAsync(sendToDefinitionId)).Should().BeTrue();

@@ -6,6 +6,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
@@ -15,9 +16,8 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public sealed class ScriptBehaviorDispatcherTests
 {
-    private static readonly string StringValueTypeUrl = Any.Pack(new StringValue()).TypeUrl;
-    private static readonly string StructTypeUrl = Any.Pack(new Struct()).TypeUrl;
-
+    private static readonly string SimpleTextStateTypeUrl = Any.Pack(new SimpleTextState()).TypeUrl;
+    private static readonly string SimpleTextReadModelTypeUrl = Any.Pack(new SimpleTextReadModel()).TypeUrl;
     [Fact]
     public async Task DispatchAsync_ShouldEmitCommittedFactsWithResolvedContract()
     {
@@ -31,14 +31,18 @@ public sealed class ScriptBehaviorDispatcherTests
             Id = "command-1",
             Payload = Any.Pack(new RunScriptRequestedEvent
             {
-                RunId = "run-1",
-                DefinitionActorId = "definition-1",
-                ScriptRevision = "rev-1",
-                RequestedEventType = "integration.requested",
-                InputPayload = Any.Pack(new StringValue { Value = "  hello " }),
-                CommandId = "command-1",
-                CorrelationId = "correlation-1",
-            }),
+                        RunId = "run-1",
+                        DefinitionActorId = "definition-1",
+                        ScriptRevision = "rev-1",
+                        RequestedEventType = "integration.requested",
+                        InputPayload = Any.Pack(new SimpleTextCommand
+                        {
+                            CommandId = "command-1",
+                            Value = "  hello ",
+                        }),
+                        CommandId = "command-1",
+                        CorrelationId = "correlation-1",
+                    }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -73,10 +77,10 @@ public sealed class ScriptBehaviorDispatcherTests
         fact.CommandId.Should().Be("command-1");
         fact.CorrelationId.Should().Be("correlation-1");
         fact.StateVersion.Should().Be(8);
-        fact.StateTypeUrl.Should().Be(StringValueTypeUrl);
-        fact.ReadModelTypeUrl.Should().Be(StringValueTypeUrl);
+        fact.StateTypeUrl.Should().Be(SimpleTextStateTypeUrl);
+        fact.ReadModelTypeUrl.Should().Be(SimpleTextReadModelTypeUrl);
         fact.DomainEventPayload.Should().NotBeNull();
-        fact.DomainEventPayload.Unpack<StringValue>().Value.Should().Be("HELLO");
+        fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
     }
 
     [Fact]
@@ -110,7 +114,10 @@ public sealed class ScriptBehaviorDispatcherTests
                         DefinitionActorId = "definition-1",
                         ScriptRevision = "rev-1",
                         RequestedEventType = "integration.requested",
-                        InputPayload = Any.Pack(new Struct()),
+                        InputPayload = Any.Pack(new SimpleTextSignal
+                        {
+                            Value = "not-a-command",
+                        }),
                     }),
                     Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
                 },
@@ -118,7 +125,7 @@ public sealed class ScriptBehaviorDispatcherTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*rejected command payload type*google.protobuf.Struct*");
+            .WithMessage("*rejected command payload type*aevatar.scripting.tests.SimpleTextSignal*");
     }
 
     [Fact]
@@ -152,7 +159,11 @@ public sealed class ScriptBehaviorDispatcherTests
                         DefinitionActorId = "definition-1",
                         ScriptRevision = "rev-1",
                         RequestedEventType = "integration.requested",
-                        InputPayload = Any.Pack(new StringValue { Value = "ok" }),
+                        InputPayload = Any.Pack(new SimpleTextCommand
+                        {
+                            CommandId = "command-3",
+                            Value = "ok",
+                        }),
                     }),
                     Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
                 },
@@ -160,7 +171,7 @@ public sealed class ScriptBehaviorDispatcherTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*undeclared domain event type*google.protobuf.Struct*");
+            .WithMessage("*undeclared domain event type*" + "type.googleapis.com/aevatar.scripting.tests.SimpleTextUnexpectedEvent*");
     }
 
     private sealed class StaticArtifactResolver : IScriptBehaviorArtifactResolver
@@ -189,71 +200,82 @@ public sealed class ScriptBehaviorDispatcherTests
             behavior.Descriptor.ToContract(),
             () => behavior);
 
-    private sealed class UppercaseBehavior : ScriptBehavior<StringValue, StringValue>
+    private sealed class UppercaseBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
-        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder
-                .OnCommand<StringValue>(HandleAsync)
-                .OnEvent<StringValue>(
-                    apply: static (_, evt, _) => new StringValue { Value = evt.Value },
-                    reduce: static (_, evt, _) => new StringValue { Value = evt.Value })
-                .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
         private static Task HandleAsync(
-            StringValue inbound,
-            ScriptCommandContext<StringValue> context,
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            context.Emit(new StringValue { Value = (inbound.Value ?? string.Empty).Trim().ToUpperInvariant() });
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = inbound.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = (inbound.Value ?? string.Empty).Trim().ToUpperInvariant(),
+                },
+            });
             return Task.CompletedTask;
         }
 
-        private static Task<StringValue?> HandleQueryAsync(
-            Empty query,
-            ScriptQueryContext<StringValue> snapshot,
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested query,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
             CancellationToken ct)
         {
-            _ = query;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<StringValue?>(snapshot.CurrentReadModel == null
-                ? null
-                : new StringValue { Value = snapshot.CurrentReadModel.Value });
+            return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+            {
+                RequestId = query.RequestId ?? string.Empty,
+                Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+            });
         }
     }
 
-    private sealed class InvalidEventBehavior : ScriptBehavior<StringValue, StringValue>
+    private sealed class InvalidEventBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
-        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder
-                .OnCommand<StringValue>(HandleAsync)
-                .OnEvent<StringValue>(apply: static (_, evt, _) => evt, reduce: static (_, evt, _) => evt)
-                .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
         private static Task HandleAsync(
-            StringValue inbound,
-            ScriptCommandContext<StringValue> context,
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
             _ = inbound;
             ct.ThrowIfCancellationRequested();
-            context.Emit(new Struct());
+            context.Emit(new SimpleTextUnexpectedEvent { Value = "unexpected" });
             return Task.CompletedTask;
         }
 
-        private static Task<StringValue?> HandleQueryAsync(
-            Empty query,
-            ScriptQueryContext<StringValue> snapshot,
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested query,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
             CancellationToken ct)
         {
             _ = query;
             _ = snapshot;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<StringValue?>(null);
+            return Task.FromResult<SimpleTextQueryResponded?>(null);
         }
     }
 

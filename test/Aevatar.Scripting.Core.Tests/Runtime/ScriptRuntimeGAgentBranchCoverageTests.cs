@@ -6,6 +6,7 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
@@ -43,8 +44,8 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-            StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
-            ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+            StateTypeUrl = ScriptSources.UppercaseStateTypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             ReadModelSchemaVersion = "1",
             ReadModelSchemaHash = "schema-hash",
         };
@@ -82,7 +83,11 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             DefinitionActorId = "definition-1",
             ScriptRevision = "rev-1",
             RequestedEventType = "integration.requested",
-            InputPayload = Any.Pack(new StringValue { Value = "hello" }),
+            InputPayload = Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "hello",
+            }),
         }));
 
         await act.Should().ThrowAsync<InvalidOperationException>()

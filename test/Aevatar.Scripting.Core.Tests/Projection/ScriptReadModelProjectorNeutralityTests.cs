@@ -9,13 +9,14 @@ using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Projection;
 
-public sealed class ScriptExecutionReadModelProjectorNeutralityTests
+public sealed class ScriptReadModelProjectorNeutralityTests
 {
     [Fact]
     public async Task ProjectAsync_ShouldNotMutateCommittedFactPayload()
@@ -27,7 +28,15 @@ public sealed class ScriptExecutionReadModelProjectorNeutralityTests
             new StaticDefinitionSnapshotPort(),
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
             new ProtobufMessageCodec());
-        var payload = Any.Pack(new StringValue { Value = "HELLO" });
+        var payload = Any.Pack(new SimpleTextEvent
+        {
+            CommandId = "command-1",
+            Current = new SimpleTextReadModel
+            {
+                HasValue = true,
+                Value = "HELLO",
+            },
+        });
         var fact = new ScriptDomainFactCommitted
         {
             ActorId = "runtime-1",
@@ -37,7 +46,7 @@ public sealed class ScriptExecutionReadModelProjectorNeutralityTests
             RunId = "run-1",
             EventType = payload.TypeUrl,
             DomainEventPayload = payload.Clone(),
-            ReadModelTypeUrl = payload.TypeUrl,
+            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
             StateVersion = 1,
         };
         var context = new ScriptExecutionProjectionContext
@@ -59,12 +68,12 @@ public sealed class ScriptExecutionReadModelProjectorNeutralityTests
             CancellationToken.None);
 
         fact.DomainEventPayload.Should().NotBeNull();
-        fact.DomainEventPayload.Unpack<StringValue>().Value.Should().Be("HELLO");
+        fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
 
         var document = await dispatcher.GetAsync("runtime-1", CancellationToken.None);
         document.Should().NotBeNull();
         document!.ReadModelPayload.Should().NotBeNull();
-        document.ReadModelPayload.Unpack<StringValue>().Value.Should().Be("HELLO");
+        document.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
     }
 
     private sealed class StaticDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
@@ -83,13 +92,13 @@ public sealed class ScriptExecutionReadModelProjectorNeutralityTests
                 SourceText: ScriptSources.UppercaseBehavior,
                 SourceHash: ScriptSources.UppercaseBehaviorHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: Any.Pack(new StringValue()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new StringValue()).TypeUrl,
+                StateTypeUrl: ScriptSources.UppercaseStateTypeUrl,
+                ReadModelTypeUrl: ScriptSources.UppercaseReadModelTypeUrl,
                 ReadModelSchemaVersion: "v1",
                 ReadModelSchemaHash: "schema-hash",
                 ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: StringValue.Descriptor.FullName,
-                ReadModelDescriptorFullName: StringValue.Descriptor.FullName));
+                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
+                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
         }
     }
 

@@ -59,13 +59,10 @@ public sealed class ScriptAutonomousEvolutionE2ETests
             orchestratorRuntimeActorId,
             CancellationToken.None);
 
-        var input = new Struct
+        var input = new ScriptOnlyEvolutionRequested
         {
-            Fields =
-            {
-                ["newScriptSource"] = Google.Protobuf.WellKnownTypes.Value.ForString(newRuntimeSource),
-                ["workerV2Source"] = Google.Protobuf.WellKnownTypes.Value.ForString(workerV2Source),
-            },
+            NewScriptSource = newRuntimeSource,
+            WorkerV2Source = workerV2Source,
         };
 
         var (fact, snapshot) = await ScriptEvolutionIntegrationTestKit.RunAndReadAsync(
@@ -79,16 +76,16 @@ public sealed class ScriptAutonomousEvolutionE2ETests
             ct: CancellationToken.None);
 
         fact.DomainEventPayload.Should().NotBeNull();
-        fact.DomainEventPayload!.Is(Struct.Descriptor).Should().BeTrue();
+        fact.DomainEventPayload!.Is(ScriptOnlyEvolutionCompleted.Descriptor).Should().BeTrue();
 
         snapshot.ReadModelPayload.Should().NotBeNull();
-        var summary = snapshot.ReadModelPayload!.Unpack<Struct>();
+        var summary = snapshot.ReadModelPayload!.Unpack<ScriptOnlyEvolutionState>();
 
-        var tempRuntimeId = summary.Fields["temp_runtime_id"].StringValue;
-        var newRuntimeId = summary.Fields["new_runtime_id"].StringValue;
-        var evolvedRuntimeId = summary.Fields["evolved_runtime_id"].StringValue;
-        var newDefinitionActorId = summary.Fields["new_definition_actor_id"].StringValue;
-        var decisionStatus = summary.Fields["decision_status"].StringValue;
+        var tempRuntimeId = summary.TempRuntimeId;
+        var newRuntimeId = summary.NewRuntimeId;
+        var evolvedRuntimeId = summary.EvolvedRuntimeId;
+        var newDefinitionActorId = summary.NewDefinitionActorId;
+        var decisionStatus = summary.DecisionStatus;
 
         decisionStatus.Should().Be("promoted");
         (await runtime.ExistsAsync(tempRuntimeId)).Should().BeTrue();

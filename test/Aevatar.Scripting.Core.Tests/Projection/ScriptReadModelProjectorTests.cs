@@ -9,6 +9,7 @@ using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -43,9 +44,17 @@ public sealed class ScriptReadModelProjectorTests
                 ScriptId = "script-1",
                 Revision = "rev-1",
                 RunId = "run-1",
-                EventType = StringValue.Descriptor.FullName,
-                DomainEventPayload = Any.Pack(new StringValue { Value = "HELLO" }),
-                ReadModelTypeUrl = StringValue.Descriptor.FullName,
+                EventType = ScriptSources.UppercaseEventTypeUrl,
+                DomainEventPayload = Any.Pack(new SimpleTextEvent
+                {
+                    CommandId = "command-1",
+                    Current = new SimpleTextReadModel
+                    {
+                        HasValue = true,
+                        Value = "HELLO",
+                    },
+                }),
+                ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
                 StateVersion = 1,
             }),
             CancellationToken.None);
@@ -57,7 +66,7 @@ public sealed class ScriptReadModelProjectorTests
         document.Revision.Should().Be("rev-1");
         document.StateVersion.Should().Be(1);
         document.ReadModelPayload.Should().NotBeNull();
-        document.ReadModelPayload.Unpack<StringValue>().Value.Should().Be("HELLO");
+        document.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
     }
 
     private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
@@ -91,13 +100,13 @@ public sealed class ScriptReadModelProjectorTests
                 SourceText: ScriptSources.UppercaseBehavior,
                 SourceHash: ScriptSources.UppercaseBehaviorHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: Any.Pack(new StringValue()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new StringValue()).TypeUrl,
+                StateTypeUrl: ScriptSources.UppercaseStateTypeUrl,
+                ReadModelTypeUrl: ScriptSources.UppercaseReadModelTypeUrl,
                 ReadModelSchemaVersion: "v1",
                 ReadModelSchemaHash: "schema-hash",
                 ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: StringValue.Descriptor.FullName,
-                ReadModelDescriptorFullName: StringValue.Descriptor.FullName));
+                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
+                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
         }
     }
 

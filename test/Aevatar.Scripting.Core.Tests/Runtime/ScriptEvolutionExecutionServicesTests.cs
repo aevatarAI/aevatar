@@ -3,9 +3,9 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
@@ -185,34 +185,47 @@ public class ScriptEvolutionExecutionServicesTests
         }
     }
 
-    private sealed class NoopBehavior : ScriptBehavior<StringValue, StringValue>
+    private sealed class NoopBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
-        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder
-                .OnCommand<StringValue>(HandleAsync)
-                .OnEvent<StringValue>(apply: static (_, evt, _) => evt, reduce: static (_, evt, _) => evt)
-                .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
         private static Task HandleAsync(
-            StringValue command,
-            ScriptCommandContext<StringValue> context,
+            SimpleTextCommand command,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            context.Emit(command.Clone());
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = command.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = command.Value ?? string.Empty,
+                },
+            });
             return Task.CompletedTask;
         }
 
-        private static Task<StringValue?> HandleQueryAsync(
-            Empty query,
-            ScriptQueryContext<StringValue> snapshot,
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested query,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
             CancellationToken ct)
         {
-            _ = query;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(snapshot.CurrentReadModel);
+            return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+            {
+                RequestId = query.RequestId ?? string.Empty,
+                Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+            });
         }
     }
 

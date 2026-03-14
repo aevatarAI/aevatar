@@ -7,6 +7,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
@@ -37,16 +38,16 @@ public sealed class ScriptRuntimeGAgentEventDrivenQueryTests
             SourceText = "source",
             SourceHash = "hash-1",
             ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("source"),
-            StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
-            ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+            StateTypeUrl = Any.Pack(new SimpleTextState()).TypeUrl,
+            ReadModelTypeUrl = Any.Pack(new SimpleTextReadModel()).TypeUrl,
             ReadModelSchemaVersion = "1",
             ReadModelSchemaHash = "schema-hash",
         }));
-        await agent.HandleEnvelopeAsync(BuildEnvelope(new Empty()));
+        await agent.HandleEnvelopeAsync(BuildEnvelope(new SimpleTextSignal { Value = "signal" }));
 
         agent.State.LastAppliedEventVersion.Should().Be(2);
         agent.State.LastRunId.Should().BeEmpty();
-        agent.State.LastEventId.Should().Be(Any.Pack(new StringValue()).TypeUrl);
+        agent.State.LastEventId.Should().Be(Any.Pack(new SimpleTextEvent()).TypeUrl);
 
         var persisted = await eventStore.GetEventsAsync(agent.Id, ct: CancellationToken.None);
         persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
@@ -68,38 +69,49 @@ public sealed class ScriptRuntimeGAgentEventDrivenQueryTests
         }
     }
 
-    private sealed class StatefulBehavior : ScriptBehavior<StringValue, StringValue>
+    private sealed class StatefulBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
-        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder
-                .OnSignal<Empty>(HandleSignalAsync)
-                .OnEvent<StringValue>(
-                    apply: static (_, evt, _) => evt,
-                    reduce: static (_, evt, _) => evt)
-                .OnQuery<Empty, StringValue>(HandleQueryAsync);
+                .OnSignal<SimpleTextSignal>(HandleSignalAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current)
+                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
         private static Task HandleSignalAsync(
-            Empty inbound,
-            ScriptCommandContext<StringValue> context,
+            SimpleTextSignal inbound,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
             _ = inbound;
-            _ = context;
             ct.ThrowIfCancellationRequested();
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = context.CommandId,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "signal",
+                },
+            });
             return Task.CompletedTask;
         }
 
-        private static Task<StringValue?> HandleQueryAsync(
-            Empty queryPayload,
-            ScriptQueryContext<StringValue> snapshot,
+        private static Task<SimpleTextQueryResponded?> HandleQueryAsync(
+            SimpleTextQueryRequested queryPayload,
+            ScriptQueryContext<SimpleTextReadModel> snapshot,
             CancellationToken ct)
         {
             _ = queryPayload;
-            _ = snapshot;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<StringValue?>(null);
+            return Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+            {
+                RequestId = queryPayload.RequestId ?? string.Empty,
+                Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
+            });
         }
     }
 
@@ -124,7 +136,7 @@ public sealed class ScriptRuntimeGAgentEventDrivenQueryTests
         {
             ct.ThrowIfCancellationRequested();
             request.Envelope.Payload.Should().NotBeNull();
-            request.Envelope.Payload!.Is(Empty.Descriptor).Should().BeTrue();
+            request.Envelope.Payload!.Is(SimpleTextSignal.Descriptor).Should().BeTrue();
             return Task.FromResult<IReadOnlyList<ScriptDomainFactCommitted>>(
             [
                 new ScriptDomainFactCommitted
@@ -137,10 +149,18 @@ public sealed class ScriptRuntimeGAgentEventDrivenQueryTests
                     CommandId = request.Envelope.Id ?? string.Empty,
                     CorrelationId = request.Envelope.Propagation?.CorrelationId ?? string.Empty,
                     EventSequence = 1,
-                    EventType = Any.Pack(new StringValue()).TypeUrl,
-                    DomainEventPayload = Any.Pack(new StringValue { Value = "signal" }),
-                    StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
-                    ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
+                    EventType = Any.Pack(new SimpleTextEvent()).TypeUrl,
+                    DomainEventPayload = Any.Pack(new SimpleTextEvent
+                    {
+                        CommandId = request.Envelope.Id ?? string.Empty,
+                        Current = new SimpleTextReadModel
+                        {
+                            HasValue = true,
+                            Value = "signal",
+                        },
+                    }),
+                    StateTypeUrl = Any.Pack(new SimpleTextState()).TypeUrl,
+                    ReadModelTypeUrl = Any.Pack(new SimpleTextReadModel()).TypeUrl,
                     StateVersion = request.CurrentStateVersion + 1,
                     OccurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 },

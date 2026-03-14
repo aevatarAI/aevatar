@@ -15,7 +15,8 @@ public sealed partial record ScriptDefinitionSnapshot(
     string ReadModelSchemaHash,
     ByteString ProtocolDescriptorSet,
     string StateDescriptorFullName,
-    string ReadModelDescriptorFullName);
+    string ReadModelDescriptorFullName,
+    ScriptRuntimeSemanticsSpec? RuntimeSemantics = null);
 
 public sealed partial record ScriptDefinitionSnapshot
 {
@@ -30,7 +31,8 @@ public sealed partial record ScriptDefinitionSnapshot
         string ReadModelSchemaHash,
         ByteString? ProtocolDescriptorSet = null,
         string StateDescriptorFullName = "",
-        string ReadModelDescriptorFullName = "")
+        string ReadModelDescriptorFullName = "",
+        ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
         : this(
             ScriptId,
             Revision,
@@ -43,7 +45,8 @@ public sealed partial record ScriptDefinitionSnapshot
             ReadModelSchemaHash,
             ProtocolDescriptorSet ?? ByteString.Empty,
             StateDescriptorFullName,
-            ReadModelDescriptorFullName)
+            ReadModelDescriptorFullName,
+            RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec())
     {
     }
 }

@@ -3,11 +3,16 @@ using Google.Protobuf;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed class GrpcToolsScriptProtoCompiler : IScriptProtoCompiler
 {
+    private static readonly Regex UnsupportedWrapperPattern = new(
+        "wrappers\\.proto|google\\.protobuf\\.(StringValue|BoolValue|Int32Value|Int64Value|UInt32Value|UInt64Value|DoubleValue|FloatValue|BytesValue)",
+        RegexOptions.Compiled);
+
     public ScriptProtoCompilationResult Compile(ScriptBehaviorCompilationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -20,6 +25,10 @@ public sealed class GrpcToolsScriptProtoCompiler : IScriptProtoCompiler
         var normalized = package.Normalize();
         if (normalized.ProtoFiles.Count == 0)
             return ScriptProtoCompilationResult.Empty;
+
+        var wrapperDiagnostics = ValidateUnsupportedWrapperUsage(normalized.ProtoFiles);
+        if (wrapperDiagnostics.Count > 0)
+            return new ScriptProtoCompilationResult(false, Array.Empty<ScriptSourceFile>(), ByteString.Empty, wrapperDiagnostics);
 
         var diagnostics = new List<string>();
         var packageRoot = Path.Combine(Path.GetTempPath(), "aevatar-script-proto", Guid.NewGuid().ToString("N"));
@@ -44,6 +53,10 @@ public sealed class GrpcToolsScriptProtoCompiler : IScriptProtoCompiler
             File.WriteAllText(
                 Path.Combine(builtinRoot, ScriptBuiltInProtoSources.ScriptingSchemaOptionsFileName),
                 ScriptBuiltInProtoSources.ScriptingSchemaOptionsContent,
+                Encoding.UTF8);
+            File.WriteAllText(
+                Path.Combine(builtinRoot, ScriptBuiltInProtoSources.ScriptingRuntimeOptionsFileName),
+                ScriptBuiltInProtoSources.ScriptingRuntimeOptionsContent,
                 Encoding.UTF8);
 
             var descriptorPath = Path.Combine(descriptorOut, "script-package.desc");
@@ -200,5 +213,22 @@ public sealed class GrpcToolsScriptProtoCompiler : IScriptProtoCompiler
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<string> ValidateUnsupportedWrapperUsage(
+        IReadOnlyList<ScriptSourceFile> protoFiles)
+    {
+        var diagnostics = new List<string>();
+        foreach (var file in protoFiles)
+        {
+            if (!UnsupportedWrapperPattern.IsMatch(file.Content ?? string.Empty))
+                continue;
+
+            diagnostics.Add(
+                $"{file.NormalizedPath}: scripting proto packages must not reference protobuf wrapper leaf types. " +
+                "Use scalar fields, proto3 optional fields, or typed sub-messages instead of google.protobuf.*Value and wrappers.proto.");
+        }
+
+        return diagnostics;
     }
 }

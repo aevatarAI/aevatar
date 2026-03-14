@@ -5,6 +5,7 @@ package aevatar.protocols;
 option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
 
 import "scripting_schema_options.proto";
+import "scripting_runtime_options.proto";
 
 message TextNormalizationReadModel {
   option (aevatar.scripting.schema.scripting_read_model) = {
@@ -49,21 +50,46 @@ message TextNormalizationRefs {
 }
 
 message TextNormalizationRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_COMMAND
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+  };
   string command_id = 1;
   string input_text = 2;
 }
 
 message TextNormalizationCompleted {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
+    projectable: true
+    replay_safe: true
+    snapshot_candidate: true
+    command_id_field: "command_id"
+    correlation_id_field: "command_id"
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
   string command_id = 1;
   TextNormalizationReadModel current = 2;
 }
 
 message TextNormalizationQueryRequested {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
+  option (aevatar.scripting.runtime.scripting_query) = {
+    result_full_name: "aevatar.protocols.TextNormalizationQueryResponded"
+  };
   string request_id = 1;
   string reply_stream_id = 2;
 }
 
 message TextNormalizationQueryResponded {
+  option (aevatar.scripting.runtime.scripting_runtime) = {
+    kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
+    read_model_scope: "aevatar.protocols.TextNormalizationReadModel"
+  };
   string request_id = 1;
   TextNormalizationReadModel current = 2;
 }

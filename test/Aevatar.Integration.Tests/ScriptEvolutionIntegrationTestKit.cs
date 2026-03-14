@@ -113,10 +113,11 @@ internal static class ScriptEvolutionIntegrationTestKit
         return result.Unpack<TextNormalizationQueryResponded>().Current;
     }
 
-    public static async Task<Struct> GetSummaryAsync(
+    public static async Task<TState> GetStateAsync<TState>(
         IServiceProvider provider,
         string runtimeActorId,
         CancellationToken ct)
+        where TState : class, IMessage<TState>, new()
     {
         var runtime = provider.GetRequiredService<IActorRuntime>();
         var actor = await runtime.GetAsync(runtimeActorId)
@@ -126,7 +127,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         if (agent.State.StateRoot == null)
             throw new InvalidOperationException($"Script runtime `{runtimeActorId}` does not have state.");
 
-        return agent.State.StateRoot.Unpack<Struct>();
+        return agent.State.StateRoot.Unpack<TState>();
     }
 
     public static Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(

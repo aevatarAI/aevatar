@@ -85,7 +85,7 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
     {
         var builder = new ScriptBehaviorBuilder<TState, TReadModel>();
         Configure(builder);
-        return builder.Build();
+        return ScriptBehaviorRuntimeSemanticsCompiler.Attach(builder.Build());
     }
 
     private ScriptDomainEventRegistration ResolveDomainEventRegistration(IMessage domainEvent)
@@ -250,7 +250,8 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
                 new Dictionary<string, ScriptSignalRegistration>(_signals, StringComparer.Ordinal),
                 new Dictionary<string, ScriptDomainEventRegistration>(_domainEvents, StringComparer.Ordinal),
                 new Dictionary<string, ScriptQueryRegistration>(_queries, StringComparer.Ordinal),
-                ByteString.Empty);
+                ByteString.Empty,
+                new ScriptRuntimeSemanticsSpec());
         }
 
         private void EnsureNoInboundConflict(string typeUrl, string category)

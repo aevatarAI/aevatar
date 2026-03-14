@@ -6,6 +6,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
@@ -52,7 +53,11 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
                         DefinitionActorId = "definition-1",
                         ScriptRevision = "rev-1",
                         RequestedEventType = "integration.requested",
-                        InputPayload = Any.Pack(new StringValue { Value = "hello" }),
+                        InputPayload = Any.Pack(new SimpleTextCommand
+                        {
+                            CommandId = "command-1",
+                            Value = "hello",
+                        }),
                     }),
                     Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
                 },
@@ -79,7 +84,7 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
         public void MarkDisposed() => DisposeCalls++;
     }
 
-    private sealed class AsyncDisposableBehavior : ScriptBehavior<StringValue, StringValue>, IAsyncDisposable
+    private sealed class AsyncDisposableBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>, IAsyncDisposable
     {
         private readonly AsyncDisposableTracker _tracker;
 
@@ -88,19 +93,30 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
             _tracker = tracker;
         }
 
-        protected override void Configure(IScriptBehaviorBuilder<StringValue, StringValue> builder)
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            builder.OnCommand<StringValue>(HandleAsync);
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
+                    reduce: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleAsync(
-            StringValue inbound,
-            ScriptCommandContext<StringValue> context,
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
             CancellationToken ct)
         {
-            _ = context;
             ct.ThrowIfCancellationRequested();
-            context.Emit(new StringValue { Value = inbound.Value ?? string.Empty });
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = inbound.CommandId ?? string.Empty,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = inbound.Value ?? string.Empty,
+                },
+            });
             return Task.CompletedTask;
         }
 

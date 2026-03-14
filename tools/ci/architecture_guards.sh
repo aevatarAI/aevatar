@@ -472,6 +472,9 @@ bash tools/ci/script_inheritance_guard.sh
 echo "Running scripting interaction boundary guard..."
 bash tools/ci/scripting_interaction_boundary_guard.sh
 
+echo "Running scripting read model wrapper guard..."
+bash tools/ci/scripting_readmodel_wrapper_guard.sh
+
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
   exit 1

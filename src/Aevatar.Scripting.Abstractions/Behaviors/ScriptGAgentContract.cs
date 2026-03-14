@@ -12,7 +12,8 @@ public sealed record ScriptGAgentContract(
     IReadOnlyList<string> InternalSignalTypeUrls,
     string StateDescriptorFullName,
     string ReadModelDescriptorFullName,
-    ByteString? ProtocolDescriptorSet = null)
+    ByteString? ProtocolDescriptorSet = null,
+    ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
 {
     public static ScriptGAgentContract Empty { get; } = new(
         StateTypeUrl: string.Empty,
@@ -24,7 +25,8 @@ public sealed record ScriptGAgentContract(
         InternalSignalTypeUrls: Array.Empty<string>(),
         StateDescriptorFullName: string.Empty,
         ReadModelDescriptorFullName: string.Empty,
-        ProtocolDescriptorSet: ByteString.Empty);
+        ProtocolDescriptorSet: ByteString.Empty,
+        RuntimeSemantics: new ScriptRuntimeSemanticsSpec());
 
     public IReadOnlyList<string> CommandTypes => CommandTypeUrls;
 

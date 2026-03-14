@@ -4,6 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
@@ -14,7 +15,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Serialization;
-using PbValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Integration.Tests;
 
@@ -172,19 +172,16 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 await commandPortNode1.RunRuntimeAsync(
                     orchestratorRuntimeActorId,
                     $"run-orleans-{scopeId}",
-                    Any.Pack(new Struct
+                    Any.Pack(new OrleansClusterRequested
                     {
-                        Fields =
-                        {
-                            ["worker_a_definition_actor_id"] = PbValue.ForString(workerADefinitionActorId),
-                            ["worker_b_definition_actor_id"] = PbValue.ForString(workerBDefinitionActorId),
-                            ["new_script_id"] = PbValue.ForString(newScriptId),
-                            ["new_script_source"] = PbValue.ForString(generatedSource),
-                            ["temp_a_runtime_id"] = PbValue.ForString(tempARuntimeId),
-                            ["temp_b_runtime_id"] = PbValue.ForString(tempBRuntimeId),
-                            ["generated_runtime_id"] = PbValue.ForString(generatedRuntimeId),
-                            ["generated_definition_actor_id"] = PbValue.ForString(generatedDefinitionActorId),
-                        },
+                        WorkerADefinitionActorId = workerADefinitionActorId,
+                        WorkerBDefinitionActorId = workerBDefinitionActorId,
+                        NewScriptId = newScriptId,
+                        NewScriptSource = generatedSource,
+                        TempARuntimeId = tempARuntimeId,
+                        TempBRuntimeId = tempBRuntimeId,
+                        GeneratedRuntimeId = generatedRuntimeId,
+                        GeneratedDefinitionActorId = generatedDefinitionActorId,
                     }),
                     "rev-orchestrator-1",
                     orchestratorDefinitionActorId,
@@ -196,9 +193,9 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     $"run-orleans-{scopeId}",
                     CancellationToken.None);
                 committed.DomainEventPayload.Should().NotBeNull();
-                var summary = committed.DomainEventPayload!.Unpack<Struct>();
-                summary.Fields["generated_definition_actor_id"].StringValue.Should().Be(generatedDefinitionActorId);
-                summary.Fields["generated_runtime_id"].StringValue.Should().Be(generatedRuntimeId);
+                var summary = committed.DomainEventPayload!.Unpack<OrleansClusterCompleted>().Current;
+                summary.GeneratedDefinitionActorId.Should().Be(generatedDefinitionActorId);
+                summary.GeneratedRuntimeId.Should().Be(generatedRuntimeId);
             }
             finally
             {

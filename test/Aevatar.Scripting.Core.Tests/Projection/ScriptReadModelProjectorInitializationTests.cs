@@ -9,13 +9,14 @@ using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Projection;
 
-public sealed class ScriptExecutionReadModelProjectorTests
+public sealed class ScriptReadModelProjectorInitializationTests
 {
     [Fact]
     public async Task InitializeAsync_ShouldSeedDocumentForProjectionRoot()
@@ -60,7 +61,11 @@ public sealed class ScriptExecutionReadModelProjectorTests
                     DefinitionActorId = "definition-1",
                     ScriptRevision = "rev-1",
                     RequestedEventType = "integration.requested",
-                    InputPayload = Any.Pack(new StringValue { Value = "hello" }),
+                    InputPayload = Any.Pack(new SimpleTextCommand
+                    {
+                        CommandId = "command-1",
+                        Value = "hello",
+                    }),
                 }),
                 Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -99,13 +104,13 @@ public sealed class ScriptExecutionReadModelProjectorTests
                 SourceText: ScriptSources.UppercaseBehavior,
                 SourceHash: ScriptSources.UppercaseBehaviorHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: Any.Pack(new StringValue()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new StringValue()).TypeUrl,
+                StateTypeUrl: ScriptSources.UppercaseStateTypeUrl,
+                ReadModelTypeUrl: ScriptSources.UppercaseReadModelTypeUrl,
                 ReadModelSchemaVersion: "v1",
                 ReadModelSchemaHash: "schema-hash",
                 ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: StringValue.Descriptor.FullName,
-                ReadModelDescriptorFullName: StringValue.Descriptor.FullName));
+                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
+                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
         }
     }
 

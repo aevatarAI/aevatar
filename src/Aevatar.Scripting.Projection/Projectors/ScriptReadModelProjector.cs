@@ -80,6 +80,15 @@ public sealed class ScriptReadModelProjector
                 throw new InvalidOperationException(
                     $"Script read model projector rejected undeclared domain event type `{eventTypeUrl}`.");
             }
+            var eventSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(eventTypeUrl, ScriptMessageKind.DomainEvent);
+            if (eventSemantics.Kind != ScriptMessageKind.DomainEvent)
+            {
+                throw new InvalidOperationException(
+                    $"Script read model projector rejected `{eventTypeUrl}` because runtime kind is `{eventSemantics.Kind}`.");
+            }
+
+            if (!eventSemantics.Projectable)
+                return;
 
             ScriptReadModelDocument? currentDocument = null;
             await _storeDispatcher.MutateAsync(context.RootActorId, document =>
