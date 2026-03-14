@@ -16,8 +16,9 @@ public class ScriptEvolutionReadModelProjectorTests
     [Fact]
     public async Task Should_Project_Proposed_Validated_And_Promoted_Timeline()
     {
-        var dispatcher = new InMemoryEvolutionProjectionStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>();
         var projector = new ScriptEvolutionReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             [
@@ -92,8 +93,9 @@ public class ScriptEvolutionReadModelProjectorTests
     [Fact]
     public async Task Should_Project_Rejected_And_RolledBack_Statuses()
     {
-        var dispatcher = new InMemoryEvolutionProjectionStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>();
         var projector = new ScriptEvolutionReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             [
@@ -174,49 +176,6 @@ public class ScriptEvolutionReadModelProjectorTests
                 CorrelationId = id,
             },
         };
-    }
-
-    private sealed class InMemoryEvolutionProjectionStoreDispatcher
-        : IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>
-    {
-        private readonly Dictionary<string, ScriptEvolutionReadModel> _store = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptEvolutionReadModel readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(
-            string key,
-            Action<ScriptEvolutionReadModel> mutate,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptEvolutionReadModel { Id = key };
-                _store[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptEvolutionReadModel?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _store.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
-        }
-
-        public Task<IReadOnlyList<ScriptEvolutionReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptEvolutionReadModel>>(
-                _store.Values.Take(take).ToArray());
-        }
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

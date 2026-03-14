@@ -84,7 +84,8 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptNativeDocumentReadModel>(),
                 keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
+                keyFormatter: key => key,
+                indexScopeSelector: readModel => readModel.DocumentIndexScope);
         }
         else
         {

@@ -20,7 +20,7 @@ public sealed class ScriptReadModelProjectorInitializationTests
     [Fact]
     public async Task InitializeAsync_ShouldSeedDocumentForProjectionRoot()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
         var context = new ScriptExecutionProjectionContext
         {
@@ -40,7 +40,7 @@ public sealed class ScriptReadModelProjectorInitializationTests
     [Fact]
     public async Task ProjectAsync_ShouldIgnoreNonCommittedEnvelope()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
         var context = new ScriptExecutionProjectionContext
         {
@@ -77,9 +77,11 @@ public sealed class ScriptReadModelProjectorInitializationTests
         document.StateVersion.Should().Be(0);
     }
 
-    private static ScriptReadModelProjector CreateProjector(InMemoryReadModelDispatcher dispatcher)
+    private static ScriptReadModelProjector CreateProjector(
+        InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher)
     {
         return new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)),
             new StaticDefinitionSnapshotPort(),
@@ -110,44 +112,6 @@ public sealed class ScriptReadModelProjectorInitializationTests
                 ProtocolDescriptorSet: ByteString.Empty,
                 StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
                 ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
-        }
-    }
-
-    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
-    {
-        private readonly Dictionary<string, ScriptReadModelDocument> _items = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = readModel.DeepClone();
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _items[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel?.DeepClone());
-        }
-
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).Select(static x => x.DeepClone()).ToArray());
         }
     }
 

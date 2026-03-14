@@ -1,4 +1,6 @@
 using Aevatar.Workflow.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
@@ -15,6 +17,7 @@ public sealed class WorkflowActorBindingProjectorTests
     {
         var dispatcher = new FakeStoreDispatcher();
         var projector = new WorkflowActorBindingProjector(
+            dispatcher,
             dispatcher,
             new StaticClock(new DateTimeOffset(2026, 3, 14, 12, 0, 0, TimeSpan.Zero)));
         var context = new WorkflowBindingProjectionContext
@@ -55,7 +58,7 @@ public sealed class WorkflowActorBindingProjectorTests
     public async Task ProjectAsync_ShouldCaptureRunBinding_AndNormalizeRunId()
     {
         var dispatcher = new FakeStoreDispatcher();
-        var projector = new WorkflowActorBindingProjector(dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
             ProjectionId = "actor-2:binding",
@@ -93,7 +96,7 @@ public sealed class WorkflowActorBindingProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedEvents()
     {
         var dispatcher = new FakeStoreDispatcher();
-        var projector = new WorkflowActorBindingProjector(dispatcher, new StaticClock(DateTimeOffset.UtcNow));
+        var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
             ProjectionId = "actor-3:binding",
@@ -116,7 +119,9 @@ public sealed class WorkflowActorBindingProjectorTests
         dispatcher.Documents.Should().BeEmpty();
     }
 
-    private sealed class FakeStoreDispatcher : IProjectionStoreDispatcher<WorkflowActorBindingDocument, string>
+    private sealed class FakeStoreDispatcher
+        : IProjectionWriteDispatcher<WorkflowActorBindingDocument, string>,
+          IProjectionDocumentReader<WorkflowActorBindingDocument, string>
     {
         public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);
 
@@ -124,23 +129,6 @@ public sealed class WorkflowActorBindingProjectorTests
         {
             ct.ThrowIfCancellationRequested();
             Documents[readModel.Id] = readModel.DeepClone();
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<WorkflowActorBindingDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!Documents.TryGetValue(key, out var document))
-            {
-                document = new WorkflowActorBindingDocument
-                {
-                    Id = key,
-                    ActorId = key,
-                };
-            }
-
-            mutate(document);
-            Documents[key] = document.DeepClone();
             return Task.CompletedTask;
         }
 

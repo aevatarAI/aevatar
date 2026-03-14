@@ -23,6 +23,7 @@ public sealed class ScriptNativeGraphProjectorTests
     public async Task ProjectAsync_ShouldMaterializeRelationsIntoNativeGraphReadModel()
     {
         var dispatcher = new RecordingNativeGraphDispatcher();
+        IProjectionGraphMaterializer<ScriptNativeGraphReadModel> graphMaterializer = new ScriptNativeGraphMaterializer();
         var projector = new ScriptNativeGraphProjector(
             dispatcher,
             new StaticClaimDefinitionSnapshotPort(),
@@ -64,11 +65,12 @@ public sealed class ScriptNativeGraphProjectorTests
 
         dispatcher.LastUpsert.Should().NotBeNull();
         var graphReadModel = dispatcher.LastUpsert!;
+        var graph = graphMaterializer.Materialize(graphReadModel);
         graphReadModel.SchemaId.Should().Be("claim_case");
         graphReadModel.GraphScope.Should().Be("script-native-claim_case");
-        graphReadModel.GraphNodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-runtime");
-        graphReadModel.GraphNodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");
-        graphReadModel.GraphEdges.Should().ContainSingle(x =>
+        graph.Nodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-runtime");
+        graph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");
+        graph.Edges.Should().ContainSingle(x =>
             x.FromNodeId == "script:claim_case:claim-runtime" &&
             x.ToNodeId == "ref:policy:POLICY-B" &&
             x.EdgeType == "rel_policy");
@@ -134,24 +136,15 @@ public sealed class ScriptNativeGraphProjectorTests
         }
     }
 
-    private sealed class RecordingNativeGraphDispatcher : IProjectionStoreDispatcher<ScriptNativeGraphReadModel, string>
+    private sealed class RecordingNativeGraphDispatcher : IProjectionWriteDispatcher<ScriptNativeGraphReadModel, string>
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
         public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel;
+            LastUpsert = readModel.DeepClone();
             return Task.CompletedTask;
         }
-
-        public Task MutateAsync(string key, Action<ScriptNativeGraphReadModel> mutate, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<ScriptNativeGraphReadModel?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<ScriptNativeGraphReadModel?>(null);
-
-        public Task<IReadOnlyList<ScriptNativeGraphReadModel>> ListAsync(int take = 50, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScriptNativeGraphReadModel>>([]);
     }
 }

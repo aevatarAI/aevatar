@@ -11,18 +11,21 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowExecutionReadModelProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IProjectionStoreDispatcher<WorkflowExecutionReport, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport, string> _writeDispatcher;
+    private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
     private readonly IEventDeduplicator _deduplicator;
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
     public WorkflowExecutionReadModelProjector(
-        IProjectionStoreDispatcher<WorkflowExecutionReport, string> storeDispatcher,
+        IProjectionWriteDispatcher<WorkflowExecutionReport, string> writeDispatcher,
+        IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         IEventDeduplicator deduplicator,
         IProjectionClock clock,
         IEnumerable<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> reducers)
     {
-        _storeDispatcher = storeDispatcher;
+        _writeDispatcher = writeDispatcher;
+        _documentReader = documentReader;
         _deduplicator = deduplicator;
         _clock = clock;
         _reducersByType = reducers
@@ -35,24 +38,7 @@ public sealed class WorkflowExecutionReadModelProjector
 
     public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
     {
-        var report = new WorkflowExecutionReport
-        {
-            Id = context.RootActorId,
-            ReportVersion = "1.0",
-            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
-            TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
-            CompletionStatus = WorkflowExecutionCompletionStatus.Running,
-            WorkflowName = context.WorkflowName,
-            RootActorId = context.RootActorId,
-            CommandId = context.CommandId,
-            CreatedAt = context.StartedAt,
-            UpdatedAt = context.StartedAt,
-            StartedAt = context.StartedAt,
-            EndedAt = context.StartedAt,
-            Input = context.Input,
-        };
-        report.Summary = new WorkflowExecutionSummary();
-        return new ValueTask(_storeDispatcher.UpsertAsync(report, ct));
+        return new ValueTask(_writeDispatcher.UpsertAsync(CreateInitialReport(context), ct));
     }
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -74,21 +60,20 @@ public sealed class WorkflowExecutionReadModelProjector
         }
 
         var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
-        await _storeDispatcher.MutateAsync(context.RootActorId, report =>
-        {
-            report.Id = context.RootActorId;
-            if (string.IsNullOrWhiteSpace(report.RootActorId))
-                report.RootActorId = context.RootActorId;
-            var mutated = false;
-            foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(report, context, normalized, now);
+        var report = await _documentReader.GetAsync(context.RootActorId, ct) ?? CreateInitialReport(context);
+        report.Id = context.RootActorId;
+        if (string.IsNullOrWhiteSpace(report.RootActorId))
+            report.RootActorId = context.RootActorId;
+        var mutated = false;
+        foreach (var reducer in reducers)
+            mutated |= reducer.Reduce(report, context, normalized, now);
 
-            if (!mutated)
-                return;
+        if (!mutated)
+            return;
 
-            WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, normalized);
-            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
-        }, ct);
+        WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, normalized);
+        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
+        await _writeDispatcher.UpsertAsync(report, ct);
     }
 
     public ValueTask CompleteAsync(
@@ -97,19 +82,48 @@ public sealed class WorkflowExecutionReadModelProjector
         CancellationToken ct = default)
     {
         var completedAt = _clock.UtcNow;
-        return new ValueTask(_storeDispatcher.MutateAsync(context.RootActorId, report =>
-        {
-            report.Id = context.RootActorId;
-            if (string.IsNullOrWhiteSpace(report.RootActorId))
-                report.RootActorId = context.RootActorId;
-            report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
-            report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
-            if (report.EndedAt < report.StartedAt)
-                report.EndedAt = completedAt;
-            if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
-                report.CompletionStatus = WorkflowExecutionCompletionStatus.Completed;
-            WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, completedAt);
-        }, ct));
+        return new ValueTask(CompleteCoreAsync(context, topology, completedAt, ct));
     }
 
+    private async Task CompleteCoreAsync(
+        WorkflowExecutionProjectionContext context,
+        IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
+        DateTimeOffset completedAt,
+        CancellationToken ct)
+    {
+        var report = await _documentReader.GetAsync(context.RootActorId, ct) ?? CreateInitialReport(context);
+        report.Id = context.RootActorId;
+        if (string.IsNullOrWhiteSpace(report.RootActorId))
+            report.RootActorId = context.RootActorId;
+        report.Topology = topology.Select(x => new WorkflowExecutionTopologyEdge(x.Parent, x.Child)).ToList();
+        report.TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot;
+        if (report.EndedAt < report.StartedAt)
+            report.EndedAt = completedAt;
+        if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
+            report.CompletionStatus = WorkflowExecutionCompletionStatus.Completed;
+        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, completedAt);
+        await _writeDispatcher.UpsertAsync(report, ct);
+    }
+
+    private static WorkflowExecutionReport CreateInitialReport(WorkflowExecutionProjectionContext context)
+    {
+        var report = new WorkflowExecutionReport
+        {
+            Id = context.RootActorId,
+            ReportVersion = "1.0",
+            ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
+            TopologySource = WorkflowExecutionTopologySource.RuntimeSnapshot,
+            CompletionStatus = WorkflowExecutionCompletionStatus.Running,
+            WorkflowName = context.WorkflowName,
+            RootActorId = context.RootActorId,
+            CommandId = context.CommandId,
+            CreatedAt = context.StartedAt,
+            UpdatedAt = context.StartedAt,
+            StartedAt = context.StartedAt,
+            EndedAt = context.StartedAt,
+            Input = context.Input,
+        };
+        report.Summary = new WorkflowExecutionSummary();
+        return report;
+    }
 }

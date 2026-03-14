@@ -35,6 +35,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowExecutionProjectionServiceTests
 {
+    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+
     [Fact]
     public async Task EnsureActorProjectionAsync_WhenEnabled_ShouldExposeActorSnapshotAndTimeline()
     {
@@ -544,11 +546,12 @@ public class WorkflowExecutionProjectionServiceTests
         var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
         {
             new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
         };
         var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var projector = new WorkflowExecutionReadModelProjector(
             storeDispatcher,
+            store,
             new TestEventDeduplicator(),
             resolvedClock,
             BuildReducers());
@@ -590,11 +593,11 @@ public class WorkflowExecutionProjectionServiceTests
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
             relationStore);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, store, resolvedClock);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -629,14 +632,14 @@ public class WorkflowExecutionProjectionServiceTests
         var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
         {
             new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
         };
         var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, clock);
+        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, store, clock);
         var queryReader = new WorkflowProjectionQueryReader(
             store,
             mapper,
@@ -857,12 +860,6 @@ public class WorkflowExecutionProjectionServiceTests
         {
             await _inner.UpsertAsync(report, ct);
             await NotifyWaitersAsync(report.RootActorId, ct);
-        }
-
-        public async Task MutateAsync(string actorId, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
-        {
-            await _inner.MutateAsync(actorId, mutate, ct);
-            await NotifyWaitersAsync(actorId, ct);
         }
 
         public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default) =>

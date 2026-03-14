@@ -22,8 +22,9 @@ public sealed class ScriptReadModelProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldReduceCommittedFactIntoReadModelDocument()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             new LenientDefinitionSnapshotPort(),
@@ -73,8 +74,9 @@ public sealed class ScriptReadModelProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldIgnore_WhenDomainEventIsNotProjectable()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             new StaticDefinitionSnapshotPort(),
@@ -138,8 +140,9 @@ public sealed class ScriptReadModelProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldReject_WhenCommittedFactEventTypeIsUndeclared()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             new LenientDefinitionSnapshotPort(),
@@ -179,8 +182,9 @@ public sealed class ScriptReadModelProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldUseFallbackValues_WhenCommittedFactOmitsOptionalFields()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             new LenientDefinitionSnapshotPort(),
@@ -254,9 +258,10 @@ public sealed class ScriptReadModelProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldDisposeAsyncBehavior_WhenProjectionCompletes()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var behavior = new AsyncDisposingBehavior();
         var projector = new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             new StaticDefinitionSnapshotPort(),
@@ -360,44 +365,6 @@ public sealed class ScriptReadModelProjectorTests
                 ProtocolDescriptorSet: ByteString.Empty,
                 StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
                 ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
-        }
-    }
-
-    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
-    {
-        private readonly Dictionary<string, ScriptReadModelDocument> _items = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _items[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
-        }
-
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).ToArray());
         }
     }
 

@@ -16,8 +16,9 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task Promote_ShouldCreateDocument_WhenCatalogEntryDoesNotExist()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -53,8 +54,9 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task Rollback_ShouldCreateDocument_WhenCatalogEntryDoesNotExist()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -89,8 +91,9 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldIgnore_UnrelatedEvents()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -117,8 +120,9 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldIgnore_EventsWithoutScriptId()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -154,7 +158,7 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task Promote_ShouldUpdateExistingDocument_WithoutDuplicatingRevisionHistory()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         await dispatcher.UpsertAsync(new ScriptCatalogEntryDocument
         {
             Id = "script-catalog:script-1",
@@ -167,6 +171,7 @@ public sealed class ScriptCatalogEntryProjectorTests
             StateVersion = 3,
         }, CancellationToken.None);
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 2, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -203,7 +208,7 @@ public sealed class ScriptCatalogEntryProjectorTests
     [Fact]
     public async Task Rollback_ShouldPreserveBinding_WhenTargetMatchesCurrentRevision()
     {
-        var dispatcher = new InMemoryCatalogEntryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         await dispatcher.UpsertAsync(new ScriptCatalogEntryDocument
         {
             Id = "script-catalog:script-1",
@@ -217,6 +222,7 @@ public sealed class ScriptCatalogEntryProjectorTests
             StateVersion = 5,
         }, CancellationToken.None);
         var projector = new ScriptCatalogEntryProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 3, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -267,49 +273,6 @@ public sealed class ScriptCatalogEntryProjectorTests
                 CorrelationId = id,
             },
         };
-
-    private sealed class InMemoryCatalogEntryStoreDispatcher
-        : IProjectionStoreDispatcher<ScriptCatalogEntryDocument, string>
-    {
-        private readonly Dictionary<string, ScriptCatalogEntryDocument> _store = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptCatalogEntryDocument readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel.DeepClone();
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(
-            string key,
-            Action<ScriptCatalogEntryDocument> mutate,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptCatalogEntryDocument { Id = key };
-                _store[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptCatalogEntryDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _store.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel?.DeepClone());
-        }
-
-        public Task<IReadOnlyList<ScriptCatalogEntryDocument>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptCatalogEntryDocument>>(
-                _store.Values.Take(take).Select(static x => x.DeepClone()).ToArray());
-        }
-    }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {

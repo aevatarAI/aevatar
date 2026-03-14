@@ -14,18 +14,18 @@ namespace Aevatar.Scripting.Projection.Queries;
 
 public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
 {
-    private readonly IProjectionDocumentStore<ScriptReadModelDocument, string> _documentStore;
+    private readonly IProjectionDocumentReader<ScriptReadModelDocument, string> _documentReader;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptReadModelQueryReader(
-        IProjectionDocumentStore<ScriptReadModelDocument, string> documentStore,
+        IProjectionDocumentReader<ScriptReadModelDocument, string> documentReader,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IProtobufMessageCodec codec)
     {
-        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
@@ -35,7 +35,7 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
         string actorId,
         CancellationToken ct = default)
     {
-        var document = await _documentStore.GetAsync(actorId, ct);
+        var document = await _documentReader.GetAsync(actorId, ct);
         return document == null ? null : Map(document);
     }
 
@@ -44,7 +44,7 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var documents = await _documentStore.ListAsync(boundedTake, ct);
+        var documents = await _documentReader.ListAsync(boundedTake, ct);
         return documents.Select(Map).ToArray();
     }
 

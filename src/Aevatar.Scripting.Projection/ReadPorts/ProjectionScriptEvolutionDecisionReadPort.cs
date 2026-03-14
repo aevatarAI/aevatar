@@ -1,7 +1,7 @@
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Scripting.Projection.ReadPorts;
@@ -22,22 +22,22 @@ public sealed class ProjectionScriptEvolutionDecisionReadPort : IScriptEvolution
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
 
-        var storeDispatcher = ResolveStoreDispatcher();
-        if (storeDispatcher == null)
+        var documentReader = ResolveDocumentReader();
+        if (documentReader == null)
             return null;
 
-        var readModel = await storeDispatcher.GetAsync(proposalId, ct);
+        var readModel = await documentReader.GetAsync(proposalId, ct);
         if (readModel == null || !TryResolveTerminal(readModel, out var decision))
             return null;
 
         return decision;
     }
 
-    private IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>? ResolveStoreDispatcher()
+    private IProjectionDocumentReader<ScriptEvolutionReadModel, string>? ResolveDocumentReader()
     {
         try
         {
-            return _serviceProvider.GetService<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>();
+            return _serviceProvider.GetService<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>();
         }
         catch (InvalidOperationException)
         {

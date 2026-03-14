@@ -5,7 +5,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
-    : IProjectionDocumentStore<TReadModel, TKey>
+    : IProjectionDocumentStore<TReadModel, TKey>,
+      IProjectionDocumentReader<TReadModel, TKey>,
+      IProjectionDocumentWriter<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private const string ProviderName = "InMemory";
@@ -65,50 +67,6 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 ProviderName,
                 typeof(TReadModel).FullName,
                 key,
-                elapsedMs,
-                "failed",
-                ex.GetType().Name);
-            throw;
-        }
-    }
-
-    public Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(mutate);
-        ct.ThrowIfCancellationRequested();
-
-        var keyValue = FormatKey(key);
-        var startedAt = DateTimeOffset.UtcNow;
-        try
-        {
-            lock (_gate)
-            {
-                if (!_itemsByKey.TryGetValue(keyValue, out var existing))
-                    throw new InvalidOperationException(
-                        $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
-
-                mutate(existing);
-            }
-
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
-            _logger.LogInformation(
-                "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderName,
-                typeof(TReadModel).FullName,
-                keyValue,
-                elapsedMs,
-                "ok");
-            return Task.CompletedTask;
-        }
-        catch (Exception ex)
-        {
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
-            _logger.LogError(
-                ex,
-                "Projection read-model write failed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
-                ProviderName,
-                typeof(TReadModel).FullName,
-                keyValue,
                 elapsedMs,
                 "failed",
                 ex.GetType().Name);

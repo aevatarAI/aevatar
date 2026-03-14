@@ -92,10 +92,9 @@ public sealed partial class ScriptEvolutionReadModel
 
 [JsonConverter(typeof(ScriptNativeDocumentReadModelJsonConverter))]
 public sealed partial class ScriptNativeDocumentReadModel
-    : IDynamicDocumentIndexedReadModel,
+    : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptNativeDocumentReadModel>
 {
-    private DocumentIndexMetadata? _documentMetadata;
     private IDictionary<string, object?>? _fieldsCache;
 
     [JsonIgnore]
@@ -118,81 +117,13 @@ public sealed partial class ScriptNativeDocumentReadModel
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
-    public DocumentIndexMetadata DocumentMetadata
-    {
-        get => _documentMetadata ??= ScriptProjectionReadModelSupport.CreateDefaultDocumentMetadata("script-native-read-models");
-        set => _documentMetadata = ScriptProjectionReadModelSupport.CloneDocumentMetadata(value);
-    }
-
-    public ScriptNativeDocumentReadModel DeepClone()
-    {
-        var clone = Clone();
-        clone.DocumentMetadata = DocumentMetadata;
-        return clone;
-    }
+    public ScriptNativeDocumentReadModel DeepClone() => Clone();
 }
 
 public sealed partial class ScriptNativeGraphReadModel
-    : IGraphReadModel,
+    : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptNativeGraphReadModel>
 {
-    [JsonIgnore]
-    public IReadOnlyList<ProjectionGraphNode> GraphNodes
-    {
-        get => GraphNodeEntries.Select(static node => new ProjectionGraphNode
-        {
-            Scope = node.Scope,
-            NodeId = node.NodeId,
-            NodeType = node.NodeType,
-            Properties = new Dictionary<string, string>(node.Properties, StringComparer.Ordinal),
-            UpdatedAt = ScriptProjectionReadModelSupport.ToDateTimeOffset(node.UpdatedAtUtcValue),
-        }).ToArray();
-        set => ScriptProjectionReadModelSupport.ReplaceCollection(
-            GraphNodeEntries,
-            value?.Select(static node => new ScriptNativeGraphNodeRecord
-            {
-                Scope = node.Scope,
-                NodeId = node.NodeId,
-                NodeType = node.NodeType,
-                Properties =
-                {
-                    node.Properties,
-                },
-                UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(node.UpdatedAt),
-            }));
-    }
-
-    [JsonIgnore]
-    public IReadOnlyList<ProjectionGraphEdge> GraphEdges
-    {
-        get => GraphEdgeEntries.Select(static edge => new ProjectionGraphEdge
-        {
-            Scope = edge.Scope,
-            EdgeId = edge.EdgeId,
-            FromNodeId = edge.FromNodeId,
-            ToNodeId = edge.ToNodeId,
-            EdgeType = edge.EdgeType,
-            Properties = new Dictionary<string, string>(edge.Properties, StringComparer.Ordinal),
-            UpdatedAt = ScriptProjectionReadModelSupport.ToDateTimeOffset(edge.UpdatedAtUtcValue),
-        }).ToArray();
-        set => ScriptProjectionReadModelSupport.ReplaceCollection(
-            GraphEdgeEntries,
-            value?.Select(static edge => new ScriptNativeGraphEdgeRecord
-            {
-                Scope = edge.Scope,
-                EdgeId = edge.EdgeId,
-                FromNodeId = edge.FromNodeId,
-                ToNodeId = edge.ToNodeId,
-                EdgeType = edge.EdgeType,
-                Properties =
-                {
-                    edge.Properties,
-                },
-                UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(edge.UpdatedAt),
-            }));
-    }
-
     [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
@@ -243,33 +174,70 @@ internal static class ScriptProjectionReadModelSupport
             StringComparer.Ordinal);
     }
 
-    public static DocumentIndexMetadata CreateDefaultDocumentMetadata(string indexName) =>
-        new(
-            indexName,
-            new Dictionary<string, object?>(StringComparer.Ordinal),
-            new Dictionary<string, object?>(StringComparer.Ordinal),
-            new Dictionary<string, object?>(StringComparer.Ordinal));
-
-    public static DocumentIndexMetadata CloneDocumentMetadata(DocumentIndexMetadata metadata)
+    public static ScriptNativeGraphNodeRecord ToGraphNodeRecord(ProjectionGraphNode node)
     {
-        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentNullException.ThrowIfNull(node);
 
-        return new DocumentIndexMetadata(
-            metadata.IndexName,
-            CloneObjectDictionary(metadata.Mappings),
-            CloneObjectDictionary(metadata.Settings),
-            CloneObjectDictionary(metadata.Aliases));
+        return new ScriptNativeGraphNodeRecord
+        {
+            Scope = node.Scope,
+            NodeId = node.NodeId,
+            NodeType = node.NodeType,
+            Properties =
+            {
+                node.Properties,
+            },
+            UpdatedAtUtcValue = ToTimestamp(node.UpdatedAt),
+        };
     }
 
-    public static IReadOnlyDictionary<string, object?> CloneObjectDictionary(
-        IReadOnlyDictionary<string, object?> source)
+    public static ProjectionGraphNode ToProjectionGraphNode(ScriptNativeGraphNodeRecord node)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(node);
 
-        return source.ToDictionary(
-            static pair => pair.Key,
-            static pair => CloneObjectGraph(pair.Value),
-            StringComparer.Ordinal);
+        return new ProjectionGraphNode
+        {
+            Scope = node.Scope,
+            NodeId = node.NodeId,
+            NodeType = node.NodeType,
+            Properties = new Dictionary<string, string>(node.Properties, StringComparer.Ordinal),
+            UpdatedAt = ToDateTimeOffset(node.UpdatedAtUtcValue),
+        };
+    }
+
+    public static ScriptNativeGraphEdgeRecord ToGraphEdgeRecord(ProjectionGraphEdge edge)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+
+        return new ScriptNativeGraphEdgeRecord
+        {
+            Scope = edge.Scope,
+            EdgeId = edge.EdgeId,
+            FromNodeId = edge.FromNodeId,
+            ToNodeId = edge.ToNodeId,
+            EdgeType = edge.EdgeType,
+            Properties =
+            {
+                edge.Properties,
+            },
+            UpdatedAtUtcValue = ToTimestamp(edge.UpdatedAt),
+        };
+    }
+
+    public static ProjectionGraphEdge ToProjectionGraphEdge(ScriptNativeGraphEdgeRecord edge)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+
+        return new ProjectionGraphEdge
+        {
+            Scope = edge.Scope,
+            EdgeId = edge.EdgeId,
+            FromNodeId = edge.FromNodeId,
+            ToNodeId = edge.ToNodeId,
+            EdgeType = edge.EdgeType,
+            Properties = new Dictionary<string, string>(edge.Properties, StringComparer.Ordinal),
+            UpdatedAt = ToDateTimeOffset(edge.UpdatedAtUtcValue),
+        };
     }
 
     public static object? CloneObjectGraph(object? value)

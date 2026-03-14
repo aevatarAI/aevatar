@@ -8,14 +8,17 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowActorBindingProjector
     : IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<WorkflowActorBindingDocument, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument, string> _writeDispatcher;
+    private readonly IProjectionDocumentReader<WorkflowActorBindingDocument, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public WorkflowActorBindingProjector(
-        IProjectionStoreDispatcher<WorkflowActorBindingDocument, string> storeDispatcher,
+        IProjectionWriteDispatcher<WorkflowActorBindingDocument, string> writeDispatcher,
+        IProjectionDocumentReader<WorkflowActorBindingDocument, string> documentReader,
         IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -42,18 +45,17 @@ public sealed class WorkflowActorBindingProjector
         if (normalized.Payload.Is(BindWorkflowDefinitionEvent.Descriptor))
         {
             var evt = normalized.Payload.Unpack<BindWorkflowDefinitionEvent>();
-            await _storeDispatcher.MutateAsync(context.RootActorId, document =>
-            {
-                document.Id = context.RootActorId;
-                document.ActorId = context.RootActorId;
-                document.ActorKind = WorkflowActorKind.Definition;
-                document.DefinitionActorId = context.RootActorId;
-                document.RunId = string.Empty;
-                document.WorkflowName = NormalizeWorkflowName(evt.WorkflowName);
-                document.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
-                ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
-                ApplyProjectionMetadata(document, normalized.Id, updatedAt);
-            }, ct);
+            var document = await GetOrCreateAsync(context.RootActorId, ct);
+            document.Id = context.RootActorId;
+            document.ActorId = context.RootActorId;
+            document.ActorKind = WorkflowActorKind.Definition;
+            document.DefinitionActorId = context.RootActorId;
+            document.RunId = string.Empty;
+            document.WorkflowName = NormalizeWorkflowName(evt.WorkflowName);
+            document.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+            ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
+            ApplyProjectionMetadata(document, normalized.Id, updatedAt);
+            await _writeDispatcher.UpsertAsync(document, ct);
             return;
         }
 
@@ -61,18 +63,17 @@ public sealed class WorkflowActorBindingProjector
             return;
 
         var bindRun = normalized.Payload.Unpack<BindWorkflowRunDefinitionEvent>();
-        await _storeDispatcher.MutateAsync(context.RootActorId, document =>
-        {
-            document.Id = context.RootActorId;
-            document.ActorId = context.RootActorId;
-            document.ActorKind = WorkflowActorKind.Run;
-            document.DefinitionActorId = bindRun.DefinitionActorId?.Trim() ?? string.Empty;
-            document.RunId = ResolveRunId(bindRun.RunId, context.RootActorId);
-            document.WorkflowName = NormalizeWorkflowName(bindRun.WorkflowName);
-            document.WorkflowYaml = bindRun.WorkflowYaml ?? string.Empty;
-            ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
-            ApplyProjectionMetadata(document, normalized.Id, updatedAt);
-        }, ct);
+        var runDocument = await GetOrCreateAsync(context.RootActorId, ct);
+        runDocument.Id = context.RootActorId;
+        runDocument.ActorId = context.RootActorId;
+        runDocument.ActorKind = WorkflowActorKind.Run;
+        runDocument.DefinitionActorId = bindRun.DefinitionActorId?.Trim() ?? string.Empty;
+        runDocument.RunId = ResolveRunId(bindRun.RunId, context.RootActorId);
+        runDocument.WorkflowName = NormalizeWorkflowName(bindRun.WorkflowName);
+        runDocument.WorkflowYaml = bindRun.WorkflowYaml ?? string.Empty;
+        ReplaceInlineWorkflowYamls(runDocument.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
+        ApplyProjectionMetadata(runDocument, normalized.Id, updatedAt);
+        await _writeDispatcher.UpsertAsync(runDocument, ct);
     }
 
     public ValueTask CompleteAsync(
@@ -124,5 +125,14 @@ public sealed class WorkflowActorBindingProjector
 
             target[normalizedWorkflowName] = workflowYamlValue;
         }
+    }
+
+    private async Task<WorkflowActorBindingDocument> GetOrCreateAsync(string actorId, CancellationToken ct)
+    {
+        return await _documentReader.GetAsync(actorId, ct) ?? new WorkflowActorBindingDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+        };
     }
 }

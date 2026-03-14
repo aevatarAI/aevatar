@@ -4,12 +4,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
 public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
-    : IProjectionStoreDispatcher<TReadModel, TKey>
+    : IProjectionStoreDispatcher<TReadModel, TKey>,
+      IProjectionWriteDispatcher<TReadModel, TKey>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly IReadOnlyList<IProjectionStoreBinding<TReadModel, TKey>> _bindings;
-    private readonly IReadOnlyList<IProjectionStoreBinding<TReadModel, TKey>> _writeOnlyBindings;
-    private readonly IProjectionQueryableStoreBinding<TReadModel, TKey>? _queryBinding;
     private readonly IProjectionStoreDispatchCompensator<TReadModel, TKey> _compensator;
     private readonly ProjectionStoreDispatchOptions _options;
     private readonly ILogger<ProjectionStoreDispatcher<TReadModel, TKey>> _logger;
@@ -58,27 +57,10 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
                 $"No configured projection store bindings are registered for read model '{typeof(TReadModel).FullName}'. skippedBindings={skipSummary}");
         }
 
-        var queryBindings = _bindings
-            .OfType<IProjectionQueryableStoreBinding<TReadModel, TKey>>()
-            .ToList();
-        if (queryBindings.Count > 1)
-        {
-            throw new InvalidOperationException(
-                $"At most one queryable projection store binding is allowed for read model '{typeof(TReadModel).FullName}', but {queryBindings.Count} were registered.");
-        }
-
-        _queryBinding = queryBindings.SingleOrDefault();
-        _writeOnlyBindings = _queryBinding is null
-            ? _bindings
-            : _bindings
-                .Where(x => !ReferenceEquals(x, _queryBinding))
-                .ToList();
-
         _logger.LogInformation(
-            "Projection store dispatcher initialized. readModelType={ReadModelType} bindingCount={BindingCount} queryStore={QueryStore}",
+            "Projection store dispatcher initialized. readModelType={ReadModelType} bindingCount={BindingCount}",
             typeof(TReadModel).FullName,
-            _bindings.Count,
-            _queryBinding?.StoreName ?? "none");
+            _bindings.Count);
     }
 
     public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
@@ -108,57 +90,6 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
                 throw;
             }
         }
-    }
-
-    public async Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(mutate);
-        ct.ThrowIfCancellationRequested();
-
-        var queryBinding = GetRequiredQueryBinding();
-        await queryBinding.MutateAsync(key, mutate, ct);
-        if (_writeOnlyBindings.Count == 0)
-            return;
-
-        var updated = await queryBinding.GetAsync(key, ct);
-        if (updated == null)
-        {
-            throw new InvalidOperationException(
-                $"Projection store mutate completed but query store '{queryBinding.StoreName}' returned null for read model '{typeof(TReadModel).FullName}'.");
-        }
-
-        var succeededWriteOnlyBindings = new List<IProjectionStoreBinding<TReadModel, TKey>>();
-        foreach (var binding in _writeOnlyBindings)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                await UpsertWithRetryAsync(binding, updated, ct);
-                succeededWriteOnlyBindings.Add(binding);
-            }
-            catch (Exception ex)
-            {
-                await CompensateAsync(
-                    operation: "mutate",
-                    key,
-                    updated,
-                    succeededWriteOnlyBindings,
-                    binding,
-                    ex,
-                    ct);
-                throw;
-            }
-        }
-    }
-
-    public Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
-    {
-        return GetRequiredQueryBinding().GetAsync(key, ct);
-    }
-
-    public Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
-    {
-        return GetRequiredQueryBinding().ListAsync(take, ct);
     }
 
     private async Task UpsertWithRetryAsync(
@@ -222,13 +153,6 @@ public sealed class ProjectionStoreDispatcher<TReadModel, TKey>
             OccurredAtUtc = DateTimeOffset.UtcNow,
         };
         return _compensator.CompensateAsync(context, ct);
-    }
-
-    private IProjectionQueryableStoreBinding<TReadModel, TKey> GetRequiredQueryBinding()
-    {
-        return _queryBinding ??
-               throw new InvalidOperationException(
-                   $"Queryable projection store binding is not configured for read model '{typeof(TReadModel).FullName}'.");
     }
 
     private sealed record SkippedBindingInfo(string StoreName, string Reason);

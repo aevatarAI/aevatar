@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
@@ -186,6 +187,7 @@ public class ClaimReplayTests
         var dispatcher1 = new InMemoryReadModelDispatcher();
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
+            dispatcher1,
             new FixedProjectionClock(projectionNow),
             definitionSnapshotPort,
             artifactResolver,
@@ -197,6 +199,7 @@ public class ClaimReplayTests
 
         var dispatcher2 = new InMemoryReadModelDispatcher();
         var projector2 = new ScriptReadModelProjector(
+            dispatcher2,
             dispatcher2,
             new FixedProjectionClock(projectionNow),
             definitionSnapshotPort,
@@ -273,27 +276,16 @@ public class ClaimReplayTests
         }
         """;
 
-    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
+    private sealed class InMemoryReadModelDispatcher
+        : IProjectionDocumentStore<ScriptReadModelDocument, string>,
+          IProjectionWriteDispatcher<ScriptReadModelDocument, string>
     {
         private readonly Dictionary<string, ScriptReadModelDocument> _store = new(StringComparer.Ordinal);
 
         public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _store[key] = readModel;
-            }
-
-            mutate(readModel);
+            _store[readModel.Id] = readModel.DeepClone();
             return Task.CompletedTask;
         }
 
@@ -301,13 +293,14 @@ public class ClaimReplayTests
         {
             ct.ThrowIfCancellationRequested();
             _store.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
+            return Task.FromResult(readModel?.DeepClone());
         }
 
         public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_store.Values.Take(take).ToArray());
+            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(
+                _store.Values.Take(take).Select(static x => x.DeepClone()).ToArray());
         }
     }
 

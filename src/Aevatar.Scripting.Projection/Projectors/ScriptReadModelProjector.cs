@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Runtime;
@@ -15,20 +16,23 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptReadModelProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptReadModelDocument, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ScriptReadModelDocument, string> _documentReader;
+    private readonly IProjectionWriteDispatcher<ScriptReadModelDocument, string> _writeDispatcher;
     private readonly IProjectionClock _clock;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptReadModelProjector(
-        IProjectionStoreDispatcher<ScriptReadModelDocument, string> storeDispatcher,
+        IProjectionDocumentReader<ScriptReadModelDocument, string> documentReader,
+        IProjectionWriteDispatcher<ScriptReadModelDocument, string> writeDispatcher,
         IProjectionClock clock,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IProtobufMessageCodec codec)
     {
-        _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
@@ -46,7 +50,7 @@ public sealed class ScriptReadModelProjector
             UpdatedAt = now,
         };
         context.CurrentSemanticReadModelDocument = document.DeepClone();
-        return new ValueTask(_storeDispatcher.UpsertAsync(document, ct));
+        return new ValueTask(_writeDispatcher.UpsertAsync(document, ct));
     }
 
     public async ValueTask ProjectAsync(
@@ -92,45 +96,46 @@ public sealed class ScriptReadModelProjector
             if (!eventSemantics.Projectable)
                 return;
 
-            ScriptReadModelDocument? currentDocument = null;
-            await _storeDispatcher.MutateAsync(context.RootActorId, document =>
-            {
-                document.Id = context.RootActorId;
-                document.ScriptId = string.IsNullOrWhiteSpace(fact.ScriptId) ? snapshot.ScriptId : fact.ScriptId;
-                document.DefinitionActorId = string.IsNullOrWhiteSpace(fact.DefinitionActorId)
-                    ? document.DefinitionActorId
-                    : fact.DefinitionActorId;
-                document.Revision = string.IsNullOrWhiteSpace(fact.Revision) ? snapshot.Revision : fact.Revision;
-                document.ReadModelTypeUrl = string.IsNullOrWhiteSpace(fact.ReadModelTypeUrl)
-                    ? artifact.Contract.ReadModelTypeUrl ?? string.Empty
-                    : fact.ReadModelTypeUrl;
-                var currentReadModel = _codec.Unpack(document.ReadModelPayload, artifact.Descriptor.ReadModelClrType);
-                var domainEvent = _codec.Unpack(fact.DomainEventPayload, domainEventRegistration.MessageClrType)
-                    ?? throw new InvalidOperationException($"Failed to unpack domain event payload `{eventTypeUrl}`.");
-                var reducedReadModel = behavior.ReduceReadModel(
-                    currentReadModel,
-                    domainEvent,
-                    new ScriptFactContext(
-                        fact.ActorId ?? context.RootActorId,
-                        fact.DefinitionActorId ?? document.DefinitionActorId,
-                        string.IsNullOrWhiteSpace(fact.ScriptId) ? snapshot.ScriptId : fact.ScriptId,
-                        string.IsNullOrWhiteSpace(fact.Revision) ? snapshot.Revision : fact.Revision,
-                        fact.RunId ?? string.Empty,
-                        fact.CommandId ?? string.Empty,
-                        fact.CorrelationId ?? string.Empty,
-                        fact.EventSequence,
-                        fact.StateVersion,
-                        fact.EventType ?? eventTypeUrl,
-                        fact.OccurredAtUnixTimeMs));
-                document.ReadModelPayload = _codec.Pack(reducedReadModel)?.Clone()
-                    ?? document.ReadModelPayload
-                    ?? Any.Pack(new Empty());
-                document.StateVersion = fact.StateVersion;
-                document.LastEventId = normalized.Id ?? string.Empty;
-                document.UpdatedAt = now;
-                currentDocument = document.DeepClone();
-            }, ct);
-            context.CurrentSemanticReadModelDocument = currentDocument;
+            var document = (await _documentReader.GetAsync(context.RootActorId, ct))?.DeepClone()
+                           ?? new ScriptReadModelDocument
+                           {
+                               Id = context.RootActorId,
+                           };
+            document.Id = context.RootActorId;
+            document.ScriptId = string.IsNullOrWhiteSpace(fact.ScriptId) ? snapshot.ScriptId : fact.ScriptId;
+            document.DefinitionActorId = string.IsNullOrWhiteSpace(fact.DefinitionActorId)
+                ? document.DefinitionActorId
+                : fact.DefinitionActorId;
+            document.Revision = string.IsNullOrWhiteSpace(fact.Revision) ? snapshot.Revision : fact.Revision;
+            document.ReadModelTypeUrl = string.IsNullOrWhiteSpace(fact.ReadModelTypeUrl)
+                ? artifact.Contract.ReadModelTypeUrl ?? string.Empty
+                : fact.ReadModelTypeUrl;
+            var currentReadModel = _codec.Unpack(document.ReadModelPayload, artifact.Descriptor.ReadModelClrType);
+            var domainEvent = _codec.Unpack(fact.DomainEventPayload, domainEventRegistration.MessageClrType)
+                ?? throw new InvalidOperationException($"Failed to unpack domain event payload `{eventTypeUrl}`.");
+            var reducedReadModel = behavior.ReduceReadModel(
+                currentReadModel,
+                domainEvent,
+                new ScriptFactContext(
+                    fact.ActorId ?? context.RootActorId,
+                    fact.DefinitionActorId ?? document.DefinitionActorId,
+                    string.IsNullOrWhiteSpace(fact.ScriptId) ? snapshot.ScriptId : fact.ScriptId,
+                    string.IsNullOrWhiteSpace(fact.Revision) ? snapshot.Revision : fact.Revision,
+                    fact.RunId ?? string.Empty,
+                    fact.CommandId ?? string.Empty,
+                    fact.CorrelationId ?? string.Empty,
+                    fact.EventSequence,
+                    fact.StateVersion,
+                    fact.EventType ?? eventTypeUrl,
+                    fact.OccurredAtUnixTimeMs));
+            document.ReadModelPayload = _codec.Pack(reducedReadModel)?.Clone()
+                ?? document.ReadModelPayload
+                ?? Any.Pack(new Empty());
+            document.StateVersion = fact.StateVersion;
+            document.LastEventId = normalized.Id ?? string.Empty;
+            document.UpdatedAt = now;
+            await _writeDispatcher.UpsertAsync(document, ct);
+            context.CurrentSemanticReadModelDocument = document.DeepClone();
         }
         finally
         {

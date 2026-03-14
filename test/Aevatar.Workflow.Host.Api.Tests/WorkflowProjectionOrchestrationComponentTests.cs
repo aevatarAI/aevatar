@@ -16,6 +16,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowProjectionOrchestrationComponentTests
 {
+    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+
     [Fact]
     public async Task ActivationService_ShouldStartProjectionAndReturnRuntimeLease()
     {
@@ -314,10 +316,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
             {
                 new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
             });
         var updater = new WorkflowProjectionReadModelUpdater(
             dispatcher,
+            store,
             new FixedClock(stoppedAt));
         var context = new WorkflowExecutionProjectionContext
         {
@@ -330,11 +333,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         };
 
         await updater.RefreshMetadataAsync("actor-2", context);
-        await store.MutateAsync("actor-2", report =>
-        {
-            report.CompletionStatus = WorkflowExecutionCompletionStatus.Running;
-            report.EndedAt = report.StartedAt.AddSeconds(-1);
-        });
+        var reportBeforeStop = await store.GetAsync("actor-2");
+        reportBeforeStop.Should().NotBeNull();
+        reportBeforeStop!.CompletionStatus = WorkflowExecutionCompletionStatus.Running;
+        reportBeforeStop.EndedAt = reportBeforeStop.StartedAt.AddSeconds(-1);
+        await store.UpsertAsync(reportBeforeStop);
         await updater.MarkStoppedAsync("actor-2");
 
         var report = await store.GetAsync("actor-2");
@@ -368,10 +371,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
             {
                 new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore),
+                new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
             });
         var updater = new WorkflowProjectionReadModelUpdater(
             dispatcher,
+            store,
             new FixedClock(stoppedAt));
 
         await updater.MarkStoppedAsync("actor-unknown");

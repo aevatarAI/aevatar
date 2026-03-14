@@ -13,20 +13,6 @@ public sealed class InMemoryCaseReadModelStore : IProjectionDocumentStore<CasePr
         return Task.CompletedTask;
     }
 
-    public Task MutateAsync(string runId, Action<CaseProjectionReadModel> mutate, CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        lock (_gate)
-        {
-            if (!_reports.TryGetValue(runId, out var report))
-                throw new CaseReadModelNotFoundException(runId);
-
-            mutate(report);
-        }
-
-        return Task.CompletedTask;
-    }
-
     public Task<CaseProjectionReadModel?> GetAsync(string runId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

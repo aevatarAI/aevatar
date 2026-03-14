@@ -19,7 +19,7 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptReadModelQueryReaderTests
 {
     [Theory]
-    [InlineData("documentStore")]
+    [InlineData("documentReader")]
     [InlineData("definitionSnapshotPort")]
     [InlineData("artifactResolver")]
     [InlineData("codec")]
@@ -27,7 +27,7 @@ public sealed class ScriptReadModelQueryReaderTests
     {
         Action act = parameterName switch
         {
-            "documentStore" => () => _ = new ScriptReadModelQueryReader(
+            "documentReader" => () => _ = new ScriptReadModelQueryReader(
                 null!,
                 new ThrowingDefinitionSnapshotPort(),
                 new ThrowingArtifactResolver(),

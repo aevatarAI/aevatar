@@ -8,16 +8,15 @@ namespace Aevatar.Scripting.Projection.ReadPorts;
 
 public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
-    private readonly ScriptAuthorityProjectionPortService? _projectionPort;
-    private readonly IProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string>? _documentStore;
+    private readonly IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>? _documentReader;
     private readonly Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshot?>>? _queryAsync;
 
     public ProjectionScriptDefinitionSnapshotPort(
         ScriptAuthorityProjectionPortService projectionPort,
-        IProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string> documentStore)
+        IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string> documentReader)
     {
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _ = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
     internal ProjectionScriptDefinitionSnapshotPort(
@@ -36,8 +35,7 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
         if (_queryAsync != null)
             return await _queryAsync(definitionActorId, requestedRevision, ct);
 
-        _ = await _projectionPort!.EnsureActorProjectionAsync(definitionActorId, ct);
-        var document = await _documentStore!.GetAsync(definitionActorId, ct);
+        var document = await _documentReader!.GetAsync(definitionActorId, ct);
         if (document == null || string.IsNullOrWhiteSpace(document.Revision))
             return null;
 

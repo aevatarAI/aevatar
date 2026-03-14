@@ -16,7 +16,7 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeDocumentProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptNativeDocumentReadModel, string> _nativeStoreDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptNativeDocumentReadModel, string> _nativeWriteDispatcher;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
@@ -24,14 +24,14 @@ public sealed class ScriptNativeDocumentProjector
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptNativeDocumentProjector(
-        IProjectionStoreDispatcher<ScriptNativeDocumentReadModel, string> nativeStoreDispatcher,
+        IProjectionWriteDispatcher<ScriptNativeDocumentReadModel, string> nativeWriteDispatcher,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptNativeDocumentMaterializer materializer,
         IProtobufMessageCodec codec)
     {
-        _nativeStoreDispatcher = nativeStoreDispatcher ?? throw new ArgumentNullException(nameof(nativeStoreDispatcher));
+        _nativeWriteDispatcher = nativeWriteDispatcher ?? throw new ArgumentNullException(nameof(nativeWriteDispatcher));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
@@ -106,7 +106,7 @@ public sealed class ScriptNativeDocumentProjector
             fact,
             semanticReadModel,
             plan);
-        await _nativeStoreDispatcher.UpsertAsync(nativeDocument, ct);
+        await _nativeWriteDispatcher.UpsertAsync(nativeDocument, ct);
     }
 
     public ValueTask CompleteAsync(

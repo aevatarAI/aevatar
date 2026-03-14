@@ -20,7 +20,7 @@ public class ClaimReadModelProjectorTests
     [Fact]
     public async Task Should_reduce_manual_review_decision_into_typed_readmodel()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
         var context = CreateContext("claim-runtime-manual");
 
@@ -77,7 +77,7 @@ public class ClaimReadModelProjectorTests
     [Fact]
     public async Task Should_noop_for_unrelated_envelopes()
     {
-        var dispatcher = new InMemoryReadModelDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
         var context = CreateContext("claim-runtime-noop");
 
@@ -103,9 +103,11 @@ public class ClaimReadModelProjectorTests
         document.ReadModelPayload.Should().BeNull();
     }
 
-    private static ScriptReadModelProjector CreateProjector(InMemoryReadModelDispatcher dispatcher)
+    private static ScriptReadModelProjector CreateProjector(
+        InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher)
     {
         return new ScriptReadModelProjector(
+            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)),
             new StaticDefinitionSnapshotPort(),
@@ -158,44 +160,6 @@ public class ClaimReadModelProjectorTests
                 ProtocolDescriptorSet: ByteString.Empty,
                 StateDescriptorFullName: ClaimState.Descriptor.FullName,
                 ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
-        }
-    }
-
-    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
-    {
-        private readonly Dictionary<string, ScriptReadModelDocument> _items = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _items[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
-        }
-
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).ToArray());
         }
     }
 

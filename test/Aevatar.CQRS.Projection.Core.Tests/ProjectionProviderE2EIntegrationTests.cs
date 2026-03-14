@@ -9,7 +9,7 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionProviderE2EIntegrationTests
 {
     [ElasticsearchIntegrationFact]
-    public async Task ElasticsearchStore_ShouldRoundtripUpsertAndMutate()
+    public async Task ElasticsearchStore_ShouldRoundtripUpsertAndOverwrite()
     {
         var endpoint = GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -41,11 +41,9 @@ public sealed class ProjectionProviderE2EIntegrationTests
         fetched.Should().NotBeNull();
         fetched!.Value.Should().Be("v1");
 
-        await store.MutateAsync(readModel.Id, model =>
-        {
-            model.Value = "v2";
-            model.UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        });
+        readModel.Value = "v2";
+        readModel.UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await store.UpsertAsync(readModel);
 
         var mutated = await store.GetAsync(readModel.Id);
         mutated.Should().NotBeNull();

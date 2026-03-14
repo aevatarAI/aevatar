@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -72,7 +73,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptAuthorityProjectionPrimingPort, ProjectionScriptAuthorityProjectionPrimingPort>();
         services.TryAddSingleton<IScriptReadModelMaterializationCompiler, ScriptReadModelMaterializationCompiler>();
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
-        services.TryAddSingleton<IScriptNativeGraphMaterializer, ScriptNativeGraphMaterializer>();
+        services.TryAddSingleton<ScriptNativeGraphMaterializer>();
+        services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>
+            sp.GetRequiredService<ScriptNativeGraphMaterializer>());
+        services.TryAddSingleton<IProjectionGraphMaterializer<ScriptNativeGraphReadModel>>(sp =>
+            sp.GetRequiredService<ScriptNativeGraphMaterializer>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptDefinitionSnapshotDocument>, ScriptDefinitionSnapshotDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptCatalogEntryDocument>, ScriptCatalogEntryDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptReadModelDocument>, ScriptReadModelDocumentMetadataProvider>();

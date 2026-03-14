@@ -11,14 +11,14 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptDefinitionSnapshotProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptDefinitionSnapshotDocument, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument, string> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptDefinitionSnapshotProjector(
-        IProjectionStoreDispatcher<ScriptDefinitionSnapshotDocument, string> storeDispatcher,
+        IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument, string> writeDispatcher,
         IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -42,7 +42,7 @@ public sealed class ScriptDefinitionSnapshotProjector
 
         var evt = envelope.Payload.Unpack<ScriptDefinitionUpsertedEvent>();
         var updatedAt = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
-        await _storeDispatcher.UpsertAsync(
+        await _writeDispatcher.UpsertAsync(
             new ScriptDefinitionSnapshotDocument
             {
                 Id = context.RootActorId,

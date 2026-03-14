@@ -10,8 +10,6 @@ public interface IStateMirrorReadModelProjector<TState, TReadModel, in TKey>
 
     Task<TReadModel> ProjectAndUpsertAsync(TState state, CancellationToken ct = default);
 
-    Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default);
-
     Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default);
 
     Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default);

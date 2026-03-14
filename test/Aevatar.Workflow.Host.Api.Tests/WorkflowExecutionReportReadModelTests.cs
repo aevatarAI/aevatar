@@ -6,6 +6,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowExecutionReportReadModelTests
 {
+    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+
     [Fact]
     public void AddTimelineAndRoleReply_ShouldCopyProjectionPayloads()
     {
@@ -69,8 +71,9 @@ public sealed class WorkflowExecutionReportReadModelTests
             ],
         };
 
-        var nodes = report.GraphNodes;
-        var edges = report.GraphEdges;
+        var graph = GraphMaterializer.Materialize(report);
+        var nodes = graph.Nodes;
+        var edges = graph.Edges;
 
         nodes.Should().Contain(x => x.NodeId == "actor-1" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType && x.Properties["input"] == "hello");
@@ -105,8 +108,9 @@ public sealed class WorkflowExecutionReportReadModelTests
             ],
         };
 
-        var nodes = report.GraphNodes;
-        var edges = report.GraphEdges;
+        var graph = GraphMaterializer.Materialize(report);
+        var nodes = graph.Nodes;
+        var edges = graph.Edges;
 
         nodes.Should().Contain(x => x.NodeId == "unknown");
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType);

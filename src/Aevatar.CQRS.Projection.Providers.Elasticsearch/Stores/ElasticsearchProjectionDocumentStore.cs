@@ -11,6 +11,8 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentStore<TReadModel, TKey>,
+      IProjectionDocumentReader<TReadModel, TKey>,
+      IProjectionDocumentWriter<TReadModel>,
       IDisposable
     where TReadModel : class, IProjectionReadModel
 {
@@ -25,9 +27,9 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private readonly bool _autoCreateIndex;
     private readonly string _listSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
-    private readonly int _mutateMaxRetryCount;
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
+    private readonly Func<TReadModel, string?>? _indexScopeSelector;
     private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -42,6 +44,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         DocumentIndexMetadata indexMetadata,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
+        Func<TReadModel, string?>? indexScopeSelector = null,
         ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>? logger = null,
         HttpMessageHandler? httpMessageHandler = null)
     {
@@ -71,82 +74,17 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
-        _mutateMaxRetryCount = Math.Clamp(options.MutateMaxRetryCount, 0, 20);
-        _supportsDynamicIndexing = typeof(IDynamicDocumentIndexedReadModel).IsAssignableFrom(typeof(TReadModel));
+        _supportsDynamicIndexing = indexScopeSelector is not null;
         _indexMetadata = normalizedMetadata with { IndexName = _indexName };
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
+        _indexScopeSelector = indexScopeSelector;
         _listSortField = options.ListSortField?.Trim() ?? "";
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
         UpsertCoreAsync(readModel, allowCreateIndex: true, ct);
-
-    public async Task MutateAsync(TKey key, Action<TReadModel> mutate, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(mutate);
-        ct.ThrowIfCancellationRequested();
-        ThrowIfDynamicReadModelQueriesUnsupported("mutate");
-
-        var keyValue = FormatKey(key);
-        if (keyValue.Length == 0)
-            throw new InvalidOperationException(
-                $"ReadModel '{typeof(TReadModel).FullName}' resolved an empty key for Elasticsearch mutation.");
-
-        var startedAt = DateTimeOffset.UtcNow;
-        for (var attempt = 0; attempt <= _mutateMaxRetryCount; attempt++)
-        {
-            var snapshot = await GetDocumentSnapshotAsync(keyValue, ct);
-            if (snapshot == null)
-            {
-                var notFound = new InvalidOperationException(
-                    $"ReadModel '{typeof(TReadModel).FullName}' with key '{keyValue}' was not found.");
-                LogWriteFailure(keyValue, startedAt, notFound);
-                throw notFound;
-            }
-
-            try
-            {
-                mutate(snapshot.ReadModel);
-            }
-            catch (Exception ex)
-            {
-                LogWriteFailure(keyValue, startedAt, ex);
-                throw;
-            }
-
-            try
-            {
-                await UpsertCoreAsync(
-                    snapshot.ReadModel,
-                    allowCreateIndex: true,
-                    ct,
-                    ifSeqNo: snapshot.SeqNo,
-                    ifPrimaryTerm: snapshot.PrimaryTerm);
-                return;
-            }
-            catch (ElasticsearchOptimisticConcurrencyException ex) when (attempt < _mutateMaxRetryCount)
-            {
-                _logger.LogWarning(
-                    ex,
-                "Projection read-model optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
-                    ProviderName,
-                    typeof(TReadModel).FullName,
-                    keyValue,
-                    attempt + 1,
-                    _mutateMaxRetryCount + 1);
-            }
-            catch (ElasticsearchOptimisticConcurrencyException ex)
-            {
-                var conflict = new InvalidOperationException(
-                    $"Elasticsearch optimistic concurrency update failed for read-model '{typeof(TReadModel).FullName}' with key '{keyValue}' after {_mutateMaxRetryCount + 1} attempt(s).",
-                    ex);
-                LogWriteFailure(keyValue, startedAt, conflict);
-                throw conflict;
-            }
-        }
-    }
 
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
@@ -222,49 +160,10 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return items;
     }
 
-    private async Task<ElasticsearchDocumentSnapshot?> GetDocumentSnapshotAsync(string keyValue, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        ThrowIfDynamicReadModelQueriesUnsupported("mutate-get");
-        await EnsureIndexAsync(_indexName, _indexMetadata, ct);
-
-        using var response = await _httpClient.GetAsync($"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            var payload = await response.Content.ReadAsStringAsync(ct);
-            if (ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
-                throw BuildMissingIndexException("mutate", payload);
-            return null;
-        }
-
-        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "mutate-get", ct);
-        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
-        using var jsonDoc = JsonDocument.Parse(successfulPayload);
-        if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
-            return null;
-
-        var readModel = DeserializeOrNull(sourceNode.GetRawText());
-        if (readModel == null)
-            return null;
-
-        if (!jsonDoc.RootElement.TryGetProperty("_seq_no", out var seqNoNode) ||
-            !seqNoNode.TryGetInt64(out var seqNo) ||
-            !jsonDoc.RootElement.TryGetProperty("_primary_term", out var primaryTermNode) ||
-            !primaryTermNode.TryGetInt64(out var primaryTerm))
-        {
-            throw new InvalidOperationException(
-                $"Elasticsearch mutate-get response missing optimistic concurrency metadata for index '{_indexName}' key '{keyValue}'.");
-        }
-
-        return new ElasticsearchDocumentSnapshot(readModel, seqNo, primaryTerm);
-    }
-
     private async Task UpsertCoreAsync(
         TReadModel readModel,
         bool allowCreateIndex,
-        CancellationToken ct,
-        long? ifSeqNo = null,
-        long? ifPrimaryTerm = null)
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
@@ -277,19 +176,13 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
-            var requestPath = BuildDocumentRequestPath(indexTarget.IndexName, keyValue, ifSeqNo, ifPrimaryTerm);
-            using var request = new HttpRequestMessage(HttpMethod.Put, requestPath)
+            using var request = new HttpRequestMessage(
+                HttpMethod.Put,
+                $"{indexTarget.IndexName}/_doc/{Uri.EscapeDataString(keyValue)}")
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };
             using var response = await _httpClient.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.Conflict)
-            {
-                var conflictPayload = await response.Content.ReadAsStringAsync(ct);
-                throw new ElasticsearchOptimisticConcurrencyException(
-                    $"Elasticsearch optimistic concurrency conflict for index '{indexTarget.IndexName}' key '{keyValue}'. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(conflictPayload)}");
-            }
-
             await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "upsert", ct);
 
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
@@ -303,22 +196,9 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         }
         catch (Exception ex)
         {
-            if (ex is not ElasticsearchOptimisticConcurrencyException)
-                LogWriteFailure(keyValue, startedAt, ex);
+            LogWriteFailure(keyValue, startedAt, ex);
             throw;
         }
-    }
-
-    private string BuildDocumentRequestPath(string indexName, string keyValue, long? ifSeqNo, long? ifPrimaryTerm)
-    {
-        var requestPath = $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}";
-        if (!ifSeqNo.HasValue && !ifPrimaryTerm.HasValue)
-            return requestPath;
-
-        if (!ifSeqNo.HasValue || !ifPrimaryTerm.HasValue)
-            throw new InvalidOperationException("Elasticsearch optimistic concurrency update requires both seq_no and primary_term.");
-
-        return requestPath + $"?if_seq_no={ifSeqNo.Value}&if_primary_term={ifPrimaryTerm.Value}";
     }
 
     private bool TryHandleMissingIndexForRead(string operation, string payload)
@@ -399,19 +279,19 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
 
     private ResolvedIndexTarget ResolveIndexTarget(TReadModel readModel)
     {
-        if (readModel is not IDynamicDocumentIndexedReadModel dynamicReadModel)
+        if (_indexScopeSelector is null)
             return new ResolvedIndexTarget(_indexName, _indexMetadata);
 
-        var metadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(dynamicReadModel.DocumentMetadata);
+        var rawScope = _indexScopeSelector(readModel)?.Trim() ?? string.Empty;
         var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(
-            dynamicReadModel.DocumentIndexScope?.Trim().Length > 0
-                ? dynamicReadModel.DocumentIndexScope
-                : metadata.IndexName);
+            rawScope.Length > 0
+                ? rawScope
+                : _indexMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
 
         var indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
-        return new ResolvedIndexTarget(indexName, metadata with { IndexName = indexName });
+        return new ResolvedIndexTarget(indexName, _indexMetadata with { IndexName = indexName });
     }
 
     private void ThrowIfDynamicReadModelQueriesUnsupported(string operation)
@@ -425,14 +305,4 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     }
 
     private sealed record ResolvedIndexTarget(string IndexName, DocumentIndexMetadata Metadata);
-
-    private sealed record ElasticsearchDocumentSnapshot(TReadModel ReadModel, long SeqNo, long PrimaryTerm);
-
-    private sealed class ElasticsearchOptimisticConcurrencyException : InvalidOperationException
-    {
-        public ElasticsearchOptimisticConcurrencyException(string message)
-            : base(message)
-        {
-        }
-    }
 }

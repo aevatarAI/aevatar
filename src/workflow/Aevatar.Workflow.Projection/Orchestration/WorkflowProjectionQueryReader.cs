@@ -5,16 +5,16 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
-    private readonly IProjectionDocumentStore<WorkflowExecutionReport, string> _documentStore;
+    private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
-        IProjectionDocumentStore<WorkflowExecutionReport, string> documentStore,
+        IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         WorkflowExecutionReadModelMapper mapper,
         IProjectionGraphStore graphStore)
     {
-        _documentStore = documentStore;
+        _documentReader = documentReader;
         _mapper = mapper;
         _graphStore = graphStore;
     }
@@ -23,7 +23,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         string actorId,
         CancellationToken ct = default)
     {
-        var report = await _documentStore.GetAsync(actorId, ct);
+        var report = await _documentReader.GetAsync(actorId, ct);
         return report == null ? null : _mapper.ToActorSnapshot(report);
     }
 
@@ -32,7 +32,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var reports = await _documentStore.ListAsync(boundedTake, ct);
+        var reports = await _documentReader.ListAsync(boundedTake, ct);
         return reports
             .Select(_mapper.ToActorSnapshot)
             .ToList();
@@ -44,7 +44,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var report = await _documentStore.GetAsync(actorId, ct);
+        var report = await _documentReader.GetAsync(actorId, ct);
         if (report == null)
             return [];
 

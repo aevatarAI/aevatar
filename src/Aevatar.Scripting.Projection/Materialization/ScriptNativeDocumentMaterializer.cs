@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -47,7 +46,6 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
                 ? fact.DomainEventPayload?.TypeUrl ?? string.Empty
                 : fact.EventType,
             UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs),
-            DocumentMetadata = CloneMetadata(plan.DocumentMetadata),
         };
     }
 
@@ -89,21 +87,4 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
         }
     }
 
-    private static DocumentIndexMetadata CloneMetadata(ScriptMaterializedDocumentMetadata metadata)
-    {
-        return new DocumentIndexMetadata(
-            metadata.IndexName,
-            CloneDictionary(metadata.Mappings),
-            CloneDictionary(metadata.Settings),
-            CloneDictionary(metadata.Aliases));
-    }
-
-    private static IReadOnlyDictionary<string, object?> CloneDictionary(
-        IReadOnlyDictionary<string, object?> source)
-    {
-        return source.ToDictionary(
-            static pair => pair.Key,
-            static pair => ScriptProjectionReadModelSupport.CloneObjectGraph(pair.Value),
-            StringComparer.Ordinal);
-    }
 }

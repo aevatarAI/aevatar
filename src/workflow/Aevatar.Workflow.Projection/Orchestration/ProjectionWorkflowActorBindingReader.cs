@@ -6,14 +6,13 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindingReader
 {
-    private readonly Func<string, CancellationToken, Task> _ensureProjectionAsync;
     private readonly Func<string, CancellationToken, Task<WorkflowActorBindingDocument?>> _getDocumentAsync;
     private readonly Func<string, Task<bool>> _existsAsync;
     private readonly Func<string, Type, CancellationToken, Task<bool>> _isExpectedAsync;
 
     public ProjectionWorkflowActorBindingReader(
         WorkflowBindingProjectionPortService projectionPort,
-        IProjectionDocumentStore<WorkflowActorBindingDocument, string> documentStore,
+        IProjectionDocumentReader<WorkflowActorBindingDocument, string> documentStore,
         IActorRuntime runtime,
         IAgentTypeVerifier agentTypeVerifier)
     {
@@ -22,22 +21,17 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(agentTypeVerifier);
 
-        _ensureProjectionAsync = async (actorId, ct) =>
-        {
-            _ = await projectionPort.EnsureActorProjectionAsync(actorId, ct);
-        };
+        _ = projectionPort;
         _getDocumentAsync = (actorId, ct) => documentStore.GetAsync(actorId, ct);
         _existsAsync = runtime.ExistsAsync;
         _isExpectedAsync = agentTypeVerifier.IsExpectedAsync;
     }
 
     internal ProjectionWorkflowActorBindingReader(
-        Func<string, CancellationToken, Task> ensureProjectionAsync,
         Func<string, CancellationToken, Task<WorkflowActorBindingDocument?>> getDocumentAsync,
         Func<string, Task<bool>> existsAsync,
         Func<string, Type, CancellationToken, Task<bool>> isExpectedAsync)
     {
-        _ensureProjectionAsync = ensureProjectionAsync ?? throw new ArgumentNullException(nameof(ensureProjectionAsync));
         _getDocumentAsync = getDocumentAsync ?? throw new ArgumentNullException(nameof(getDocumentAsync));
         _existsAsync = existsAsync ?? throw new ArgumentNullException(nameof(existsAsync));
         _isExpectedAsync = isExpectedAsync ?? throw new ArgumentNullException(nameof(isExpectedAsync));
@@ -55,7 +49,6 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
         if (actorKind == WorkflowActorKind.Unsupported)
             return WorkflowActorBinding.Unsupported(actorId);
 
-        await _ensureProjectionAsync(actorId, ct);
         var document = await _getDocumentAsync(actorId, ct);
         return document == null
             ? CreateUnboundBinding(actorId, actorKind)

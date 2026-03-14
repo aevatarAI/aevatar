@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Projection.Projectors;
@@ -10,14 +11,17 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptCatalogEntryProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptCatalogEntryDocument, string> _storeDispatcher;
+    private readonly IProjectionDocumentReader<ScriptCatalogEntryDocument, string> _documentReader;
+    private readonly IProjectionWriteDispatcher<ScriptCatalogEntryDocument, string> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptCatalogEntryProjector(
-        IProjectionStoreDispatcher<ScriptCatalogEntryDocument, string> storeDispatcher,
+        IProjectionDocumentReader<ScriptCatalogEntryDocument, string> documentReader,
+        IProjectionWriteDispatcher<ScriptCatalogEntryDocument, string> writeDispatcher,
         IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -44,7 +48,7 @@ public sealed class ScriptCatalogEntryProjector
                 return;
 
             var documentId = BuildDocumentId(context.RootActorId, evt.ScriptId);
-            var document = (await _storeDispatcher.GetAsync(documentId, ct))?.DeepClone()
+            var document = (await _documentReader.GetAsync(documentId, ct))?.DeepClone()
                            ?? new ScriptCatalogEntryDocument
                            {
                                Id = documentId,
@@ -64,7 +68,7 @@ public sealed class ScriptCatalogEntryProjector
             document.StateVersion += 1;
             if (!document.RevisionHistory.Any(x => string.Equals(x, document.ActiveRevision, StringComparison.Ordinal)))
                 document.RevisionHistory.Add(document.ActiveRevision);
-            await _storeDispatcher.UpsertAsync(document, ct);
+            await _writeDispatcher.UpsertAsync(document, ct);
             return;
         }
 
@@ -76,7 +80,7 @@ public sealed class ScriptCatalogEntryProjector
             return;
 
         var rollbackDocumentId = BuildDocumentId(context.RootActorId, rollback.ScriptId);
-        var rollbackDocument = (await _storeDispatcher.GetAsync(rollbackDocumentId, ct))?.DeepClone()
+        var rollbackDocument = (await _documentReader.GetAsync(rollbackDocumentId, ct))?.DeepClone()
                                ?? new ScriptCatalogEntryDocument
                                {
                                    Id = rollbackDocumentId,
@@ -101,7 +105,7 @@ public sealed class ScriptCatalogEntryProjector
         rollbackDocument.StateVersion += 1;
         if (!rollbackDocument.RevisionHistory.Any(x => string.Equals(x, rollbackDocument.ActiveRevision, StringComparison.Ordinal)))
             rollbackDocument.RevisionHistory.Add(rollbackDocument.ActiveRevision);
-        await _storeDispatcher.UpsertAsync(rollbackDocument, ct);
+        await _writeDispatcher.UpsertAsync(rollbackDocument, ct);
     }
 
     public ValueTask CompleteAsync(
