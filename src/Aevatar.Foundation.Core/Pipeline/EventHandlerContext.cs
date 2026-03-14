@@ -48,10 +48,10 @@ internal sealed class EventHandlerContext : IEventHandlerContext
     /// <summary>Logger.</summary>
     public ILogger Logger { get; }
 
-    /// <summary>Publishes an event to stream routing.</summary>
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
+    /// <summary>Publishes an event to topology publication routing.</summary>
+    public Task PublishAsync<TEvent>(TEvent evt, TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default, EventEnvelopePublishOptions? options = null) where TEvent : IMessage =>
-        _publisher.PublishAsync(evt, direction, ct, InboundEnvelope, options);
+        _publisher.PublishAsync(evt, audience, ct, InboundEnvelope, options);
 
     /// <summary>Sends an event directly to the target actor.</summary>
     public Task SendToAsync<TEvent>(string targetActorId, TEvent evt,

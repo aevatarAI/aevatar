@@ -112,7 +112,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 Prompt = prompt,
                 TimeoutMs = timeoutMs,
                 RunId = runId,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
         }
         else if (payload.Is(WaitSignalTimeoutFiredEvent.Descriptor))
         {
@@ -150,7 +150,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 Success = false,
                 Error = $"signal '{signalName}' timed out after {timeout.TimeoutMs}ms",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             state.Pending.Remove(BuildPendingKey(pendingKey));
             await SaveStateAsync(state, ctx, ct);
         }
@@ -181,7 +181,7 @@ public sealed class WaitSignalModule : IEventModule<IWorkflowExecutionContext>
                 RunId = pending.RunId,
                 Success = true,
                 Output = output,
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             state.Pending.Remove(BuildPendingKey(pendingKey));
             await SaveStateAsync(state, ctx, ct);
 

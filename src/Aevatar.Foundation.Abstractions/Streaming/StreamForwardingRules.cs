@@ -20,8 +20,8 @@ public static class StreamForwardingRules
             ForwardingMode = forwardingMode,
             DirectionFilter =
             [
-                EventDirection.Down,
-                EventDirection.Both,
+                TopologyAudience.Children,
+                TopologyAudience.ParentAndChildren,
             ],
         };
     }
@@ -31,7 +31,7 @@ public static class StreamForwardingRules
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var direction = envelope.Route?.Direction ?? EventDirection.Unspecified;
+        var direction = envelope.Route.GetTopologyAudience();
         if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(direction))
             return false;
 
@@ -124,8 +124,8 @@ public static class StreamForwardingRules
         ArgumentException.ThrowIfNullOrWhiteSpace(selfActorId);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var direction = envelope.Route?.Direction ?? EventDirection.Unspecified;
-        if (direction is not EventDirection.Down and not EventDirection.Both)
+        var direction = envelope.Route.GetTopologyAudience();
+        if (direction is not TopologyAudience.Children and not TopologyAudience.ParentAndChildren)
             return false;
 
         return IsForwardedEnvelopeForTarget(envelope, selfActorId) &&

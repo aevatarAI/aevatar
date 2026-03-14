@@ -62,11 +62,7 @@ public class WorkflowYamlScriptParityTests
                 WorkflowYaml = BuildParityWorkflowYaml(),
                 WorkflowName = "yaml_script_parity",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -84,11 +80,7 @@ public class WorkflowYamlScriptParityTests
                 WorkflowName = "yaml_script_parity",
                 RunId = "yaml-script-parity-run",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
@@ -116,11 +108,7 @@ public class WorkflowYamlScriptParityTests
                 Prompt = prompt,
                 SessionId = "parity-session",
             }),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "test",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),

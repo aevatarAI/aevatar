@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Runtime.Persistence;
 using Google.Protobuf;
@@ -92,7 +93,7 @@ public class DeferredEventStoreCompactionSchedulerTests
 
         public int DeleteCalls => _deleteCalls;
 
-        public Task<long> AppendAsync(
+        public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
             IEnumerable<StateEvent> events,
             long expectedVersion,

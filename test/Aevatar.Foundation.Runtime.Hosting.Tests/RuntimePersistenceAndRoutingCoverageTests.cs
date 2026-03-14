@@ -2,8 +2,11 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
-using Aevatar.Foundation.Runtime.Routing;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -36,7 +39,9 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
             new StateEvent { EventId = "e2", Version = 2, EventType = "test", AgentId = "actor-1" },
         ];
 
-        (await store.AppendAsync("actor-1", events, expectedVersion: 0)).Should().Be(2);
+        var commitResult = await store.AppendAsync("actor-1", events, expectedVersion: 0);
+        commitResult.LatestVersion.Should().Be(2);
+        commitResult.CommittedEvents.Select(x => x.Version).Should().Equal(1, 2);
         (await store.GetVersionAsync("actor-1")).Should().Be(2);
         (await store.GetVersionAsync("missing")).Should().Be(0);
 
@@ -56,169 +61,23 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
     }
 
     [Fact]
-    public async Task InMemoryRouterStore_ShouldSaveLoadAndDeleteHierarchy()
+    public async Task LocalActorRuntime_LinkAndUnlink_ShouldMaintainTopologyState()
     {
-        var store = new InMemoryRouterStore();
-        var hierarchy = new RouterHierarchy(
-            ParentId: "parent-1",
-            ChildrenIds: new HashSet<string>(StringComparer.Ordinal) { "child-1", "child-2" });
+        var registry = new InMemoryStreamForwardingRegistry();
+        var streams = new InMemoryStreamProvider(new InMemoryStreamOptions(), NullLoggerFactory.Instance, registry);
+        var services = new ServiceCollection().BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
 
-        (await store.LoadAsync("missing")).Should().BeNull();
+        var parent = await runtime.CreateAsync<CoverageTestAgent>("parent");
+        var child = await runtime.CreateAsync<CoverageTestAgent>("child");
 
-        await store.SaveAsync("actor-1", hierarchy);
-        var loaded = await store.LoadAsync("actor-1");
-        loaded.Should().NotBeNull();
-        loaded!.ParentId.Should().Be("parent-1");
-        loaded.ChildrenIds.Should().BeEquivalentTo(["child-1", "child-2"]);
+        await runtime.LinkAsync(parent.Id, child.Id);
+        (await parent.GetChildrenIdsAsync()).Should().BeEquivalentTo(["child"]);
+        (await child.GetParentIdAsync()).Should().Be("parent");
 
-        await store.DeleteAsync("actor-1");
-        (await store.LoadAsync("actor-1")).Should().BeNull();
-    }
-
-    [Fact]
-    public async Task EventRouter_ShouldRouteByDirection_AndSkipAlreadyPublishedTargets()
-    {
-        var router = new EventRouter("middle");
-        router.ActorId.Should().Be("middle");
-        router.SetParent("parent");
-        router.ParentId.Should().Be("parent");
-        router.AddChild("child-1");
-        router.AddChild("child-2");
-
-        var handledCount = 0;
-        var sent = new List<string>();
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Self),
-            _ =>
-            {
-                handledCount++;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        sent.Should().BeEmpty();
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Up),
-            _ =>
-            {
-                handledCount++;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Down),
-            _ =>
-            {
-                handledCount++;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both),
-            _ =>
-            {
-                handledCount++;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        var parentCountBeforeSkip = sent.Count(x => x == "parent");
-        var child1CountBeforeSkip = sent.Count(x => x == "child-1");
-        var child2CountBeforeSkip = sent.Count(x => x == "child-2");
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both, publishers: "parent,child-1"),
-            _ =>
-            {
-                handledCount++;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        handledCount.Should().Be(5);
-        sent.Should().Contain("parent");
-        sent.Should().Contain("child-1");
-        sent.Should().Contain("child-2");
-        sent.Count(x => x == "parent").Should().Be(parentCountBeforeSkip);
-        sent.Count(x => x == "child-1").Should().Be(child1CountBeforeSkip);
-        sent.Count(x => x == "child-2").Should().Be(child2CountBeforeSkip + 1);
-
-        router.RemoveChild("child-1");
-        router.ChildrenIds.Should().BeEquivalentTo(["child-2"]);
-        router.ClearParent();
-        router.ParentId.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task EventRouter_WhenEnvelopeAlreadyContainsSelfInPublisherChain_ShouldSkipHandling()
-    {
-        var router = new EventRouter("actor-a");
-        router.SetParent("parent");
-        router.AddChild("child");
-
-        var handled = false;
-        var sent = new List<string>();
-
-        await router.RouteAsync(
-            CreateEnvelope(EventDirection.Both, publishers: "actor-a"),
-            _ =>
-            {
-                handled = true;
-                return Task.CompletedTask;
-            },
-            (target, _) =>
-            {
-                sent.Add(target);
-                return Task.CompletedTask;
-            });
-
-        handled.Should().BeFalse();
-        sent.Should().BeEmpty();
-    }
-
-    private static EventEnvelope CreateEnvelope(EventDirection direction, string? publishers = null)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = new EnvelopeRoute
-            {
-                Direction = direction,
-            },
-        };
-
-        if (!string.IsNullOrWhiteSpace(publishers))
-        {
-            foreach (var publisher in publishers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                VisitedActorChain.AppendIfMissing(envelope, publisher);
-        }
-
-        return envelope;
+        await runtime.UnlinkAsync(child.Id);
+        (await parent.GetChildrenIdsAsync()).Should().BeEmpty();
+        (await child.GetParentIdAsync()).Should().BeNull();
     }
 
     private sealed class TestState
@@ -226,5 +85,20 @@ public sealed class RuntimePersistenceAndRoutingCoverageTests
         public int Count { get; init; }
 
         public string Name { get; init; } = string.Empty;
+    }
+
+    private sealed class CoverageTestAgent : IAgent
+    {
+        public string Id => "coverage";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("coverage");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 }

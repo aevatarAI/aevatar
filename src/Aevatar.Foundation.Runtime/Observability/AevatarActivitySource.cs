@@ -60,7 +60,7 @@ public static class AevatarActivitySource
             activity.SetTag(EventTypeTag, eventTypeUrl);
         else if (!string.IsNullOrWhiteSpace(eventTypeName))
             activity.SetTag(EventTypeTag, eventTypeName);
-        activity.SetTag(EventDirectionTag, (envelope.Route?.Direction ?? EventDirection.Unspecified).ToString());
+        activity.SetTag(EventDirectionTag, envelope.Route.Describe());
         if (!string.IsNullOrWhiteSpace(envelope.Route?.PublisherActorId))
             activity.SetTag(EventPublisherTag, envelope.Route.PublisherActorId);
 

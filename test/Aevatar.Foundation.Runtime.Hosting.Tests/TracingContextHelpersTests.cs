@@ -106,11 +106,7 @@ public sealed class TracingContextHelpersTests
             {
                 CorrelationId = "corr-3",
             },
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Self,
-                PublisherActorId = "publisher-3",
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-3", TopologyAudience.Self),
         };
 
         using var scope = EventHandleScope.Begin(logger, "agent-3", envelope);

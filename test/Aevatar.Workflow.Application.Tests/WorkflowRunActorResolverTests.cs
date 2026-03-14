@@ -405,6 +405,64 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldKeepExistingBindingForOpaqueActorId_WhileNewRunUsesLatestRegistryDefinition()
+    {
+        const string opaqueActorId = "script-runtime:legacy-worker-42";
+        const string legacyYaml =
+            """
+            name: direct
+            description: legacy implementation
+            roles: []
+            steps: []
+            """;
+        const string latestYaml =
+            """
+            name: direct
+            description: latest implementation
+            roles: []
+            steps: []
+            """;
+        var bindingReader = new RecordingWorkflowActorBindingReader();
+        bindingReader.Register(
+            opaqueActorId,
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                opaqueActorId,
+                "definition-direct-legacy",
+                "run-legacy",
+                "direct",
+                legacyYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionRegistry();
+        registry.Register("direct", latestYaml);
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
+
+        var boundResult = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", null, opaqueActorId),
+            CancellationToken.None);
+
+        boundResult.Error.Should().Be(WorkflowChatRunStartError.None);
+        bindingReader.LastActorId.Should().Be(opaqueActorId);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].DefinitionActorId.Should().Be("definition-direct-legacy");
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(legacyYaml);
+
+        actorPort.CreateRunBindings.Clear();
+
+        var freshResult = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            CancellationToken.None);
+
+        freshResult.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].DefinitionActorId.Should().Be("definition-direct");
+        actorPort.CreateRunBindings[0].WorkflowName.Should().Be("direct");
+        actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(latestYaml);
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldReturnAgentWorkflowNotConfigured_WhenBoundWorkflowYamlMissingEverywhere()
     {
         var actorPort = new RecordingWorkflowRunActorPort();
@@ -492,6 +550,23 @@ public sealed class WorkflowRunActorResolverTests
             _ = actorId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_binding);
+        }
+    }
+
+    private sealed class RecordingWorkflowActorBindingReader : IWorkflowActorBindingReader
+    {
+        private readonly Dictionary<string, WorkflowActorBinding> _bindings = new(StringComparer.Ordinal);
+
+        public string? LastActorId { get; private set; }
+
+        public void Register(string actorId, WorkflowActorBinding binding) =>
+            _bindings[actorId] = binding;
+
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastActorId = actorId;
+            return Task.FromResult(_bindings.GetValueOrDefault(actorId));
         }
     }
 

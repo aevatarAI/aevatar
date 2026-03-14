@@ -288,6 +288,61 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
+actor_id_parsing_hits="$(
+  rg -n "[A-Za-z0-9_]*ActorId[A-Za-z0-9_]*\s*\.(StartsWith|EndsWith|Contains|Split|Substring)\(" \
+    src/Aevatar.Mainnet.Host.Api \
+    src/workflow/Aevatar.Workflow.Host.Api \
+    src/workflow/Aevatar.Workflow.Application \
+    src/Aevatar.Scripting.Application \
+    -g '*.cs' || true
+)"
+
+if [ -n "${actor_id_parsing_hits}" ]; then
+  echo "${actor_id_parsing_hits}"
+  echo "Host/Application must not parse actorId strings for source/type branching. Use actor-owned binding queries or typed target resolvers."
+  exit 1
+fi
+
+source_named_runtime_port_hits="$(
+  rg -n "\b(interface|class|record)\s+I?(Workflow|Script|Scripting|Static)[A-Za-z0-9_]*(GAgentRuntimePort|ActorRuntimePort|ActorCommunicationPort|ActorInvocationPort|ActorDispatchPort)\b" \
+    src test \
+    -g '*.cs' || true
+)"
+
+if [ -n "${source_named_runtime_port_hits}" ]; then
+  echo "${source_named_runtime_port_hits}"
+  echo "Source-named generic actor communication abstractions are forbidden. Keep lifecycle on IActorRuntime and use subsystem-local typed/contextual adapters."
+  exit 1
+fi
+
+legacy_runtime_port_hits="$(
+  rg -n "\b(interface|class|record)\s+(IGAgentRuntimePort|RuntimeGAgentRuntimePort)\b" \
+    src test \
+    -g '*.cs' || true
+)"
+
+if [ -n "${legacy_runtime_port_hits}" ]; then
+  echo "${legacy_runtime_port_hits}"
+  echo "Legacy fat runtime-port abstractions are forbidden. Foundation must keep lifecycle/topology on IActorRuntime and message execution on context/publisher."
+  exit 1
+fi
+
+if rg -n "IActorMessagingPort|IActorMessagingSession|IActorMessagingSessionFactory|RuntimeActorMessagingPort|RuntimeActorMessagingSessionFactory" \
+  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  -g '!docs/architecture/*'
+then
+  echo "Public actor messaging port/session abstractions are forbidden. Use IActorRuntime + IActorDispatchPort + IEventContext/IEventPublisher or subsystem-local typed adapters."
+  exit 1
+fi
+
+if rg -n "\bgagent_query\b|GAgentQueryState|GAgentQueryResultState|GAgentDispatchState|\bgagent_send\b" \
+  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  -g '!docs/architecture/*'
+then
+  echo "Legacy gagent_* generic communication modules/states are forbidden. Use actor_send plus protocol-specific typed query/reply paths."
+  exit 1
+fi
+
 if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
   echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowGAgent persisted state."
   exit 1
@@ -472,25 +527,25 @@ if rg -n "MapMakerCapabilityEndpoints|/api/maker" src -g '*.cs'; then
   exit 1
 fi
 
-if ! rg -n "AddWorkflowMakerExtensions\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
-  echo "Mainnet host must register workflow maker extensions via AddWorkflowMakerExtensions()."
+if ! rg -n "AddAevatarPlatform\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
-if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
-  echo "Mainnet host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
+if ! rg -n "EnableMakerExtensions\s*=\s*true" src/Aevatar.Mainnet.Host.Api/Program.cs >/dev/null; then
+  echo "Mainnet host must enable Maker via AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })."
   exit 1
 fi
 
-if ! rg -n "AddWorkflowCapabilityWithAIDefaults\(" src/workflow/Aevatar.Workflow.Host.Api/Program.cs >/dev/null; then
-  echo "Workflow host must register workflow capability + AI defaults via AddWorkflowCapabilityWithAIDefaults()."
+if ! rg -n "AddAevatarPlatform\(" src/workflow/Aevatar.Workflow.Host.Api/Program.cs >/dev/null; then
+  echo "Workflow host must register platform capabilities via AddAevatarPlatform(...)."
   exit 1
 fi
 
 if ! rg -n "AddWorkflowProjectionReadModelProviders\(" \
-  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowCapabilityHostBuilderExtensions.cs >/dev/null
+  src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/AevatarPlatformHostBuilderExtensions.cs >/dev/null
 then
-  echo "Workflow hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
+  echo "Platform hosting extension must register read-model providers via AddWorkflowProjectionReadModelProviders()."
   exit 1
 fi
 

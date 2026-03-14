@@ -1,36 +1,35 @@
+using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 
-internal sealed class OrleansGrainEventPublisher : IEventPublisher
+internal sealed class OrleansGrainEventPublisher : IEventPublisher, ICommittedStateEventPublisher
 {
     private readonly string _actorId;
     private readonly Func<string?> _getParentId;
-    private readonly Func<EventEnvelope, Task> _dispatchToSelfAsync;
     private readonly IEnvelopePropagationPolicy _propagationPolicy;
     private readonly Aevatar.Foundation.Abstractions.IStreamProvider _streams;
 
     public OrleansGrainEventPublisher(
         string actorId,
         Func<string?> getParentId,
-        Func<EventEnvelope, Task> dispatchToSelfAsync,
         IEnvelopePropagationPolicy propagationPolicy,
         Aevatar.Foundation.Abstractions.IStreamProvider streams)
     {
         _actorId = actorId;
         _getParentId = getParentId;
-        _dispatchToSelfAsync = dispatchToSelfAsync;
         _propagationPolicy = propagationPolicy;
         _streams = streams;
     }
 
     public async Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelope? sourceEnvelope = null,
         EventEnvelopePublishOptions? options = null)
@@ -41,36 +40,32 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = _actorId,
-                Direction = direction,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, audience),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
             sourceEnvelope,
             _propagationPolicy,
             _actorId,
-            EstimateRouteTargetCount(direction),
+            EstimateRouteTargetCount(audience),
             options);
 
-        switch (direction)
+        switch (audience)
         {
-            case EventDirection.Self:
-                await DispatchAsync(_actorId, _actorId, envelope, ct);
-                break;
-            case EventDirection.Down:
+            case TopologyAudience.Self:
                 await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
-            case EventDirection.Up:
+            case TopologyAudience.Children:
+                await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+                break;
+            case TopologyAudience.Parent:
             {
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
-                    await DispatchAsync(_actorId, parentId, envelope, ct);
+                    await DispatchAsync(parentId, envelope, ct);
                 break;
             }
-            case EventDirection.Both:
+            case TopologyAudience.ParentAndChildren:
             {
                 var tasks = new List<Task>
                 {
@@ -78,7 +73,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
                 };
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
-                    tasks.Add(DispatchAsync(_actorId, parentId, envelope, ct));
+                    tasks.Add(DispatchAsync(parentId, envelope, ct));
                 await Task.WhenAll(tasks);
                 break;
             }
@@ -98,12 +93,7 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = _actorId,
-                Direction = EventDirection.Self,
-                TargetActorId = targetActorId,
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(_actorId, targetActorId),
         };
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             envelope,
@@ -112,25 +102,49 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher
             _actorId,
             routeTargetCount: 1,
             options);
-        return DispatchAsync(_actorId, targetActorId, envelope, ct);
+        if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
+            return _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+
+        return DispatchAsync(targetActorId, envelope, ct);
     }
 
-    private long? EstimateRouteTargetCount(EventDirection direction) =>
-        direction switch
+    Task ICommittedStateEventPublisher.PublishAsync(
+        CommittedStateEventPublished evt,
+        ObserverAudience audience,
+        CancellationToken ct,
+        EventEnvelope? sourceEnvelope,
+        EventEnvelopePublishOptions? options)
+    {
+        var envelope = new EventEnvelope
         {
-            EventDirection.Self => 1,
-            EventDirection.Up => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(_actorId, audience),
+        };
+        EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            envelope,
+            sourceEnvelope,
+            _propagationPolicy,
+            _actorId,
+            routeTargetCount: 0,
+            options);
+        return _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
+    }
+
+    private long? EstimateRouteTargetCount(TopologyAudience audience) =>
+        audience switch
+        {
+            TopologyAudience.Self => 1,
+            TopologyAudience.Parent => string.IsNullOrWhiteSpace(_getParentId()) ? 0 : 1,
             // Down/Both fan-out count is stream-subscriber dependent and unknown at publish time.
             _ => null,
         };
 
-    private Task DispatchAsync(string senderActorId, string targetActorId, EventEnvelope envelope, CancellationToken ct)
+    private Task DispatchAsync(string targetActorId, EventEnvelope envelope, CancellationToken ct)
     {
         var routedEnvelope = envelope.Clone();
-        VisitedActorChain.AppendDispatchPublisher(routedEnvelope, senderActorId, targetActorId);
-
-        if (string.Equals(targetActorId, _actorId, StringComparison.Ordinal))
-            return _dispatchToSelfAsync(routedEnvelope);
+        VisitedActorChain.AppendDispatchPublisher(routedEnvelope, _actorId, targetActorId);
 
         return _streams.GetStream(targetActorId).ProduceAsync(routedEnvelope, ct);
     }

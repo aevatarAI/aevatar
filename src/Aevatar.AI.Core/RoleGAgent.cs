@@ -155,7 +155,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         {
             SessionId = request.SessionId,
             AgentId = Id,
-        }, EventDirection.Up);
+        }, TopologyAudience.Parent);
 
         SessionReplayRecord replayRecord;
         try
@@ -218,7 +218,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 {
                     Delta = chunk.DeltaContent,
                     SessionId = request.SessionId,
-                }, EventDirection.Up);
+                }, TopologyAudience.Parent);
             }
 
             if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
@@ -228,7 +228,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 {
                     Delta = chunk.DeltaReasoningContent,
                     SessionId = request.SessionId,
-                }, EventDirection.Up);
+                }, TopologyAudience.Parent);
             }
 
             if (chunk.DeltaToolCall != null)
@@ -242,7 +242,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
                 ArgumentsJson = toolCall.ArgumentsJson,
-            }, EventDirection.Up);
+            }, TopologyAudience.Parent);
         }
 
         var response = fullContent.ToString();
@@ -297,7 +297,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         {
             SessionId = sessionId,
             AgentId = Id,
-        }, EventDirection.Up);
+        }, TopologyAudience.Parent);
 
         if (trackedSession.ContentEmitted && !string.IsNullOrEmpty(trackedSession.FinalContent))
         {
@@ -305,7 +305,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             {
                 Delta = trackedSession.FinalContent,
                 SessionId = sessionId,
-            }, EventDirection.Up);
+            }, TopologyAudience.Parent);
         }
 
         if (!string.IsNullOrEmpty(trackedSession.FinalReasoningContent))
@@ -314,7 +314,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             {
                 Delta = trackedSession.FinalReasoningContent,
                 SessionId = sessionId,
-            }, EventDirection.Up);
+            }, TopologyAudience.Parent);
         }
 
         foreach (var toolCall in trackedSession.ToolCalls)
@@ -324,7 +324,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 CallId = toolCall.CallId,
                 ToolName = toolCall.ToolName,
                 ArgumentsJson = toolCall.ArgumentsJson,
-            }, EventDirection.Up);
+            }, TopologyAudience.Parent);
         }
 
         await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
@@ -337,7 +337,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 Content = completionContent,
                 SessionId = sessionId,
             },
-            EventDirection.Up);
+            TopologyAudience.Parent);
 
     private RoleChatSessionState? ResolveTrackedSession(ChatRequestEvent request)
     {

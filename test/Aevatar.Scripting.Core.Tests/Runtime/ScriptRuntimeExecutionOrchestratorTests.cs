@@ -37,7 +37,8 @@ public class ScriptRuntimeExecutionOrchestratorTests
                 ScriptRevision: "rev-1",
                 SourceText: "source",
                 ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "hash-v1"),
+                ReadModelSchemaHash: "hash-v1",
+                MessageContext: new ScriptExecutionMessageContext(new NullEventPublisher(), null)),
             CancellationToken.None);
 
         result.Should().ContainSingle();
@@ -129,7 +130,7 @@ public class ScriptRuntimeExecutionOrchestratorTests
             return Task.FromResult(string.Empty);
         }
 
-        public Task PublishAsync(IMessage eventPayload, EventDirection direction, CancellationToken ct)
+        public Task PublishAsync(IMessage eventPayload, TopologyAudience direction, CancellationToken ct)
         {
             _ = eventPayload;
             _ = direction;
@@ -140,14 +141,6 @@ public class ScriptRuntimeExecutionOrchestratorTests
         public Task SendToAsync(string targetActorId, IMessage eventPayload, CancellationToken ct)
         {
             _ = targetActorId;
-            _ = eventPayload;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task InvokeAgentAsync(string targetAgentId, IMessage eventPayload, CancellationToken ct)
-        {
-            _ = targetAgentId;
             _ = eventPayload;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
@@ -283,6 +276,42 @@ public class ScriptRuntimeExecutionOrchestratorTests
             _ = targetRevision;
             _ = reason;
             _ = proposalId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NullEventPublisher : IEventPublisher
+    {
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = evt;
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

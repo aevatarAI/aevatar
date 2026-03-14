@@ -20,14 +20,10 @@ public sealed class ScriptEvolutionCommandTarget
 
     public ScriptEvolutionCommandTarget(
         IActor actor,
-        string managerActorId,
         string proposalId,
         IScriptEvolutionProjectionPort projectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
-        ManagerActorId = string.IsNullOrWhiteSpace(managerActorId)
-            ? throw new ArgumentException("Manager actor id is required.", nameof(managerActorId))
-            : managerActorId;
         ProposalId = string.IsNullOrWhiteSpace(proposalId)
             ? throw new ArgumentException("Proposal id is required.", nameof(proposalId))
             : proposalId;
@@ -35,7 +31,6 @@ public sealed class ScriptEvolutionCommandTarget
     }
 
     public IActor Actor { get; }
-    public string ManagerActorId { get; }
     public string ProposalId { get; }
     public string TargetId => Actor.Id;
     public string SessionActorId => Actor.Id;

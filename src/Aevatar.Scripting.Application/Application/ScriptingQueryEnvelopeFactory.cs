@@ -49,26 +49,4 @@ public static class ScriptingQueryEnvelopeFactory
             ScriptingQueryChannels.CatalogPublisherId);
     }
 
-    public static EventEnvelope CreateEvolutionDecisionQuery(
-        string targetActorId,
-        string requestId,
-        string replyStreamId,
-        string proposalId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(replyStreamId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(proposalId);
-
-        return ScriptingActorRequestEnvelopeFactory.Create(
-            targetActorId,
-            proposalId,
-            new QueryScriptEvolutionDecisionRequestedEvent
-            {
-                RequestId = requestId,
-                ReplyStreamId = replyStreamId,
-                ProposalId = proposalId,
-            },
-            ScriptingQueryChannels.EvolutionPublisherId);
-    }
 }

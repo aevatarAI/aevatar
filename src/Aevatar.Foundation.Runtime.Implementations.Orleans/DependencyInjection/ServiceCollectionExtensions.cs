@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Orleans.Hosting;
+using Orleans.Serialization;
 using Orleans.Streams;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -31,6 +32,7 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
         services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
+        services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
         services.RemoveAll(typeof(IEventSourcingSnapshotStore<>));

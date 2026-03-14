@@ -13,6 +13,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Pipeline;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,10 +38,16 @@ public abstract class GAgentBase : IAgent
     /// <summary>Unique agent identifier.</summary>
     public string Id { get; private set; } = string.Empty;
 
+    /// <summary>Current inbound envelope during handler execution, if any.</summary>
+    protected EventEnvelope? ActiveInboundEnvelope => _activeInboundEnvelope;
+
     // Framework-injected dependencies (set by Runtime)
 
-    /// <summary>Event publisher injected by actor/runtime.</summary>
+    /// <summary>Topology event publisher injected by actor/runtime.</summary>
     public IEventPublisher EventPublisher { get; set; } = NullEventPublisher.Instance;
+
+    /// <summary>Framework-internal committed state-event publisher injected by actor/runtime.</summary>
+    internal ICommittedStateEventPublisher CommittedStateEventPublisher { get; set; } = NullCommittedStateEventPublisher.Instance;
 
     /// <summary>Logger injected by runtime.</summary>
     public ILogger Logger { get; set; } = NullLogger.Instance;
@@ -216,12 +223,12 @@ public abstract class GAgentBase : IAgent
 
     // Publishing helper methods
 
-    /// <summary>Publishes an event with direction.</summary>
+    /// <summary>Publishes an event to a topology audience.</summary>
     protected Task PublishAsync<TEvent>(TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience audience = TopologyAudience.Children,
         CancellationToken ct = default,
         EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct, _activeInboundEnvelope, options);
+        EventPublisher.PublishAsync(evt, audience, ct, _activeInboundEnvelope, options);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
@@ -336,8 +343,19 @@ public abstract class GAgentBase : IAgent
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, TopologyAudience a, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
         public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+    }
+
+    private sealed class NullCommittedStateEventPublisher : ICommittedStateEventPublisher
+    {
+        public static readonly NullCommittedStateEventPublisher Instance = new();
+        public Task PublishAsync(
+            CommittedStateEventPublished e,
+            ObserverAudience a,
+            CancellationToken c,
+            EventEnvelope? sourceEnvelope,
+            EventEnvelopePublishOptions? options) => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

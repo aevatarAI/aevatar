@@ -14,7 +14,6 @@ public sealed class ScriptEvolutionAcceptedReceiptFactory
         ArgumentNullException.ThrowIfNull(context);
 
         return new ScriptEvolutionAcceptedReceipt(
-            ManagerActorId: target.ManagerActorId,
             SessionActorId: target.SessionActorId,
             ProposalId: target.ProposalId,
             CommandId: context.CommandId,

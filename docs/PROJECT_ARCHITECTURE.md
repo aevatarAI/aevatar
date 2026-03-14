@@ -28,16 +28,15 @@ flowchart TB
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     MH["Aevatar.Mainnet.Host.Api"] --> H0["AddAevatarDefaultHost()"]
-    MH --> H1["AddWorkflowCapabilityWithAIDefaults()"]
-    MH --> H2["AddWorkflowMakerExtensions()"]
+    MH --> H1["AddAevatarPlatform(EnableMakerExtensions=true)"]
 
     WH["Aevatar.Workflow.Host.Api"] --> W0["AddAevatarDefaultHost()"]
-    WH --> W1["AddWorkflowCapabilityWithAIDefaults()"]
+    WH --> W1["AddAevatarPlatform()"]
 ```
 
 约束：
 
-1. Mainnet 必须注册 `AddWorkflowCapabilityWithAIDefaults()` 与 `AddWorkflowMakerExtensions()`。
+1. Mainnet 必须注册 `AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })`。
 2. Workflow Host 作为能力隔离入口，可不加载 Maker 插件。
 3. 不再保留 Maker 独立 Host 与 `/api/maker/*` API。
 
@@ -48,7 +47,7 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 职责：
 
 1. 提供 `maker_recursive`、`maker_vote` 模块实现。
-2. 提供 `AddWorkflowMakerExtensions()` 统一注册入口。
+2. 提供 `AddWorkflowMakerExtensions()` 作为 Maker 模块注册入口，并由平台入口在启用 Maker 时统一调用。
 3. 通过 `IWorkflowModulePack` 贡献模块定义，与内建模块走同一注册体系。
 
 依赖约束：
@@ -101,5 +100,5 @@ Maker 插件工程：`src/workflow/extensions/Aevatar.Workflow.Extensions.Maker`
 1. 禁止 `Workflow -> Maker` 反向依赖。
 2. 禁止残留独立 Maker 工程（Application/Infrastructure/Host/Core）。
 3. 禁止 `AddMakerCapability()` 与 `/api/maker/*` 端点回流。
-4. 强制 Mainnet 使用 `AddWorkflowMakerExtensions()` 装配插件。
+4. 强制 Mainnet 通过 `AddAevatarPlatform(...EnableMakerExtensions=true...)` 装配 Maker 插件。
 5. 默认 `dotnet test aevatar.slnx --nologo` 为快速主链路；分钟级脚本自治演化回归由 `slow_test_guards.sh` 单独承接。

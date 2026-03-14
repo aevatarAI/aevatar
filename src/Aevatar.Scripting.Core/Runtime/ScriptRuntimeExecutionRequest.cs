@@ -12,4 +12,5 @@ public sealed record ScriptRuntimeExecutionRequest(
     string ScriptRevision,
     string SourceText,
     string ReadModelSchemaVersion,
-    string ReadModelSchemaHash);
+    string ReadModelSchemaHash,
+    ScriptExecutionMessageContext MessageContext);

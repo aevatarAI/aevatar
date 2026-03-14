@@ -162,7 +162,7 @@ public sealed class WorkflowYamlValidateModuleTests
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new() => new();
@@ -177,7 +177,7 @@ public sealed class WorkflowYamlValidateModuleTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage

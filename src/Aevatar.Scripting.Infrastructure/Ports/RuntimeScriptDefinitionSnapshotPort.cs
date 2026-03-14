@@ -11,22 +11,17 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
     private readonly RuntimeScriptActorAccessor _actorAccessor;
     private readonly RuntimeScriptQueryClient _queryClient;
     private readonly TimeSpan _queryTimeout;
-    private readonly bool _useEventDrivenDefinitionQuery;
+
     public RuntimeScriptDefinitionSnapshotPort(
         RuntimeScriptActorAccessor actorAccessor,
         RuntimeScriptQueryClient queryClient,
-        IScriptingRuntimeQueryModes queryModes,
-        IScriptingPortTimeouts timeouts)
+        ScriptingQueryTimeoutOptions timeoutOptions)
     {
         _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
-        _useEventDrivenDefinitionQuery = (queryModes ?? throw new ArgumentNullException(nameof(queryModes)))
-            .UseEventDrivenDefinitionQuery;
-        _queryTimeout = (timeouts ?? throw new ArgumentNullException(nameof(timeouts)))
-            .GetDefinitionSnapshotQueryTimeout();
+        _queryTimeout = (timeoutOptions ?? throw new ArgumentNullException(nameof(timeoutOptions)))
+            .ResolveDefinitionSnapshotQueryTimeout();
     }
-
-    public bool UseEventDrivenDefinitionQuery => _useEventDrivenDefinitionQuery;
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(
         string definitionActorId,

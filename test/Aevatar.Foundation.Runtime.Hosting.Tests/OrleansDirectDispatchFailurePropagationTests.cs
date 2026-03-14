@@ -180,10 +180,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         {
             Id = Guid.NewGuid().ToString("N"),
             Payload = Any.Pack(new StringValue { Value = payload }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
 
     private static int ReserveTcpPort()

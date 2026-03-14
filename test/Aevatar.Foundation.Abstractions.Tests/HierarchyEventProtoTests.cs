@@ -55,12 +55,7 @@ public class HierarchyEventProtoTests
             Id = "evt-2",
             Payload = payload,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = "actor-a",
-                Direction = EventDirection.Self,
-                TargetActorId = "actor-b",
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect("actor-a", "actor-b"),
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = "corr-2",

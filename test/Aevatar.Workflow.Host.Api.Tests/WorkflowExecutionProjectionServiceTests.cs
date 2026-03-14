@@ -687,11 +687,7 @@ public class WorkflowExecutionProjectionServiceTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        Route = new EnvelopeRoute
-        {
-            PublisherActorId = publisherId,
-            Direction = EventDirection.Down,
-        },
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
     };
 
     private static WorkflowRunEventEnvelope BuildRunStartedEvent(string threadId) =>

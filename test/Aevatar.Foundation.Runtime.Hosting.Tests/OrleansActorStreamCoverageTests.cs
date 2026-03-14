@@ -35,7 +35,7 @@ public sealed class OrleansActorStreamCoverageTests
         var source = provider.GetRecordedStream("actor-1");
         source.Published.Should().ContainSingle();
         source.Published[0].Payload!.Unpack<StringValue>().Value.Should().Be("hello");
-        source.Published[0].Route!.Direction.Should().Be(EventDirection.Down);
+        source.Published[0].Route.GetTopologyAudience().Should().Be(TopologyAudience.Children);
     }
 
     [Fact]
@@ -46,10 +46,7 @@ public sealed class OrleansActorStreamCoverageTests
         var envelope = new EventEnvelope
         {
             Id = "evt-1",
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Both,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.ParentAndChildren),
             Payload = Any.Pack(new StringValue { Value = "direct" }),
         };
 
@@ -58,7 +55,7 @@ public sealed class OrleansActorStreamCoverageTests
         var source = provider.GetRecordedStream("actor-1");
         source.Published.Should().ContainSingle();
         source.Published[0].Id.Should().Be("evt-1");
-        source.Published[0].Route!.Direction.Should().Be(EventDirection.Both);
+        source.Published[0].Route.GetTopologyAudience().Should().Be(TopologyAudience.ParentAndChildren);
         source.Published[0].Payload!.Unpack<StringValue>().Value.Should().Be("direct");
     }
 
@@ -72,28 +69,28 @@ public sealed class OrleansActorStreamCoverageTests
             SourceStreamId = "actor-1",
             TargetStreamId = "target-handle",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
         await registry.UpsertAsync(new StreamForwardingBinding
         {
             SourceStreamId = "actor-1",
             TargetStreamId = "target-transit",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
         await registry.UpsertAsync(new StreamForwardingBinding
         {
             SourceStreamId = "actor-1",
             TargetStreamId = "target-up-only",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Up],
+            DirectionFilter = [TopologyAudience.Parent],
         });
         await registry.UpsertAsync(new StreamForwardingBinding
         {
             SourceStreamId = "actor-1",
             TargetStreamId = "actor-1",
             ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
 
         var stream = CreateStream(provider: provider, forwardingRegistry: registry);
@@ -144,14 +141,14 @@ public sealed class OrleansActorStreamCoverageTests
             SourceStreamId = "actor-1",
             TargetStreamId = "middle",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
         await registry.UpsertAsync(new StreamForwardingBinding
         {
             SourceStreamId = "middle",
             TargetStreamId = "actor-1",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [EventDirection.Down, EventDirection.Both],
+            DirectionFilter = [TopologyAudience.Children, TopologyAudience.ParentAndChildren],
         });
 
         var stream = CreateStream(provider: provider, forwardingRegistry: registry);
@@ -187,10 +184,7 @@ public sealed class OrleansActorStreamCoverageTests
         {
             Id = "evt-envelope",
             Payload = Any.Pack(new StringValue { Value = "payload" }),
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         });
 
         received.Should().ContainSingle(x => x.Id == "evt-envelope");
@@ -218,27 +212,18 @@ public sealed class OrleansActorStreamCoverageTests
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-null",
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         });
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-mismatch",
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
             Payload = Any.Pack(new Int32Value { Value = 42 }),
         });
         await source.PushToObserversAsync(new EventEnvelope
         {
             Id = "evt-match",
-            Route = new EnvelopeRoute
-            {
-                Direction = EventDirection.Down,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
             Payload = Any.Pack(new StringValue { Value = "ok" }),
         });
 
@@ -280,7 +265,7 @@ public sealed class OrleansActorStreamCoverageTests
             SourceStreamId = "other",
             TargetStreamId = "target-1",
             ForwardingMode = StreamForwardingMode.TransitOnly,
-            DirectionFilter = [EventDirection.Up],
+            DirectionFilter = [TopologyAudience.Parent],
             EventTypeFilter = new HashSet<string>(StringComparer.Ordinal) { "evt" },
             Version = 3,
             LeaseId = "lease-1",
@@ -292,7 +277,7 @@ public sealed class OrleansActorStreamCoverageTests
         listed[0].SourceStreamId.Should().Be("actor-1");
         listed[0].TargetStreamId.Should().Be("target-1");
         listed[0].ForwardingMode.Should().Be(StreamForwardingMode.TransitOnly);
-        listed[0].DirectionFilter.Should().BeEquivalentTo([EventDirection.Up]);
+        listed[0].DirectionFilter.Should().BeEquivalentTo([TopologyAudience.Parent]);
         listed[0].EventTypeFilter.Should().BeEquivalentTo(["evt"]);
         listed[0].Version.Should().Be(3);
         listed[0].LeaseId.Should().Be("lease-1");
@@ -365,7 +350,7 @@ public sealed class OrleansActorStreamCoverageTests
                 SourceStreamId = binding.SourceStreamId,
                 TargetStreamId = binding.TargetStreamId,
                 ForwardingMode = binding.ForwardingMode,
-                DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+                DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
                 EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
                 Version = binding.Version,
                 LeaseId = binding.LeaseId,

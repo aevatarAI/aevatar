@@ -47,7 +47,7 @@
 ## Endpoint 定义归属
 
 - `Workflow` 能力 API 定义位于 `Aevatar.Workflow.Infrastructure/CapabilityApi/*`。
-- Host 通过 `builder.AddWorkflowCapabilityWithAIDefaults()` 统一装配 Workflow capability + AI features + AI projection extension，端点由默认 Host 自动挂载。
+- Host 通过 `builder.AddAevatarPlatform()` 统一装配 Workflow capability、Scripting capability、AI features 与 Workflow AI projection extension，端点由默认 Host 自动挂载。
 - Host 项目不再保留重复 endpoint 实现。
 
 ## 运行语义
@@ -68,7 +68,7 @@
 `Program.cs` 默认注册：
 
 - `builder.AddAevatarDefaultHost(...)`
-- `builder.AddWorkflowCapabilityWithAIDefaults()`
+- `builder.AddAevatarPlatform()`
 - `app.UseAevatarDefaultHost()`（默认自动执行 `MapAevatarCapabilities()`）
 
 Host 只做“协议 + 组合”，核心用例在 `workflow/*` 能力实现层。

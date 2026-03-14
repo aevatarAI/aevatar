@@ -1,19 +1,18 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Core.Runtime;
 using FluentAssertions;
-using Google.Protobuf;
 
-namespace Aevatar.Hosting.Tests;
+namespace Aevatar.Scripting.Core.Tests.Runtime;
 
-public class RuntimeGAgentRuntimePortFactoryTests
+public class ScriptAgentLifecycleCapabilitiesTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldCreateAgentThroughRuntime_AndReturnActorId()
+    public async Task CreateAgentAsync_ShouldCreateAgentThroughRuntime_AndReturnActorId()
     {
         var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentRuntimePort(runtime, runtime);
+        var capabilities = new ScriptAgentLifecycleCapabilities(runtime);
 
-        var actorId = await port.CreateAsync(
+        var actorId = await capabilities.CreateAgentAsync(
             typeof(FakeTestAgent).AssemblyQualifiedName!,
             "agent-x",
             CancellationToken.None);
@@ -24,13 +23,13 @@ public class RuntimeGAgentRuntimePortFactoryTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldThrow_WhenAgentTypeNotFound()
+    public async Task CreateAgentAsync_ShouldThrow_WhenAgentTypeNotFound()
     {
-        var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentRuntimePort(runtime, runtime);
+        var capabilities = new ScriptAgentLifecycleCapabilities(
+            new RecordingRuntime());
 
         Func<Task> act = async () =>
-            _ = await port.CreateAsync("Missing.Type, Missing.Assembly", "agent-y", CancellationToken.None);
+            _ = await capabilities.CreateAgentAsync("Missing.Type, Missing.Assembly", "agent-y", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Unable to resolve GAgent type*");
@@ -40,11 +39,11 @@ public class RuntimeGAgentRuntimePortFactoryTests
     public async Task DestroyLinkAndUnlink_ShouldDelegateToRuntime()
     {
         var runtime = new RecordingRuntime();
-        var port = new RuntimeGAgentRuntimePort(runtime, runtime);
+        var capabilities = new ScriptAgentLifecycleCapabilities(runtime);
 
-        await port.LinkAsync("parent-1", "child-1", CancellationToken.None);
-        await port.UnlinkAsync("child-1", CancellationToken.None);
-        await port.DestroyAsync("child-1", CancellationToken.None);
+        await capabilities.LinkAgentsAsync("parent-1", "child-1", CancellationToken.None);
+        await capabilities.UnlinkAgentAsync("child-1", CancellationToken.None);
+        await capabilities.DestroyAgentAsync("child-1", CancellationToken.None);
 
         runtime.LinkedParentId.Should().Be("parent-1");
         runtime.LinkedChildId.Should().Be("child-1");
@@ -52,9 +51,9 @@ public class RuntimeGAgentRuntimePortFactoryTests
         runtime.DestroyedActorId.Should().Be("child-1");
     }
 
-    private sealed class RecordingRuntime : IActorRuntime, IActorDispatchPort
+    private sealed class RecordingRuntime : IActorRuntime
     {
-        public Type? CreatedType { get; set; }
+        public global::System.Type? CreatedType { get; set; }
         public string? CreatedActorId { get; set; }
         public string? DestroyedActorId { get; set; }
         public string? LinkedParentId { get; set; }
@@ -64,7 +63,7 @@ public class RuntimeGAgentRuntimePortFactoryTests
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
             CreateAsync(typeof(TAgent), id, ct);
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default)
         {
             CreatedType = agentType;
             CreatedActorId = id ?? string.Empty;
@@ -78,14 +77,6 @@ public class RuntimeGAgentRuntimePortFactoryTests
         }
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = actorId;
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
 
@@ -101,8 +92,6 @@ public class RuntimeGAgentRuntimePortFactoryTests
             UnlinkedChildId = childId;
             return Task.CompletedTask;
         }
-
-        public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class FakeActor(string id, IAgent agent) : IActor
@@ -128,6 +117,7 @@ public class RuntimeGAgentRuntimePortFactoryTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
         public Task<string> GetDescriptionAsync() => Task.FromResult("fake");
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task<IReadOnlyList<global::System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<global::System.Type>>([]);
     }
 }

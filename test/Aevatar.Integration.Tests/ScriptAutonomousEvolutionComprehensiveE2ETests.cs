@@ -286,7 +286,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
     }
 
     [Fact]
-    public async Task ScriptOnlyFlow_ShouldExerciseInteractionAndInvocationCapabilities()
+    public async Task ScriptOnlyFlow_ShouldExerciseInteractionAndDefinitionUpsertCapabilities()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -303,7 +303,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
             controllerDefinitionActorId,
             scriptId: "interaction-controller-script",
             revision: "rev-interaction-1",
-            source: InteractionInvocationOrchestratorSource);
+            source: InteractionUpsertOrchestratorSource);
 
         var controllerRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(controllerRuntimeActorId);
         await RunScriptAsync(
@@ -337,15 +337,15 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
 
         var publishedDefinitionId = summary.Fields["published_definition_actor_id"].StringValue;
         var sendToDefinitionId = summary.Fields["sendto_definition_actor_id"].StringValue;
-        var invokeDefinitionId = summary.Fields["invoke_definition_actor_id"].StringValue;
+        var upsertDefinitionId = summary.Fields["upsert_definition_actor_id"].StringValue;
 
         (await runtime.ExistsAsync(publishedDefinitionId)).Should().BeTrue();
         (await runtime.ExistsAsync(sendToDefinitionId)).Should().BeTrue();
-        (await runtime.ExistsAsync(invokeDefinitionId)).Should().BeTrue();
-        var invokeDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(invokeDefinitionId))!.Agent;
+        (await runtime.ExistsAsync(upsertDefinitionId)).Should().BeTrue();
+        var upsertDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(upsertDefinitionId))!.Agent;
 
-        invokeDefinition.State.ScriptId.Should().Be("interaction-invoke-script");
-        invokeDefinition.State.Revision.Should().Be("rev-invoke-1");
+        upsertDefinition.State.ScriptId.Should().Be("interaction-invoke-script");
+        upsertDefinition.State.Revision.Should().Be("rev-invoke-1");
     }
 
     private static async Task UpsertDefinitionAsync(
@@ -1004,7 +1004,7 @@ public sealed class CatalogControlOrchestrator : IScriptPackageRuntime
 }
 """;
 
-    private const string InteractionInvocationOrchestratorSource = """
+    private const string InteractionUpsertOrchestratorSource = """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1014,7 +1014,7 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
+public sealed class InteractionUpsertOrchestrator : IScriptPackageRuntime
 {
     public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
         ScriptRequestedEventEnvelope requestedEvent,
@@ -1039,7 +1039,7 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
             {
                 Value = "interaction.publish.signal",
             },
-            EventDirection.Down,
+            TopologyAudience.Children,
             ct);
         await context.Capabilities.UnlinkAgentAsync(publishedDefinitionActorId, ct);
 
@@ -1058,19 +1058,16 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
             },
             ct);
 
-        var invokeDefinitionActorId = await context.Capabilities.CreateAgentAsync(
+        var upsertDefinitionActorId = await context.Capabilities.CreateAgentAsync(
             definitionType,
-            "invoke-definition-" + context.RunId,
+            "upsert-definition-" + context.RunId,
             ct);
-        await context.Capabilities.InvokeAgentAsync(
-            invokeDefinitionActorId,
-            new Aevatar.Scripting.Abstractions.UpsertScriptDefinitionRequestedEvent
-            {
-                ScriptId = "interaction-invoke-script",
-                ScriptRevision = "rev-invoke-1",
-                SourceText = invokeSource,
-                SourceHash = "hash-invoke-1",
-            },
+        upsertDefinitionActorId = await context.Capabilities.UpsertScriptDefinitionAsync(
+            "interaction-invoke-script",
+            "rev-invoke-1",
+            invokeSource,
+            "hash-invoke-1",
+            upsertDefinitionActorId,
             ct);
 
         var summary = new Struct
@@ -1080,7 +1077,7 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
                 ["ai_response_length"] = Value.ForString((aiResponse ?? string.Empty).Length.ToString()),
                 ["published_definition_actor_id"] = Value.ForString(publishedDefinitionActorId),
                 ["sendto_definition_actor_id"] = Value.ForString(sendToDefinitionActorId),
-                ["invoke_definition_actor_id"] = Value.ForString(invokeDefinitionActorId),
+                ["upsert_definition_actor_id"] = Value.ForString(upsertDefinitionActorId),
             },
         };
 

@@ -3,6 +3,7 @@
 // Provides RaiseEvent / ConfirmEventsAsync / PersistSnapshotAsync / ReplayAsync.
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Google.Protobuf;
@@ -58,17 +59,24 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _pending.Add(evt);
 
     /// <inheritdoc />
-    public async Task ConfirmEventsAsync(CancellationToken ct = default)
+    public async Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
     {
-        if (_pending.Count == 0)
-            return;
+        var pendingEvents = _pending.ToArray();
+        if (pendingEvents.Length == 0)
+        {
+            return new EventStoreCommitResult
+            {
+                AgentId = _agentId,
+                LatestVersion = _currentVersion,
+            };
+        }
 
-        EnsureNoStateSnapshotEvents();
+        EnsureNoStateSnapshotEvents(pendingEvents);
 
         var fromVersion = _currentVersion;
-        var eventType = JoinEventTypes(_pending);
+        var eventType = JoinEventTypes(pendingEvents);
         var startedAt = Stopwatch.GetTimestamp();
-        var stateEvents = _pending.Select((evt, i) => new StateEvent
+        var stateEvents = pendingEvents.Select((evt, i) => new StateEvent
         {
             EventId = Guid.NewGuid().ToString("N"),
             Timestamp = TimestampHelper.Now(),
@@ -76,13 +84,14 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             EventType = evt.Descriptor.FullName,
             EventData = Any.Pack(evt),
             AgentId = _agentId,
-        });
+        }).ToArray();
 
         try
         {
-            _currentVersion = await _eventStore.AppendAsync(
+            var commitResult = await _eventStore.AppendAsync(
                 _agentId, stateEvents, _currentVersion, ct);
-            _pending.Clear();
+            _currentVersion = commitResult.LatestVersion;
+            RemoveCommittedPendingPrefix(pendingEvents.Length);
             _logger.LogInformation(
                 "Event sourcing commit completed. agentId={AgentId} eventType={EventType} version={Version} elapsedMs={ElapsedMs} result={Result}",
                 _agentId,
@@ -90,6 +99,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 _currentVersion,
                 Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
                 "ok");
+            return commitResult;
         }
         catch (Exception ex)
         {
@@ -172,16 +182,30 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     public virtual TState TransitionState(TState current, IMessage evt)
         => current;
 
-    private void EnsureNoStateSnapshotEvents()
+    private void EnsureNoStateSnapshotEvents(IReadOnlyList<IMessage> pendingEvents)
     {
         var stateTypeFullName = new TState().Descriptor.FullName;
-        if (_pending.Any(evt =>
+        if (pendingEvents.Any(evt =>
                 string.Equals(evt.Descriptor.FullName, stateTypeFullName, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 $"Persisting state snapshot events is forbidden for state '{typeof(TState).FullName}'. " +
                 "Emit domain events instead.");
         }
+    }
+
+    private void RemoveCommittedPendingPrefix(int committedCount)
+    {
+        if (committedCount <= 0)
+            return;
+
+        if (_pending.Count <= committedCount)
+        {
+            _pending.Clear();
+            return;
+        }
+
+        _pending.RemoveRange(0, committedCount);
     }
 
     private async Task<EventSourcingSnapshot<TState>?> TryLoadSnapshotAsync(

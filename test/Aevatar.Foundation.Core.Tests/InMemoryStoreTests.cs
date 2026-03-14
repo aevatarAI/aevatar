@@ -60,8 +60,9 @@ public class InMemoryEventStoreTests
             },
         };
 
-        var version = await store.AppendAsync("agent-1", events, 0);
-        version.ShouldBe(2);
+        var commitResult = await store.AppendAsync("agent-1", events, 0);
+        commitResult.LatestVersion.ShouldBe(2);
+        commitResult.CommittedEvents.Count.ShouldBe(2);
 
         var loaded = await store.GetEventsAsync("agent-1");
         loaded.Count.ShouldBe(2);

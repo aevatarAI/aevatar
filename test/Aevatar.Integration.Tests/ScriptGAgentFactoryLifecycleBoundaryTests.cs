@@ -1,14 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Scripting.Core;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Integration.Tests;
 
-public class ScriptGAgentFactoryLifecycleBoundaryTests
+public class ScriptGAgentLifecycleBoundaryTests
 {
     [Fact]
     public async Task Lifecycle_ShouldBeRuntimeAuthoritative_NotScopeAuthoritative()
@@ -21,11 +20,8 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
 
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
-            var actorId = await factory.CreateAsync(
-                typeof(ScriptDefinitionGAgent).AssemblyQualifiedName!,
-                "factory-lifecycle-definition",
-                CancellationToken.None);
+            var scopedRuntime = scope.ServiceProvider.GetRequiredService<IActorRuntime>();
+            var actorId = (await scopedRuntime.CreateAsync<ScriptDefinitionGAgent>("factory-lifecycle-definition")).Id;
 
             actorId.Should().Be("factory-lifecycle-definition");
         }
@@ -34,8 +30,8 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
 
         await using (var scope = provider.CreateAsyncScope())
         {
-            var factory = scope.ServiceProvider.GetRequiredService<IGAgentRuntimePort>();
-            await factory.DestroyAsync("factory-lifecycle-definition", CancellationToken.None);
+            var scopedRuntime = scope.ServiceProvider.GetRequiredService<IActorRuntime>();
+            await scopedRuntime.DestroyAsync("factory-lifecycle-definition", CancellationToken.None);
         }
 
         (await runtime.ExistsAsync("factory-lifecycle-definition")).Should().BeFalse();
@@ -49,22 +45,15 @@ public class ScriptGAgentFactoryLifecycleBoundaryTests
         services.AddScriptCapability();
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<IActorRuntime>();
-        var factory = provider.GetRequiredService<IGAgentRuntimePort>();
 
-        var parentId = await factory.CreateAsync(
-            typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-            "factory-parent",
-            CancellationToken.None);
-        var childId = await factory.CreateAsync(
-            typeof(ScriptRuntimeGAgent).AssemblyQualifiedName!,
-            "factory-child",
-            CancellationToken.None);
+        var parentId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("factory-parent")).Id;
+        var childId = (await runtime.CreateAsync<ScriptRuntimeGAgent>("factory-child")).Id;
 
-        await factory.LinkAsync(parentId, childId, CancellationToken.None);
+        await runtime.LinkAsync(parentId, childId, CancellationToken.None);
         var childActor = await runtime.GetAsync(childId);
         (await childActor!.GetParentIdAsync()).Should().Be(parentId);
 
-        await factory.UnlinkAsync(childId, CancellationToken.None);
+        await runtime.UnlinkAsync(childId, CancellationToken.None);
         (await childActor.GetParentIdAsync()).Should().BeNull();
     }
 }

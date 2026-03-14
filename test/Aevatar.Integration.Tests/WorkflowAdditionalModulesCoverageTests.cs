@@ -68,7 +68,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         ctx.Published.Should().ContainSingle();
-        ctx.Published[0].direction.Should().Be(EventDirection.Both);
+        ctx.Published[0].direction.Should().Be(TopologyAudience.ParentAndChildren);
         var emitted = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         emitted.Annotations["emit.event_type"].Should().Be("audit");
         emitted.Annotations["emit.payload"].Should().Be("{\"k\":1}");
@@ -2007,11 +2007,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            Route = new EnvelopeRoute
-            {
-                PublisherActorId = publisherId ?? "test-publisher",
-                Direction = EventDirection.Self,
-            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? "test-publisher", TopologyAudience.Self),
         };
     }
 

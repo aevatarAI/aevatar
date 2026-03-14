@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Scripting.Abstractions;
@@ -6,8 +7,8 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -22,13 +23,13 @@ namespace Aevatar.Hosting.Tests;
 public class ScriptCapabilityHostExtensionsTests
 {
     [Fact]
-    public void AddScriptCapability_ShouldRegisterCapabilityAndValidateNull()
+    public void AddScriptingCapabilityBundle_ShouldRegisterCapabilityAndValidateNull()
     {
-        Action act = () => ScriptCapabilityHostBuilderExtensions.AddScriptCapability(null!);
+        Action act = () => ScriptCapabilityHostBuilderExtensions.AddScriptingCapabilityBundle(null!);
         act.Should().Throw<ArgumentNullException>();
 
         var builder = WebApplication.CreateBuilder();
-        var returned = builder.AddScriptCapability();
+        var returned = builder.AddScriptingCapabilityBundle();
 
         returned.Should().BeSameAs(builder);
         var registrations = builder.Services
@@ -36,7 +37,7 @@ public class ScriptCapabilityHostExtensionsTests
             .Select(x => x.ImplementationInstance)
             .OfType<AevatarCapabilityRegistration>()
             .ToList();
-        registrations.Should().ContainSingle(x => x.Name == "script");
+        registrations.Should().ContainSingle(x => x.Name == "scripting-bundle");
     }
 
     [Fact]
@@ -78,19 +79,29 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptCatalogQueryPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
-            x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
+            x.ServiceType == typeof(IScriptEvolutionPolicyEvaluator) &&
+            x.ImplementationType == typeof(DefaultScriptEvolutionPolicyEvaluator));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentRuntimePort));
+            x.ServiceType == typeof(IScriptEvolutionValidationService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionValidationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogBaselineReader) &&
+            x.ImplementationType == typeof(RuntimeScriptCatalogBaselineReader));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptPromotionCompensationService) &&
+            x.ImplementationType == typeof(RuntimeScriptPromotionCompensationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionRollbackService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionRollbackService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }
 
     [Fact]
-    public void AddScriptCapability_ShouldMapEvolutionProposalEndpoint()
+    public void AddScriptingCapabilityBundle_ShouldMapEvolutionProposalEndpoint()
     {
         var builder = WebApplication.CreateBuilder();
-        builder.AddScriptCapability();
+        builder.AddScriptingCapabilityBundle();
 
         var app = builder.Build();
         app.MapAevatarCapabilities();

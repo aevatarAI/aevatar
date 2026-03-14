@@ -96,7 +96,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 };
                 completed.Annotations["reflect.rounds"] = round.ToString();
                 completed.Annotations["reflect.passed"] = passed.ToString();
-                await ctx.PublishAsync(completed, EventDirection.Self, ct);
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -140,7 +140,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
         }
         else
-            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
+            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, TopologyAudience.Self, ct);
     }
 
     private async Task SendImproveAsync(
@@ -170,7 +170,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             await ctx.SendToAsync(targetActorId, new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, ct);
         }
         else
-            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, EventDirection.Self, ct);
+            await ctx.PublishAsync(new ChatRequestEvent { Prompt = prompt, SessionId = sessionId }, TopologyAudience.Self, ct);
     }
 
     private static Task SaveStateAsync(

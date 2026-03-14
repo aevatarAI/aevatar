@@ -4,9 +4,11 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Configuration;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
+using Aevatar.Scripting.Projection.ReadPorts;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Scripting.Projection.Reducers;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +23,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton(new ScriptEvolutionProjectionOptions());
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
@@ -34,32 +37,33 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScriptEvolutionProjectionPortService>();
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPortService>());
+        services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionEventReducer<ScriptExecutionReadModel, ScriptProjectionContext>,
             ScriptRunDomainEventCommittedReducer>());
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
+            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionProposedEventReducer>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
+            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionValidatedEventReducer>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
+            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionRejectedEventReducer>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
+            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionPromotedEventReducer>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionProjectionContext>,
+            IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionRolledBackEventReducer>());
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptProjectionContext, IReadOnlyList<string>>,
             ScriptExecutionReadModelProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptEvolutionProjectionContext, IReadOnlyList<string>>,
+            IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>,
             ScriptEvolutionReadModelProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>,
