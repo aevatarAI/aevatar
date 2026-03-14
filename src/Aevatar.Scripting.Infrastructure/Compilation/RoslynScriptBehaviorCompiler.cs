@@ -9,10 +9,14 @@ namespace Aevatar.Scripting.Infrastructure.Compilation;
 public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
 {
     private readonly ScriptSandboxPolicy _sandboxPolicy;
+    private readonly IScriptProtoCompiler _protoCompiler;
 
-    public RoslynScriptBehaviorCompiler(ScriptSandboxPolicy sandboxPolicy)
+    public RoslynScriptBehaviorCompiler(
+        ScriptSandboxPolicy sandboxPolicy,
+        IScriptProtoCompiler? protoCompiler = null)
     {
         _sandboxPolicy = sandboxPolicy ?? throw new ArgumentNullException(nameof(sandboxPolicy));
+        _protoCompiler = protoCompiler ?? new GrpcToolsScriptProtoCompiler();
     }
 
     public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
@@ -24,27 +28,48 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
             diagnostics.Add("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(request.Revision))
             diagnostics.Add("Revision is required.");
-        if (string.IsNullOrWhiteSpace(request.Source))
-            diagnostics.Add("Source is required.");
+        var normalizedPackage = request.Package.Normalize();
+        var csharpSources = normalizedPackage.CSharpSources;
+        if (csharpSources.Count == 0)
+            diagnostics.Add("At least one C# source file is required in the script package.");
         if (diagnostics.Count > 0)
             return new ScriptBehaviorCompilationResult(false, null, diagnostics);
 
-        var sandbox = _sandboxPolicy.Validate(request.Source);
-        if (!sandbox.IsValid)
-            return new ScriptBehaviorCompilationResult(false, null, sandbox.Violations);
+        foreach (var sourceFile in csharpSources)
+        {
+            var sandbox = _sandboxPolicy.Validate(sourceFile.Content);
+            if (!sandbox.IsValid)
+            {
+                return new ScriptBehaviorCompilationResult(
+                    false,
+                    null,
+                    sandbox.Violations.Select(x => $"{sourceFile.Path}: {x}").ToArray());
+            }
+        }
 
-        var syntaxTree = CSharpSyntaxTree.ParseText(request.Source);
-        var syntaxErrors = syntaxTree
-            .GetDiagnostics()
-            .Where(x => x.Severity == DiagnosticSeverity.Error)
-            .Select(x => x.ToString())
-            .ToArray();
-        if (syntaxErrors.Length > 0)
-            return new ScriptBehaviorCompilationResult(false, null, syntaxErrors);
+        var syntaxTrees = new List<SyntaxTree>(csharpSources.Count);
+        foreach (var sourceFile in csharpSources)
+        {
+            var syntaxTree = CSharpSyntaxTree.ParseText(sourceFile.Content, path: sourceFile.Path);
+            var syntaxErrors = syntaxTree
+                .GetDiagnostics()
+                .Where(x => x.Severity == DiagnosticSeverity.Error)
+                .Select(x => x.ToString())
+                .ToArray();
+            if (syntaxErrors.Length > 0)
+                return new ScriptBehaviorCompilationResult(false, null, syntaxErrors);
+            syntaxTrees.Add(syntaxTree);
+        }
+
+        var protoCompilation = _protoCompiler.Compile(request);
+        if (!protoCompilation.IsSuccess)
+            return new ScriptBehaviorCompilationResult(false, null, protoCompilation.Diagnostics);
+        foreach (var generatedSource in protoCompilation.GeneratedSources)
+            syntaxTrees.Add(CSharpSyntaxTree.ParseText(generatedSource.Content, path: generatedSource.Path));
 
         var semanticCompilation = CSharpCompilation.Create(
             assemblyName: "Aevatar.DynamicScript.Validation." + Guid.NewGuid().ToString("N"),
-            syntaxTrees: [syntaxTree],
+            syntaxTrees: syntaxTrees,
             references: ScriptCompilationMetadataReferences.Build(),
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var semanticErrors = semanticCompilation
@@ -61,7 +86,10 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
         ScriptBehaviorLoader.LoadedScriptBehavior loadedBehavior;
         try
         {
-            loadedBehavior = ScriptBehaviorLoader.LoadFromCompilation(semanticCompilation);
+            loadedBehavior = ScriptBehaviorLoader.LoadFromCompilation(
+                semanticCompilation,
+                protoCompilation.DescriptorSet,
+                request.Package.EntryBehaviorTypeName);
         }
         catch (Exception ex)
         {
@@ -71,7 +99,7 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
         var artifact = new ScriptBehaviorArtifact(
             request.ScriptId,
             request.Revision,
-            ComputeSourceHash(request.Source),
+            request.ResolvedPackageHash,
             loadedBehavior.Descriptor,
             loadedBehavior.Contract ?? ScriptGAgentContract.Empty,
             loadedBehavior.CreateBehavior,
@@ -131,12 +159,5 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
             foreach (var item in EnumerateNamedTypes(nested))
                 yield return item;
         }
-    }
-
-    private static string ComputeSourceHash(string source)
-    {
-        using var sha = System.Security.Cryptography.SHA256.Create();
-        var bytes = System.Text.Encoding.UTF8.GetBytes(source ?? string.Empty);
-        return Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
     }
 }

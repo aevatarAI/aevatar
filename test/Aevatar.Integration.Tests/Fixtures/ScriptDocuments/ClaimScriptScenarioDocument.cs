@@ -56,7 +56,6 @@ public sealed class ClaimScriptScenarioDocument
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Scripting.Abstractions.Definitions;
 
         public sealed class ClaimOrchestratorBehavior : ScriptBehavior<ClaimCaseState, ClaimCaseReadModel>
         {
@@ -79,30 +78,7 @@ public sealed class ClaimScriptScenarioDocument
                                 LastCommandId = evt.CommandId ?? string.Empty,
                             },
                         reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync)
-                    .DescribeReadModel(
-                        new ScriptReadModelDefinition(
-                            "claim_case",
-                            "3",
-                            new[]
-                            {
-                                new ScriptReadModelFieldDefinition("case_id", "keyword", "case_id", false),
-                                new ScriptReadModelFieldDefinition("policy_id", "keyword", "policy_id", false),
-                                new ScriptReadModelFieldDefinition("decision_status", "keyword", "decision_status", false),
-                                new ScriptReadModelFieldDefinition("manual_review_required", "boolean", "manual_review_required", false),
-                                new ScriptReadModelFieldDefinition("search.lookup_key", "keyword", "search.lookup_key", false),
-                                new ScriptReadModelFieldDefinition("refs.policy_id", "keyword", "refs.policy_id", false),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelIndexDefinition("idx_case_policy", new[] { "case_id", "policy_id" }, true, "document"),
-                                new ScriptReadModelIndexDefinition("idx_decision", new[] { "decision_status" }, false, "document"),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelRelationDefinition("rel_policy", "refs.policy_id", "policy", "policy_id", "many_to_one", "graph"),
-                            }),
-                        new[] { "document", "graph" });
+                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
             private static async Task HandleAsync(

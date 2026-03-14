@@ -1,0 +1,158 @@
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Materialization;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Artifacts;
+using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Serialization;
+using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.Orchestration;
+using Aevatar.Scripting.Projection.Projectors;
+using Aevatar.Scripting.Projection.ReadModels;
+using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.Scripting.Core.Tests.Projection;
+
+public sealed class ScriptNativeGraphProjectorTests
+{
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeRelationsIntoNativeGraphReadModel()
+    {
+        var dispatcher = new RecordingNativeGraphDispatcher();
+        var projector = new ScriptNativeGraphProjector(
+            dispatcher,
+            new StaticClaimDefinitionSnapshotPort(),
+            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
+            new ScriptReadModelMaterializationCompiler(),
+            new ScriptNativeGraphMaterializer(),
+            new ProtobufMessageCodec());
+        var context = new ScriptExecutionProjectionContext
+        {
+            ProjectionId = "claim-runtime:native-graph",
+            RootActorId = "claim-runtime",
+            CurrentSemanticReadModelDocument = new ScriptReadModelDocument
+            {
+                Id = "claim-runtime",
+                ScriptId = "claim_orchestrator",
+                DefinitionActorId = "definition-1",
+                Revision = "rev-claim-1",
+                ReadModelTypeUrl = Any.Pack(new ClaimReadModel()).TypeUrl,
+                ReadModelPayload = Any.Pack(BuildClaimReadModel()),
+                StateVersion = 3,
+            },
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildEnvelope(new ScriptDomainFactCommitted
+            {
+                ActorId = "claim-runtime",
+                DefinitionActorId = "definition-1",
+                ScriptId = "claim_orchestrator",
+                Revision = "rev-claim-1",
+                RunId = "run-claim-1",
+                EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
+                DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = BuildClaimReadModel() }),
+                StateVersion = 3,
+                OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+            }),
+            CancellationToken.None);
+
+        dispatcher.LastUpsert.Should().NotBeNull();
+        var graphReadModel = dispatcher.LastUpsert!;
+        graphReadModel.SchemaId.Should().Be("claim_case");
+        graphReadModel.GraphScope.Should().Be("script-native-claim_case");
+        graphReadModel.GraphNodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-runtime");
+        graphReadModel.GraphNodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");
+        graphReadModel.GraphEdges.Should().ContainSingle(x =>
+            x.FromNodeId == "script:claim_case:claim-runtime" &&
+            x.ToNodeId == "ref:policy:POLICY-B" &&
+            x.EdgeType == "rel_policy");
+    }
+
+    private static ClaimReadModel BuildClaimReadModel()
+    {
+        return new ClaimReadModel
+        {
+            HasValue = true,
+            CaseId = "Case-B",
+            PolicyId = "POLICY-B",
+            DecisionStatus = "ManualReview",
+            ManualReviewRequired = true,
+            AiSummary = "high-risk-profile",
+            Search = new ClaimSearchIndex
+            {
+                LookupKey = "case-b:policy-b",
+                DecisionKey = "manualreview",
+            },
+            Refs = new ClaimRefs
+            {
+                PolicyId = "POLICY-B",
+                OwnerActorId = "claim-runtime",
+            },
+        };
+    }
+
+    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
+    {
+        return new EventEnvelope
+        {
+            Id = "evt-graph-1",
+            Payload = Any.Pack(fact),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
+        };
+    }
+
+    private sealed class StaticClaimDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    {
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            definitionActorId.Should().Be("definition-1");
+            requestedRevision.Should().Be("rev-claim-1");
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                ScriptId: "claim_orchestrator",
+                Revision: "rev-claim-1",
+                SourceText: ClaimScriptSources.DecisionBehavior,
+                SourceHash: ClaimScriptSources.DecisionBehaviorHash,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+                StateTypeUrl: Any.Pack(new ClaimState()).TypeUrl,
+                ReadModelTypeUrl: Any.Pack(new ClaimReadModel()).TypeUrl,
+                ReadModelSchemaVersion: "3",
+                ReadModelSchemaHash: "claim-schema",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: ClaimState.Descriptor.FullName,
+                ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
+        }
+    }
+
+    private sealed class RecordingNativeGraphDispatcher : IProjectionStoreDispatcher<ScriptNativeGraphReadModel, string>
+    {
+        public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
+
+        public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastUpsert = readModel;
+            return Task.CompletedTask;
+        }
+
+        public Task MutateAsync(string key, Action<ScriptNativeGraphReadModel> mutate, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScriptNativeGraphReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<ScriptNativeGraphReadModel?>(null);
+
+        public Task<IReadOnlyList<ScriptNativeGraphReadModel>> ListAsync(int take = 50, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScriptNativeGraphReadModel>>([]);
+    }
+}

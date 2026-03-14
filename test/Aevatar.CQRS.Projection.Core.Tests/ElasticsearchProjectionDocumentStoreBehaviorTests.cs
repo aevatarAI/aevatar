@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -177,6 +178,86 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
     }
 
+    [Fact]
+    public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
+
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<DynamicStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "script-native-read-models",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new DynamicStoreReadModel
+        {
+            Id = "actor-1",
+            DocumentIndexScope = "dynamic-alpha",
+            DocumentMetadata = new DocumentIndexMetadata(
+                IndexName: "dynamic-alpha",
+                Mappings: new Dictionary<string, object?> { ["dynamic"] = false },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+        });
+        await store.UpsertAsync(new DynamicStoreReadModel
+        {
+            Id = "actor-2",
+            DocumentIndexScope = "dynamic-beta",
+            DocumentMetadata = new DocumentIndexMetadata(
+                IndexName: "dynamic-beta",
+                Mappings: new Dictionary<string, object?> { ["dynamic"] = false },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+        });
+
+        handler.CapturedRequests.Should().HaveCount(4);
+        handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha");
+        handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
+        handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenReadModelUsesDynamicIndexScope_ShouldThrowUnsupported()
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = false,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<DynamicStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "script-native-read-models",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: new ScriptedHttpMessageHandler());
+
+        Func<Task> act = () => store.GetAsync("actor-1");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*dynamically indexed read model*");
+    }
+
     private static ElasticsearchProjectionDocumentStore<StoreReadModel, string> CreateStore(
         ElasticsearchProjectionDocumentStoreOptions options,
         HttpMessageHandler handler)
@@ -243,5 +324,18 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         public string Id { get; set; } = "";
 
         public string Value { get; set; } = "";
+    }
+
+    private sealed class DynamicStoreReadModel : IDynamicDocumentIndexedReadModel
+    {
+        public string Id { get; set; } = string.Empty;
+
+        public string DocumentIndexScope { get; set; } = string.Empty;
+
+        public DocumentIndexMetadata DocumentMetadata { get; set; } = new(
+            IndexName: "script-native-read-models",
+            Mappings: new Dictionary<string, object?>(),
+            Settings: new Dictionary<string, object?>(),
+            Aliases: new Dictionary<string, object?>());
     }
 }

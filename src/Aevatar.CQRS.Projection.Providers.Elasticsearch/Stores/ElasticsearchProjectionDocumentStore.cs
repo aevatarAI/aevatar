@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -18,12 +19,14 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
     private readonly Func<TKey, string> _keyFormatter;
+    private readonly string _indexPrefix;
     private readonly string _indexName;
     private readonly int _listTakeMax;
     private readonly bool _autoCreateIndex;
     private readonly string _listSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly int _mutateMaxRetryCount;
+    private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
     private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
@@ -31,7 +34,8 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     {
         PropertyNameCaseInsensitive = true,
     };
-    private bool _indexInitialized;
+    private readonly Lock _dynamicIndexStateGate = new();
+    private readonly HashSet<string> _initializedIndices = new(StringComparer.Ordinal);
 
     public ElasticsearchProjectionDocumentStore(
         ElasticsearchProjectionDocumentStoreOptions options,
@@ -59,14 +63,16 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         }
 
         var normalizedMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(indexMetadata);
+        _indexPrefix = options.IndexPrefix?.Trim() ?? "";
         var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(normalizedMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
-        _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(options.IndexPrefix, normalizedScope);
+        _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
         _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _mutateMaxRetryCount = Math.Clamp(options.MutateMaxRetryCount, 0, 20);
+        _supportsDynamicIndexing = typeof(IDynamicDocumentIndexedReadModel).IsAssignableFrom(typeof(TReadModel));
         _indexMetadata = normalizedMetadata with { IndexName = _indexName };
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
@@ -81,6 +87,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     {
         ArgumentNullException.ThrowIfNull(mutate);
         ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelQueriesUnsupported("mutate");
 
         var keyValue = FormatKey(key);
         if (keyValue.Length == 0)
@@ -144,7 +151,8 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await EnsureIndexAsync(ct);
+        ThrowIfDynamicReadModelQueriesUnsupported("get");
+        await EnsureIndexAsync(_indexName, _indexMetadata, ct);
 
         var keyValue = FormatKey(key);
         if (keyValue.Length == 0)
@@ -171,7 +179,8 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     public async Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await EnsureIndexAsync(ct);
+        ThrowIfDynamicReadModelQueriesUnsupported("list");
+        await EnsureIndexAsync(_indexName, _indexMetadata, ct);
         var boundedTake = Math.Clamp(take, 1, _listTakeMax);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
@@ -216,7 +225,8 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private async Task<ElasticsearchDocumentSnapshot?> GetDocumentSnapshotAsync(string keyValue, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        await EnsureIndexAsync(ct);
+        ThrowIfDynamicReadModelQueriesUnsupported("mutate-get");
+        await EnsureIndexAsync(_indexName, _indexMetadata, ct);
 
         using var response = await _httpClient.GetAsync($"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -258,15 +268,16 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
+        var indexTarget = ResolveIndexTarget(readModel);
         if (allowCreateIndex)
-            await EnsureIndexAsync(ct);
+            await EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
 
         var keyValue = ResolveReadModelKey(readModel);
         var payload = JsonSerializer.Serialize(readModel, _jsonOptions);
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
-            var requestPath = BuildDocumentRequestPath(keyValue, ifSeqNo, ifPrimaryTerm);
+            var requestPath = BuildDocumentRequestPath(indexTarget.IndexName, keyValue, ifSeqNo, ifPrimaryTerm);
             using var request = new HttpRequestMessage(HttpMethod.Put, requestPath)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
@@ -276,7 +287,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             {
                 var conflictPayload = await response.Content.ReadAsStringAsync(ct);
                 throw new ElasticsearchOptimisticConcurrencyException(
-                    $"Elasticsearch optimistic concurrency conflict for index '{_indexName}' key '{keyValue}'. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(conflictPayload)}");
+                    $"Elasticsearch optimistic concurrency conflict for index '{indexTarget.IndexName}' key '{keyValue}'. body={ElasticsearchProjectionDocumentStoreNamingSupport.TruncatePayload(conflictPayload)}");
             }
 
             await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "upsert", ct);
@@ -298,9 +309,9 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         }
     }
 
-    private string BuildDocumentRequestPath(string keyValue, long? ifSeqNo, long? ifPrimaryTerm)
+    private string BuildDocumentRequestPath(string indexName, string keyValue, long? ifSeqNo, long? ifPrimaryTerm)
     {
-        var requestPath = $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}";
+        var requestPath = $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}";
         if (!ifSeqNo.HasValue && !ifPrimaryTerm.HasValue)
             return requestPath;
 
@@ -385,6 +396,35 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         _httpClient.Dispose();
         _indexInitializationLock.Dispose();
     }
+
+    private ResolvedIndexTarget ResolveIndexTarget(TReadModel readModel)
+    {
+        if (readModel is not IDynamicDocumentIndexedReadModel dynamicReadModel)
+            return new ResolvedIndexTarget(_indexName, _indexMetadata);
+
+        var metadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(dynamicReadModel.DocumentMetadata);
+        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(
+            dynamicReadModel.DocumentIndexScope?.Trim().Length > 0
+                ? dynamicReadModel.DocumentIndexScope
+                : metadata.IndexName);
+        if (normalizedScope.Length == 0)
+            normalizedScope = "readmodel";
+
+        var indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
+        return new ResolvedIndexTarget(indexName, metadata with { IndexName = indexName });
+    }
+
+    private void ThrowIfDynamicReadModelQueriesUnsupported(string operation)
+    {
+        if (!_supportsDynamicIndexing)
+            return;
+
+        throw new InvalidOperationException(
+            $"Elasticsearch '{operation}' is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
+            "Use direct provider-native inspection/query capability for this read model type.");
+    }
+
+    private sealed record ResolvedIndexTarget(string IndexName, DocumentIndexMetadata Metadata);
 
     private sealed record ElasticsearchDocumentSnapshot(TReadModel ReadModel, long SeqNo, long PrimaryTerm);
 

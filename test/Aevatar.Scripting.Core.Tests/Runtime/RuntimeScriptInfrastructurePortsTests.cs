@@ -189,7 +189,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task DefinitionSnapshotPort_ShouldThrow_WhenSourceTextIsEmpty()
+    public async Task DefinitionSnapshotPort_ShouldThrow_WhenScriptPackageIsEmpty()
     {
         var runtime = new TestActorRuntime();
         var port = CreateDefinitionSnapshotPort(runtime, request =>
@@ -205,7 +205,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*source_text is empty*definition-1*");
+            .WithMessage("*script_package is empty*definition-1*");
     }
 
     [Fact]
@@ -562,6 +562,12 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             var request = envelope.Payload.Unpack<QueryScriptDefinitionSnapshotRequestedEvent>();
             var response = responseFactory(request);
+            if (response.Found &&
+                response.ScriptPackage == null &&
+                !string.IsNullOrWhiteSpace(response.SourceText))
+            {
+                response.ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(response.SourceText);
+            }
             await streams.GetStream(request.ReplyStreamId).ProduceAsync(response, ct);
         }));
         return new RuntimeScriptDefinitionSnapshotPort(

@@ -1,3 +1,5 @@
+using Aevatar.Scripting.Projection.ReadModels;
+
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptExecutionProjectionContext
@@ -6,6 +8,8 @@ public sealed class ScriptExecutionProjectionContext
     public required string ProjectionId { get; init; }
 
     public required string RootActorId { get; init; }
+
+    public ScriptReadModelDocument? CurrentSemanticReadModelDocument { get; set; }
 
     string IProjectionContext.ProjectionId => ProjectionId;
 

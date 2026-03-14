@@ -4,9 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Interactions;
-using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Application.AI;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
@@ -28,7 +26,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Configuration;
 using Aevatar.Scripting.Projection.DependencyInjection;
-using Aevatar.Scripting.Projection.ReadModels;
 
 namespace Aevatar.Scripting.Hosting.DependencyInjection;
 
@@ -45,6 +42,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(new ScriptingQueryTimeoutOptions());
         services.TryAddSingleton(new ScriptingInteractionTimeoutOptions());
         services.TryAddSingleton<ScriptSandboxPolicy>();
+        services.TryAddSingleton<IScriptProtoCompiler, GrpcToolsScriptProtoCompiler>();
         services.TryAddSingleton<IScriptingActorAddressResolver, DefaultScriptingActorAddressResolver>();
         services.TryAddSingleton<IProtobufMessageCodec, ProtobufMessageCodec>();
         services.TryAddSingleton<IScriptBehaviorCompiler, RoslynScriptBehaviorCompiler>();
@@ -100,8 +98,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
         services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
         services.AddProjectionReadModelRuntime();
-        AddDefaultScriptingProjectionStores(services);
         services.AddScriptingProjectionComponents();
+        services.AddScriptingProjectionReadModelProviders(configuration);
         services.TryAddSingleton<IAICapability>(sp =>
         {
             var roleAgentPort = sp.GetService<IRoleAgentPort>();
@@ -125,26 +123,4 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
     }
-
-    private static void AddDefaultScriptingProjectionStores(IServiceCollection services)
-    {
-        var executionStoreType = typeof(IProjectionDocumentStore<ScriptReadModelDocument, string>);
-        if (!services.Any(x => x.ServiceType == executionStoreType))
-        {
-            services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
-                keySelector: static readModel => readModel.Id,
-                keyFormatter: static key => key,
-                listSortSelector: static readModel => readModel.UpdatedAt);
-        }
-
-        var evolutionStoreType = typeof(IProjectionDocumentStore<ScriptEvolutionReadModel, string>);
-        if (!services.Any(x => x.ServiceType == evolutionStoreType))
-        {
-            services.AddInMemoryDocumentProjectionStore<ScriptEvolutionReadModel, string>(
-                keySelector: static readModel => readModel.Id,
-                keyFormatter: static key => key,
-                listSortSelector: static readModel => readModel.UpdatedAt);
-        }
-    }
-
 }

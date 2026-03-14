@@ -1,4 +1,4 @@
-using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
@@ -10,8 +10,9 @@ public sealed record ScriptGAgentContract(
     IReadOnlyList<string> QueryTypeUrls,
     IReadOnlyDictionary<string, string> QueryResultTypeUrls,
     IReadOnlyList<string> InternalSignalTypeUrls,
-    ScriptReadModelDefinition? ReadModelDefinition = null,
-    IReadOnlyList<string>? StoreKinds = null)
+    string StateDescriptorFullName,
+    string ReadModelDescriptorFullName,
+    ByteString? ProtocolDescriptorSet = null)
 {
     public static ScriptGAgentContract Empty { get; } = new(
         StateTypeUrl: string.Empty,
@@ -21,8 +22,9 @@ public sealed record ScriptGAgentContract(
         QueryTypeUrls: Array.Empty<string>(),
         QueryResultTypeUrls: new Dictionary<string, string>(StringComparer.Ordinal),
         InternalSignalTypeUrls: Array.Empty<string>(),
-        ReadModelDefinition: null,
-        StoreKinds: Array.Empty<string>());
+        StateDescriptorFullName: string.Empty,
+        ReadModelDescriptorFullName: string.Empty,
+        ProtocolDescriptorSet: ByteString.Empty);
 
     public IReadOnlyList<string> CommandTypes => CommandTypeUrls;
 
@@ -33,6 +35,4 @@ public sealed record ScriptGAgentContract(
     public IReadOnlyDictionary<string, string> QueryResultTypes => QueryResultTypeUrls;
 
     public IReadOnlyList<string> InternalSignalTypes => InternalSignalTypeUrls;
-
-    public IReadOnlyList<string> ReadModelStoreCapabilities => StoreKinds ?? Array.Empty<string>();
 }

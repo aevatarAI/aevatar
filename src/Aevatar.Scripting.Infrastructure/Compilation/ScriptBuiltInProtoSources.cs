@@ -1,0 +1,54 @@
+namespace Aevatar.Scripting.Infrastructure.Compilation;
+
+internal static class ScriptBuiltInProtoSources
+{
+    public const string ScriptingSchemaOptionsFileName = "scripting_schema_options.proto";
+
+    public const string ScriptingSchemaOptionsContent =
+        """
+        syntax = "proto3";
+
+        package aevatar.scripting.schema;
+
+        option csharp_namespace = "Aevatar.Scripting.Abstractions.Schema";
+
+        import "google/protobuf/descriptor.proto";
+
+        message ScriptingDocumentIndexOptions {
+          string name = 1;
+          repeated string paths = 2;
+          bool unique = 3;
+          string provider = 4;
+        }
+
+        message ScriptingGraphRelationOptions {
+          string name = 1;
+          string source_path = 2;
+          string target_schema_id = 3;
+          string target_path = 4;
+          string cardinality = 5;
+          string provider = 6;
+        }
+
+        message ScriptingReadModelOptions {
+          string schema_id = 1;
+          string schema_version = 2;
+          repeated string store_kinds = 3;
+          repeated ScriptingDocumentIndexOptions document_indexes = 4;
+          repeated ScriptingGraphRelationOptions graph_relations = 5;
+        }
+
+        message ScriptingFieldOptions {
+          string storage_type = 1;
+          bool nullable = 2;
+        }
+
+        extend google.protobuf.MessageOptions {
+          ScriptingReadModelOptions scripting_read_model = 51001;
+        }
+
+        extend google.protobuf.FieldOptions {
+          ScriptingFieldOptions scripting_field = 51002;
+        }
+        """;
+}

@@ -7,6 +7,7 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
@@ -54,6 +55,7 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
             var definition = new ScriptDefinitionGAgent(
                 new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()),
+                new ScriptReadModelMaterializationCompiler(),
                 new DefaultScriptReadModelSchemaActivationPolicy())
             {
                 EventSourcingBehaviorFactory =
@@ -91,8 +93,9 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         artifact.Contract.CommandTypeUrls.Should().Contain(Any.Pack(new ClaimSubmitted()).TypeUrl);
         artifact.Contract.DomainEventTypeUrls.Should().Contain(Any.Pack(new ClaimDecisionRecorded()).TypeUrl);
         artifact.Contract.QueryTypeUrls.Should().Contain(Any.Pack(new ClaimQueryRequested()).TypeUrl);
-        artifact.Contract.ReadModelDefinition.Should().NotBeNull();
-        artifact.Contract.ReadModelStoreCapabilities.Should().Contain(["document", "graph"]);
+        artifact.Contract.ReadModelDescriptorFullName.Should().Be(ClaimCaseReadModel.Descriptor.FullName);
+        artifact.Contract.ProtocolDescriptorSet.Should().NotBeNull();
+        artifact.Contract.ProtocolDescriptorSet!.IsEmpty.Should().BeFalse();
         typeof(IScriptBehaviorRuntimeCapabilities).GetMethod("GetRequiredService").Should().BeNull();
 
         await using var provider = ClaimIntegrationTestKit.BuildProvider();

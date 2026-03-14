@@ -1,4 +1,4 @@
-using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf.Reflection;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
@@ -107,8 +107,6 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
         private readonly Dictionary<string, ScriptSignalRegistration> _signals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptDomainEventRegistration> _domainEvents = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptQueryRegistration> _queries = new(StringComparer.Ordinal);
-        private ScriptReadModelDefinition? _readModelDefinition;
-        private IReadOnlyList<string> _storeKinds = Array.Empty<string>();
 
         public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnCommand<TCommand>(
             Func<TCommand, ScriptCommandContext<TBuilderState>, CancellationToken, Task> handler)
@@ -237,29 +235,22 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
             return this;
         }
 
-        public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> DescribeReadModel(
-            ScriptReadModelDefinition definition,
-            IReadOnlyList<string> storeKinds)
-        {
-            _readModelDefinition = definition ?? throw new ArgumentNullException(nameof(definition));
-            _storeKinds = storeKinds?.Where(static x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-                ?? Array.Empty<string>();
-            return this;
-        }
-
         public ScriptBehaviorDescriptor Build()
         {
+            var stateDescriptor = ScriptMessageTypes.GetDescriptor(typeof(TBuilderState));
+            var readModelDescriptor = ScriptMessageTypes.GetDescriptor(typeof(TBuilderReadModel));
             return new ScriptBehaviorDescriptor(
                 typeof(TBuilderState),
                 typeof(TBuilderReadModel),
+                stateDescriptor,
+                readModelDescriptor,
                 ScriptMessageTypes.GetTypeUrl<TBuilderState>(),
                 ScriptMessageTypes.GetTypeUrl<TBuilderReadModel>(),
                 new Dictionary<string, ScriptCommandRegistration>(_commands, StringComparer.Ordinal),
                 new Dictionary<string, ScriptSignalRegistration>(_signals, StringComparer.Ordinal),
                 new Dictionary<string, ScriptDomainEventRegistration>(_domainEvents, StringComparer.Ordinal),
                 new Dictionary<string, ScriptQueryRegistration>(_queries, StringComparer.Ordinal),
-                _readModelDefinition,
-                _storeKinds.ToArray());
+                ByteString.Empty);
         }
 
         private void EnsureNoInboundConflict(string typeUrl, string category)

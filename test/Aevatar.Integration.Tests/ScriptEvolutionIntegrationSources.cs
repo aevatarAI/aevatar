@@ -13,8 +13,8 @@ internal static class ScriptEvolutionIntegrationSources
         using System.Threading.Tasks;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Scripting.Abstractions.Definitions;
 
+        // schema hint: {{schemaName}}@{{schemaVersion}}
         public sealed class {{className}} : ScriptBehavior<TextNormalizationReadModel, TextNormalizationReadModel>
         {
             protected override void Configure(IScriptBehaviorBuilder<TextNormalizationReadModel, TextNormalizationReadModel> builder)
@@ -24,27 +24,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnEvent<TextNormalizationCompleted>(
                         apply: static (_, evt, _) => evt.Current,
                         reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync)
-                    .DescribeReadModel(
-                        new ScriptReadModelDefinition(
-                            "{{schemaName}}",
-                            "{{schemaVersion}}",
-                            new[]
-                            {
-                                new ScriptReadModelFieldDefinition("last_command_id", "keyword", "last_command_id", false),
-                                new ScriptReadModelFieldDefinition("normalized_text", "text", "normalized_text", false),
-                                new ScriptReadModelFieldDefinition("lookup.normalized", "keyword", "lookup.normalized", false),
-                                new ScriptReadModelFieldDefinition("refs.profile_id", "keyword", "refs.profile_id", false),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelIndexDefinition("idx_normalized", new[] { "lookup.normalized" }, false, "document"),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelRelationDefinition("rel_profile", "refs.profile_id", "profile", "profile_id", "many_to_one", "graph"),
-                            }),
-                        new[] { "document", "graph" });
+                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleAsync(

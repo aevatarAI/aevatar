@@ -4,6 +4,8 @@ package aevatar.scripting.tests;
 
 option csharp_namespace = "Aevatar.Scripting.Core.Tests.Messages";
 
+import "scripting_schema_options.proto";
+
 message ScriptProfileState {
   int32 command_count = 1;
   string last_command_id = 2;
@@ -11,23 +13,49 @@ message ScriptProfileState {
 }
 
 message ScriptProfileSearchIndex {
-  string lookup_key = 1;
-  string sort_key = 2;
+  string lookup_key = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string sort_key = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
 }
 
 message ScriptProfileDocumentRef {
-  string actor_id = 1;
-  string policy_id = 2;
+  string actor_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string policy_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
 }
 
 message ScriptProfileReadModel {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "script_profile"
+    schema_version: "3"
+    store_kinds: "document"
+    store_kinds: "graph"
+    document_indexes: {
+      name: "idx_actor_policy"
+      paths: "actor_id"
+      paths: "policy_id"
+      unique: true
+      provider: "document"
+    }
+    document_indexes: {
+      name: "idx_lookup"
+      paths: "search.lookup_key"
+      provider: "document"
+    }
+    graph_relations: {
+      name: "rel_policy"
+      source_path: "refs.policy_id"
+      target_schema_id: "policy"
+      target_path: "policy_id"
+      cardinality: "many_to_one"
+      provider: "graph"
+    }
+  };
   bool has_value = 1;
-  string actor_id = 2;
-  string policy_id = 3;
-  string last_command_id = 4;
-  string input_text = 5;
-  string normalized_text = 6;
-  repeated string tags = 7;
+  string actor_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string policy_id = 3 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string last_command_id = 4 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string input_text = 5 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
+  string normalized_text = 6 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
+  repeated string tags = 7 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword", nullable: true }];
   ScriptProfileSearchIndex search = 8;
   ScriptProfileDocumentRef refs = 9;
 }
@@ -55,13 +83,13 @@ message ScriptProfileQueryResponded {
 }
 
 message ClaimSearchIndex {
-  string lookup_key = 1;
-  string decision_key = 2;
+  string lookup_key = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string decision_key = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
 }
 
 message ClaimRefs {
-  string policy_id = 1;
-  string owner_actor_id = 2;
+  string policy_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string owner_actor_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
 }
 
 message ClaimState {
@@ -76,18 +104,44 @@ message ClaimState {
 }
 
 message ClaimReadModel {
+  option (aevatar.scripting.schema.scripting_read_model) = {
+    schema_id: "claim_case"
+    schema_version: "3"
+    store_kinds: "document"
+    store_kinds: "graph"
+    document_indexes: {
+      name: "idx_case_policy"
+      paths: "case_id"
+      paths: "policy_id"
+      unique: true
+      provider: "document"
+    }
+    document_indexes: {
+      name: "idx_decision"
+      paths: "decision_status"
+      provider: "document"
+    }
+    graph_relations: {
+      name: "rel_policy"
+      source_path: "refs.policy_id"
+      target_schema_id: "policy"
+      target_path: "policy_id"
+      cardinality: "many_to_one"
+      provider: "graph"
+    }
+  };
   bool has_value = 1;
-  string case_id = 2;
-  string policy_id = 3;
-  string decision_status = 4;
-  bool manual_review_required = 5;
-  string ai_summary = 6;
+  string case_id = 2 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string policy_id = 3 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  string decision_status = 4 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
+  bool manual_review_required = 5 [(aevatar.scripting.schema.scripting_field) = { storage_type: "boolean" }];
+  string ai_summary = 6 [(aevatar.scripting.schema.scripting_field) = { storage_type: "text" }];
   double risk_score = 7;
   bool compliance_passed = 8;
-  string last_command_id = 9;
+  string last_command_id = 9 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
   ClaimSearchIndex search = 10;
   ClaimRefs refs = 11;
-  repeated string trace_steps = 12;
+  repeated string trace_steps = 12 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword", nullable: true }];
 }
 
 message ClaimSubmitted {

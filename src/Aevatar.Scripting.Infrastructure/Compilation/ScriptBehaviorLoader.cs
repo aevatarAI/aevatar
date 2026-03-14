@@ -1,4 +1,7 @@
 using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Scripting.Core.Compilation;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using System.Reflection;
@@ -8,7 +11,10 @@ namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 internal static class ScriptBehaviorLoader
 {
-    public static LoadedScriptBehavior LoadFromCompilation(CSharpCompilation compilation)
+    public static LoadedScriptBehavior LoadFromCompilation(
+        CSharpCompilation compilation,
+        ByteString descriptorSet,
+        string? entryBehaviorTypeName)
     {
         ArgumentNullException.ThrowIfNull(compilation);
 
@@ -33,22 +39,27 @@ internal static class ScriptBehaviorLoader
         try
         {
             var assembly = loadContext.LoadFromStream(assemblyStream);
-            var behaviorType = assembly
+            var behaviorTypes = assembly
                 .GetTypes()
                 .Where(type =>
                     !type.IsAbstract &&
                     !type.IsInterface &&
                     typeof(IScriptBehaviorBridge).IsAssignableFrom(type))
                 .OrderBy(type => type.FullName, StringComparer.Ordinal)
-                .FirstOrDefault();
+                .ToArray();
+            var behaviorType = ResolveEntryBehaviorType(behaviorTypes, entryBehaviorTypeName);
             if (behaviorType == null)
                 throw new InvalidOperationException("Script must define a non-abstract type implementing IScriptBehaviorBridge.");
 
             if (Activator.CreateInstance(behaviorType) is not IScriptBehaviorBridge behavior)
                 throw new InvalidOperationException($"Failed to instantiate script behavior type `{behaviorType.FullName}`.");
 
-            var descriptor = behavior.Descriptor ?? throw new InvalidOperationException(
+            var rawDescriptor = behavior.Descriptor ?? throw new InvalidOperationException(
                 $"Script behavior type `{behaviorType.FullName}` returned a null descriptor.");
+            var effectiveDescriptorSet = descriptorSet == null || descriptorSet.IsEmpty
+                ? ScriptDescriptorSetBuilder.BuildFromDescriptors(EnumerateProtocolDescriptors(rawDescriptor))
+                : descriptorSet;
+            var descriptor = rawDescriptor.WithProtocolDescriptorSet(effectiveDescriptorSet);
             var contract = descriptor.ToContract();
             DisposeBehavior(behavior);
             return new LoadedScriptBehavior(behaviorType, descriptor, contract, loadContext);
@@ -65,6 +76,43 @@ internal static class ScriptBehaviorLoader
     {
         if (behavior is IDisposable disposable)
             disposable.Dispose();
+    }
+
+    private static Type? ResolveEntryBehaviorType(
+        IReadOnlyList<Type> behaviorTypes,
+        string? entryBehaviorTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(entryBehaviorTypeName))
+        {
+            var exact = behaviorTypes.FirstOrDefault(type =>
+                string.Equals(type.FullName, entryBehaviorTypeName, StringComparison.Ordinal) ||
+                string.Equals(type.Name, entryBehaviorTypeName, StringComparison.Ordinal));
+            if (exact != null)
+                return exact;
+
+            throw new InvalidOperationException(
+                $"Configured entry behavior type `{entryBehaviorTypeName}` was not found in the compiled script package.");
+        }
+
+        return behaviorTypes.FirstOrDefault();
+    }
+
+    private static IEnumerable<MessageDescriptor> EnumerateProtocolDescriptors(ScriptBehaviorDescriptor descriptor)
+    {
+        yield return descriptor.StateDescriptor;
+        yield return descriptor.ReadModelDescriptor;
+
+        foreach (var registration in descriptor.Commands.Values)
+            yield return ScriptMessageTypes.GetDescriptor(registration.MessageClrType);
+        foreach (var registration in descriptor.Signals.Values)
+            yield return ScriptMessageTypes.GetDescriptor(registration.MessageClrType);
+        foreach (var registration in descriptor.DomainEvents.Values)
+            yield return ScriptMessageTypes.GetDescriptor(registration.MessageClrType);
+        foreach (var registration in descriptor.Queries.Values)
+        {
+            yield return ScriptMessageTypes.GetDescriptor(registration.QueryClrType);
+            yield return ScriptMessageTypes.GetDescriptor(registration.ResultClrType);
+        }
     }
 
     private static Assembly? ResolveFromDefault(AssemblyLoadContext context, AssemblyName assemblyName)

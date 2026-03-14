@@ -1,7 +1,7 @@
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
@@ -119,10 +119,18 @@ public class RoslynScriptBehaviorCompilerTests
         artifact.Contract.QueryTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
         artifact.Contract.QueryResultTypeUrls.Should().ContainKey(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
         artifact.Contract.InternalSignalTypeUrls.Should().ContainSingle("type.googleapis.com/google.protobuf.Empty");
-        artifact.Contract.ReadModelDefinition.Should().NotBeNull();
-        artifact.Contract.ReadModelDefinition!.Fields.Should().Contain(x => x.Name == "search.lookup_key");
-        artifact.Contract.ReadModelDefinition.Indexes.Should().Contain(x => x.Name == "idx_actor_policy");
-        artifact.Contract.ReadModelDefinition.Relations.Should().Contain(x => x.Name == "rel_policy");
+        artifact.Contract.StateDescriptorFullName.Should().Be(Int32Value.Descriptor.FullName);
+        artifact.Contract.ReadModelDescriptorFullName.Should().Be(ScriptProfileReadModel.Descriptor.FullName);
+        artifact.Contract.ProtocolDescriptorSet.Should().NotBeNull();
+        artifact.Contract.ProtocolDescriptorSet!.IsEmpty.Should().BeFalse();
+
+        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+            artifact,
+            schemaHash: "contract-hash",
+            schemaVersion: "3");
+        plan.SchemaId.Should().Be("script_profile");
+        plan.DocumentFields.Should().Contain(x => x.Path == "search.lookup_key");
+        plan.GraphRelations.Should().ContainSingle(x => x.Name == "rel_policy");
     }
 
     private const string ContractBehaviorSource =
@@ -133,7 +141,6 @@ public class RoslynScriptBehaviorCompilerTests
         using System.Threading.Tasks;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Scripting.Abstractions.Definitions;
         using Aevatar.Scripting.Core.Tests.Messages;
         using Google.Protobuf.WellKnownTypes;
 
@@ -147,27 +154,7 @@ public class RoslynScriptBehaviorCompilerTests
                     .OnEvent<ScriptProfileUpdated>(
                         apply: static (_, evt, _) => new Int32Value { Value = 1 },
                         reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync)
-                    .DescribeReadModel(
-                        new ScriptReadModelDefinition(
-                            "contract_case",
-                            "1",
-                            new[]
-                            {
-                                new ScriptReadModelFieldDefinition("actor_id", "keyword", "actor_id", false),
-                                new ScriptReadModelFieldDefinition("policy_id", "keyword", "policy_id", false),
-                                new ScriptReadModelFieldDefinition("normalized_text", "text", "normalized_text", false),
-                                new ScriptReadModelFieldDefinition("search.lookup_key", "keyword", "search.lookup_key", false),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelIndexDefinition("idx_actor_policy", new[] { "actor_id", "policy_id" }, true, "document"),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelRelationDefinition("rel_policy", "policy_id", "policy", "policy_id", "many_to_one", "graph"),
-                            }),
-                        new[] { "document", "graph" });
+                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleAsync(

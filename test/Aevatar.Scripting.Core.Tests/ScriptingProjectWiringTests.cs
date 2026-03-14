@@ -4,9 +4,11 @@ using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Projection.Materialization;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +28,9 @@ public sealed class ScriptingProjectWiringTests
         provider.GetRequiredService<IScriptBehaviorArtifactResolver>().Should().NotBeNull();
         provider.GetRequiredService<IScriptBehaviorDispatcher>().Should().NotBeNull();
         provider.GetRequiredService<IScriptBehaviorRuntimeCapabilityFactory>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptReadModelMaterializationCompiler>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptNativeDocumentMaterializer>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptNativeGraphMaterializer>().Should().NotBeNull();
         provider.GetRequiredService<IScriptExecutionProjectionPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();

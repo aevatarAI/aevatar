@@ -101,6 +101,7 @@ public class ScriptBehaviorGAgentReplayContractTests
             Revision = "rev-1",
             SourceText = StatefulBehaviorSource,
             SourceHash = sourceHash,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(StatefulBehaviorSource),
             StateTypeUrl = Any.Pack(new ScriptProfileState()).TypeUrl,
             ReadModelTypeUrl = Any.Pack(new ScriptProfileReadModel()).TypeUrl,
             ReadModelSchemaVersion = "1",

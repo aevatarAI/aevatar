@@ -1,5 +1,3 @@
-using Aevatar.Scripting.Abstractions.Definitions;
-
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
 public interface IScriptBehaviorBuilder<TState, TReadModel>
@@ -23,8 +21,4 @@ public interface IScriptBehaviorBuilder<TState, TReadModel>
         Func<TQuery, ScriptQueryContext<TReadModel>, CancellationToken, Task<TResult?>> handler)
         where TQuery : class, IMessage<TQuery>, new()
         where TResult : class, IMessage<TResult>, new();
-
-    IScriptBehaviorBuilder<TState, TReadModel> DescribeReadModel(
-        ScriptReadModelDefinition definition,
-        IReadOnlyList<string> storeKinds);
 }

@@ -3,6 +3,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Google.Protobuf;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -46,10 +47,14 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
             definitionActorId,
             normalizedRevision,
             ct);
+        var scriptPackage = snapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(snapshot.SourceText);
+        if (scriptPackage.CsharpSources.Count == 0 && !string.IsNullOrWhiteSpace(snapshot.SourceText))
+            scriptPackage = ScriptPackageModel.CreateSingleSourcePackage(snapshot.SourceText);
         var compilation = _compiler.Compile(new ScriptBehaviorCompilationRequest(
             snapshot.ScriptId,
             snapshot.Revision,
-            snapshot.SourceText));
+            scriptPackage,
+            snapshot.SourceHash));
         if (!compilation.IsSuccess || compilation.Artifact == null)
             throw new InvalidOperationException("Failed to provision script runtime: " + string.Join("; ", compilation.Diagnostics));
 
@@ -68,22 +73,20 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
                     Revision = snapshot.Revision,
                     SourceText = snapshot.SourceText,
                     SourceHash = string.IsNullOrWhiteSpace(snapshot.SourceHash)
-                        ? ComputeSourceHash(snapshot.SourceText)
+                        ? ScriptPackageModel.ComputePackageHash(snapshot.ScriptPackage)
                         : snapshot.SourceHash,
                     StateTypeUrl = compilation.Artifact.Contract.StateTypeUrl ?? string.Empty,
                     ReadModelTypeUrl = compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
                     ReadModelSchemaVersion = snapshot.ReadModelSchemaVersion,
                     ReadModelSchemaHash = snapshot.ReadModelSchemaHash,
+                    ScriptPackage = scriptPackage,
+                    ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
+                    StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
+                    ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
                 }),
             ct);
         await _projectionPort.EnsureActorProjectionAsync(actorId, ct);
         await compilation.Artifact.DisposeAsync();
         return actorId;
-    }
-
-    private static string ComputeSourceHash(string sourceText)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sourceText ?? string.Empty));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
@@ -19,13 +20,16 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
     private readonly IScriptBehaviorCompiler _compiler;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
     public ScriptDefinitionGAgent(
         IScriptBehaviorCompiler compiler,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _schemaActivationPolicy = schemaActivationPolicy ?? throw new ArgumentNullException(nameof(schemaActivationPolicy));
         InitializeId();
     }
@@ -34,12 +38,20 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     public async Task HandleUpsertScriptDefinitionRequested(UpsertScriptDefinitionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        var sourceText = evt.SourceText ?? string.Empty;
+        var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(evt.SourceText ?? string.Empty);
+        var scriptPackage = evt.ScriptPackage?.Clone();
+        if (scriptPackage == null || scriptPackage.CsharpSources.Count == 0)
+            scriptPackage = ScriptPackageModel.ToPackageSpec(parsedPackage);
+        var sourceText = ScriptPackageModel.GetEntrySourceText(scriptPackage);
+        var packageHash = string.IsNullOrWhiteSpace(evt.SourceHash)
+            ? ScriptPackageModel.ComputePackageHash(scriptPackage)
+            : evt.SourceHash;
         var compilation = _compiler.Compile(
             new ScriptBehaviorCompilationRequest(
                 evt.ScriptId ?? string.Empty,
                 evt.ScriptRevision ?? string.Empty,
-                sourceText));
+                scriptPackage,
+                packageHash));
         try
         {
             if (!compilation.IsSuccess || compilation.Artifact == null)
@@ -51,11 +63,15 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             var readModelSchemaVersion = string.Empty;
             IReadOnlyList<string> readModelSchemaStoreKinds = Array.Empty<string>();
             var hasReadModelSchema = false;
-            var extracted = ScriptReadModelDefinitionExtraction.Empty;
-            if (ScriptReadModelDefinitionExtractor.TryExtractFromContract(
-                    compilation.Artifact.Contract,
+            var extracted = ScriptSchemaDescriptorExtraction.Empty;
+            if (ScriptSchemaDescriptorExtractor.TryExtractFromDescriptor(
+                    compilation.Artifact.Descriptor,
                     out extracted))
             {
+                _ = _materializationCompiler.GetOrCompile(
+                    compilation.Artifact,
+                    extracted.SchemaHash,
+                    extracted.SchemaVersion);
                 hasReadModelSchema = true;
                 readModelSchema = extracted.SchemaPayload.Clone();
                 readModelSchemaHash = extracted.SchemaHash;
@@ -68,7 +84,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ScriptId = evt.ScriptId ?? string.Empty,
                 ScriptRevision = evt.ScriptRevision ?? string.Empty,
                 SourceText = sourceText,
-                SourceHash = evt.SourceHash ?? string.Empty,
+                SourceHash = packageHash,
                 ReadModelSchema = readModelSchema,
                 ReadModelSchemaHash = readModelSchemaHash,
                 ReadModelSchemaVersion = readModelSchemaVersion,
@@ -79,6 +95,10 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
                 QueryTypeUrls = { compilation.Artifact.Contract.QueryTypeUrls },
                 InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
+                ScriptPackage = scriptPackage,
+                ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
+                StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
+                ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
             });
 
             if (!hasReadModelSchema)
@@ -95,8 +115,8 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             });
 
             var activation = _schemaActivationPolicy.ValidateActivation(new ScriptReadModelSchemaActivationRequest(
-                RequiresDocumentStore: extracted.Definition.Fields.Count > 0 || extracted.Definition.Indexes.Count > 0,
-                RequiresGraphStore: extracted.Definition.Relations.Count > 0,
+                RequiresDocumentStore: extracted.RequiresDocumentStore,
+                RequiresGraphStore: extracted.RequiresGraphStore,
                 DeclaredProviderHints: extracted.StoreCapabilities));
             if (activation.IsActivated)
             {
@@ -180,6 +200,10 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             SourceHash = State.SourceHash ?? string.Empty,
             StateTypeUrl = State.StateTypeUrl ?? string.Empty,
             ReadModelTypeUrl = State.ReadModelTypeUrl ?? string.Empty,
+            ScriptPackage = State.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+            ProtocolDescriptorSet = State.ProtocolDescriptorSet,
+            StateDescriptorFullName = State.StateDescriptorFullName ?? string.Empty,
+            ReadModelDescriptorFullName = State.ReadModelDescriptorFullName ?? string.Empty,
             FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
                 ? "Script source text is empty."
                 : string.Empty,
@@ -233,6 +257,10 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.QueryTypeUrls.Add(evt.QueryTypeUrls);
         next.InternalSignalTypeUrls.Clear();
         next.InternalSignalTypeUrls.Add(evt.InternalSignalTypeUrls);
+        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
+        next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
+        next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
+        next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
         next.ReadModelSchemaStatus = next.ReadModelSchema == null || next.ReadModelSchema.Is(Empty.Descriptor)
             ? string.Empty
             : SchemaStatusPending;

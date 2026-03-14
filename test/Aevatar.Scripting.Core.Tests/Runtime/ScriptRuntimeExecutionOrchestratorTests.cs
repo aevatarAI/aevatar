@@ -38,6 +38,7 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
                 Revision: "rev-1",
                 SourceText: "source",
                 SourceHash: "hash-1",
+                ScriptPackage: new ScriptPackageSpec(),
                 StateTypeUrl: string.Empty,
                 ReadModelTypeUrl: string.Empty,
                 CurrentStateRoot: null,

@@ -147,10 +147,14 @@ public class ClaimReadModelProjectorTests
                 Revision: "rev-claim-1",
                 SourceText: ClaimScriptSources.DecisionBehavior,
                 SourceHash: ClaimScriptSources.DecisionBehaviorHash,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
                 StateTypeUrl: Any.Pack(new ClaimState()).TypeUrl,
                 ReadModelTypeUrl: Any.Pack(new ClaimReadModel()).TypeUrl,
                 ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "claim-schema-hash"));
+                ReadModelSchemaHash: "claim-schema-hash",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: ClaimState.Descriptor.FullName,
+                ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
         }
     }
 

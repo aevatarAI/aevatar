@@ -21,6 +21,12 @@ public static class ScriptMessageTypes
     {
         ArgumentNullException.ThrowIfNull(messageClrType);
         var descriptor = GetDescriptor(messageClrType);
+        return GetTypeUrl(descriptor);
+    }
+
+    public static string GetTypeUrl(MessageDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
         return TypeUrlPrefix + descriptor.FullName;
     }
 

@@ -27,7 +27,6 @@ public sealed class ScriptPackageRuntimeContractTests
                     using System.Threading.Tasks;
                     using Aevatar.Scripting.Abstractions;
                     using Aevatar.Scripting.Abstractions.Behaviors;
-                    using Aevatar.Scripting.Abstractions.Definitions;
                     using Aevatar.Scripting.Core.Tests.Messages;
 
                     public sealed class ContractBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
@@ -44,27 +43,7 @@ public sealed class ScriptPackageRuntimeContractTests
                                         NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                                     },
                                     reduce: static (_, evt, _) => evt.Current)
-                                .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync)
-                                .DescribeReadModel(
-                                    new ScriptReadModelDefinition(
-                                        "script_profile",
-                                        "3",
-                                        new[]
-                                        {
-                                            new ScriptReadModelFieldDefinition("actor_id", "keyword", "actor_id", false),
-                                            new ScriptReadModelFieldDefinition("policy_id", "keyword", "policy_id", false),
-                                            new ScriptReadModelFieldDefinition("normalized_text", "text", "normalized_text", false),
-                                            new ScriptReadModelFieldDefinition("search.lookup_key", "keyword", "search.lookup_key", false),
-                                        },
-                                        new[]
-                                        {
-                                            new ScriptReadModelIndexDefinition("idx_actor_policy", new[] { "actor_id", "policy_id" }, true, "document"),
-                                        },
-                                        new[]
-                                        {
-                                            new ScriptReadModelRelationDefinition("rel_policy", "refs.policy_id", "policy", "policy_id", "many_to_one", "graph"),
-                                        }),
-                                    new[] { "document", "graph" });
+                                .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
                         }
 
                         private static Task HandleAsync(

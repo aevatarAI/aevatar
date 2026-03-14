@@ -176,10 +176,14 @@ public sealed class ScriptReadModelQueryReaderTests
                 Revision: revision,
                 SourceText: sourceText,
                 SourceHash: sourceHash,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(sourceText),
                 StateTypeUrl: ScriptSources.StructuredProfileStateTypeUrl,
                 ReadModelTypeUrl: ScriptSources.StructuredProfileReadModelTypeUrl,
                 ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "schema-hash"));
+                ReadModelSchemaHash: "schema-hash",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: ScriptProfileState.Descriptor.FullName,
+                ReadModelDescriptorFullName: ScriptProfileReadModel.Descriptor.FullName));
         }
     }
 

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Google.Protobuf;
@@ -80,6 +81,10 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty,
             ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty,
             ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty,
+            ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+            ProtocolDescriptorSet = evt.ProtocolDescriptorSet,
+            StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
+            ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
         }, ct);
     }
 
@@ -103,6 +108,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ReadModelTypeUrl = State.ReadModelTypeUrl ?? string.Empty,
             ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
             ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+            StateDescriptorFullName = State.StateDescriptorFullName ?? string.Empty,
+            ReadModelDescriptorFullName = State.ReadModelDescriptorFullName ?? string.Empty,
             FailureReason = found ? string.Empty : "Script behavior actor is not bound.",
         }, ct, sourceEnvelope: null);
     }
@@ -154,6 +161,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 Revision: State.Revision ?? string.Empty,
                 SourceText: State.SourceText ?? string.Empty,
                 SourceHash: State.SourceHash ?? string.Empty,
+                ScriptPackage: State.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
                 StateTypeUrl: State.StateTypeUrl ?? string.Empty,
                 ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
                 CurrentStateRoot: State.StateRoot?.Clone(),
@@ -182,6 +190,10 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
         next.ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty;
         next.ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty;
+        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(evt.SourceText ?? string.Empty);
+        next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
+        next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
+        next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(evt.Revision ?? string.Empty, ":binding");
         return next;
@@ -193,10 +205,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         var next = state.Clone();
         var payload = evt.DomainEventPayload?.Clone() ?? Any.Pack(new Empty());
+        var scriptPackage = state.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(state.SourceText ?? string.Empty);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
             string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
-            state.SourceText ?? string.Empty,
+            scriptPackage,
             state.SourceHash ?? string.Empty));
         var behavior = artifact.CreateBehavior();
         try
@@ -264,13 +277,14 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             throw new InvalidOperationException("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(evt.Revision))
             throw new InvalidOperationException("Revision is required.");
-        if (string.IsNullOrWhiteSpace(evt.SourceText))
-            throw new InvalidOperationException("SourceText is required.");
+        if ((evt.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(evt.SourceText))
+            throw new InvalidOperationException("ScriptPackage must contain at least one C# source.");
     }
 
     private void EnsureBound()
     {
-        if (string.IsNullOrWhiteSpace(State.DefinitionActorId) || string.IsNullOrWhiteSpace(State.SourceText))
+        if (string.IsNullOrWhiteSpace(State.DefinitionActorId) ||
+            ((State.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(State.SourceText)))
             throw new InvalidOperationException($"Script behavior actor `{Id}` is not bound.");
     }
 

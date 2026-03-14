@@ -3,7 +3,7 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v12`
+- 文档版本：`v13`
 - 更新时间：`2026-03-14`
 - 适用范围：`src/Aevatar.Scripting.*` 与相关 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests`
 - 非范围：`Aevatar.Foundation.*` 的内部 runtime 实现细节；本文只说明当前生效的 scripting 主链与文档入口
@@ -16,7 +16,10 @@
    - `docs/architecture/2026-03-14-scripting-gagent-behavior-parity-implementation-closeout.md`
 2. 当前 typed authoring 设计：
    - `docs/architecture/2026-03-14-scripting-typed-authoring-surface-detailed-design.md`
-3. 本文：
+3. 后续定义源与原生物化提案：
+   - `docs/architecture/2026-03-14-scripting-native-readmodel-materialization-detailed-design.md`
+   - `docs/architecture/2026-03-14-scripting-protobuf-definition-source-detailed-design.md`
+4. 本文：
    - 作为 scripting 总览与文档索引，帮助快速定位当前主链
 
 以下文档保留为历史设计留痕，不再作为当前实现依据：
@@ -25,6 +28,8 @@
 2. `docs/architecture/2026-03-13-scripting-gagent-behavior-parity-detailed-design.md`
 
 若本文与 `implementation-closeout` 发生冲突，以 `implementation-closeout` 和实际代码为准。
+
+上面两份 `2026-03-14` 提案文档讨论的是后续方向，不代表当前代码已经切到 `script package(cs + proto)`。它们的编译模型明确是“definition/provisioning 阶段的动态包编译”，不是解决方案构建期静态预编译。
 
 ## 3. 当前结论
 

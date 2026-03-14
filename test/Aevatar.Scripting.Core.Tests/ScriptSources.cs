@@ -62,7 +62,6 @@ internal static class ScriptSources
         using System.Threading.Tasks;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Scripting.Abstractions.Definitions;
         using Aevatar.Scripting.Core.Tests.Messages;
 
         public sealed class StructuredProfileBehavior : ScriptBehavior<ScriptProfileState, ScriptProfileReadModel>
@@ -79,32 +78,7 @@ internal static class ScriptSources
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
                         reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync)
-                    .DescribeReadModel(
-                        new ScriptReadModelDefinition(
-                            "script_profile",
-                            "3",
-                            new[]
-                            {
-                                new ScriptReadModelFieldDefinition("actor_id", "keyword", "actor_id", false),
-                                new ScriptReadModelFieldDefinition("policy_id", "keyword", "policy_id", false),
-                                new ScriptReadModelFieldDefinition("last_command_id", "keyword", "last_command_id", false),
-                                new ScriptReadModelFieldDefinition("normalized_text", "text", "normalized_text", false),
-                                new ScriptReadModelFieldDefinition("tags", "keyword[]", "tags", true),
-                                new ScriptReadModelFieldDefinition("search.lookup_key", "keyword", "search.lookup_key", false),
-                                new ScriptReadModelFieldDefinition("search.sort_key", "keyword", "search.sort_key", false),
-                                new ScriptReadModelFieldDefinition("refs.policy_id", "keyword", "refs.policy_id", false),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelIndexDefinition("idx_actor_policy", new[] { "actor_id", "policy_id" }, true, "document"),
-                                new ScriptReadModelIndexDefinition("idx_lookup", new[] { "search.lookup_key" }, false, "document"),
-                            },
-                            new[]
-                            {
-                                new ScriptReadModelRelationDefinition("rel_policy", "refs.policy_id", "policy", "policy_id", "many_to_one", "graph"),
-                            }),
-                        new[] { "document", "graph" });
+                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleCommandAsync(

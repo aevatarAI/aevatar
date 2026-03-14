@@ -31,7 +31,9 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="Protos/script_behavior_test_messages.proto" GrpcServices="None" />
+    <Protobuf Include="Protos/script_behavior_test_messages.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />

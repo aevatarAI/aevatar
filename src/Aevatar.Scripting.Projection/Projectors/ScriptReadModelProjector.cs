@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
@@ -39,11 +40,13 @@ public sealed class ScriptReadModelProjector
         CancellationToken ct = default)
     {
         var now = _clock.UtcNow;
-        return new ValueTask(_storeDispatcher.UpsertAsync(new ScriptReadModelDocument
+        var document = new ScriptReadModelDocument
         {
             Id = context.RootActorId,
             UpdatedAt = now,
-        }, ct));
+        };
+        context.CurrentSemanticReadModelDocument = document.DeepClone();
+        return new ValueTask(_storeDispatcher.UpsertAsync(document, ct));
     }
 
     public async ValueTask ProjectAsync(
@@ -60,10 +63,11 @@ public sealed class ScriptReadModelProjector
             fact.DefinitionActorId,
             fact.Revision,
             ct);
+        var scriptPackage = snapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(snapshot.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             snapshot.ScriptId,
             snapshot.Revision,
-            snapshot.SourceText,
+            scriptPackage,
             snapshot.SourceHash));
         var behavior = artifact.CreateBehavior();
         var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
@@ -77,6 +81,7 @@ public sealed class ScriptReadModelProjector
                     $"Script read model projector rejected undeclared domain event type `{eventTypeUrl}`.");
             }
 
+            ScriptReadModelDocument? currentDocument = null;
             await _storeDispatcher.MutateAsync(context.RootActorId, document =>
             {
                 document.Id = context.RootActorId;
@@ -112,7 +117,9 @@ public sealed class ScriptReadModelProjector
                 document.StateVersion = fact.StateVersion;
                 document.LastEventId = normalized.Id ?? string.Empty;
                 document.UpdatedAt = now;
+                currentDocument = document.DeepClone();
             }, ct);
+            context.CurrentSemanticReadModelDocument = currentDocument;
         }
         finally
         {

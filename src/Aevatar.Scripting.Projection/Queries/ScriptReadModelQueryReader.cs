@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -60,10 +61,11 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
             snapshot.DefinitionActorId,
             snapshot.Revision,
             ct);
+        var scriptPackage = definitionSnapshot.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(definitionSnapshot.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             definitionSnapshot.ScriptId,
             definitionSnapshot.Revision,
-            definitionSnapshot.SourceText,
+            scriptPackage,
             definitionSnapshot.SourceHash));
         if (!artifact.Descriptor.Queries.TryGetValue(queryPayload.TypeUrl ?? string.Empty, out var queryRegistration))
         {

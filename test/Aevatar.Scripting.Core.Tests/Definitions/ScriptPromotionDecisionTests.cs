@@ -63,24 +63,14 @@ public class ScriptPromotionDecisionTests
     }
 }
 
-public class ScriptContractManifestTests
+public class ScriptEvolutionValidationReportTests
 {
     [Fact]
-    public void Ctor_ShouldFallbackToEmpty_WhenOptionalInputsAreNull()
+    public void Empty_ShouldExposeStableDefaultValues()
     {
-        var manifest = new ScriptContractManifest(
-            inputSchema: null!,
-            outputEvents: null!,
-            stateSchema: null!,
-            readModelSchema: null!,
-            readModelDefinition: null,
-            readModelStoreCapabilities: null);
+        var report = ScriptEvolutionValidationReport.Empty;
 
-        manifest.InputSchema.Should().BeEmpty();
-        manifest.OutputEvents.Should().BeEmpty();
-        manifest.StateSchema.Should().BeEmpty();
-        manifest.ReadModelSchema.Should().BeEmpty();
-        manifest.ReadModelStoreCapabilities.Should().BeEmpty();
-        manifest.ReadModelDefinition.Should().BeNull();
+        report.IsSuccess.Should().BeFalse();
+        report.Diagnostics.Should().ContainSingle("Validation was not executed.");
     }
 }

@@ -56,14 +56,18 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
             response.Revision ?? string.Empty,
             response.SourceText ?? string.Empty,
             response.SourceHash ?? string.Empty,
+            response.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
             response.StateTypeUrl ?? string.Empty,
             response.ReadModelTypeUrl ?? string.Empty,
             response.ReadModelSchemaVersion ?? string.Empty,
-            response.ReadModelSchemaHash ?? string.Empty);
+            response.ReadModelSchemaHash ?? string.Empty,
+            response.ProtocolDescriptorSet,
+            response.StateDescriptorFullName ?? string.Empty,
+            response.ReadModelDescriptorFullName ?? string.Empty);
 
-        if (string.IsNullOrWhiteSpace(snapshot.SourceText))
+        if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
             throw new InvalidOperationException(
-                $"Script definition source_text is empty for actor `{definitionActorId}`.");
+                $"Script definition script_package is empty for actor `{definitionActorId}`.");
         if (!string.IsNullOrWhiteSpace(requestedRevision) &&
             !string.Equals(requestedRevision, snapshot.Revision, StringComparison.Ordinal))
             throw new InvalidOperationException(

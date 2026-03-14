@@ -42,6 +42,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             Revision = "rev-1",
             SourceText = ScriptSources.UppercaseBehavior,
             SourceHash = ScriptSources.UppercaseBehaviorHash,
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
             StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
             ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
             ReadModelSchemaVersion = "1",

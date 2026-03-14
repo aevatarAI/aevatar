@@ -1,17 +1,24 @@
 using Aevatar.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.ReadModels;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Hosting.Tests;
@@ -49,10 +56,59 @@ public class ScriptCapabilityHostExtensionsTests
         provider.GetRequiredService<IScriptBehaviorArtifactResolver>().Should().NotBeNull();
         provider.GetRequiredService<IScriptBehaviorDispatcher>().Should().NotBeNull();
         provider.GetRequiredService<IScriptBehaviorRuntimeCapabilityFactory>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptReadModelMaterializationCompiler>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptNativeDocumentMaterializer>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptNativeGraphMaterializer>().Should().NotBeNull();
         provider.GetRequiredService<IScriptExecutionProjectionPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddScriptCapability_ShouldRegisterElasticsearchDocumentStores_WhenConfigured()
+    {
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        services.AddScriptCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentStore<ScriptReadModelDocument, string>>()
+            .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptReadModelDocument, string>>();
+        provider.GetRequiredService<IProjectionDocumentStore<ScriptEvolutionReadModel, string>>()
+            .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptEvolutionReadModel, string>>();
+        provider.GetRequiredService<IProjectionDocumentStore<ScriptNativeDocumentReadModel, string>>()
+            .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptNativeDocumentReadModel, string>>();
+        provider.GetRequiredService<IProjectionGraphStore>()
+            .Should().BeOfType<InMemoryProjectionGraphStore>();
+    }
+
+    [Fact]
+    public void AddScriptCapability_ShouldRejectInvalidProjectionProviderFlags()
+    {
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "not-a-bool",
+            })
+            .Build();
+
+        var act = () => services.AddScriptCapability(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Invalid boolean value*");
     }
 
     [Fact]

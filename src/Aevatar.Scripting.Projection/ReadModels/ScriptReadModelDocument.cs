@@ -1,4 +1,6 @@
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json.Serialization;
+using Aevatar.Scripting.Projection.Serialization;
 
 namespace Aevatar.Scripting.Projection.ReadModels;
 
@@ -10,6 +12,7 @@ public sealed class ScriptReadModelDocument : IProjectionReadModel
     public string DefinitionActorId { get; set; } = string.Empty;
     public string Revision { get; set; } = string.Empty;
     public string ReadModelTypeUrl { get; set; } = string.Empty;
+    [JsonConverter(typeof(ProtobufAnyBase64JsonConverter))]
     public Any? ReadModelPayload { get; set; }
     public long StateVersion { get; set; }
     public string LastEventId { get; set; } = string.Empty;

@@ -6,8 +6,11 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Abstractions.Evolution;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Configuration;
+using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.Metadata;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.Queries;
@@ -56,6 +59,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<IScriptReadModelQueryReader, ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort, ScriptReadModelQueryService>();
+        services.TryAddSingleton<IScriptReadModelMaterializationCompiler, ScriptReadModelMaterializationCompiler>();
+        services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
+        services.TryAddSingleton<IScriptNativeGraphMaterializer, ScriptNativeGraphMaterializer>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptReadModelDocument>, ScriptReadModelDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>, ScriptEvolutionReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>, ScriptNativeDocumentReadModelMetadataProvider>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>,
@@ -76,6 +85,12 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
             ScriptReadModelProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
+            ScriptNativeDocumentProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
+            ScriptNativeGraphProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
             ScriptExecutionSessionEventProjector>());

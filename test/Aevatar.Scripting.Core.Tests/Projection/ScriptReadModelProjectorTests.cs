@@ -90,10 +90,14 @@ public sealed class ScriptReadModelProjectorTests
                 Revision: "rev-1",
                 SourceText: ScriptSources.UppercaseBehavior,
                 SourceHash: ScriptSources.UppercaseBehaviorHash,
-                StateTypeUrl: StringValue.Descriptor.FullName,
-                ReadModelTypeUrl: StringValue.Descriptor.FullName,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
+                StateTypeUrl: Any.Pack(new StringValue()).TypeUrl,
+                ReadModelTypeUrl: Any.Pack(new StringValue()).TypeUrl,
                 ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "schema-hash"));
+                ReadModelSchemaHash: "schema-hash",
+                ProtocolDescriptorSet: ByteString.Empty,
+                StateDescriptorFullName: StringValue.Descriptor.FullName,
+                ReadModelDescriptorFullName: StringValue.Descriptor.FullName));
         }
     }
 

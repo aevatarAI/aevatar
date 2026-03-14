@@ -36,7 +36,7 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             request.ScriptId,
             request.Revision,
-            request.SourceText,
+            request.ScriptPackage,
             request.SourceHash));
         var inbound = BuildInboundMessage(request.Envelope);
         ValidateInboundContract(request, artifact.Descriptor, inbound.PayloadTypeUrl);

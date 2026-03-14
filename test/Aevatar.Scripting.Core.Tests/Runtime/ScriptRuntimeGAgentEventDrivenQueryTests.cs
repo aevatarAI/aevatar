@@ -36,6 +36,7 @@ public sealed class ScriptRuntimeGAgentEventDrivenQueryTests
             Revision = "rev-1",
             SourceText = "source",
             SourceHash = "hash-1",
+            ScriptPackage = ScriptPackageSpecExtensions.CreateSingleSource("source"),
             StateTypeUrl = Any.Pack(new StringValue()).TypeUrl,
             ReadModelTypeUrl = Any.Pack(new StringValue()).TypeUrl,
             ReadModelSchemaVersion = "1",

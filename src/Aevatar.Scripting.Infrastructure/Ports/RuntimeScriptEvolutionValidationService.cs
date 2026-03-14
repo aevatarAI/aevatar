@@ -21,7 +21,7 @@ public sealed class RuntimeScriptEvolutionValidationService : IScriptEvolutionVa
 
         ct.ThrowIfCancellationRequested();
         var compilation = _compiler.Compile(
-            new ScriptBehaviorCompilationRequest(
+            ScriptBehaviorCompilationRequest.FromPersistedSource(
                 proposal.ScriptId ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
                 proposal.CandidateSource ?? string.Empty));

@@ -9,7 +9,7 @@ namespace Aevatar.Scripting.Core.Tests.Contract;
 public sealed class ScriptDefinitionContractsTests
 {
     [Fact]
-    public void EmptyContract_ShouldExposeEmptyCollectionsAndStoreCapabilities()
+    public void EmptyContract_ShouldExposeEmptyCollectionsAndDescriptorPayload()
     {
         var contract = ScriptGAgentContract.Empty;
 
@@ -20,7 +20,10 @@ public sealed class ScriptDefinitionContractsTests
         contract.QueryTypeUrls.Should().BeEmpty();
         contract.QueryResultTypeUrls.Should().BeEmpty();
         contract.InternalSignalTypeUrls.Should().BeEmpty();
-        contract.ReadModelStoreCapabilities.Should().BeEmpty();
+        contract.StateDescriptorFullName.Should().BeEmpty();
+        contract.ReadModelDescriptorFullName.Should().BeEmpty();
+        contract.ProtocolDescriptorSet.Should().NotBeNull();
+        contract.ProtocolDescriptorSet!.IsEmpty.Should().BeTrue();
     }
 
     [Fact]

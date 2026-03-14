@@ -216,7 +216,6 @@ public class ClaimReplayTests
         using System.Threading.Tasks;
         using Aevatar.Integration.Tests.Protocols;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Scripting.Abstractions.Definitions;
 
         public sealed class PersistedDefinitionSourceBehavior : ScriptBehavior<ClaimCaseState, ClaimCaseReadModel>
         {
@@ -234,15 +233,7 @@ public class ClaimReplayTests
                             LastCommandId = evt.CommandId ?? string.Empty,
                         },
                         reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync)
-                    .DescribeReadModel(
-                        new ScriptReadModelDefinition(
-                            "claim_case",
-                            "1",
-                            new[] { new ScriptReadModelFieldDefinition("ai_summary", "keyword", "ai_summary", false) },
-                            new[] { new ScriptReadModelIndexDefinition("idx_ai_summary", new[] { "ai_summary" }, false, "document") },
-                            new ScriptReadModelRelationDefinition[] { }),
-                        new[] { "document" });
+                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
             private static Task HandleAsync(

@@ -1,19 +1,27 @@
-using Aevatar.Scripting.Abstractions.Definitions;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
 public sealed record ScriptBehaviorDescriptor(
     Type StateClrType,
     Type ReadModelClrType,
+    MessageDescriptor StateDescriptor,
+    MessageDescriptor ReadModelDescriptor,
     string StateTypeUrl,
     string ReadModelTypeUrl,
     IReadOnlyDictionary<string, ScriptCommandRegistration> Commands,
     IReadOnlyDictionary<string, ScriptSignalRegistration> Signals,
     IReadOnlyDictionary<string, ScriptDomainEventRegistration> DomainEvents,
     IReadOnlyDictionary<string, ScriptQueryRegistration> Queries,
-    ScriptReadModelDefinition? ReadModelDefinition,
-    IReadOnlyList<string> StoreKinds)
+    ByteString? ProtocolDescriptorSet)
 {
+    public ScriptBehaviorDescriptor WithProtocolDescriptorSet(ByteString descriptorSet) =>
+        this with
+        {
+            ProtocolDescriptorSet = descriptorSet ?? ByteString.Empty,
+        };
+
     public ScriptGAgentContract ToContract()
     {
         var queryResultTypeUrls = Queries.ToDictionary(
@@ -29,7 +37,8 @@ public sealed record ScriptBehaviorDescriptor(
             QueryTypeUrls: Queries.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
             QueryResultTypeUrls: queryResultTypeUrls,
             InternalSignalTypeUrls: Signals.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
-            ReadModelDefinition: ReadModelDefinition,
-            StoreKinds: StoreKinds.ToArray());
+            StateDescriptorFullName: StateDescriptor.FullName ?? string.Empty,
+            ReadModelDescriptorFullName: ReadModelDescriptor.FullName ?? string.Empty,
+            ProtocolDescriptorSet: ProtocolDescriptorSet ?? ByteString.Empty);
     }
 }
