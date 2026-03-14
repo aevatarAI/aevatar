@@ -8,6 +8,8 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/architecture_guards.sh`: architecture/static guards (includes projection route mapping guard).
 - `tools/ci/code_metrics_analyzer_guard.sh`: repository-wide code metrics analyzer gate (CA1501/CA1502/CA1505/CA1506/CA1509 via `CodeMetricsConfig.txt`).
 - `tools/ci/code_metrics_report.ps1`: Windows-only `Microsoft.CodeAnalysis.Metrics` report generation for production projects under `src/`.
+- `tools/ci/fetch_latest_code_metrics.sh`: downloads the latest available `code-metrics-reports` GitHub Actions artifact into `artifacts/code-metrics/latest/` via `gh`.
+- `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
 - `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard.
 - `tools/ci/solution_split_guards.sh`: split build guard.
 - `tools/ci/solution_split_test_guards.sh`: split test guard.
