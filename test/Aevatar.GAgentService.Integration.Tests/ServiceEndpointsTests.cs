@@ -174,6 +174,7 @@ public sealed class ServiceEndpointsTests
                 [
                     new ServiceEndpointSnapshot("submit", "Submit", "command", "req", string.Empty, "desc"),
                 ],
+                [],
                 DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")),
         ];
         host.QueryPort.GetServiceResult = host.QueryPort.ListServicesResult[0];
@@ -361,6 +362,7 @@ public sealed class ServiceEndpointsTests
             string.Empty,
             string.Empty,
             string.Empty,
+            [],
             [],
             DateTimeOffset.UtcNow);
         host.QueryPort.GetServiceRevisionsResult = new ServiceRevisionCatalogSnapshot(

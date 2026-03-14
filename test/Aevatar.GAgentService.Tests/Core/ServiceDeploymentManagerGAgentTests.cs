@@ -4,6 +4,8 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
@@ -234,7 +236,39 @@ public sealed class ServiceDeploymentManagerGAgentTests
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceDeploymentManagerGAgent, ServiceDeploymentState>(
             eventStore,
             actorId,
-            () => new ServiceDeploymentManagerGAgent(artifactStore, activator));
+            () => new ServiceDeploymentManagerGAgent(
+                artifactStore,
+                new AlwaysReadyCapabilityViewReader(),
+                new AllowActivationAdmissionEvaluator(),
+                activator));
+    }
+
+    private sealed class AlwaysReadyCapabilityViewReader : IActivationCapabilityViewReader
+    {
+        public Task<ActivationCapabilityView> GetAsync(
+            ServiceIdentity identity,
+            string revisionId,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult(new ActivationCapabilityView
+            {
+                Identity = identity.Clone(),
+                RevisionId = revisionId,
+            });
+        }
+    }
+
+    private sealed class AllowActivationAdmissionEvaluator : IActivationAdmissionEvaluator
+    {
+        public Task<ActivationAdmissionDecision> EvaluateAsync(
+            ActivationAdmissionRequest request,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult(new ActivationAdmissionDecision
+            {
+                Allowed = true,
+            });
+        }
     }
 
     private sealed class RecordingRuntimeActivator : IServiceRuntimeActivator

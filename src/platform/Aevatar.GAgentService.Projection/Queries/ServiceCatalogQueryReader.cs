@@ -63,6 +63,7 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
                     x.ResponseTypeUrl,
                     x.Description))
                 .ToList(),
+            [.. readModel.PolicyIds],
             readModel.UpdatedAt);
     }
 }

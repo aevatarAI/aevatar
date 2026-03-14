@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Abstractions";
+
+import "service_endpoint.proto";
+
+enum ServiceBindingKind {
+  SERVICE_BINDING_KIND_UNSPECIFIED = 0;
+  SERVICE_BINDING_KIND_SERVICE = 1;
+  SERVICE_BINDING_KIND_CONNECTOR = 2;
+  SERVICE_BINDING_KIND_SECRET = 3;
+}
+
+message BoundServiceRef {
+  ServiceIdentity identity = 1;
+  string endpoint_id = 2;
+}
+
+message BoundConnectorRef {
+  string connector_type = 1;
+  string connector_id = 2;
+}
+
+message BoundSecretRef {
+  string secret_name = 1;
+}
+
+message ServiceBindingSpec {
+  ServiceIdentity identity = 1;
+  string binding_id = 2;
+  string display_name = 3;
+  ServiceBindingKind binding_kind = 4;
+  repeated string policy_ids = 5;
+
+  oneof target {
+    BoundServiceRef service_ref = 20;
+    BoundConnectorRef connector_ref = 21;
+    BoundSecretRef secret_ref = 22;
+  }
+}
+
+message ServiceBindingRecordState {
+  ServiceBindingSpec spec = 1;
+  bool retired = 2;
+}
+
+message ServiceBindingCatalogState {
+  ServiceIdentity identity = 1;
+  map<string, ServiceBindingRecordState> bindings = 2;
+  int64 last_applied_event_version = 3;
+  string last_event_id = 4;
+}
+
+message CreateServiceBindingCommand {
+  ServiceBindingSpec spec = 1;
+}
+
+message UpdateServiceBindingCommand {
+  ServiceBindingSpec spec = 1;
+}
+
+message RetireServiceBindingCommand {
+  ServiceIdentity identity = 1;
+  string binding_id = 2;
+}
+
+message ServiceBindingCreatedEvent {
+  ServiceBindingSpec spec = 1;
+}
+
+message ServiceBindingUpdatedEvent {
+  ServiceBindingSpec spec = 1;
+}
+
+message ServiceBindingRetiredEvent {
+  ServiceIdentity identity = 1;
+  string binding_id = 2;
+}
+
+message QueryServiceBindingCatalogRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ServiceBindingCatalogRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  ServiceBindingCatalogState state = 3;
+  string failure_reason = 4;
+}

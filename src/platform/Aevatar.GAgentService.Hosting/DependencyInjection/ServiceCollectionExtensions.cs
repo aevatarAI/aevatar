@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -33,7 +34,9 @@ public static class ServiceCollectionExtensions
         services.AddWorkflowCapability(configuration);
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.AddGAgentServiceGovernanceCapability(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
+        services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
         services.TryAddSingleton<IServiceRevisionArtifactStore, InMemoryServiceRevisionArtifactStore>();
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();

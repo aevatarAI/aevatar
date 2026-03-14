@@ -3,9 +3,9 @@ using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
-using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 
@@ -14,252 +14,222 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ServiceCommandApplicationServiceTests
 {
     [Fact]
-    public async Task CreateServiceAsync_ShouldCreateDefinitionActor_EnsureProjection_AndDispatchCommand()
+    public async Task DefinitionCommands_ShouldUseDefinitionTargetProjectionAndDispatch()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
+        var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var catalogProjectionPort = new RecordingCatalogProjectionPort();
-        var revisionProjectionPort = new RecordingRevisionProjectionPort();
-        var service = CreateService(runtime, dispatchPort, catalogProjectionPort, revisionProjectionPort);
+        var service = CreateService(
+            provisioner,
+            dispatchPort,
+            new RecordingCatalogQueryReader(),
+            catalogProjectionPort,
+            new RecordingRevisionProjectionPort());
 
-        var receipt = await service.CreateServiceAsync(new CreateServiceDefinitionCommand
+        var createReceipt = await service.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
         });
+        var updateReceipt = await service.UpdateServiceAsync(new UpdateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "rev-1",
+        });
 
-        runtime.CreateCalls.Should().ContainSingle();
-        runtime.CreateCalls[0].actorType.Should().Be(typeof(ServiceDefinitionGAgent));
-        runtime.CreateCalls[0].actorId.Should().Be(ServiceActorIds.Definition(identity));
-        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Definition(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-        dispatchPort.Calls[0].actorId.Should().Be(ServiceActorIds.Definition(identity));
-        dispatchPort.Calls[0].envelope.Route.GetTargetActorId().Should().Be(ServiceActorIds.Definition(identity));
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        receipt.CorrelationId.Should().Be(ServiceKeys.Build(identity));
-        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        provisioner.DefinitionRequests.Should().HaveCount(3);
+        provisioner.DefinitionRequests.Should().OnlyContain(x => ServiceIdentityComparer.Instance.Equals(x, identity));
+        catalogProjectionPort.ActorIds.Should().Equal(
+            ServiceActorIds.Definition(identity),
+            ServiceActorIds.Definition(identity),
+            ServiceActorIds.Definition(identity));
+        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Definition(identity));
+        createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
     }
 
     [Fact]
-    public async Task CreateRevisionAsync_ShouldRejectMissingDefinition()
+    public async Task RevisionCommands_ShouldRequireDefinitionAndUseRevisionCatalogProjection()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = CreateService(
-            new RecordingActorRuntime(),
+        var missingDefinitionService = CreateService(
+            new RecordingCommandTargetProvisioner(),
             new RecordingActorDispatchPort(),
+            new RecordingCatalogQueryReader(),
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort());
 
-        var act = () => service.CreateRevisionAsync(new CreateServiceRevisionCommand
+        var missingDefinition = () => missingDefinitionService.CreateRevisionAsync(new CreateServiceRevisionCommand
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
+        await missingDefinition.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Service definition*was not found*");
-    }
 
-    [Fact]
-    public async Task PublishRevisionAsync_ShouldCreateRevisionActor_EnsureProjection_AndDispatchCommand()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Definition(identity));
+        var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var revisionProjectionPort = new RecordingRevisionProjectionPort();
         var service = CreateService(
-            runtime,
+            provisioner,
             dispatchPort,
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
             new RecordingCatalogProjectionPort(),
             revisionProjectionPort);
 
-        var receipt = await service.PublishRevisionAsync(new PublishServiceRevisionCommand
+        var createReceipt = await service.CreateRevisionAsync(new CreateServiceRevisionCommand
         {
-            Identity = identity.Clone(),
-            RevisionId = "r1",
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
-
-        runtime.CreateCalls.Should().ContainSingle();
-        runtime.CreateCalls[0].actorType.Should().Be(typeof(ServiceRevisionCatalogGAgent));
-        runtime.CreateCalls[0].actorId.Should().Be(ServiceActorIds.RevisionCatalog(identity));
-        revisionProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.RevisionCatalog(identity));
-        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
-        dispatchPort.Calls.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task UpdateServiceAsync_ShouldReuseExistingDefinitionActor()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Definition(identity));
-        var dispatchPort = new RecordingActorDispatchPort();
-        var catalogProjectionPort = new RecordingCatalogProjectionPort();
-        var service = CreateService(
-            runtime,
-            dispatchPort,
-            catalogProjectionPort,
-            new RecordingRevisionProjectionPort());
-
-        var receipt = await service.UpdateServiceAsync(new UpdateServiceDefinitionCommand
-        {
-            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
-        });
-
-        runtime.CreateCalls.Should().BeEmpty();
-        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Definition(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-    }
-
-    [Fact]
-    public async Task PrepareRevisionAsync_ShouldReuseExistingRevisionActor_WhenCatalogAlreadyExists()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Definition(identity));
-        runtime.MarkExisting(ServiceActorIds.RevisionCatalog(identity));
-        var dispatchPort = new RecordingActorDispatchPort();
-        var revisionProjectionPort = new RecordingRevisionProjectionPort();
-        var service = CreateService(
-            runtime,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            revisionProjectionPort);
-
-        var receipt = await service.PrepareRevisionAsync(new PrepareServiceRevisionCommand
+        var prepareReceipt = await service.PrepareRevisionAsync(new PrepareServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = "r2",
         });
-
-        runtime.CreateCalls.Should().BeEmpty();
-        revisionProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.RevisionCatalog(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
-    }
-
-    [Fact]
-    public async Task SetDefaultServingRevisionAsync_ShouldCreateDefinitionActor_WhenMissing()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var catalogProjectionPort = new RecordingCatalogProjectionPort();
-        var service = CreateService(
-            runtime,
-            dispatchPort,
-            catalogProjectionPort,
-            new RecordingRevisionProjectionPort());
-
-        var receipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        var publishReceipt = await service.PublishRevisionAsync(new PublishServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = "r3",
         });
 
-        runtime.CreateCalls.Should().ContainSingle(x => x.actorType == typeof(ServiceDefinitionGAgent));
-        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Definition(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        provisioner.RevisionCatalogRequests.Should().HaveCount(3);
+        provisioner.RevisionCatalogRequests.Should().OnlyContain(x => ServiceIdentityComparer.Instance.Equals(x, identity));
+        revisionProjectionPort.ActorIds.Should().Equal(
+            ServiceActorIds.RevisionCatalog(identity),
+            ServiceActorIds.RevisionCatalog(identity),
+            ServiceActorIds.RevisionCatalog(identity));
+        dispatchPort.Calls.Should().HaveCount(3);
+        createReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
+        prepareReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
+        publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
     }
 
     [Fact]
-    public async Task ActivateServingRevisionAsync_ShouldCreateDeploymentActor_AndEnsureCatalogProjection()
+    public async Task ActivateServingRevisionAsync_ShouldUseDeploymentTarget_AndProvisionerFailuresShouldBubble()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Definition(identity));
+        var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var catalogProjectionPort = new RecordingCatalogProjectionPort();
         var service = CreateService(
-            runtime,
+            provisioner,
             dispatchPort,
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
             catalogProjectionPort,
             new RecordingRevisionProjectionPort());
 
         var receipt = await service.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
         {
             Identity = identity.Clone(),
-            RevisionId = "r4",
+            RevisionId = "rev-2",
         });
 
-        runtime.CreateCalls.Should().ContainSingle(x => x.actorType == typeof(ServiceDeploymentManagerGAgent));
+        receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        provisioner.DeploymentRequests.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(identity);
         catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         dispatchPort.Calls.Should().ContainSingle(x => x.actorId == ServiceActorIds.Deployment(identity));
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
-    }
 
-    [Fact]
-    public async Task PublishRevisionAsync_ShouldThrow_WhenActorDisappearsAfterExistsCheck()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Definition(identity));
-        runtime.MarkExistsWithoutActor(ServiceActorIds.RevisionCatalog(identity));
-        var service = CreateService(
-            runtime,
-            new RecordingActorDispatchPort(),
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort());
+        provisioner.DeploymentException = new InvalidOperationException("deployment target failed");
 
-        var act = () => service.PublishRevisionAsync(new PublishServiceRevisionCommand
+        var failingActivation = () => service.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
         {
             Identity = identity.Clone(),
-            RevisionId = "r5",
+            RevisionId = "rev-3",
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage($"*{ServiceActorIds.RevisionCatalog(identity)}*not found after existence check*");
+        await failingActivation.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("deployment target failed");
     }
 
     private static ServiceCommandApplicationService CreateService(
-        RecordingActorRuntime runtime,
+        RecordingCommandTargetProvisioner provisioner,
         RecordingActorDispatchPort dispatchPort,
+        RecordingCatalogQueryReader catalogQueryReader,
         RecordingCatalogProjectionPort catalogProjectionPort,
         RecordingRevisionProjectionPort revisionProjectionPort) =>
-        new(runtime, dispatchPort, catalogProjectionPort, revisionProjectionPort);
+        new(
+            dispatchPort,
+            provisioner,
+            catalogQueryReader,
+            catalogProjectionPort,
+            revisionProjectionPort);
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private static ServiceCatalogSnapshot CreateCatalogSnapshot(ServiceIdentity identity) =>
+        new(
+            ServiceKeys.Build(identity),
+            identity.TenantId,
+            identity.AppId,
+            identity.Namespace,
+            identity.ServiceId,
+            "Service",
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            ServiceDeploymentStatus.Unspecified.ToString(),
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+
+    private sealed class RecordingCommandTargetProvisioner : IServiceCommandTargetProvisioner
     {
-        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
-        private readonly HashSet<string> _existingWithoutActor = new(StringComparer.Ordinal);
+        public List<ServiceIdentity> DefinitionRequests { get; } = [];
 
-        public List<(Type actorType, string actorId)> CreateCalls { get; } = [];
+        public List<ServiceIdentity> RevisionCatalogRequests { get; } = [];
 
-        public void MarkExisting(string actorId) => _actors[actorId] = new RecordingActor(actorId);
+        public List<ServiceIdentity> DeploymentRequests { get; } = [];
 
-        public void MarkExistsWithoutActor(string actorId) => _existingWithoutActor.Add(actorId);
+        public Exception? DeploymentException { get; set; }
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        public Task<string> EnsureDefinitionTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            var actorId = id ?? AgentId.New(agentType);
-            CreateCalls.Add((agentType, actorId));
-            var actor = new RecordingActor(actorId);
-            _actors[actorId] = actor;
-            return Task.FromResult<IActor>(actor);
+            DefinitionRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.Definition(identity));
         }
 
-        public Task DestroyAsync(string id, CancellationToken ct = default)
+        public Task<string> EnsureRevisionCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _actors.Remove(id);
-            _existingWithoutActor.Remove(id);
-            return Task.CompletedTask;
+            RevisionCatalogRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.RevisionCatalog(identity));
         }
 
-        public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult(_actors.TryGetValue(id, out var actor) ? actor : null);
+        public Task<string> EnsureDeploymentTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            DeploymentRequests.Add(identity.Clone());
+            if (DeploymentException != null)
+                throw DeploymentException;
 
-        public Task<bool> ExistsAsync(string id) =>
-            Task.FromResult(_actors.ContainsKey(id) || _existingWithoutActor.Contains(id));
+            return Task.FromResult(ServiceActorIds.Deployment(identity));
+        }
+    }
 
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+    private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
+    {
+        public ServiceCatalogSnapshot? GetResult { get; init; }
 
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
@@ -295,25 +265,24 @@ public sealed class ServiceCommandApplicationServiceTests
         }
     }
 
-    private sealed class RecordingActor : IActor
+    private sealed class ServiceIdentityComparer : IEqualityComparer<ServiceIdentity>
     {
-        public RecordingActor(string id)
+        public static ServiceIdentityComparer Instance { get; } = new();
+
+        public bool Equals(ServiceIdentity? x, ServiceIdentity? y)
         {
-            Id = id;
+            if (ReferenceEquals(x, y))
+                return true;
+            if (x is null || y is null)
+                return false;
+
+            return string.Equals(x.TenantId, y.TenantId, StringComparison.Ordinal) &&
+                   string.Equals(x.AppId, y.AppId, StringComparison.Ordinal) &&
+                   string.Equals(x.Namespace, y.Namespace, StringComparison.Ordinal) &&
+                   string.Equals(x.ServiceId, y.ServiceId, StringComparison.Ordinal);
         }
 
-        public string Id { get; }
-
-        public IAgent Agent { get; } = new TestStaticServiceAgent();
-
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        public int GetHashCode(ServiceIdentity obj) =>
+            HashCode.Combine(obj.TenantId, obj.AppId, obj.Namespace, obj.ServiceId);
     }
 }

@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Abstractions";
+
+import "service_endpoint.proto";
+
+enum ServiceEndpointExposureKind {
+  SERVICE_ENDPOINT_EXPOSURE_KIND_UNSPECIFIED = 0;
+  SERVICE_ENDPOINT_EXPOSURE_KIND_INTERNAL = 1;
+  SERVICE_ENDPOINT_EXPOSURE_KIND_PUBLIC = 2;
+  SERVICE_ENDPOINT_EXPOSURE_KIND_DISABLED = 3;
+}
+
+message ServiceEndpointExposureSpec {
+  string endpoint_id = 1;
+  string display_name = 2;
+  ServiceEndpointKind kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+  ServiceEndpointExposureKind exposure_kind = 7;
+  repeated string policy_ids = 8;
+}
+
+message ServiceEndpointCatalogSpec {
+  ServiceIdentity identity = 1;
+  repeated ServiceEndpointExposureSpec endpoints = 2;
+}
+
+message ServiceEndpointCatalogState {
+  ServiceEndpointCatalogSpec spec = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+}
+
+message CreateServiceEndpointCatalogCommand {
+  ServiceEndpointCatalogSpec spec = 1;
+}
+
+message UpdateServiceEndpointCatalogCommand {
+  ServiceEndpointCatalogSpec spec = 1;
+}
+
+message ServiceEndpointCatalogCreatedEvent {
+  ServiceEndpointCatalogSpec spec = 1;
+}
+
+message ServiceEndpointCatalogUpdatedEvent {
+  ServiceEndpointCatalogSpec spec = 1;
+}
+
+message QueryServiceEndpointCatalogRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ServiceEndpointCatalogRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  ServiceEndpointCatalogState state = 3;
+  string failure_reason = 4;
+}

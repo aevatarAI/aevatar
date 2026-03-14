@@ -57,3 +57,15 @@ message ServiceDeploymentHealthChangedEvent {
   ServiceDeploymentStatus status = 3;
   google.protobuf.Timestamp occurred_at = 4;
 }
+
+message QueryServiceDeploymentStateRequestedEvent {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message ServiceDeploymentStateRespondedEvent {
+  string request_id = 1;
+  bool found = 2;
+  ServiceDeploymentState state = 3;
+  string failure_reason = 4;
+}

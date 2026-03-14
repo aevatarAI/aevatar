@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;

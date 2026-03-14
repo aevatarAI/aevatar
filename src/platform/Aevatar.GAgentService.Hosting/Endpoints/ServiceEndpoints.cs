@@ -1,10 +1,12 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -23,12 +25,13 @@ public static class ServiceEndpoints
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
         group.MapGet("/{serviceId}/revisions", HandleGetRevisionsAsync);
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
+        group.MapGAgentServiceGovernanceEndpoints();
         return app;
     }
 
     private static async Task<IResult> HandleCreateServiceAsync(
         CreateServiceHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var receipt = await commandPort.CreateServiceAsync(new CreateServiceDefinitionCommand
@@ -38,6 +41,7 @@ public static class ServiceEndpoints
                 Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, request.ServiceId),
                 DisplayName = request.DisplayName ?? string.Empty,
                 Endpoints = { request.Endpoints.Select(ToEndpointSpec) },
+                PolicyIds = { request.PolicyIds ?? [] },
             },
         }, ct);
         return Results.Accepted($"/api/services/{request.ServiceId}", receipt);
@@ -46,7 +50,7 @@ public static class ServiceEndpoints
     private static async Task<IResult> HandleCreateRevisionAsync(
         string serviceId,
         CreateRevisionHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var spec = new ServiceRevisionSpec
@@ -104,7 +108,7 @@ public static class ServiceEndpoints
         string serviceId,
         string revisionId,
         ServiceIdentityHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var receipt = await commandPort.PrepareRevisionAsync(new PrepareServiceRevisionCommand
@@ -119,7 +123,7 @@ public static class ServiceEndpoints
         string serviceId,
         string revisionId,
         ServiceIdentityHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var receipt = await commandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
@@ -133,7 +137,7 @@ public static class ServiceEndpoints
     private static async Task<IResult> HandleSetDefaultServingRevisionAsync(
         string serviceId,
         SetDefaultServingRevisionHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var receipt = await commandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
@@ -147,7 +151,7 @@ public static class ServiceEndpoints
     private static async Task<IResult> HandleActivateAsync(
         string serviceId,
         ActivateServiceHttpRequest request,
-        IServiceCommandPort commandPort,
+        [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
         var receipt = await commandPort.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
@@ -160,14 +164,14 @@ public static class ServiceEndpoints
 
     private static Task<IReadOnlyList<ServiceCatalogSnapshot>> HandleListServicesAsync(
         [AsParameters] ServiceIdentityQuery query,
-        IServiceQueryPort queryPort,
+        [FromServices] IServiceQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.ListServicesAsync(query.TenantId ?? string.Empty, query.AppId ?? string.Empty, query.Namespace ?? string.Empty, query.Take, ct);
 
     private static Task<ServiceCatalogSnapshot?> HandleGetServiceAsync(
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
-        IServiceQueryPort queryPort,
+        [FromServices] IServiceQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.GetServiceAsync(
             ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
@@ -176,7 +180,7 @@ public static class ServiceEndpoints
     private static Task<ServiceRevisionCatalogSnapshot?> HandleGetRevisionsAsync(
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
-        IServiceQueryPort queryPort,
+        [FromServices] IServiceQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.GetServiceRevisionsAsync(
             ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
@@ -186,7 +190,7 @@ public static class ServiceEndpoints
         string serviceId,
         string endpointId,
         InvokeServiceHttpRequest request,
-        IServiceInvocationPort invocationPort,
+        [FromServices] IServiceInvocationPort invocationPort,
         CancellationToken ct)
     {
         var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
@@ -198,11 +202,17 @@ public static class ServiceEndpoints
             Payload = ServiceJsonPayloads.PackBase64(
                 request.PayloadTypeUrl ?? string.Empty,
                 request.PayloadBase64),
+            Caller = new ServiceInvocationCaller
+            {
+                ServiceKey = request.CallerServiceKey ?? string.Empty,
+                TenantId = request.CallerTenantId ?? string.Empty,
+                AppId = request.CallerAppId ?? string.Empty,
+            },
         }, ct);
         return Results.Accepted($"/api/services/{serviceId}", receipt);
     }
 
-    private static ServiceIdentity ToIdentity(string? tenantId, string? appId, string? @namespace, string serviceId)
+    internal static ServiceIdentity ToIdentity(string? tenantId, string? appId, string? @namespace, string serviceId)
     {
         return new ServiceIdentity
         {
@@ -281,7 +291,8 @@ public static class ServiceEndpoints
         string Namespace,
         string ServiceId,
         string DisplayName,
-        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints);
+        IReadOnlyList<ServiceEndpointHttpRequest> Endpoints,
+        IReadOnlyList<string>? PolicyIds = null);
 
     public sealed record StaticRevisionHttpRequest(
         string ActorTypeName,
@@ -328,5 +339,8 @@ public static class ServiceEndpoints
         string? CommandId,
         string? CorrelationId,
         string? PayloadTypeUrl,
-        string? PayloadBase64);
+        string? PayloadBase64,
+        string? CallerServiceKey = null,
+        string? CallerTenantId = null,
+        string? CallerAppId = null);
 }

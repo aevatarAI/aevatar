@@ -1,9 +1,9 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
-using Aevatar.GAgentService.Core;
-using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
@@ -14,7 +14,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ServiceInvocationApplicationServiceTests
 {
     [Fact]
-    public async Task InvokeAsync_ShouldResolveTarget_AndDispatch()
+    public async Task InvokeAsync_ShouldResolveAuthorizeAndDispatch()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var artifactStore = new InMemoryServiceRevisionArtifactStore();
@@ -22,27 +22,31 @@ public sealed class ServiceInvocationApplicationServiceTests
             identity,
             "r1",
             GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
-        await artifactStore.SaveAsync("tenant:app:default:svc", "r1", artifact);
+        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
 
         var resolutionService = new ServiceInvocationResolutionService(
-            new RecordingCatalogQueryReader(
-                new ServiceCatalogSnapshot(
-                    "tenant:app:default:svc",
-                    "tenant",
-                    "app",
-                    "default",
-                    "svc",
-                    "Service",
+            new RecordingCatalogQueryReader
+            {
+                GetResult = new ServiceCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    "Orders",
                     "r1",
-                    string.Empty,
+                    "r1",
                     "dep-1",
                     "actor-1",
-                    "Active",
-                    [new ServiceEndpointSnapshot("chat", "chat", "Command", "type.googleapis.com/test.command", string.Empty, string.Empty)],
-                    DateTimeOffset.UtcNow)),
+                    ServiceDeploymentStatus.Active.ToString(),
+                    [],
+                    ["service-policy"],
+                    DateTimeOffset.UtcNow),
+            },
             artifactStore);
+        var authorizer = new RecordingAuthorizer();
         var dispatcher = new RecordingDispatcher();
-        var service = new ServiceInvocationApplicationService(resolutionService, dispatcher);
+        var service = new ServiceInvocationApplicationService(resolutionService, authorizer, dispatcher);
 
         var receipt = await service.InvokeAsync(new ServiceInvocationRequest
         {
@@ -53,6 +57,9 @@ public sealed class ServiceInvocationApplicationServiceTests
             CorrelationId = "corr-1",
         });
 
+        authorizer.Calls.Should().ContainSingle();
+        authorizer.Calls[0].serviceKey.Should().Be(ServiceKeys.Build(identity));
+        authorizer.Calls[0].deploymentId.Should().Be("dep-1");
         dispatcher.Calls.Should().ContainSingle();
         dispatcher.Calls[0].target.Endpoint.EndpointId.Should().Be("chat");
         dispatcher.Calls[0].request.CommandId.Should().Be("cmd-1");
@@ -62,15 +69,10 @@ public sealed class ServiceInvocationApplicationServiceTests
 
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {
-        private readonly ServiceCatalogSnapshot? _snapshot;
-
-        public RecordingCatalogQueryReader(ServiceCatalogSnapshot? snapshot)
-        {
-            _snapshot = snapshot;
-        }
+        public ServiceCatalogSnapshot? GetResult { get; init; }
 
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(_snapshot);
+            Task.FromResult(GetResult);
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
             string tenantId,
@@ -78,7 +80,24 @@ public sealed class ServiceInvocationApplicationServiceTests
             string @namespace,
             int take = 200,
             CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>(_snapshot == null ? [] : [_snapshot]);
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+    }
+
+    private sealed class RecordingAuthorizer : IInvokeAdmissionAuthorizer
+    {
+        public List<(string serviceKey, string deploymentId, PreparedServiceRevisionArtifact artifact, ServiceEndpointDescriptor endpoint, ServiceInvocationRequest request)> Calls { get; } = [];
+
+        public Task AuthorizeAsync(
+            string serviceKey,
+            string deploymentId,
+            PreparedServiceRevisionArtifact artifact,
+            ServiceEndpointDescriptor endpoint,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            Calls.Add((serviceKey, deploymentId, artifact.Clone(), endpoint.Clone(), request.Clone()));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingDispatcher : IServiceInvocationDispatcher

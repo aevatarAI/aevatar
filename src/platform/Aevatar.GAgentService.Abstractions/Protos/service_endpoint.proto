@@ -43,6 +43,7 @@ message ServiceInvocationRequest {
   google.protobuf.Any payload = 3;
   string command_id = 4;
   string correlation_id = 5;
+  ServiceInvocationCaller caller = 6;
 }
 
 message ServiceInvocationAcceptedReceipt {
@@ -53,4 +54,10 @@ message ServiceInvocationAcceptedReceipt {
   string endpoint_id = 5;
   string command_id = 6;
   string correlation_id = 7;
+}
+
+message ServiceInvocationCaller {
+  string service_key = 1;
+  string tenant_id = 2;
+  string app_id = 3;
 }

@@ -1,8 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Queries;
-using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Core.Ports;
@@ -242,20 +240,13 @@ public sealed class DefaultServiceInvocationDispatcherTests
         }
 
         return new ServiceInvocationResolvedTarget(
-            new ServiceCatalogSnapshot(
+            new ServiceInvocationResolvedService(
                 "tenant:app:default:svc",
-                "tenant",
-                "app",
-                "default",
-                "svc",
-                "Service",
-                "r1",
                 "r1",
                 "dep-1",
                 "primary-actor",
-                "Active",
-                [new ServiceEndpointSnapshot(endpointId, endpointId, "Command", requestTypeUrl, string.Empty, string.Empty)],
-                DateTimeOffset.UtcNow),
+                ServiceDeploymentStatus.Active.ToString(),
+                []),
             artifact,
             new ServiceEndpointDescriptor
             {

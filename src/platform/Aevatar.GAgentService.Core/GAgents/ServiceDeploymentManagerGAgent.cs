@@ -2,8 +2,11 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -12,13 +15,19 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymentState>
 {
     private readonly IServiceRevisionArtifactStore _artifactStore;
+    private readonly IActivationCapabilityViewReader _capabilityViewReader;
+    private readonly IActivationAdmissionEvaluator _admissionEvaluator;
     private readonly IServiceRuntimeActivator _runtimeActivator;
 
     public ServiceDeploymentManagerGAgent(
         IServiceRevisionArtifactStore artifactStore,
+        IActivationCapabilityViewReader capabilityViewReader,
+        IActivationAdmissionEvaluator admissionEvaluator,
         IServiceRuntimeActivator runtimeActivator)
     {
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
+        _capabilityViewReader = capabilityViewReader ?? throw new ArgumentNullException(nameof(capabilityViewReader));
+        _admissionEvaluator = admissionEvaluator ?? throw new ArgumentNullException(nameof(admissionEvaluator));
         _runtimeActivator = runtimeActivator ?? throw new ArgumentNullException(nameof(runtimeActivator));
         InitializeId();
     }
@@ -35,6 +44,14 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         var artifact = await _artifactStore.GetAsync(serviceKey, command.RevisionId, CancellationToken.None)
             ?? throw new InvalidOperationException($"Prepared artifact was not found for '{serviceKey}' revision '{command.RevisionId}'.");
         var currentState = State.Clone();
+        var capabilityView = await _capabilityViewReader.GetAsync(command.Identity, command.RevisionId, CancellationToken.None);
+        var admissionDecision = await _admissionEvaluator.EvaluateAsync(
+            new ActivationAdmissionRequest
+            {
+                CapabilityView = capabilityView,
+            },
+            CancellationToken.None);
+        EnsureActivationAllowed(admissionDecision);
 
         if (!string.IsNullOrWhiteSpace(currentState.ActiveDeploymentId) &&
             !string.IsNullOrWhiteSpace(currentState.PrimaryActorId))
@@ -61,7 +78,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 command.Identity.Clone(),
                 artifact,
                 command.RevisionId,
-                Id),
+                Id,
+                capabilityView),
             CancellationToken.None);
 
         await PersistDomainEventAsync(new ServiceDeploymentActivatedEvent
@@ -167,5 +185,17 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     {
         var serviceKey = identity == null ? "unbound" : ServiceKeys.Build(identity);
         return $"{serviceKey}:{deploymentId ?? "none"}:{suffix}";
+    }
+
+    private static void EnsureActivationAllowed(ActivationAdmissionDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        if (decision.Allowed)
+            return;
+
+        var reason = decision.Violations.Count == 0
+            ? "activation admission rejected."
+            : string.Join("; ", decision.Violations.Select(x => $"{x.Code}:{x.SubjectId}:{x.Message}"));
+        throw new InvalidOperationException(reason);
     }
 }

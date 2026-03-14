@@ -13,6 +13,7 @@ public sealed record ServiceCatalogSnapshot(
     string PrimaryActorId,
     string DeploymentStatus,
     IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
+    IReadOnlyList<string> PolicyIds,
     DateTimeOffset UpdatedAt);
 
 public sealed record ServiceEndpointSnapshot(

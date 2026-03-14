@@ -74,6 +74,14 @@
     <Project Path="src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
 	  </Folder>
+  <Folder Name="/src/platform/">
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Abstractions/Aevatar.GAgentService.Governance.Abstractions.csproj" />
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Application/Aevatar.GAgentService.Governance.Application.csproj" />
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Core/Aevatar.GAgentService.Governance.Core.csproj" />
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Hosting/Aevatar.GAgentService.Governance.Hosting.csproj" />
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Infrastructure/Aevatar.GAgentService.Governance.Infrastructure.csproj" />
+    <Project Path="src/platform/Aevatar.GAgentService.Governance.Projection/Aevatar.GAgentService.Governance.Projection.csproj" />
+  </Folder>
   <Folder Name="/src/workflow/">
     <Project Path="src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />

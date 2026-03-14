@@ -32,6 +32,8 @@ public sealed class ServiceCatalogReadModel
 
     public List<ServiceCatalogEndpointReadModel> Endpoints { get; set; } = [];
 
+    public List<string> PolicyIds { get; set; } = [];
+
     public ServiceCatalogReadModel DeepClone()
     {
         return new ServiceCatalogReadModel
@@ -51,6 +53,7 @@ public sealed class ServiceCatalogReadModel
             Endpoints = Endpoints
                 .Select(x => x.DeepClone())
                 .ToList(),
+            PolicyIds = [.. PolicyIds],
         };
     }
 }

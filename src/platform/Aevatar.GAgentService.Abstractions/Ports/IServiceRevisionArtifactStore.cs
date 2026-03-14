@@ -1,6 +1,4 @@
-using Aevatar.GAgentService.Abstractions;
-
-namespace Aevatar.GAgentService.Core.Ports;
+namespace Aevatar.GAgentService.Abstractions.Ports;
 
 public interface IServiceRevisionArtifactStore
 {

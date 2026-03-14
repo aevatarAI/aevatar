@@ -45,6 +45,7 @@ public sealed class ServiceCatalogProjector
                 ApplyIdentity(readModel, evt.Spec.Identity);
                 readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
                 readModel.Endpoints = evt.Spec.Endpoints.Select(MapEndpoint).ToList();
+                readModel.PolicyIds = [.. evt.Spec.PolicyIds];
             }, ct);
             return;
         }
@@ -57,6 +58,7 @@ public sealed class ServiceCatalogProjector
                 ApplyIdentity(readModel, evt.Spec.Identity);
                 readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
                 readModel.Endpoints = evt.Spec.Endpoints.Select(MapEndpoint).ToList();
+                readModel.PolicyIds = [.. evt.Spec.PolicyIds];
             }, ct);
             return;
         }
