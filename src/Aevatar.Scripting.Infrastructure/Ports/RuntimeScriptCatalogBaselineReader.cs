@@ -5,14 +5,11 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogBaselineReader : IScriptCatalogBaselineReader
 {
-    private readonly IScriptCatalogQueryPort _catalogQueryPort;
     private readonly IScriptingActorAddressResolver _addressResolver;
 
     public RuntimeScriptCatalogBaselineReader(
-        IScriptCatalogQueryPort catalogQueryPort,
         IScriptingActorAddressResolver addressResolver)
     {
-        _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
@@ -24,34 +21,14 @@ public sealed class RuntimeScriptCatalogBaselineReader : IScriptCatalogBaselineR
 
         var scriptId = proposal.ScriptId ?? string.Empty;
         var catalogActorId = _addressResolver.GetCatalogActorId();
-        ScriptCatalogEntrySnapshot? catalogBefore;
-        var catalogBaselineSource = "query";
+        ct.ThrowIfCancellationRequested();
 
-        try
-        {
-            catalogBefore = await _catalogQueryPort.GetCatalogEntryAsync(catalogActorId, scriptId, ct);
-        }
-        catch (Exception ex)
-        {
-            if (string.IsNullOrWhiteSpace(proposal.BaseRevision))
-            {
-                return new ScriptCatalogBaselineResolution(
-                    CatalogActorId: catalogActorId,
-                    Baseline: null,
-                    BaselineSource: "query_failed_without_fallback",
-                    FailureReason: "Failed to load catalog baseline before promotion and no base revision fallback is available. reason=" +
-                                   ex.Message);
-            }
-
-            catalogBefore = BuildFallbackCatalogBaseline(proposal);
-            catalogBaselineSource = "fallback_base_revision_after_query_failure";
-        }
-
-        if (catalogBefore == null && !string.IsNullOrWhiteSpace(proposal.BaseRevision))
-        {
-            catalogBefore = BuildFallbackCatalogBaseline(proposal);
-            catalogBaselineSource = "fallback_base_revision_after_null_query";
-        }
+        var catalogBefore = string.IsNullOrWhiteSpace(proposal.BaseRevision)
+            ? null
+            : BuildFallbackCatalogBaseline(proposal);
+        var catalogBaselineSource = catalogBefore == null
+            ? "no_baseline"
+            : "proposal_base_revision";
 
         return new ScriptCatalogBaselineResolution(
             CatalogActorId: catalogActorId,

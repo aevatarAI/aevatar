@@ -37,7 +37,7 @@ public sealed class RuntimeScriptEvolutionValidationService : IScriptEvolutionVa
         }
     }
 
-    private static async Task DisposeCompiledArtifactAsync(Aevatar.Scripting.Core.Artifacts.ScriptBehaviorArtifact? artifact)
+    private static async Task DisposeCompiledArtifactAsync(Aevatar.Scripting.Core.Runtime.ScriptBehaviorArtifact? artifact)
     {
         if (artifact != null)
             await artifact.DisposeAsync();

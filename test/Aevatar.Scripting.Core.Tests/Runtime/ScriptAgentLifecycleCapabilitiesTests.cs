@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
@@ -98,6 +99,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     [Fact]
     public async Task ReadModelEvolutionAndProvisioningApis_ShouldDelegateToPorts()
     {
+        var executionProjectionPort = new RecordingExecutionProjectionPort();
         var readModelPort = new RecordingReadModelQueryPort();
         var proposalPort = new RecordingProposalPort();
         var definitionPort = new RecordingDefinitionCommandPort();
@@ -107,6 +109,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         var aiCapability = new RecordingAICapability();
         var capabilities = CreateCapabilities(
             aiCapability: aiCapability,
+            executionProjectionPort: executionProjectionPort,
             readModelQueryPort: readModelPort,
             proposalPort: proposalPort,
             definitionCommandPort: definitionPort,
@@ -183,6 +186,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         proposalPort.LastProposal!.CandidateRevision.Should().Be("rev-2");
         definitionPort.Upserts.Should().ContainSingle();
         provisioningPort.EnsureCalls.Should().ContainSingle();
+        executionProjectionPort.EnsureCalls.Should().ContainInOrder("runtime-1", "runtime-1");
         runtimeCommandPort.RunCalls.Should().ContainSingle(x => x.RunId == "run-1");
         catalogCommandPort.PromoteCalls.Should().ContainSingle(x => x.Revision == "rev-2");
         catalogCommandPort.RollbackCalls.Should().ContainSingle(x => x.TargetRevision == "rev-1");
@@ -191,6 +195,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     private static ScriptBehaviorRuntimeCapabilities CreateCapabilities(
         IActorRuntime? runtime = null,
         IAICapability? aiCapability = null,
+        IScriptExecutionProjectionPort? executionProjectionPort = null,
         IScriptReadModelQueryPort? readModelQueryPort = null,
         IScriptEvolutionProposalPort? proposalPort = null,
         IScriptDefinitionCommandPort? definitionCommandPort = null,
@@ -214,6 +219,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             cancelCallbackAsync: cancelCallbackAsync ?? ((_, _) => Task.CompletedTask),
             aiCapability: aiCapability ?? new RecordingAICapability(),
             runtime: runtime ?? new RecordingRuntime(),
+            executionProjectionPort: executionProjectionPort ?? new RecordingExecutionProjectionPort(),
             readModelQueryPort: readModelQueryPort ?? new RecordingReadModelQueryPort(),
             proposalPort: proposalPort ?? new RecordingProposalPort(),
             definitionCommandPort: definitionCommandPort ?? new RecordingDefinitionCommandPort(),
@@ -231,6 +237,67 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("ok:" + prompt);
         }
+    }
+
+    private sealed class RecordingExecutionProjectionPort : IScriptExecutionProjectionPort
+    {
+        public bool ProjectionEnabled => true;
+        public List<string> EnsureCalls { get; } = [];
+
+        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            EnsureCalls.Add(actorId);
+            return Task.FromResult<IScriptExecutionProjectionLease?>(new RecordingLease(actorId));
+        }
+
+        public Task<IScriptExecutionProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string projectionName,
+            string input,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            _ = projectionName;
+            _ = input;
+            _ = commandId;
+            return EnsureActorProjectionAsync(actorId, ct);
+        }
+
+        public Task AttachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DetachLiveSinkAsync(
+            IScriptExecutionProjectionLease lease,
+            IEventSink<EventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IScriptExecutionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        private sealed record RecordingLease(string ActorId) : IScriptExecutionProjectionLease;
     }
 
     private sealed class RecordingRuntime : IActorRuntime

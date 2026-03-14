@@ -86,6 +86,21 @@ public sealed record RunScriptRuntimeCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+public sealed record ProvisionScriptRuntimeCommand(
+    string DefinitionActorId,
+    string ScriptRevision,
+    string? RuntimeActorId) : ICommandContextSeed
+{
+    public string? CommandId => ScriptingCommandIds.Build(
+        "script-runtime-provision",
+        string.IsNullOrWhiteSpace(RuntimeActorId) ? DefinitionActorId : RuntimeActorId,
+        string.IsNullOrWhiteSpace(ScriptRevision) ? "latest" : ScriptRevision);
+
+    public string? CorrelationId => string.IsNullOrWhiteSpace(ScriptRevision) ? "latest" : ScriptRevision;
+
+    public IReadOnlyDictionary<string, string>? Headers => null;
+}
+
 public sealed record PromoteScriptCatalogRevisionCommand(
     string? CatalogActorId,
     string ScriptId,

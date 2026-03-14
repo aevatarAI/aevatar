@@ -1,26 +1,23 @@
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Application;
-using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
-    private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly RuntimeScriptQueryClient _queryClient;
-    private readonly TimeSpan _queryTimeout;
+    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(5);
+    private readonly RuntimeScriptActorQueryClient? _queryClient;
+    private readonly Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshotRespondedEvent>>? _queryAsync;
 
-    public RuntimeScriptDefinitionSnapshotPort(
-        RuntimeScriptActorAccessor actorAccessor,
-        RuntimeScriptQueryClient queryClient,
-        ScriptingQueryTimeoutOptions timeoutOptions)
+    public RuntimeScriptDefinitionSnapshotPort(RuntimeScriptActorQueryClient queryClient)
     {
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
-        _queryTimeout = (timeoutOptions ?? throw new ArgumentNullException(nameof(timeoutOptions)))
-            .ResolveDefinitionSnapshotQueryTimeout();
+    }
+
+    internal RuntimeScriptDefinitionSnapshotPort(
+        Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshotRespondedEvent>> queryAsync)
+    {
+        _queryAsync = queryAsync ?? throw new ArgumentNullException(nameof(queryAsync));
     }
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(
@@ -30,33 +27,41 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(definitionActorId);
 
-        var actor = await _actorAccessor.GetAsync(definitionActorId)
-            ?? throw new InvalidOperationException($"Script definition actor not found: {definitionActorId}");
-
-        var response = await _queryClient.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
-            actor,
-            ScriptingQueryRouteConventions.DefinitionReplyStreamPrefix,
-            _queryTimeout,
-            (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateDefinitionSnapshotQuery(
+        var response = _queryAsync != null
+            ? await _queryAsync(definitionActorId, requestedRevision, ct)
+            : await _queryClient!.QueryActorAsync<ScriptDefinitionSnapshotRespondedEvent>(
                 definitionActorId,
-                requestId,
-                replyStreamId,
-                requestedRevision),
-            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            ScriptingQueryRouteConventions.BuildDefinitionSnapshotTimeoutMessage,
-            ct);
+                ScriptActorQueryRouteConventions.DefinitionSnapshotReplyStreamPrefix,
+                QueryTimeout,
+                (requestId, replyStreamId) => ScriptActorQueryEnvelopeFactory.CreateDefinitionSnapshotQuery(
+                    definitionActorId,
+                    requestId,
+                    replyStreamId,
+                    requestedRevision ?? string.Empty),
+                static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+                ScriptActorQueryRouteConventions.BuildDefinitionTimeoutMessage,
+                ct);
+
         if (!response.Found)
+        {
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(response.FailureReason)
                     ? $"Script definition snapshot not found for actor `{definitionActorId}`."
                     : response.FailureReason);
+        }
 
-        var snapshot = new ScriptDefinitionSnapshot(
+        if ((response.ScriptPackage?.CsharpSources.Count ?? 0) == 0 && string.IsNullOrWhiteSpace(response.SourceText))
+        {
+            throw new InvalidOperationException(
+                $"Script definition script_package is empty for actor `{definitionActorId}`.");
+        }
+
+        return new ScriptDefinitionSnapshot(
             response.ScriptId ?? string.Empty,
             response.Revision ?? string.Empty,
             response.SourceText ?? string.Empty,
             response.SourceHash ?? string.Empty,
-            response.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+            response.ScriptPackage?.Clone() ?? new Aevatar.Scripting.Abstractions.ScriptPackageSpec(),
             response.StateTypeUrl ?? string.Empty,
             response.ReadModelTypeUrl ?? string.Empty,
             response.ReadModelSchemaVersion ?? string.Empty,
@@ -64,17 +69,6 @@ public sealed class RuntimeScriptDefinitionSnapshotPort : IScriptDefinitionSnaps
             response.ProtocolDescriptorSet,
             response.StateDescriptorFullName ?? string.Empty,
             response.ReadModelDescriptorFullName ?? string.Empty,
-            response.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec());
-
-        if ((snapshot.ScriptPackage?.CsharpSources.Count ?? 0) == 0)
-            throw new InvalidOperationException(
-                $"Script definition script_package is empty for actor `{definitionActorId}`.");
-        if (!string.IsNullOrWhiteSpace(requestedRevision) &&
-            !string.Equals(requestedRevision, snapshot.Revision, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                $"Requested script revision `{requestedRevision}` does not match definition snapshot revision `{snapshot.Revision}`.");
-
-        ct.ThrowIfCancellationRequested();
-        return snapshot;
+            response.RuntimeSemantics?.Clone() ?? new Aevatar.Scripting.Abstractions.ScriptRuntimeSemanticsSpec());
     }
 }

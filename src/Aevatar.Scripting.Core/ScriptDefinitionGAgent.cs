@@ -1,8 +1,9 @@
 using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Scripting.Core.Artifacts;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
@@ -154,16 +155,18 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     public async Task HandleQueryScriptDefinitionSnapshotRequested(QueryScriptDefinitionSnapshotRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.RequestId) || string.IsNullOrWhiteSpace(evt.ReplyStreamId))
+        if (string.IsNullOrWhiteSpace(evt.RequestId) ||
+            (string.IsNullOrWhiteSpace(evt.ReplyStreamId) && string.IsNullOrWhiteSpace(evt.ReplyActorId)))
             return;
 
         Logger.LogInformation(
-            "Script definition query received. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision} reply_stream_id={ReplyStreamId}",
+            "Script definition query received. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision} reply_stream_id={ReplyStreamId} reply_actor_id={ReplyActorId}",
             Id,
             evt.RequestId,
             evt.RequestedRevision,
             State.Revision,
-            evt.ReplyStreamId);
+            evt.ReplyStreamId,
+            evt.ReplyActorId);
 
         if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
             !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
@@ -174,12 +177,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 evt.RequestId,
                 evt.RequestedRevision,
                 State.Revision);
-            await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                FailureReason = $"Requested revision `{evt.RequestedRevision}` does not match active revision `{State.Revision}`.",
-            });
+            await SendQueryResponseAsync(evt, BuildSnapshotResponse(evt));
             return;
         }
 
@@ -189,7 +187,48 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             evt.RequestId,
             !string.IsNullOrWhiteSpace(State.SourceText),
             State.Revision);
-        await SendQueryResponseAsync(evt.ReplyStreamId, new ScriptDefinitionSnapshotRespondedEvent
+        await SendQueryResponseAsync(evt, BuildSnapshotResponse(evt));
+    }
+
+    protected override ScriptDefinitionState TransitionState(ScriptDefinitionState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ScriptDefinitionUpsertedEvent>(ApplyDefinitionUpserted)
+            .On<ScriptReadModelSchemaDeclaredEvent>(ApplySchemaDeclared)
+            .On<ScriptReadModelSchemaValidatedEvent>(ApplySchemaValidated)
+            .On<ScriptReadModelSchemaActivationFailedEvent>(ApplySchemaActivationFailed)
+            .OrCurrent();
+
+    private Task SendQueryResponseAsync(
+        QueryScriptDefinitionSnapshotRequestedEvent request,
+        ScriptDefinitionSnapshotRespondedEvent response,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!string.IsNullOrWhiteSpace(request.ReplyActorId))
+            return EventPublisher.SendToAsync(request.ReplyActorId, response, ct, sourceEnvelope: null);
+
+        return EventPublisher.SendToAsync(request.ReplyStreamId, response, ct, sourceEnvelope: null);
+    }
+
+    private ScriptDefinitionSnapshotRespondedEvent BuildSnapshotResponse(
+        QueryScriptDefinitionSnapshotRequestedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
+            !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
+        {
+            return new ScriptDefinitionSnapshotRespondedEvent
+            {
+                RequestId = evt.RequestId,
+                Found = false,
+                FailureReason = $"Requested revision `{evt.RequestedRevision}` does not match active revision `{State.Revision}`.",
+            };
+        }
+
+        return new ScriptDefinitionSnapshotRespondedEvent
         {
             RequestId = evt.RequestId,
             Found = !string.IsNullOrWhiteSpace(State.SourceText),
@@ -209,24 +248,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
                 ? "Script source text is empty."
                 : string.Empty,
-        });
-    }
-
-    protected override ScriptDefinitionState TransitionState(ScriptDefinitionState current, IMessage evt) =>
-        StateTransitionMatcher
-            .Match(current, evt)
-            .On<ScriptDefinitionUpsertedEvent>(ApplyDefinitionUpserted)
-            .On<ScriptReadModelSchemaDeclaredEvent>(ApplySchemaDeclared)
-            .On<ScriptReadModelSchemaValidatedEvent>(ApplySchemaValidated)
-            .On<ScriptReadModelSchemaActivationFailedEvent>(ApplySchemaActivationFailed)
-            .OrCurrent();
-
-    private Task SendQueryResponseAsync(
-        string replyStreamId,
-        ScriptDefinitionSnapshotRespondedEvent response,
-        CancellationToken ct = default)
-    {
-        return EventPublisher.SendToAsync(replyStreamId, response, ct, sourceEnvelope: null);
+        };
     }
 
     private static async Task DisposeCompiledArtifactAsync(ScriptBehaviorArtifact? artifact)

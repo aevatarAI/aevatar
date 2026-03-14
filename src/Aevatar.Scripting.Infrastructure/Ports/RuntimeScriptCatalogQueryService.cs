@@ -1,27 +1,29 @@
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
 {
-    private readonly RuntimeScriptActorAccessor _actorAccessor;
-    private readonly RuntimeScriptQueryClient _queryClient;
+    private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(5);
+    private readonly RuntimeScriptActorQueryClient? _queryClient;
+    private readonly Func<string?, string, CancellationToken, Task<ScriptCatalogEntryRespondedEvent>>? _queryAsync;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly TimeSpan _catalogQueryTimeout;
+
     public RuntimeScriptCatalogQueryService(
-        RuntimeScriptActorAccessor actorAccessor,
-        RuntimeScriptQueryClient queryClient,
-        IScriptingActorAddressResolver addressResolver,
-        ScriptingQueryTimeoutOptions timeoutOptions)
+        RuntimeScriptActorQueryClient queryClient,
+        IScriptingActorAddressResolver addressResolver)
     {
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _catalogQueryTimeout = (timeoutOptions ?? throw new ArgumentNullException(nameof(timeoutOptions)))
-            .ResolveCatalogEntryQueryTimeout();
+    }
+
+    internal RuntimeScriptCatalogQueryService(
+        Func<string?, string, CancellationToken, Task<ScriptCatalogEntryRespondedEvent>> queryAsync,
+        IScriptingActorAddressResolver addressResolver)
+    {
+        _queryAsync = queryAsync ?? throw new ArgumentNullException(nameof(queryAsync));
+        _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
     public async Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(
@@ -32,23 +34,24 @@ public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
         if (string.IsNullOrWhiteSpace(scriptId))
             return null;
 
-        var resolvedCatalogActorId = ResolveCatalogActorId(catalogActorId);
-        var actor = await _actorAccessor.GetAsync(resolvedCatalogActorId);
-        if (actor == null)
-            return null;
-
-        var response = await _queryClient.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
-            actor,
-            ScriptingQueryRouteConventions.CatalogReplyStreamPrefix,
-            _catalogQueryTimeout,
-            (requestId, replyStreamId) => ScriptingQueryEnvelopeFactory.CreateCatalogEntryQuery(
+        var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
+            ? _addressResolver.GetCatalogActorId()
+            : catalogActorId;
+        var response = _queryAsync != null
+            ? await _queryAsync(resolvedCatalogActorId, scriptId, ct)
+            : await _queryClient!.QueryActorAsync<ScriptCatalogEntryRespondedEvent>(
                 resolvedCatalogActorId,
-                requestId,
-                replyStreamId,
-                scriptId),
-            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            ScriptingQueryRouteConventions.BuildCatalogEntryTimeoutMessage,
-            ct);
+                ScriptActorQueryRouteConventions.CatalogEntryReplyStreamPrefix,
+                QueryTimeout,
+                (requestId, replyStreamId) => ScriptActorQueryEnvelopeFactory.CreateCatalogEntryQuery(
+                    resolvedCatalogActorId,
+                    requestId,
+                    replyStreamId,
+                    scriptId),
+                static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+                ScriptActorQueryRouteConventions.BuildCatalogTimeoutMessage,
+                ct);
+
         if (!response.Found)
             return null;
 
@@ -61,9 +64,4 @@ public sealed class RuntimeScriptCatalogQueryService : IScriptCatalogQueryPort
             RevisionHistory: response.RevisionHistory.ToArray(),
             LastProposalId: response.LastProposalId ?? string.Empty);
     }
-
-    private string ResolveCatalogActorId(string? catalogActorId) =>
-        string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
-            : catalogActorId;
 }

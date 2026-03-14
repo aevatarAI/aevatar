@@ -19,6 +19,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly Func<RuntimeCallbackLease, CancellationToken, Task> _cancelCallbackAsync;
     private readonly IAICapability _aiCapability;
     private readonly IActorRuntime _runtime;
+    private readonly IScriptExecutionProjectionPort _executionProjectionPort;
     private readonly IScriptReadModelQueryPort _readModelQueryPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
@@ -38,6 +39,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         Func<RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync,
         IAICapability aiCapability,
         IActorRuntime runtime,
+        IScriptExecutionProjectionPort executionProjectionPort,
         IScriptReadModelQueryPort readModelQueryPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
@@ -54,6 +56,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _cancelCallbackAsync = cancelCallbackAsync ?? throw new ArgumentNullException(nameof(cancelCallbackAsync));
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
         _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
@@ -124,22 +127,40 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         CancellationToken ct) =>
         _definitionCommandPort.UpsertDefinitionAsync(scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, ct);
 
-    public Task<string> SpawnScriptRuntimeAsync(
+    public async Task<string> SpawnScriptRuntimeAsync(
         string definitionActorId,
         string scriptRevision,
         string? runtimeActorId,
-        CancellationToken ct) =>
-        _runtimeProvisioningPort.EnsureRuntimeAsync(definitionActorId, scriptRevision, runtimeActorId, ct);
+        CancellationToken ct)
+    {
+        var resolvedRuntimeActorId = await _runtimeProvisioningPort.EnsureRuntimeAsync(
+            definitionActorId,
+            scriptRevision,
+            runtimeActorId,
+            ct);
+        await EnsureProjectedRuntimeAsync(resolvedRuntimeActorId, ct);
+        return resolvedRuntimeActorId;
+    }
 
-    public Task RunScriptInstanceAsync(
+    public async Task RunScriptInstanceAsync(
         string runtimeActorId,
         string runId,
         Any? inputPayload,
         string scriptRevision,
         string definitionActorId,
         string requestedEventType,
-        CancellationToken ct) =>
-        _runtimeCommandPort.RunRuntimeAsync(runtimeActorId, runId, inputPayload, scriptRevision, definitionActorId, requestedEventType, ct);
+        CancellationToken ct)
+    {
+        await EnsureProjectedRuntimeAsync(runtimeActorId, ct);
+        await _runtimeCommandPort.RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            ct);
+    }
 
     public Task PromoteRevisionAsync(
         string catalogActorId,
@@ -174,4 +195,11 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             proposalId,
             string.Empty,
             ct);
+
+    private async Task EnsureProjectedRuntimeAsync(
+        string runtimeActorId,
+        CancellationToken ct)
+    {
+        _ = await _executionProjectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
+    }
 }

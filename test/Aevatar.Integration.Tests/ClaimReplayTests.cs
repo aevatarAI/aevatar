@@ -134,7 +134,7 @@ public class ClaimReplayTests
         await using var provider = ClaimIntegrationTestKit.BuildProvider();
         var eventStore = provider.GetRequiredService<IEventStore>();
         var definitionSnapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
-        var artifactResolver = provider.GetRequiredService<Aevatar.Scripting.Core.Artifacts.IScriptBehaviorArtifactResolver>();
+        var artifactResolver = provider.GetRequiredService<Aevatar.Scripting.Core.Runtime.IScriptBehaviorArtifactResolver>();
         var codec = provider.GetRequiredService<IProtobufMessageCodec>();
         var document = ClaimScriptScenarioDocument.CreateEmbedded();
         var orchestrator = document.Scripts.Single(x => x.ScriptId == "claim_orchestrator");

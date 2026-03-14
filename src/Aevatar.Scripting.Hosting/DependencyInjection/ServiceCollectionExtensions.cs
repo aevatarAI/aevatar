@@ -11,16 +11,14 @@ using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Core.Artifacts;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Core.Schema;
-using Aevatar.Scripting.Infrastructure.Artifacts;
-using Aevatar.Scripting.Infrastructure.Ports;
 using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Infrastructure.Ports;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -39,7 +37,6 @@ public static class ServiceCollectionExtensions
         _ = configuration;
 
         services.AddCqrsCore();
-        services.TryAddSingleton(new ScriptingQueryTimeoutOptions());
         services.TryAddSingleton(new ScriptingInteractionTimeoutOptions());
         services.TryAddSingleton<ScriptSandboxPolicy>();
         services.TryAddSingleton<IScriptProtoCompiler, GrpcToolsScriptProtoCompiler>();
@@ -58,7 +55,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptPromotionCompensationService, RuntimeScriptPromotionCompensationService>();
         services.TryAddSingleton<IScriptEvolutionRollbackService, RuntimeScriptEvolutionRollbackService>();
         services.TryAddSingleton<RuntimeScriptActorAccessor>();
-        services.TryAddSingleton<RuntimeScriptQueryClient>();
         services.TryAddSingleton<ICommandTargetResolver<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>, ScriptEvolutionCommandTargetResolver>();
         services.TryAddSingleton<ICommandTargetBinder<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>, ScriptEvolutionCommandTargetBinder>();
         services.TryAddSingleton<ICommandEnvelopeFactory<ScriptEvolutionProposal>, ScriptEvolutionEnvelopeFactory>();
@@ -81,6 +77,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandTargetDispatcher<ScriptingActorCommandTarget>, ActorCommandTargetDispatcher<ScriptingActorCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt>, ScriptingCommandAcceptedReceiptFactory>();
         AddSimpleScriptingCommandDispatch<UpsertScriptDefinitionCommand, UpsertScriptDefinitionCommandTargetResolver, UpsertScriptDefinitionCommandEnvelopeFactory>(services);
+        AddSimpleScriptingCommandDispatch<ProvisionScriptRuntimeCommand, ProvisionScriptRuntimeCommandTargetResolver, ProvisionScriptRuntimeCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<RunScriptRuntimeCommand, RunScriptRuntimeCommandTargetResolver, RunScriptRuntimeCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<PromoteScriptCatalogRevisionCommand, PromoteScriptCatalogRevisionCommandTargetResolver, PromoteScriptCatalogRevisionCommandEnvelopeFactory>(services);
         AddSimpleScriptingCommandDispatch<RollbackScriptCatalogRevisionCommand, RollbackScriptCatalogRevisionCommandTargetResolver, RollbackScriptCatalogRevisionCommandEnvelopeFactory>(services);
@@ -89,6 +86,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<RuntimeScriptProvisioningService>();
         services.TryAddSingleton<RuntimeScriptCommandService>();
         services.TryAddSingleton<RuntimeScriptCatalogCommandService>();
+        services.TryAddSingleton<RuntimeScriptActorQueryClient>();
         services.TryAddSingleton<RuntimeScriptCatalogQueryService>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>());

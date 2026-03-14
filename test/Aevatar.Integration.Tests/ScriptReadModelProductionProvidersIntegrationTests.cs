@@ -63,9 +63,9 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 $"{indexPrefix}-script-read-model-documents",
                 runtimeActorId,
                 CancellationToken.None);
-            semanticDocument.GetProperty("id").GetString().Should().Be(runtimeActorId);
-            semanticDocument.GetProperty("script_id").GetString().Should().Be("claim_orchestrator");
-            semanticDocument.GetProperty("revision").GetString().Should().Be(revision);
+            GetRequiredStringProperty(semanticDocument, "Id").Should().Be(runtimeActorId);
+            GetRequiredStringProperty(semanticDocument, "ScriptId").Should().Be("claim_orchestrator");
+            GetRequiredStringProperty(semanticDocument, "Revision").Should().Be(revision);
 
             var nativeDocument = await FindSingleElasticsearchDocumentAsync(
                 client,
@@ -218,34 +218,30 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
         string documentId,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{indexPattern}/_search")
+        var indices = indexPattern.Contains('*', StringComparison.Ordinal)
+            ? await ResolveElasticsearchIndicesAsync(client, indexPattern, ct)
+            : new[] { indexPattern };
+        foreach (var indexName in indices)
         {
-            Content = new StringContent(
-                $$"""
-                  {
-                    "size": 1,
-                    "query": {
-                      "term": {
-                        "id": {
-                          "value": "{{documentId}}"
-                        }
-                      }
-                    }
-                  }
-                  """,
-                Encoding.UTF8,
-                "application/json"),
-        };
-        using var response = await client.SendAsync(request, ct);
-        var payload = await response.Content.ReadAsStringAsync(ct);
-        response.IsSuccessStatusCode.Should().BeTrue($"Elasticsearch search failed. body={payload}");
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{indexName}/_doc/{Uri.EscapeDataString(documentId)}");
+            using var response = await client.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                continue;
 
-        using var document = JsonDocument.Parse(payload);
-        var hits = document.RootElement
-            .GetProperty("hits")
-            .GetProperty("hits");
-        hits.GetArrayLength().Should().BeGreaterThan(0, $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`.");
-        return hits[0].GetProperty("_source").Clone();
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            response.IsSuccessStatusCode.Should().BeTrue($"Elasticsearch document lookup failed. body={payload}");
+
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("found", out var foundNode) || !foundNode.GetBoolean())
+                continue;
+
+            return document.RootElement.GetProperty("_source").Clone();
+        }
+
+        throw new InvalidOperationException(
+            $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`, but no matching document was found.");
     }
 
     private static async Task DeleteElasticsearchIndicesAsync(
@@ -253,13 +249,55 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
         string indexPattern,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Delete, indexPattern);
-        using var response = await client.SendAsync(request, ct);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        var indices = await ResolveElasticsearchIndicesAsync(client, indexPattern, ct);
+        if (indices.Count == 0)
             return;
 
+        using var request = new HttpRequestMessage(HttpMethod.Delete, string.Join(',', indices));
+        using var response = await client.SendAsync(request, ct);
         var payload = await response.Content.ReadAsStringAsync(ct);
         response.IsSuccessStatusCode.Should().BeTrue($"Elasticsearch index cleanup failed. body={payload}");
+    }
+
+    private static async Task<IReadOnlyList<string>> ResolveElasticsearchIndicesAsync(
+        HttpClient client,
+        string indexPattern,
+        CancellationToken ct)
+    {
+        var encodedPattern = Uri.EscapeDataString(indexPattern);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"_cat/indices/{encodedPattern}?format=json&h=index");
+        using var response = await client.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return Array.Empty<string>();
+
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        response.IsSuccessStatusCode.Should().BeTrue($"Elasticsearch index resolution failed. body={payload}");
+
+        using var document = JsonDocument.Parse(payload);
+        var indices = new List<string>();
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            if (!item.TryGetProperty("index", out var indexElement))
+                continue;
+
+            var index = indexElement.GetString();
+            if (!string.IsNullOrWhiteSpace(index))
+                indices.Add(index);
+        }
+
+        return indices;
+    }
+
+    private static string? GetRequiredStringProperty(
+        JsonElement source,
+        string propertyName)
+    {
+        if (source.TryGetProperty(propertyName, out var property))
+            return property.GetString();
+
+        throw new KeyNotFoundException($"Property `{propertyName}` was not found in Elasticsearch document source.");
     }
 
     private static class ProjectionProviderIntegrationTestConfiguration

@@ -97,20 +97,68 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
+        var queryPayload = Any.Pack(new TextNormalizationQueryRequested
+        {
+            RequestId = requestId,
+            ReplyStreamId = $"reply-{requestId}",
+        });
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-        var result = await queryService.ExecuteDeclaredQueryAsync(
-            runtimeActorId,
-            Any.Pack(new TextNormalizationQueryRequested
+        try
+        {
+            var immediateResult = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
+            if (immediateResult != null)
+                return immediateResult.Unpack<TextNormalizationQueryResponded>().Current;
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
+        var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
+            ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
+
+        try
+        {
+            static bool IsReady(ScriptReadModelSnapshot? snapshot) =>
+                snapshot != null &&
+                !string.IsNullOrWhiteSpace(snapshot.DefinitionActorId) &&
+                !string.IsNullOrWhiteSpace(snapshot.Revision) &&
+                snapshot.ReadModelPayload != null;
+
+            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
+            if (!IsReady(snapshot))
             {
-                RequestId = requestId,
-                ReplyStreamId = $"reply-{requestId}",
-            }),
-            ct);
+                await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
+                await projectionPort.AttachLiveSinkAsync(lease, sink, ct);
+                try
+                {
+                    snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
+                    while (!IsReady(snapshot))
+                    {
+                        await ScriptRunCommittedObservationTestHelper.WaitForAnyCommittedAsync(sink, ct);
+                        snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
+                    }
+                }
+                finally
+                {
+                    await projectionPort.DetachLiveSinkAsync(lease, sink, ct);
+                }
+            }
 
-        if (result == null)
-            throw new InvalidOperationException($"Script query returned null. actor_id={runtimeActorId}");
+            var result = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
 
-        return result.Unpack<TextNormalizationQueryResponded>().Current;
+            if (result == null)
+                throw new InvalidOperationException($"Script query returned null. actor_id={runtimeActorId}");
+
+            return result.Unpack<TextNormalizationQueryResponded>().Current;
+        }
+        finally
+        {
+            await projectionPort.ReleaseActorProjectionAsync(lease, ct);
+        }
     }
 
     public static async Task<TState> GetStateAsync<TState>(

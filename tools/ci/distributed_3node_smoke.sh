@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
+source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
 KAFKA_CONTAINER="aevatar-kafka"
 GARNET_HOST="127.0.0.1"
@@ -16,6 +17,7 @@ WAIT_SECONDS=120
 HTTP_PORTS=(18081 18082 18083)
 SILO_PORTS=(11111 11112 11113)
 GATEWAY_PORTS=(30000 30001 30002)
+LOCK_OWNER="distributed_3node_smoke"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 cluster_id="aevatar-mainnet-ci-cluster-${timestamp}"
@@ -26,39 +28,23 @@ mkdir -p "${log_dir}"
 declare -a pids=()
 
 cleanup() {
-  for pid in "${pids[@]}"; do
+  for pid in "${pids[@]-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
     fi
   done
 
   sleep 1
-  for pid in "${pids[@]}"; do
+  for pid in "${pids[@]-}"; do
     if kill -0 "${pid}" 2>/dev/null; then
       kill -9 "${pid}" 2>/dev/null || true
     fi
   done
 
   docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  release_distributed_smoke_lock
 }
-trap cleanup EXIT
-
-wait_kafka() {
-  for i in {1..30}; do
-    status="$(docker inspect --format='{{.State.Health.Status}}' "${KAFKA_CONTAINER}" || true)"
-    if [[ "${status}" == "healthy" ]]; then
-      echo "Kafka is healthy."
-      return 0
-    fi
-
-    echo "Kafka status: ${status:-unknown}"
-    sleep 2
-  done
-
-  echo "Kafka failed to become healthy."
-  docker logs "${KAFKA_CONTAINER}" || true
-  return 1
-}
+trap cleanup EXIT INT TERM
 
 wait_garnet() {
   for i in {1..30}; do
@@ -109,8 +95,16 @@ start_node() {
 }
 
 echo "Starting Kafka..."
+acquire_distributed_smoke_lock "${LOCK_OWNER}"
+ensure_local_tcp_ports_free \
+  "${LOCK_OWNER}" \
+  9092 \
+  "${GARNET_PORT}" \
+  "${HTTP_PORTS[@]}" \
+  "${SILO_PORTS[@]}" \
+  "${GATEWAY_PORTS[@]}"
 docker compose up -d kafka garnet
-wait_kafka
+wait_kafka_health "${KAFKA_CONTAINER}"
 wait_garnet
 
 echo "Publishing host app..."

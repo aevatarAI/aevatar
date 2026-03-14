@@ -129,6 +129,11 @@ message ScriptBehaviorState {
   string state_descriptor_full_name = 16;
   string read_model_descriptor_full_name = 17;
   ScriptRuntimeSemanticsSpec runtime_semantics = 18;
+  string pending_definition_actor_id = 19;
+  string pending_revision = 20;
+  string pending_binding_request_id = 21;
+  repeated RunScriptRequestedEvent pending_run_requests = 23;
+  string binding_failure_reason = 24;
 }
 
 message ScriptCatalogEntryState {
@@ -254,6 +259,12 @@ message RunScriptRequestedEvent {
   string correlation_id = 7;
 }
 
+message ProvisionScriptBehaviorRequestedEvent {
+  string definition_actor_id = 1;
+  string requested_revision = 2;
+  string request_id = 3;
+}
+
 message BindScriptBehaviorRequestedEvent {
   string definition_actor_id = 1;
   string script_id = 2;
@@ -271,6 +282,12 @@ message BindScriptBehaviorRequestedEvent {
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
 }
 
+message ScriptBehaviorBindingRequestedEvent {
+  string definition_actor_id = 1;
+  string requested_revision = 2;
+  string request_id = 3;
+}
+
 message ScriptBehaviorBoundEvent {
   string definition_actor_id = 1;
   string script_id = 2;
@@ -286,6 +303,19 @@ message ScriptBehaviorBoundEvent {
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
+}
+
+message ScriptBehaviorBindingFailedEvent {
+  string request_id = 1;
+  string failure_reason = 2;
+}
+
+message ScriptBehaviorRunQueuedEvent {
+  RunScriptRequestedEvent run_request = 1;
+}
+
+message ScriptBehaviorBindingTimeoutFiredEvent {
+  string request_id = 1;
 }
 
 message QueryScriptBehaviorBindingRequestedEvent {
@@ -308,6 +338,7 @@ message ScriptBehaviorBindingRespondedEvent {
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
+  bool pending = 15;
 }
 
 message ScriptDomainFactCommitted {
@@ -381,6 +412,7 @@ message QueryScriptDefinitionSnapshotRequestedEvent {
   string request_id = 1;
   string reply_stream_id = 2;
   string requested_revision = 3;
+  string reply_actor_id = 4;
 }
 
 message ScriptDefinitionSnapshotRespondedEvent {
@@ -406,6 +438,7 @@ message QueryScriptCatalogEntryRequestedEvent {
   string request_id = 1;
   string reply_stream_id = 2;
   string script_id = 3;
+  string reply_actor_id = 4;
 }
 
 message ScriptCatalogEntryRespondedEvent {
