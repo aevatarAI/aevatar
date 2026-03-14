@@ -145,8 +145,8 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
-            listSortSelector: report => report.CreatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: report => report.CreatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
 

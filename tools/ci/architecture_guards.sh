@@ -77,6 +77,20 @@ if rg -n "Projection:ReadModel:Bindings" src test; then
   exit 1
 fi
 
+set +e
+projection_document_reader_list_report="$(
+  rg -l "IProjectionDocumentReader<" src test demos \
+    | xargs -r rg -n "ListAsync\("
+)"
+projection_document_reader_list_status=$?
+set -e
+
+if [[ ${projection_document_reader_list_status} -eq 0 && -n "${projection_document_reader_list_report}" ]]; then
+  echo "${projection_document_reader_list_report}"
+  echo "IProjectionDocumentReader-based document querying must use QueryAsync. Legacy ListAsync is forbidden."
+  exit 1
+fi
+
 if [ -f "src/Aevatar.Foundation.Core/EventSourcing/DefaultAutoPersistedStateEventFactory.cs" ]; then
   echo "DefaultAutoPersistedStateEventFactory is forbidden. EventStore must persist domain events, not snapshot-state events."
   exit 1

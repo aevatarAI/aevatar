@@ -5,7 +5,8 @@ Elasticsearch Document Provider。
 ## 能力
 
 - `ElasticsearchProjectionDocumentStore<TReadModel, TKey>`
-- OCC 更新：`seq_no/primary_term`
+- `GetAsync(key)` 精确读取
+- `QueryAsync(query)` 结构化 document 查询
 - 基于 `DocumentIndexMetadata` 的索引初始化（`Mappings/Settings/Aliases`）
 
 ## DI
@@ -16,3 +17,4 @@ Elasticsearch Document Provider。
 
 - `Projection:Document:Providers:Elasticsearch:*`
 - 至少配置 `Endpoints`
+- 默认查询排序由 `DefaultSortField` 控制，未配置时回退到 `CreatedAt desc, _id desc`

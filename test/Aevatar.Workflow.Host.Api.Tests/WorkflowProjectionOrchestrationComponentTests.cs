@@ -909,7 +909,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
-        listSortSelector: report => report.StartedAt);
+        defaultSortSelector: report => report.StartedAt);
 
     private static WorkflowExecutionRuntimeLease CreateLease(
         string actorId,

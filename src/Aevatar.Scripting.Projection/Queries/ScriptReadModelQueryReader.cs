@@ -44,8 +44,13 @@ public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var documents = await _documentReader.ListAsync(boundedTake, ct);
-        return documents.Select(Map).ToArray();
+        var documents = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+            },
+            ct);
+        return documents.Items.Select(Map).ToArray();
     }
 
     public async Task<Any?> ExecuteDeclaredQueryAsync(

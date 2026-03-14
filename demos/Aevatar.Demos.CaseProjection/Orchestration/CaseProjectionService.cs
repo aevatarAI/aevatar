@@ -97,7 +97,13 @@ public sealed class CaseProjectionService : ICaseProjectionService
         if (!EnableRunQueryEndpoints)
             return [];
 
-        return await _documentReader.ListAsync(take, ct);
+        var result = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = take,
+            },
+            ct);
+        return result.Items;
     }
 
     public async Task<CaseProjectionReadModel?> GetRunAsync(string runId, CancellationToken ct = default)

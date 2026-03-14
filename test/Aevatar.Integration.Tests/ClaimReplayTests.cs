@@ -296,11 +296,18 @@ public class ClaimReplayTests
             return Task.FromResult(readModel?.DeepClone());
         }
 
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<ScriptReadModelDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(
-                _store.Values.Take(take).Select(static x => x.DeepClone()).ToArray());
+            return Task.FromResult(new ProjectionDocumentQueryResult<ScriptReadModelDocument>
+            {
+                Items = _store.Values
+                    .Take(query.Take <= 0 ? 50 : query.Take)
+                    .Select(static x => x.DeepClone())
+                    .ToArray(),
+            });
         }
     }
 

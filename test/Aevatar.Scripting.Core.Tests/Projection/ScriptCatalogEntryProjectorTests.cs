@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
@@ -114,7 +115,12 @@ public sealed class ScriptCatalogEntryProjectorTests
                 })),
             CancellationToken.None);
 
-        (await dispatcher.ListAsync(10, CancellationToken.None)).Should().BeEmpty();
+        (await dispatcher.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = 10,
+            },
+            CancellationToken.None)).Items.Should().BeEmpty();
     }
 
     [Fact]
@@ -152,7 +158,12 @@ public sealed class ScriptCatalogEntryProjectorTests
                 })),
             CancellationToken.None);
 
-        (await dispatcher.ListAsync(10, CancellationToken.None)).Should().BeEmpty();
+        (await dispatcher.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = 10,
+            },
+            CancellationToken.None)).Items.Should().BeEmpty();
     }
 
     [Fact]

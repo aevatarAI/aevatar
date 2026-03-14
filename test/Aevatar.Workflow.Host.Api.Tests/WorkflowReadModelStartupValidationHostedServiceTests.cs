@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -81,10 +82,12 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             return Task.FromResult<WorkflowExecutionReport?>(null);
         }
 
-        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowExecutionReport>>([]);
+            return Task.FromResult(ProjectionDocumentQueryResult<WorkflowExecutionReport>.Empty);
         }
     }
 
@@ -96,7 +99,9 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             return Task.FromResult<WorkflowExecutionReport?>(null);
         }
 
-        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException("document store unavailable");

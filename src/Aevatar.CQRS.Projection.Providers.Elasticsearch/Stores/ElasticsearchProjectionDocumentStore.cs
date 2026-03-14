@@ -22,9 +22,9 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private readonly Func<TKey, string> _keyFormatter;
     private readonly string _indexPrefix;
     private readonly string _indexName;
-    private readonly int _listTakeMax;
+    private readonly int _queryTakeMax;
     private readonly bool _autoCreateIndex;
-    private readonly string _listSortField;
+    private readonly string _defaultSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
@@ -70,7 +70,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
         _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
-        _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
+        _queryTakeMax = options.QueryTakeMax > 0 ? options.QueryTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _supportsDynamicIndexing = indexScopeSelector is not null;
@@ -78,7 +78,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _indexScopeSelector = indexScopeSelector;
-        _listSortField = options.ListSortField?.Trim() ?? "";
+        _defaultSortField = options.DefaultSortField?.Trim() ?? "";
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
@@ -113,18 +113,22 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return DeserializeOrNull(sourceNode.GetRawText());
     }
 
-    public async Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+    public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(query);
         ct.ThrowIfCancellationRequested();
-        ThrowIfDynamicReadModelQueriesUnsupported("list");
+        ThrowIfDynamicReadModelQueriesUnsupported("query");
         await EnsureIndexAsync(_indexName, _indexMetadata, ct);
-        var boundedTake = Math.Clamp(take, 1, _listTakeMax);
+        var boundedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, _queryTakeMax);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
         {
                 Content = new StringContent(
-                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildListPayloadJson(
-                        _listSortField,
+                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildQueryPayloadJson(
+                        query,
+                        _defaultSortField,
                         boundedTake),
                     Encoding.UTF8,
                     "application/json"),
@@ -133,19 +137,22 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var payload = await response.Content.ReadAsStringAsync(ct);
-            if (TryHandleMissingIndexForRead("list", payload))
-                return [];
-            return [];
+            if (TryHandleMissingIndexForRead("query", payload))
+                return ProjectionDocumentQueryResult<TReadModel>.Empty;
+            return ProjectionDocumentQueryResult<TReadModel>.Empty;
         }
 
-        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "list", ct);
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "query", ct);
         var successfulPayload = await response.Content.ReadAsStringAsync(ct);
         using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("hits", out var hitsNode) ||
             !hitsNode.TryGetProperty("hits", out var hitItems))
-            return [];
+        {
+            return ProjectionDocumentQueryResult<TReadModel>.Empty;
+        }
 
         var items = new List<TReadModel>();
+        string? nextCursor = null;
         foreach (var hit in hitItems.EnumerateArray())
         {
             if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -154,9 +161,23 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             var item = DeserializeOrNull(sourceNode.GetRawText());
             if (item != null)
                 items.Add(item);
+
+            nextCursor = ElasticsearchProjectionDocumentStorePayloadSupport.BuildNextCursor(hit);
         }
 
-        return items;
+        long? totalCount = null;
+        if (query.IncludeTotalCount &&
+            ElasticsearchProjectionDocumentStorePayloadSupport.TryReadTotalCount(jsonDoc.RootElement, out var total))
+        {
+            totalCount = total;
+        }
+
+        return new ProjectionDocumentQueryResult<TReadModel>
+        {
+            Items = items,
+            NextCursor = items.Count == boundedTake ? nextCursor : null,
+            TotalCount = totalCount,
+        };
     }
 
     private async Task UpsertCoreAsync(

@@ -30,14 +30,18 @@ internal sealed class InMemoryProjectionDocumentStore<TReadModel>
                 : null);
     }
 
-    public Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+    public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IReadOnlyList<TReadModel>>(
-            _items.Values
-                .Take(take)
+        return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+        {
+            Items = _items.Values
+                .Take(query.Take <= 0 ? 50 : query.Take)
                 .Select(Clone)
-                .ToArray());
+                .ToArray(),
+        });
     }
 
     private static TReadModel Clone(TReadModel readModel)

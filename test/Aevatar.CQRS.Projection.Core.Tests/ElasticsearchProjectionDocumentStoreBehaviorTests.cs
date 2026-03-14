@@ -52,7 +52,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task ListAsync_WhenSortFieldNotConfigured_ShouldUseDeterministicDefaultSort()
+    public async Task QueryAsync_WhenSortFieldNotConfigured_ShouldUseDeterministicDefaultSort()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
@@ -63,11 +63,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
-                ListSortField = "",
+                DefaultSortField = "",
             },
             handler);
 
-        _ = await store.ListAsync();
+        _ = await store.QueryAsync(new ProjectionDocumentQuery());
 
         var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
         searchRequest.PathAndQuery.Should().EndWith("/_search");

@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -697,7 +698,7 @@ public class WorkflowExecutionProjectionServiceTests
     private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
-        listSortSelector: report => report.StartedAt);
+        defaultSortSelector: report => report.StartedAt);
 
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "root") => new()
     {
@@ -873,8 +874,10 @@ public class WorkflowExecutionProjectionServiceTests
         public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default) =>
             _inner.GetAsync(actorId, ct);
 
-        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default) =>
-            _inner.ListAsync(take, ct);
+        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            _inner.QueryAsync(query, ct);
 
         public async Task WaitForTimelineStageAsync(string actorId, string stage, TimeSpan timeout)
         {

@@ -32,8 +32,13 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var reports = await _documentReader.ListAsync(boundedTake, ct);
-        return reports
+        var reports = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+            },
+            ct);
+        return reports.Items
             .Select(_mapper.ToActorSnapshot)
             .ToList();
     }

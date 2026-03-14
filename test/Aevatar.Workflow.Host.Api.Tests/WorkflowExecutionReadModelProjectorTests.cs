@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -26,7 +27,7 @@ public class WorkflowExecutionReadModelProjectorTests
     private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
-        listSortSelector: report => report.StartedAt);
+        defaultSortSelector: report => report.StartedAt);
     private static IProjectionWriteDispatcher<WorkflowExecutionReport> CreateDispatcher(
         InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> store)
     {
@@ -359,10 +360,13 @@ public class WorkflowExecutionReadModelProjectorTests
             Summary = new WorkflowExecutionSummary(),
         });
 
-        var runs = await store.ListAsync(10);
-        runs.Should().HaveCount(2);
-        runs[0].RootActorId.Should().Be("a-newer");
-        runs[1].RootActorId.Should().Be("a-older");
+        var runs = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Take = 10,
+        });
+        runs.Items.Should().HaveCount(2);
+        runs.Items[0].RootActorId.Should().Be("a-newer");
+        runs.Items[1].RootActorId.Should().Be("a-older");
     }
 
     [Fact]

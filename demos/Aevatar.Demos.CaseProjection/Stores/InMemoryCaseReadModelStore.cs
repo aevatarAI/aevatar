@@ -27,10 +27,12 @@ public sealed class InMemoryCaseReadModelStore
         }
     }
 
-    public Task<IReadOnlyList<CaseProjectionReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+    public Task<ProjectionDocumentQueryResult<CaseProjectionReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        var boundedTake = Math.Clamp(take, 1, 200);
+        var boundedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, 200);
         lock (_gate)
         {
             var list = _reports.Values
@@ -39,7 +41,10 @@ public sealed class InMemoryCaseReadModelStore
                 .Select(Clone)
                 .ToList();
 
-            return Task.FromResult<IReadOnlyList<CaseProjectionReadModel>>(list);
+            return Task.FromResult(new ProjectionDocumentQueryResult<CaseProjectionReadModel>
+            {
+                Items = list,
+            });
         }
     }
 

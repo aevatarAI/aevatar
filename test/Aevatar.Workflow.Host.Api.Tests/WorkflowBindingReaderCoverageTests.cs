@@ -138,11 +138,18 @@ public sealed class WorkflowActorBindingProjectorTests
             return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.DeepClone() : null);
         }
 
-        public Task<IReadOnlyList<WorkflowActorBindingDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowActorBindingDocument>>(
-                Documents.Values.Take(take).Select(static x => x.DeepClone()).ToList());
+            return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
+            {
+                Items = Documents.Values
+                    .Take(query.Take <= 0 ? 50 : query.Take)
+                    .Select(static x => x.DeepClone())
+                    .ToList(),
+            });
         }
     }
 
