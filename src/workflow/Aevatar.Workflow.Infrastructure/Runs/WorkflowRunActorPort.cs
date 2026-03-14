@@ -50,28 +50,40 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
                 "Workflow run creation requires a valid workflow definition binding.");
         }
 
-        var definitionResolution = await EnsureDefinitionActorAsync(definition, ct);
-        var runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
-        if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
-            await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id);
+        DefinitionActorResolutionResult definitionResolution = default;
+        IActor? runActor = null;
+        var createdActorIds = new List<string>(2);
+        try
+        {
+            definitionResolution = await EnsureDefinitionActorAsync(definition, ct);
+            if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
+                createdActorIds.Add(definitionResolution.ActorId);
 
-        await _dispatchPort.DispatchAsync(
-            runActor.Id,
-            CreateWorkflowRunBindEnvelope(
-                definitionResolution.ActorId,
+            runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(ct: ct);
+            createdActorIds.Add(runActor.Id);
+            if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
+                await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id, ct);
+
+            await _dispatchPort.DispatchAsync(
                 runActor.Id,
-                definition.WorkflowYaml,
-                definition.WorkflowName,
-                definition.InlineWorkflowYamls),
-            ct);
-        var createdActorIds = new List<string>(2) { runActor.Id };
-        if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
-            createdActorIds.Insert(0, definitionResolution.ActorId);
+                CreateWorkflowRunBindEnvelope(
+                    definitionResolution.ActorId,
+                    runActor.Id,
+                    definition.WorkflowYaml,
+                    definition.WorkflowName,
+                    definition.InlineWorkflowYamls),
+                ct);
 
-        return new WorkflowRunCreationResult(
-            runActor,
-            definitionResolution.ActorId,
-            createdActorIds);
+            return new WorkflowRunCreationResult(
+                runActor,
+                definitionResolution.ActorId,
+                createdActorIds);
+        }
+        catch
+        {
+            await TryDestroyActorsAsync(createdActorIds);
+            throw;
+        }
     }
 
     public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -146,6 +158,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
                     $"Actor '{existingActor.Id}' is not a workflow definition actor and cannot be reused as a definition source.");
             }
 
+            EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+
             if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
             {
                 await BindWorkflowDefinitionAsync(
@@ -167,14 +181,80 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         string? preferredActorId,
         CancellationToken ct)
     {
-        var definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
-        await BindWorkflowDefinitionAsync(
-            definitionActor,
-            definition.WorkflowYaml,
-            definition.WorkflowName,
-            definition.InlineWorkflowYamls,
-            ct);
-        return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+        IActor definitionActor;
+        try
+        {
+            definitionActor = await CreateDefinitionAsync(preferredActorId, ct);
+        }
+        catch (InvalidOperationException) when (!string.IsNullOrWhiteSpace(preferredActorId))
+        {
+            var racedActor = await TryResolveRacedDefinitionActorAsync(definition, preferredActorId!, ct);
+            if (racedActor != null)
+                return new DefinitionActorResolutionResult(racedActor.Id, CreatedNow: false);
+
+            throw;
+        }
+
+        try
+        {
+            await BindWorkflowDefinitionAsync(
+                definitionActor,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                ct);
+            return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
+        }
+        catch
+        {
+            await TryDestroyActorsAsync([definitionActor.Id]);
+            throw;
+        }
+    }
+
+    private async Task<IActor?> TryResolveRacedDefinitionActorAsync(
+        WorkflowDefinitionBinding definition,
+        string preferredActorId,
+        CancellationToken ct)
+    {
+        var existingActor = await _runtime.GetAsync(preferredActorId);
+        if (existingActor == null)
+            return null;
+
+        var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
+        if (binding == null || binding.ActorKind != WorkflowActorKind.Definition)
+            return null;
+
+        EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        if (!binding.HasDefinitionPayload || !IsSameDefinition(binding, definition))
+        {
+            await BindWorkflowDefinitionAsync(
+                existingActor,
+                definition.WorkflowYaml,
+                definition.WorkflowName,
+                definition.InlineWorkflowYamls,
+                ct);
+        }
+
+        return existingActor;
+    }
+
+    private async Task TryDestroyActorsAsync(IReadOnlyList<string> actorIds)
+    {
+        foreach (var actorId in actorIds
+                     .Where(static x => !string.IsNullOrWhiteSpace(x))
+                     .Distinct(StringComparer.Ordinal)
+                     .Reverse())
+        {
+            try
+            {
+                await _runtime.DestroyAsync(actorId, CancellationToken.None);
+            }
+            catch
+            {
+                // Best effort rollback path.
+            }
+        }
     }
 
     private static string? NormalizeActorId(string? actorId)
@@ -220,6 +300,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return true;
     }
 
+    private static void EnsureWorkflowNameCompatibility(
+        string actorId,
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        var boundWorkflowName = binding.WorkflowName?.Trim() ?? string.Empty;
+        var requestedWorkflowName = definition.WorkflowName?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(boundWorkflowName) ||
+            string.IsNullOrWhiteSpace(requestedWorkflowName) ||
+            string.Equals(boundWorkflowName, requestedWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Workflow definition actor '{actorId}' is already bound to workflow '{binding.WorkflowName}' and cannot switch to '{definition.WorkflowName}'.");
+    }
+
     private static EventEnvelope CreateWorkflowDefinitionBindEnvelope(
         string workflowYaml,
         string workflowName,
@@ -229,9 +327,11 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(workflowYaml, workflowName, inlineWorkflowYamls)),
-            PublisherId = WorkflowRunActorPortPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         };
 
     private static EventEnvelope CreateWorkflowRunBindEnvelope(
@@ -245,9 +345,11 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls)),
-            PublisherId = WorkflowRunActorPortPublisherId,
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         };
 
     private static BindWorkflowDefinitionEvent BuildBindWorkflowDefinitionEvent(

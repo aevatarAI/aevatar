@@ -119,10 +119,16 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         var envelope = new EventEnvelope
         {
             Id = "evt-child",
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = traceId.ToString(),
+                    SpanId = parentSpanId.ToString(),
+                    TraceFlags = "01",
+                },
+            },
         };
-        envelope.Metadata[EnvelopeMetadataKeys.TraceId] = traceId.ToString();
-        envelope.Metadata[EnvelopeMetadataKeys.TraceSpanId] = parentSpanId.ToString();
-        envelope.Metadata[EnvelopeMetadataKeys.TraceFlags] = "01";
 
         using var activity = AevatarActivitySource.StartHandleEvent("Workflow:run-1", envelope);
 

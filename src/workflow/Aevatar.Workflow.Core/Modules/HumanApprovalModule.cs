@@ -73,7 +73,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-            }, EventDirection.Both, ct);
+            }, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 
@@ -99,9 +99,9 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     RunId = pending.RunId,
                     Success = true,
                     Output = string.IsNullOrEmpty(resumed.UserInput) ? pending.Input : resumed.UserInput,
+                    BranchKey = "true",
                 };
-                approved.Metadata["branch"] = "true";
-                await ctx.PublishAsync(approved, EventDirection.Self, ct);
+                await ctx.PublishAsync(approved, TopologyAudience.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -124,9 +124,9 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     Success = onReject != "fail",
                     Output = rejectionOutput,
                     Error = onReject == "fail" ? "Human approval rejected" : "",
+                    BranchKey = "false",
                 };
-                rejected.Metadata["branch"] = "false";
-                await ctx.PublishAsync(rejected, EventDirection.Self, ct);
+                await ctx.PublishAsync(rejected, TopologyAudience.Self, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }

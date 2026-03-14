@@ -62,6 +62,89 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallMetadata()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-identity",
+                        Name = "echo",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "{}"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-99",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflow.run_id"] = "run-99",
+            },
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[0].RequestId.Should().Be("session-99");
+        provider.Requests[1].RequestId.Should().Be("session-99");
+        provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
+        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
+        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldExposeStableRequestIdAndPerCallIdToLlmMiddlewareMetadata()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-identity",
+                        Name = "echo",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "{}"));
+        var requestIdMiddleware = new CaptureLlmRequestIdentityMiddleware();
+        var loop = new ToolCallLoop(
+            tools,
+            hooks: null,
+            toolMiddlewares: [],
+            llmMiddlewares: [requestIdMiddleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest
+        {
+            Messages = [],
+            RequestId = "session-105",
+        };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        requestIdMiddleware.RequestIds.Should().Equal("session-105", "session-105");
+        requestIdMiddleware.CallIds.Should().Equal("session-105", "session-105:tool-round:2");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenHookMutatesToolCall_ShouldUseMutatedNameAndArguments()
     {
         var provider = new QueueLLMProvider(
@@ -224,6 +307,85 @@ public class ToolCallLoopTests
         messages.Should().Contain(m => m.Role == "tool" && m.ToolCallId == "tc-arg-rewrite" && m.Content == """{"v":"rewritten"}""");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenToolMiddlewareTerminates_ShouldUseMiddlewareResultWithoutExecutingTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-blocked",
+                        Name = "echo",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+
+        var toolExecutions = 0;
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", args =>
+        {
+            toolExecutions++;
+            return args;
+        }));
+
+        var terminateMiddleware = new DelegateToolCallMiddleware((context, _) =>
+        {
+            context.Terminate = true;
+            context.Result = "blocked-by-middleware";
+            return Task.CompletedTask;
+        });
+
+        var loop = new ToolCallLoop(
+            tools,
+            hooks: null,
+            toolMiddlewares: [terminateMiddleware],
+            llmMiddlewares: []);
+
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("done");
+        toolExecutions.Should().Be(0);
+        messages.Should().Contain(m => m.Role == "tool" && m.ToolCallId == "tc-blocked" && m.Content == "blocked-by-middleware");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareTerminates_ShouldReturnMiddlewareResponseWithoutCallingProvider()
+    {
+        var provider = new QueueLLMProvider([]);
+        var middleware = new DelegateLlmCallMiddleware((context, _) =>
+        {
+            context.Terminate = true;
+            context.Response = new LLMResponse { Content = "middleware-answer" };
+            return Task.CompletedTask;
+        });
+        var hook = new RecordingHook();
+        var loop = new ToolCallLoop(
+            new ToolManager(),
+            hooks: new AgentHookPipeline([hook]),
+            toolMiddlewares: [],
+            llmMiddlewares: [middleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("middleware-answer");
+        provider.Requests.Should().BeEmpty();
+        messages.Should().ContainSingle(m => m.Role == "assistant" && m.Content == "middleware-answer");
+        hook.LlmStartCount.Should().Be(1);
+        hook.LlmEndCount.Should().Be(1);
+    }
+
     private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;
@@ -285,6 +447,29 @@ public class ToolCallLoopTests
         Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
     {
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
+    }
+
+    private sealed class CaptureLlmRequestIdentityMiddleware : ILLMCallMiddleware
+    {
+        public List<string> RequestIds { get; } = [];
+        public List<string> CallIds { get; } = [];
+
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            if (context.Items.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+                requestIdObj is string requestId)
+            {
+                RequestIds.Add(requestId);
+            }
+
+            if (context.Items.TryGetValue(LLMRequestMetadataKeys.CallId, out var callIdObj) &&
+                callIdObj is string callId)
+            {
+                CallIds.Add(callId);
+            }
+
+            await next();
+        }
     }
 
     private sealed class RecordingHook : IAIGAgentExecutionHook

@@ -130,7 +130,7 @@ else
         Console.WriteLine("  No LLM API key found.");
         Console.WriteLine();
         Console.WriteLine("  Option 1: Use aevatar CLI to configure secrets:");
-        Console.WriteLine("    aevatar config set-secret LLMProviders:Providers:deepseek:ApiKey sk-...");
+        Console.WriteLine("    aevatar config secrets set LLMProviders:Providers:deepseek:ApiKey sk-...");
         Console.WriteLine();
         Console.WriteLine("  Option 2: Set environment variable:");
         Console.WriteLine("    export DEEPSEEK_API_KEY=\"sk-...\"");
@@ -245,9 +245,11 @@ await actor.HandleEventAsync(new EventEnvelope
         WorkflowYaml = workflowYaml,
         WorkflowName = workflowName,
     }),
-    PublisherId = "maker.demo",
-    Direction = EventDirection.Self,
-    CorrelationId = Guid.NewGuid().ToString("N"),
+    Route = EnvelopeRouteSemantics.CreateTopologyPublication("maker.demo", TopologyAudience.Self),
+    Propagation = new EnvelopePropagation
+    {
+        CorrelationId = Guid.NewGuid().ToString("N"),
+    },
 });
 
 logger.LogInformation("WorkflowGAgent created: {Id}", actor.Id);
@@ -273,14 +275,14 @@ await using var sub = await stream.SubscribeAsync<EventEnvelope>(envelope =>
     {
         var evt = payload.Unpack<TextMessageStartEvent>();
         logger.LogInformation("Role stream started: agent={AgentId}, session={SessionId}",
-            string.IsNullOrWhiteSpace(evt.AgentId) ? envelope.PublisherId : evt.AgentId,
+            string.IsNullOrWhiteSpace(evt.AgentId) ? envelope.Route?.PublisherActorId : evt.AgentId,
             evt.SessionId);
     }
 
     if (payload.Is(TextMessageEndEvent.Descriptor))
     {
         var evt = payload.Unpack<TextMessageEndEvent>();
-        var publisher = string.IsNullOrWhiteSpace(envelope.PublisherId) ? "(unknown)" : envelope.PublisherId;
+        var publisher = string.IsNullOrWhiteSpace(envelope.Route?.PublisherActorId) ? "(unknown)" : envelope.Route.PublisherActorId;
 
         // Print every role agent's full LLM reply.
         if (!string.Equals(publisher, actor.Id, StringComparison.Ordinal))
@@ -337,8 +339,7 @@ var envelope = new EventEnvelope
     Id = Guid.NewGuid().ToString("N"),
     Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
     Payload = Any.Pack(chatEvt),
-    PublisherId = "maker-cli",
-    Direction = EventDirection.Self,
+    Route = EnvelopeRouteSemantics.CreateTopologyPublication("maker-cli", TopologyAudience.Self),
 };
 
 await actor.HandleEventAsync(envelope);

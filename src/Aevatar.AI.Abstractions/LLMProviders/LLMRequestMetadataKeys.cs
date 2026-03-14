@@ -1,0 +1,7 @@
+namespace Aevatar.AI.Abstractions.LLMProviders;
+
+public static class LLMRequestMetadataKeys
+{
+    public const string RequestId = "aevatar.request_id";
+    public const string CallId = "aevatar.call_id";
+}

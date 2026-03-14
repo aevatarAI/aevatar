@@ -12,6 +12,7 @@ using Aevatar.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Bootstrap.Extensions.AI;
 
@@ -19,6 +20,7 @@ public sealed class AevatarAIFeatureOptions
 {
     public bool EnableMEAIProviders { get; set; } = true;
     public bool EnableMEAIToTornadoFailover { get; set; } = true;
+    public bool EnableReloadableProviderFactory { get; set; }
     public bool FailoverFallbackToDefaultProviderWhenNamedProviderMissing { get; set; } = true;
     public bool FailoverPreferFallbackDefaultProvider { get; set; } = true;
     public bool FailoverPreferDeepSeekAsFallbackDefault { get; set; } = true;
@@ -68,7 +70,31 @@ public static class ServiceCollectionExtensions
         if (!options.EnableMEAIProviders)
             return;
 
-        var secrets = options.SecretsStore ?? new AevatarSecretsStore();
+        var secretsStoreAccessor = CreateSecretsStoreAccessor(options);
+        if (options.EnableReloadableProviderFactory)
+        {
+            var versionProvider = BuildProviderConfigVersionProvider(options);
+            services.TryAddSingleton<ILLMProviderFactory>(sp =>
+            {
+                var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
+                return new ReloadableLLMProviderFactory(
+                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor),
+                    versionProvider,
+                    logger);
+            });
+            return;
+        }
+
+        var factory = BuildLlmProviderFactory(configuration, options, secretsStoreAccessor);
+        services.TryAddSingleton<ILLMProviderFactory>(factory);
+    }
+
+    private static ILLMProviderFactory BuildLlmProviderFactory(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options,
+        Func<IAevatarSecretsStore> secretsStoreAccessor)
+    {
+        var secrets = secretsStoreAccessor();
         var configuredProviders = ReadConfiguredProviders(secrets, options);
         if (configuredProviders.Count == 0)
         {
@@ -91,14 +117,11 @@ public static class ServiceCollectionExtensions
 
         var meaiFactory = BuildMeaiFactory(configuredProviders, defaultName);
         if (!options.EnableMEAIToTornadoFailover)
-        {
-            services.TryAddSingleton<ILLMProviderFactory>(meaiFactory);
-            return;
-        }
+            return meaiFactory;
 
         var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, defaultName, options);
         var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
-        var failoverFactory = new FailoverLLMProviderFactory(
+        return new FailoverLLMProviderFactory(
             meaiFactory,
             tornadoFactory,
             new LLMProviderFailoverOptions
@@ -107,7 +130,6 @@ public static class ServiceCollectionExtensions
                     options.FailoverFallbackToDefaultProviderWhenNamedProviderMissing,
                 PreferFallbackDefaultProvider = options.FailoverPreferFallbackDefaultProvider,
             });
-        services.TryAddSingleton<ILLMProviderFactory>(failoverFactory);
     }
 
     private static string ResolveTornadoDefaultProviderName(
@@ -177,6 +199,40 @@ public static class ServiceCollectionExtensions
 
         factory.SetDefault(defaultName);
         return factory;
+    }
+
+    private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(AevatarAIFeatureOptions options)
+    {
+        if (options.SecretsStore != null)
+            return () => options.SecretsStore;
+
+        return static () => new AevatarSecretsStore();
+    }
+
+    private static Func<long> BuildProviderConfigVersionProvider(AevatarAIFeatureOptions options)
+    {
+        if (options.SecretsStore != null)
+            return static () => 0L;
+
+        return static () => HashCode.Combine(
+            ComputeFileVersion(AevatarPaths.SecretsJson),
+            ComputeFileVersion(AevatarPaths.ConfigJson));
+    }
+
+    private static long ComputeFileVersion(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return 0L;
+
+            var info = new FileInfo(path);
+            return HashCode.Combine(info.LastWriteTimeUtc.Ticks, info.Length);
+        }
+        catch
+        {
+            return 0L;
+        }
     }
 
     private static List<ConfiguredProvider> ReadConfiguredProviders(

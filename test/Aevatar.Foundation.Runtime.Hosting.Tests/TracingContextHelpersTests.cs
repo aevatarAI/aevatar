@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
@@ -14,10 +13,16 @@ public sealed class TracingContextHelpersTests
     {
         var envelope = new EventEnvelope
         {
-            CorrelationId = "corr-1",
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+                CausationEventId = "cause-1",
+                Trace = new TraceContext
+                {
+                    TraceId = "trace-1",
+                },
+            },
         };
-        envelope.Metadata[EnvelopeMetadataKeys.TraceId] = "trace-1";
-        envelope.Metadata[EnvelopeMetadataKeys.TraceCausationId] = "cause-1";
 
         var scope = TracingContextHelpers.CreateLogScopeState(envelope);
 
@@ -35,10 +40,16 @@ public sealed class TracingContextHelpersTests
 
         var envelope = new EventEnvelope
         {
-            CorrelationId = "corr-2",
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-2",
+                CausationEventId = "cause-2",
+                Trace = new TraceContext
+                {
+                    TraceId = "trace-2",
+                },
+            },
         };
-        envelope.Metadata[EnvelopeMetadataKeys.TraceId] = "trace-2";
-        envelope.Metadata[EnvelopeMetadataKeys.TraceCausationId] = "cause-2";
 
         using (TracingContextHelpers.BeginEnvelopeScope(logger, envelope))
         {
@@ -53,7 +64,7 @@ public sealed class TracingContextHelpersTests
     }
 
     [Fact]
-    public void PopulateTraceId_ShouldPopulateTraceAndSpanMetadata_FromCurrentActivity()
+    public void PopulateTraceId_ShouldPopulateTraceAndSpanState_FromCurrentActivity()
     {
         using var listener = new ActivityListener
         {
@@ -69,9 +80,9 @@ public sealed class TracingContextHelpersTests
 
         TracingContextHelpers.PopulateTraceId(envelope);
 
-        envelope.Metadata[EnvelopeMetadataKeys.TraceId].Should().Be(activity!.TraceId.ToString());
-        envelope.Metadata[EnvelopeMetadataKeys.TraceSpanId].Should().Be(activity.SpanId.ToString());
-        envelope.Metadata[EnvelopeMetadataKeys.TraceFlags].Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
+        envelope.Propagation!.Trace!.TraceId.Should().Be(activity!.TraceId.ToString());
+        envelope.Propagation.Trace.SpanId.Should().Be(activity.SpanId.ToString());
+        envelope.Propagation.Trace.TraceFlags.Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
     }
 
     [Fact]
@@ -91,9 +102,11 @@ public sealed class TracingContextHelpersTests
         var envelope = new EventEnvelope
         {
             Id = "evt-3",
-            CorrelationId = "corr-3",
-            Direction = EventDirection.Self,
-            PublisherId = "publisher-3",
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-3",
+            },
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-3", TopologyAudience.Self),
         };
 
         using var scope = EventHandleScope.Begin(logger, "agent-3", envelope);

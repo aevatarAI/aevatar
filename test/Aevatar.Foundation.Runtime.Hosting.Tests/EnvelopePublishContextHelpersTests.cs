@@ -10,7 +10,7 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class EnvelopePublishContextHelpersTests
 {
     [Fact]
-    public void ApplyOutboundPublishContext_ShouldApplyPropagationAndPublishMetadata()
+    public void ApplyOutboundPublishContext_ShouldApplyPropagationAndRuntimeContext()
     {
         using var listener = new ActivityListener
         {
@@ -20,10 +20,21 @@ public sealed class EnvelopePublishContextHelpersTests
         };
         ActivitySource.AddActivityListener(listener);
 
-        var sourceEnvelope = new EventEnvelope();
-        sourceEnvelope.Metadata[EnvelopeMetadataKeys.TraceId] = ActivityTraceId.CreateRandom().ToString();
-        sourceEnvelope.Metadata[EnvelopeMetadataKeys.TraceSpanId] = ActivitySpanId.CreateRandom().ToString();
-        sourceEnvelope.Metadata["custom.key"] = "v1";
+        var sourceEnvelope = new EventEnvelope
+        {
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = ActivityTraceId.CreateRandom().ToString(),
+                    SpanId = ActivitySpanId.CreateRandom().ToString(),
+                },
+                Baggage =
+                {
+                    ["custom.key"] = "v1",
+                },
+            },
+        };
 
         using var activity = AevatarActivitySource.Source.StartActivity("apply-outbound-publish-context-test");
         activity.Should().NotBeNull();
@@ -36,12 +47,12 @@ public sealed class EnvelopePublishContextHelpersTests
             "actor-1",
             routeTargetCount: 3);
 
-        outbound.Metadata[EnvelopeMetadataKeys.TraceId].Should().Be(activity!.TraceId.ToString());
-        outbound.Metadata[EnvelopeMetadataKeys.TraceSpanId].Should().Be(activity.SpanId.ToString());
-        outbound.Metadata[EnvelopeMetadataKeys.TraceFlags].Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
-        outbound.Metadata[EnvelopeMetadataKeys.SourceActorId].Should().Be("actor-1");
-        outbound.Metadata[EnvelopeMetadataKeys.RouteTargetCount].Should().Be("3");
-        outbound.Metadata["custom.key"].Should().Be("v1");
+        outbound.Propagation!.Trace!.TraceId.Should().Be(activity!.TraceId.ToString());
+        outbound.Propagation.Trace.SpanId.Should().Be(activity.SpanId.ToString());
+        outbound.Propagation.Trace.TraceFlags.Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
+        outbound.Runtime!.SourceActorId.Should().Be("actor-1");
+        outbound.Runtime.RouteTargetCount.Should().Be(3);
+        outbound.Propagation.Baggage["custom.key"].Should().Be("v1");
     }
 
     private sealed class PassthroughEnvelopePropagationPolicy : IEnvelopePropagationPolicy
@@ -51,8 +62,8 @@ public sealed class EnvelopePublishContextHelpersTests
             if (inboundEnvelope == null)
                 return;
 
-            foreach (var (key, value) in inboundEnvelope.Metadata)
-                outboundEnvelope.Metadata[key] = value;
+            if (inboundEnvelope.Propagation != null)
+                outboundEnvelope.Propagation = inboundEnvelope.Propagation.Clone();
         }
     }
 }

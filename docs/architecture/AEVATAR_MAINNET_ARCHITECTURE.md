@@ -122,11 +122,11 @@ flowchart LR
 | Agent | `IAgent` / `IAgent<TState>` | 业务逻辑单元，处理事件、维护状态 |
 | Actor | `IActor` | Agent 的运行容器，提供串行处理保证与父子层级关系 |
 | Runtime | `IActorRuntime` | 构建在 stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 |
-| Stream | `IStream` / `IStreamProvider` | `EventEnvelope` 的传播通道，支持方向路由（Self / Down / Up / Both） |
-| EventEnvelope | `EventEnvelope` (Proto) | 统一运行时消息包络，包含 payload、publisher、direction、correlation 等元数据 |
+| Stream | `IStream` / `IStreamProvider` | `EventEnvelope` 的传播通道，支持 `DirectRoute / PublicationRoute(topology|observer)` |
+| EventEnvelope | `EventEnvelope` (Proto) | 统一运行时消息包络，包含 payload、route、correlation 等元数据 |
 | EventModule | `IEventModule` | 可插拔事件处理器，`CanHandle` 过滤 + `HandleAsync` 执行，按 `Priority` 排序 |
 
-主链路：外部输入先规范化为 command / request → 包入 `EventEnvelope.payload` → 按 `EventDirection` 路由到目标 Stream → `GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行 → Actor 视情况显式持久化领域事件。
+主链路：外部输入先规范化为 command / request → 包入 `EventEnvelope.payload` → 按 `EnvelopeRoute` 路由到目标 Stream → `GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule` 合并后按优先级执行 → Actor 视情况显式持久化领域事件。
 
 边界澄清：
 
@@ -218,7 +218,7 @@ sequenceDiagram
     participant User as "终端用户"
     participant App as "AI Native App"
     participant API as "Mainnet API"
-    participant AppSvc as "WorkflowRunInteractionService"
+    participant AppSvc as "ICommandInteractionService"
     participant WFAgent as "WorkflowRunGAgent"
     participant Role1 as "RoleGAgent:analyst"
     participant Role2 as "RoleGAgent:reviewer"
@@ -1536,7 +1536,7 @@ Mainnet 的职责是将该 YAML 编译为可执行工作流，并按 `agent_prof
 sequenceDiagram
     participant AppSdk as "AI Native App SDK"
     participant MainnetApi as "Mainnet API"
-    participant AppService as "WorkflowRunInteractionService"
+    participant AppService as "ICommandInteractionService"
     participant Resolver as "WorkflowRunActorResolver"
     participant WfAgent as "WorkflowGAgent"
     participant Chrono as "Chrono Platform"

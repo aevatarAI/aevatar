@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -23,7 +24,13 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
             RecordId = "record-1",
             Operation = "upsert",
             FailedStore = "Graph",
-            ReadModelJson = "{}",
+            ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(new WorkflowExecutionReport
+            {
+                Id = "record-1",
+                RootActorId = "record-1",
+                CommandId = "cmd-1",
+                WorkflowName = "workflow",
+            }),
             ReadModelType = "type",
             Key = "key",
         };
@@ -38,9 +45,9 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
 
         actor.HandledEnvelopes.Should().ContainSingle();
         var envelope = actor.HandledEnvelopes.Single();
-        envelope.CorrelationId.Should().Be("record-1");
-        envelope.PublisherId.Should().Be("projection.compensation.outbox");
-        envelope.Direction.Should().Be(EventDirection.Self);
+        envelope.Propagation!.CorrelationId.Should().Be("record-1");
+        envelope.Route!.PublisherActorId.Should().Be("projection.compensation.outbox");
+        envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
         envelope.Payload.Unpack<ProjectionCompensationEnqueuedEvent>().RecordId.Should().Be("record-1");
     }
 
@@ -63,7 +70,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         actor.HandledEnvelopes.Should().ContainSingle();
         var replay = actor.HandledEnvelopes.Single().Payload.Unpack<ProjectionCompensationTriggerReplayEvent>();
         replay.BatchSize.Should().Be(17);
-        actor.HandledEnvelopes.Single().CorrelationId.Should().Be("replay");
+        actor.HandledEnvelopes.Single().Propagation!.CorrelationId.Should().Be("replay");
     }
 
     [Fact]

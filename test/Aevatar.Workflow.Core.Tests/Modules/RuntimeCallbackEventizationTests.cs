@@ -1,5 +1,7 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -90,6 +92,102 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task DelayModule_ShouldAcceptCallbackIdFallback_WhenLeaseIsMissing()
+    {
+        var module = new DelayModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "delay-step",
+                StepType = "delay",
+                RunId = "run-delay-fallback",
+                Input = "payload",
+                Parameters = { ["duration_ms"] = "1200" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single();
+        var state = ctx.LoadState<DelayModuleState>("delay");
+        state.Pending["run-delay-fallback:delay-step"].Lease = null;
+        await ctx.SaveStateAsync("delay", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new DelayStepTimeoutFiredEvent
+                {
+                    RunId = "run-delay-fallback",
+                    StepId = "delay-step",
+                    DurationMs = 1200,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("payload");
+    }
+
+    [Fact]
+    public async Task DelayModule_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
+    {
+        var module = new DelayModule();
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "delay-step", StringComparison.Ordinal) &&
+                                     completed.Success,
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "delay-step",
+                StepType = "delay",
+                RunId = "run-delay-replay",
+                Input = "payload",
+                Parameters = { ["duration_ms"] = "1200" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single();
+        ctx.Published.Clear();
+        var timeoutEnvelope = Wrap(
+            new DelayStepTimeoutFiredEvent
+            {
+                RunId = "run-delay-replay",
+                StepId = "delay-step",
+                DurationMs = 1200,
+            },
+            MetadataFor(scheduled));
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.LoadState<DelayModuleState>("delay").Pending.Should().ContainKey("run-delay-replay:delay-step");
+
+        await module.HandleAsync(timeoutEnvelope, ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("payload");
+    }
+
+    [Fact]
     public async Task WaitSignalModule_ShouldIgnoreStaleTimeoutWithoutDroppingPending()
     {
         var module = new WaitSignalModule();
@@ -153,6 +251,55 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldAcceptCallbackIdFallback_WhenLeaseIsMissing()
+    {
+        var module = new WaitSignalModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "wait-1",
+                StepType = "wait_signal",
+                RunId = "run-wait-fallback",
+                Input = "default-output",
+                Parameters =
+                {
+                    ["signal_name"] = "approve",
+                    ["timeout_ms"] = "5000",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
+        var state = ctx.LoadState<WaitSignalModuleState>("wait_signal");
+        state.Pending["run-wait-fallback:approve:wait-1"].TimeoutLease = null;
+        await ctx.SaveStateAsync("wait_signal", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WaitSignalTimeoutFiredEvent
+                {
+                    RunId = "run-wait-fallback",
+                    StepId = "wait-1",
+                    SignalName = "approve",
+                    TimeoutMs = 5000,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().Contain("timed out");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
         var ctx = new SchedulingContext
@@ -213,6 +360,57 @@ public class RuntimeCallbackEventizationTests
             .Single();
         completion.Success.Should().BeFalse();
         completion.Error.Should().Contain("TIMEOUT");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldResumeInitialDispatch_WhenStartPublishFailsTransiently()
+    {
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepRequestEvent request &&
+                                     string.Equals(request.StepId, "step-1", StringComparison.Ordinal),
+        };
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                },
+            ],
+        }, ctx);
+
+        var startEnvelope = Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-start-replay",
+            Input = "input-v1",
+        });
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(startEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        var pendingState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        pendingState.Active.Should().BeTrue();
+        pendingState.CurrentStepDispatchPending.Should().BeTrue();
+        pendingState.CurrentStepId.Should().Be("step-1");
+
+        await module.HandleAsync(startEnvelope, ctx, CancellationToken.None);
+
+        var retryStepRequest = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Single();
+        retryStepRequest.RunId.Should().Be("run-start-replay");
+        retryStepRequest.StepId.Should().Be("step-1");
+        retryStepRequest.Input.Should().Be("input-v1");
     }
 
     [Fact]
@@ -304,6 +502,153 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WorkflowLoop_ShouldConsumeRetryBackoffReplay_AfterRedispatchAlreadyCommitted()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-retry-cleanup",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-cleanup",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepRetryBackoffFiredEvent);
+        var state = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        state.RetryBackoffsByStepId["step-1"].DispatchPending = true;
+        await ctx.SaveStateAsync("workflow_execution_kernel", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WorkflowStepRetryBackoffFiredEvent
+                {
+                    RunId = "run-retry-cleanup",
+                    StepId = "step-1",
+                    DelayMs = 800,
+                    NextAttempt = 2,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel")
+            .RetryBackoffsByStepId.Should().NotContainKey("step-1");
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldResumeRetryBackoffReplay_WhenRedispatchWasPersistedPending()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "transform",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        Backoff = "fixed",
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf",
+                RunId = "run-retry-resume",
+                Input = "input-v1",
+            }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Scheduled.Clear();
+
+        await module.HandleAsync(
+            Wrap(new StepCompletedEvent
+            {
+                StepId = "step-1",
+                RunId = "run-retry-resume",
+                Success = false,
+                Error = "boom",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WorkflowStepRetryBackoffFiredEvent);
+        var state = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        state.RetryBackoffsByStepId["step-1"].DispatchPending = true;
+        state.CurrentStepDispatchPending = true;
+        await ctx.SaveStateAsync("workflow_execution_kernel", state, CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Wrap(
+                new WorkflowStepRetryBackoffFiredEvent
+                {
+                    RunId = "run-retry-resume",
+                    StepId = "step-1",
+                    DelayMs = 800,
+                    NextAttempt = 2,
+                },
+                MetadataFor(scheduled)),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepRequestEvent>()
+            .Should()
+            .ContainSingle(x => x.RunId == "run-retry-resume" && x.StepId == "step-1" && x.Input == "input-v1");
+        ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel")
+            .RetryBackoffsByStepId.Should().NotContainKey("step-1");
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
     {
         var ctx = new SchedulingContext();
@@ -375,7 +720,7 @@ public class RuntimeCallbackEventizationTests
 
         ctx.Published.Should().BeEmpty();
         ctx.Canceled.Should().ContainSingle(x =>
-            x.CallbackId == "workflow-step-timeout:run-retry-replay:step-1" &&
+            x.CallbackId.StartsWith("workflow-step-timeout:run-retry-replay:step-1:", StringComparison.Ordinal) &&
             x.ExpectedGeneration == 2);
 
         await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
@@ -387,6 +732,104 @@ public class RuntimeCallbackEventizationTests
         retryStepRequest.RunId.Should().Be("run-retry-replay");
         retryStepRequest.StepId.Should().Be("step-1");
         retryStepRequest.Input.Should().Be("input-v1");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldReplayCompletion_WhenPublishFailsTransiently()
+    {
+        var module = new LLMCallModule();
+        var ctx = new SchedulingContext
+        {
+            FailPublishOnce = evt => evt is StepCompletedEvent completed &&
+                                     string.Equals(completed.StepId, "step-1", StringComparison.Ordinal) &&
+                                     completed.Success,
+        };
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "step-1",
+                StepType = "llm_call",
+                RunId = "run-llm-replay",
+                Input = "prompt",
+                Parameters = { ["timeout_ms"] = "5000" },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chatRequest = ctx.Published.Select(x => x.Event).OfType<ChatRequestEvent>().Single();
+        ctx.Published.Clear();
+        var responseEnvelope = Wrap(new ChatResponseEvent
+        {
+            SessionId = chatRequest.SessionId,
+            Content = "ok",
+        });
+
+        await FluentActions
+            .Invoking(() => module.HandleAsync(responseEnvelope, ctx, CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("transient publish failure");
+
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId.Should().ContainKey(chatRequest.SessionId);
+
+        await module.HandleAsync(responseEnvelope, ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be("ok");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldReuseDispatchDedupState_WhenDispatchIsReplayed()
+    {
+        var module = new LLMCallModule();
+        var ctx = new SchedulingContext();
+        var requestEnvelope = Wrap(new StepRequestEvent
+        {
+            StepId = "step-1",
+            StepType = "llm_call",
+            RunId = "run-llm-dedup",
+            Input = "prompt",
+            TargetRole = "assistant",
+            Parameters = { ["timeout_ms"] = "5000" },
+        });
+
+        await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
+
+        var firstDispatch = ctx.Outbound
+            .Single(x => x.Event is ChatRequestEvent);
+        var firstChatRequest = (ChatRequestEvent)firstDispatch.Event;
+        firstDispatch.TargetActorId.Should().NotBeNullOrWhiteSpace();
+        firstDispatch.Options.Should().NotBeNull();
+        firstDispatch.Options!.Delivery.Should().NotBeNull();
+        var dedupOriginId = firstDispatch.Options.Delivery!.DeduplicationOperationId;
+        dedupOriginId.Should().StartWith("workflow-llm-dispatch:");
+
+        var state = ctx.LoadState<LLMCallModuleState>("llm_call");
+        var pending = state.PendingBySessionId[firstChatRequest.SessionId];
+        pending.RequestDispatched = false;
+        state.PendingBySessionId[firstChatRequest.SessionId] = pending;
+        await ctx.SaveStateAsync("llm_call", state, CancellationToken.None);
+        ctx.Published.Clear();
+        ctx.Outbound.Clear();
+
+        await module.HandleAsync(requestEnvelope, ctx, CancellationToken.None);
+
+        var replayDispatch = ctx.Outbound
+            .Single(x => x.Event is ChatRequestEvent);
+        var replayChatRequest = (ChatRequestEvent)replayDispatch.Event;
+        replayChatRequest.SessionId.Should().Be(firstChatRequest.SessionId);
+        replayDispatch.TargetActorId.Should().Be(firstDispatch.TargetActorId);
+        replayDispatch.Options!.Delivery!.DeduplicationOperationId.Should().Be(dedupOriginId);
+
+        ctx.LoadState<LLMCallModuleState>("llm_call")
+            .PendingBySessionId[firstChatRequest.SessionId]
+            .DispatchDedupId.Should().Be(dedupOriginId);
     }
 
     [Fact]
@@ -607,7 +1050,7 @@ public class RuntimeCallbackEventizationTests
                 RunId = "run-next",
                 Success = true,
                 Output = "done",
-                Metadata = { ["next_step"] = "missing-step" },
+                NextStepId = "missing-step",
             }),
             ctx,
             CancellationToken.None);
@@ -669,8 +1112,11 @@ public class RuntimeCallbackEventizationTests
         ctx.Scheduled.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task WorkflowLoop_ShouldFailTimeoutWithoutRetrying()
+    [Theory]
+    [InlineData("TIMEOUT after 100ms")]
+    [InlineData("LLM call timed out after 100ms")]
+    [InlineData("signal 'approve' timed out after 100ms")]
+    public async Task WorkflowLoop_ShouldFailRecognizedTimeoutErrorsWithoutRetrying(string error)
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -710,51 +1156,46 @@ public class RuntimeCallbackEventizationTests
                 StepId = "step-1",
                 RunId = "run-timeout",
                 Success = false,
-                Error = "TIMEOUT after 100ms",
+                Error = error,
             }),
             ctx,
             CancellationToken.None);
 
         var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
         completion.Success.Should().BeFalse();
-        completion.Error.Should().Contain("TIMEOUT");
+        completion.Error.Should().Be(error);
         ctx.Scheduled.Should().BeEmpty();
     }
 
     private static EventEnvelope Wrap(
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EnvelopeCallbackContext? callback = null)
     {
-        var envelope = new EventEnvelope
+        return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Runtime = callback == null
+                ? null
+                : new EnvelopeRuntime
+                {
+                    Callback = callback.Clone(),
+                },
         };
-
-        if (metadata != null)
-        {
-            foreach (var pair in metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
-        }
-
-        return envelope;
     }
 
-    private static IReadOnlyDictionary<string, string> MetadataFor(
+    private static EnvelopeCallbackContext MetadataFor(
         ScheduledCallback callback,
         long? generation = null,
         long fireIndex = 0) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
+        new()
         {
-            [RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId,
-            [RuntimeCallbackMetadataKeys.CallbackGeneration] = (generation ?? callback.Generation)
-                .ToString(CultureInfo.InvariantCulture),
-            [RuntimeCallbackMetadataKeys.CallbackFireIndex] = fireIndex.ToString(CultureInfo.InvariantCulture),
-            [RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                .ToString(CultureInfo.InvariantCulture),
+            CallbackId = callback.CallbackId,
+            Generation = generation ?? callback.Generation,
+            FireIndex = fireIndex,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
     private static WorkflowExecutionKernel CreateKernel(
@@ -783,7 +1224,9 @@ public class RuntimeCallbackEventizationTests
 
         public string RunId => ((IWorkflowExecutionStateHost)Agent).RunId;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
+
+        public List<OutboundDispatch> Outbound { get; } = [];
 
         public List<ScheduledCallback> Scheduled { get; } = [];
 
@@ -793,8 +1236,27 @@ public class RuntimeCallbackEventizationTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            return RecordOutboundAsync(evt, direction, targetActorId: null, options, ct);
+        }
+
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            return RecordOutboundAsync(evt, TopologyAudience.Self, targetActorId, options, ct);
+        }
+
+        private Task RecordOutboundAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction,
+            string? targetActorId,
+            EventEnvelopePublishOptions? options,
+            CancellationToken ct)
             where TEvent : IMessage
         {
             _ = ct;
@@ -805,14 +1267,12 @@ public class RuntimeCallbackEventizationTests
             }
 
             Published.Add((evt, direction));
+            Outbound.Add(new OutboundDispatch(
+                evt,
+                direction,
+                targetActorId,
+                options));
             return Task.CompletedTask;
-        }
-
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
-            where TEvent : IMessage
-        {
-            _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct);
         }
 
         public TState LoadState<TState>(string scopeKey)
@@ -857,11 +1317,11 @@ public class RuntimeCallbackEventizationTests
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = dueTime;
-            _ = metadata;
+            _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
@@ -874,12 +1334,12 @@ public class RuntimeCallbackEventizationTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = dueTime;
             _ = period;
-            _ = metadata;
+            _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
@@ -954,4 +1414,10 @@ public class RuntimeCallbackEventizationTests
 
         public long ExpectedGeneration => Lease.Generation;
     }
+
+    private sealed record OutboundDispatch(
+        IMessage Event,
+        TopologyAudience Direction,
+        string? TargetActorId,
+        EventEnvelopePublishOptions? Options);
 }

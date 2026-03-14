@@ -54,9 +54,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             orchestratorRuntime,
             orchestratorRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-multi-script-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-multi-script-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -77,9 +78,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             ?? throw new InvalidOperationException("ScriptRuntimeGAgent type name is required.")),
                     },
                 }),
-                ScriptRevision: "rev-orchestrator-1",
-                DefinitionActorId: orchestratorDefinitionActorId,
-                RequestedEventType: "script.autonomous.multi.orchestrate"));
+                ScriptRevision = "rev-orchestrator-1",
+                DefinitionActorId = orchestratorDefinitionActorId,
+                RequestedEventType = "script.autonomous.multi.orchestrate",
+            });
 
         var summary = GetSummary(orchestratorRuntime);
         summary.Fields["decision_a2"].StringValue.Should().Be("promoted");
@@ -162,9 +164,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             rootRuntime,
             runtimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-self-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-self-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -174,9 +177,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("SelfGeneratedRuntime", "SelfGeneratedCompletedEvent")),
                     },
                 }),
-                ScriptRevision: "rev-self-1",
-                DefinitionActorId: definitionActorId,
-                RequestedEventType: "script.self.evolve"));
+                ScriptRevision = "rev-self-1",
+                DefinitionActorId = definitionActorId,
+                RequestedEventType = "script.self.evolve",
+            });
 
         var v1Summary = GetSummary(rootRuntime);
         v1Summary.Fields["decision_v2"].StringValue.Should().Be("promoted");
@@ -240,9 +244,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-catalog-control-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-catalog-control-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -252,9 +257,10 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("ManualCatalogRev2Runtime", "ManualCatalogRev2CompletedEvent")),
                     },
                 }),
-                ScriptRevision: "rev-controller-1",
-                DefinitionActorId: controllerDefinitionActorId,
-                RequestedEventType: "script.catalog.control"));
+                ScriptRevision = "rev-controller-1",
+                DefinitionActorId = controllerDefinitionActorId,
+                RequestedEventType = "script.catalog.control",
+            });
 
         var summary = GetSummary(controllerRuntime);
         var manualRuntimeId = summary.Fields["manual_runtime_id"].StringValue;
@@ -280,7 +286,7 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
     }
 
     [Fact]
-    public async Task ScriptOnlyFlow_ShouldExerciseInteractionAndInvocationCapabilities()
+    public async Task ScriptOnlyFlow_ShouldExerciseInteractionAndDefinitionUpsertCapabilities()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -297,15 +303,16 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
             controllerDefinitionActorId,
             scriptId: "interaction-controller-script",
             revision: "rev-interaction-1",
-            source: InteractionInvocationOrchestratorSource);
+            source: InteractionUpsertOrchestratorSource);
 
         var controllerRuntime = await runtime.CreateAsync<ScriptRuntimeGAgent>(controllerRuntimeActorId);
         await RunScriptAsync(
             controllerRuntime,
             controllerRuntimeActorId,
-            new RunScriptActorRequest(
-                RunId: "run-interaction-1",
-                InputPayload: Any.Pack(new Struct
+            new RunScriptRequestedEvent
+            {
+                RunId = "run-interaction-1",
+                InputPayload = Any.Pack(new Struct
                 {
                     Fields =
                     {
@@ -320,24 +327,25 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
                             BuildSimpleRuntimeSource("InvokedDefinitionRuntime", "InvokedDefinitionEvent")),
                     },
                 }),
-                ScriptRevision: "rev-interaction-1",
-                DefinitionActorId: controllerDefinitionActorId,
-                RequestedEventType: "script.interaction.exercise"));
+                ScriptRevision = "rev-interaction-1",
+                DefinitionActorId = controllerDefinitionActorId,
+                RequestedEventType = "script.interaction.exercise",
+            });
 
         var summary = GetSummary(controllerRuntime);
         summary.Fields["ai_response_length"].StringValue.Should().Be("0");
 
         var publishedDefinitionId = summary.Fields["published_definition_actor_id"].StringValue;
         var sendToDefinitionId = summary.Fields["sendto_definition_actor_id"].StringValue;
-        var invokeDefinitionId = summary.Fields["invoke_definition_actor_id"].StringValue;
+        var upsertDefinitionId = summary.Fields["upsert_definition_actor_id"].StringValue;
 
         (await runtime.ExistsAsync(publishedDefinitionId)).Should().BeTrue();
         (await runtime.ExistsAsync(sendToDefinitionId)).Should().BeTrue();
-        (await runtime.ExistsAsync(invokeDefinitionId)).Should().BeTrue();
-        var invokeDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(invokeDefinitionId))!.Agent;
+        (await runtime.ExistsAsync(upsertDefinitionId)).Should().BeTrue();
+        var upsertDefinition = (ScriptDefinitionGAgent)(await runtime.GetAsync(upsertDefinitionId))!.Agent;
 
-        invokeDefinition.State.ScriptId.Should().Be("interaction-invoke-script");
-        invokeDefinition.State.Revision.Should().Be("rev-invoke-1");
+        upsertDefinition.State.ScriptId.Should().Be("interaction-invoke-script");
+        upsertDefinition.State.Revision.Should().Be("rev-invoke-1");
     }
 
     private static async Task UpsertDefinitionAsync(
@@ -348,26 +356,23 @@ public class ScriptAutonomousEvolutionComprehensiveE2ETests
         string source)
     {
         var actor = await runtime.CreateAsync<ScriptDefinitionGAgent>(definitionActorId);
-        var upsert = new UpsertScriptDefinitionActorRequestAdapter();
         await actor.HandleEventAsync(
-            upsert.Map(
-                new UpsertScriptDefinitionActorRequest(
-                    ScriptId: scriptId,
-                    ScriptRevision: revision,
-                    SourceText: source,
-                    SourceHash: $"hash-{scriptId}-{revision}"),
-                definitionActorId),
+            ScriptingCommandEnvelopeTestKit.CreateUpsertDefinition(
+                definitionActorId,
+                scriptId,
+                revision,
+                source,
+                $"hash-{scriptId}-{revision}"),
             CancellationToken.None);
     }
 
     private static async Task RunScriptAsync(
         IActor runtimeActor,
         string runtimeActorId,
-        RunScriptActorRequest command)
+        RunScriptRequestedEvent command)
     {
-        var run = new RunScriptActorRequestAdapter();
         await runtimeActor.HandleEventAsync(
-            run.Map(command, runtimeActorId),
+            ScriptingCommandEnvelopeTestKit.CreateRunScript(runtimeActorId, command),
             CancellationToken.None);
     }
 
@@ -999,7 +1004,7 @@ public sealed class CatalogControlOrchestrator : IScriptPackageRuntime
 }
 """;
 
-    private const string InteractionInvocationOrchestratorSource = """
+    private const string InteractionUpsertOrchestratorSource = """
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1009,7 +1014,7 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
+public sealed class InteractionUpsertOrchestrator : IScriptPackageRuntime
 {
     public async Task<ScriptHandlerResult> HandleRequestedEventAsync(
         ScriptRequestedEventEnvelope requestedEvent,
@@ -1034,7 +1039,7 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
             {
                 Value = "interaction.publish.signal",
             },
-            EventDirection.Down,
+            TopologyAudience.Children,
             ct);
         await context.Capabilities.UnlinkAgentAsync(publishedDefinitionActorId, ct);
 
@@ -1053,19 +1058,16 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
             },
             ct);
 
-        var invokeDefinitionActorId = await context.Capabilities.CreateAgentAsync(
+        var upsertDefinitionActorId = await context.Capabilities.CreateAgentAsync(
             definitionType,
-            "invoke-definition-" + context.RunId,
+            "upsert-definition-" + context.RunId,
             ct);
-        await context.Capabilities.InvokeAgentAsync(
-            invokeDefinitionActorId,
-            new Aevatar.Scripting.Abstractions.UpsertScriptDefinitionRequestedEvent
-            {
-                ScriptId = "interaction-invoke-script",
-                ScriptRevision = "rev-invoke-1",
-                SourceText = invokeSource,
-                SourceHash = "hash-invoke-1",
-            },
+        upsertDefinitionActorId = await context.Capabilities.UpsertScriptDefinitionAsync(
+            "interaction-invoke-script",
+            "rev-invoke-1",
+            invokeSource,
+            "hash-invoke-1",
+            upsertDefinitionActorId,
             ct);
 
         var summary = new Struct
@@ -1075,7 +1077,7 @@ public sealed class InteractionInvocationOrchestrator : IScriptPackageRuntime
                 ["ai_response_length"] = Value.ForString((aiResponse ?? string.Empty).Length.ToString()),
                 ["published_definition_actor_id"] = Value.ForString(publishedDefinitionActorId),
                 ["sendto_definition_actor_id"] = Value.ForString(sendToDefinitionActorId),
-                ["invoke_definition_actor_id"] = Value.ForString(invokeDefinitionActorId),
+                ["upsert_definition_actor_id"] = Value.ForString(upsertDefinitionActorId),
             },
         };
 

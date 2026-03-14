@@ -15,14 +15,16 @@ public interface IEventContext
 
     Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default)
+        TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage;
 
     Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         throw new NotSupportedException(

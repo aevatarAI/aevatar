@@ -93,13 +93,19 @@ public static class RoleGAgentFactory
         IServiceProvider services)
     {
         if (string.IsNullOrWhiteSpace(eventModules))
+        {
+            agent.SetModules([]);
             return;
+        }
 
         var factories = services.GetServices<IEventModuleFactory<IEventHandlerContext>>().ToList();
         var moduleNames = eventModules
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (moduleNames.Length == 0)
+        {
+            agent.SetModules([]);
             return;
+        }
 
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
         var rawModules = new List<IEventModule<IEventHandlerContext>>();
@@ -139,8 +145,7 @@ public static class RoleGAgentFactory
             }
         }
 
-        if (finalModules.Count > 0)
-            agent.SetModules(finalModules);
+        agent.SetModules(finalModules);
     }
 
     private static string? PreferTopLevelText(string? topLevel, string? fallback)

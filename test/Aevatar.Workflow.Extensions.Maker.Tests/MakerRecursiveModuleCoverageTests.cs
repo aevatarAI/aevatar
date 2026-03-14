@@ -70,8 +70,8 @@ public class MakerRecursiveModuleCoverageTests
         final.RunId.Should().Be(runId);
         final.Success.Should().BeTrue();
         final.Output.Should().Be("LEAF_ANSWER");
-        final.Metadata["maker.recursive"].Should().Be("true");
-        final.Metadata["maker.stage"].Should().Be("leaf");
+        final.Annotations["maker.recursive"].Should().Be("true");
+        final.Annotations["maker.stage"].Should().Be("leaf");
     }
 
     [Fact]
@@ -190,8 +190,7 @@ public class MakerRecursiveModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 
@@ -205,7 +204,7 @@ public class MakerRecursiveModuleCoverageTests
             InboundEnvelope = new EventEnvelope();
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId { get; }
         public string RunId => AgentId;
@@ -244,32 +243,36 @@ public class MakerRecursiveModuleCoverageTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct);
+            _ = options;
+            return PublishAsync(evt, TopologyAudience.Self, ct);
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }
@@ -279,14 +282,14 @@ public class MakerRecursiveModuleCoverageTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = period;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }

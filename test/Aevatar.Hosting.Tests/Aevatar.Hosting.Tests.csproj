@@ -9,6 +9,7 @@
     <RootNamespace>Aevatar.Hosting.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />

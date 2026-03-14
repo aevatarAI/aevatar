@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -17,11 +16,6 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
     : GAgentBase<ProjectionDispatchCompensationOutboxState>
 {
     public const string ActorIdPrefix = "projection.compensation.outbox";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
 
     public static string BuildActorId(string scopeId)
     {
@@ -91,7 +85,7 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             FailedStore = evt.FailedStore,
             SucceededStores = { evt.SucceededStores },
             ReadModelType = evt.ReadModelType,
-            ReadModelJson = evt.ReadModelJson,
+            ReadModel = evt.ReadModel?.Clone(),
             Key = evt.Key,
             EnqueuedAtUtc = evt.EnqueuedAtUtc,
             NextVisibleAtUtc = evt.EnqueuedAtUtc,
@@ -144,23 +138,12 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             return;
         }
 
-        WorkflowExecutionReport? readModel;
-        try
-        {
-            readModel = JsonSerializer.Deserialize<WorkflowExecutionReport>(entry.ReadModelJson, JsonOptions);
-        }
-        catch (Exception ex)
-        {
-            await ScheduleRetryAsync(entry, ex);
-            return;
-        }
-
-        if (readModel == null)
+        if (!WorkflowExecutionReportSnapshotMapper.TryUnpack(entry.ReadModel, out var readModel) || readModel == null)
         {
             await ScheduleRetryAsync(
                 entry,
                 new InvalidOperationException(
-                    $"Compensation replay deserialized null read model for record '{entry.RecordId}'."));
+                    $"Compensation replay payload is missing or incompatible for record '{entry.RecordId}'."));
             return;
         }
 

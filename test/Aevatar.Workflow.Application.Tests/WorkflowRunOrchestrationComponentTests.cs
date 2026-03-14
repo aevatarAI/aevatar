@@ -12,15 +12,19 @@ public sealed class WorkflowRunOrchestrationComponentTests
     [Fact]
     public async Task WorkflowRunCommandTargetResolver_ShouldFail_WhenProjectionIsDisabled()
     {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None));
         var resolver = new WorkflowRunCommandTargetResolver(
-            new FakeWorkflowRunActorResolver(
-                new WorkflowActorResolutionResult(new FakeActor("actor-1"), "auto", WorkflowChatRunStartError.None)),
-            new FakeProjectionPort { ProjectionEnabled = false });
+            actorResolver,
+            new FakeProjectionPort { ProjectionEnabled = false },
+            new FakeWorkflowRunActorPort(),
+            new FakeDetachedCleanupScheduler());
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
+        actorResolver.ResolveCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -30,7 +34,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var resolver = new WorkflowRunCommandTargetResolver(
             new FakeWorkflowRunActorResolver(
                 new WorkflowActorResolutionResult(actor, "auto", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
-            new FakeProjectionPort());
+            new FakeProjectionPort(),
+            new FakeWorkflowRunActorPort(),
+            new FakeDetachedCleanupScheduler());
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
@@ -49,8 +55,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
             EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "direct", [], projectionPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var target = new WorkflowRunCommandTarget(
+            new FakeActor("actor-1"),
+            "direct",
+            [],
+            projectionPort,
+            actorPort,
+            new FakeDetachedCleanupScheduler());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -78,12 +90,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
             EnsureLease = null,
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
             ["definition-1", "actor-1", "definition-1"],
-            projectionPort);
+            projectionPort,
+            actorPort,
+            new FakeDetachedCleanupScheduler());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -110,12 +124,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort, actorPort);
+        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
             ["definition-1", "actor-1"],
-            projectionPort);
+            projectionPort,
+            actorPort,
+            new FakeDetachedCleanupScheduler());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -136,6 +152,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
     {
         private readonly WorkflowActorResolutionResult _result;
+        public int ResolveCallCount { get; private set; }
 
         public FakeWorkflowRunActorResolver(WorkflowActorResolutionResult result)
         {
@@ -148,16 +165,17 @@ public sealed class WorkflowRunOrchestrationComponentTests
         {
             _ = request;
             ct.ThrowIfCancellationRequested();
+            ResolveCallCount++;
             return Task.FromResult(_result);
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }
         public Exception? AttachException { get; set; }
-        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEvent> Sink)> AttachCalls { get; } = [];
+        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> AttachCalls { get; } = [];
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -176,7 +194,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -189,7 +207,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -238,6 +256,32 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public string ActorId { get; }
         public string CommandId { get; }
+    }
+
+    private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
+    {
+        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeActor : IActor

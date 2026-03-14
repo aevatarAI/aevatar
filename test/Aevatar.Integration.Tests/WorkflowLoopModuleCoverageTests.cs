@@ -168,6 +168,41 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenStartParametersProvided_ShouldExposeContextVariablesToStepExpressions()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "assign",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["target"] = "result",
+                    ["value"] = "${session_id}",
+                },
+            }));
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-start-parameters",
+                Input = "seed",
+                Parameters =
+                {
+                    ["session_id"] = "session-ctx-001",
+                    ["workflow.session_id"] = "workflow-session-ctx-001",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.Parameters["value"].Should().Be("session-ctx-001");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenAlreadyRunning_ShouldPublishFailure()
     {
         var module = new WorkflowLoopModule();
@@ -558,7 +593,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["branch"] = "yes" },
+                BranchKey = "yes",
             }),
             ctx,
             CancellationToken.None);
@@ -591,7 +626,7 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "branch-output",
-                Metadata = { ["next_step"] = "s3" },
+                NextStepId = "s3",
             }),
             ctx,
             CancellationToken.None);
@@ -716,6 +751,51 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenOnErrorFallbackHasNoOutput_ShouldPassErrorTextToFallbackStep()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "workflow_yaml_validate",
+                OnError = new StepErrorPolicy
+                {
+                    Strategy = "fallback",
+                    FallbackStep = "repair",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "repair",
+                Type = "llm_call",
+            }));
+        var ctx = CreateContext();
+        const string runId = "run-onerror-fallback-error-input";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "invalid-yaml" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = false,
+                Error = "Invalid workflow YAML: Property 'description' not found on type 'RawStep'.",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var fallbackRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        fallbackRequest.StepId.Should().Be("repair");
+        fallbackRequest.Input.Should().Contain("Property 'description' not found");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenStepCompletesBeforeTimeout_ShouldCancelPendingTimeout()
     {
         var module = new WorkflowLoopModule();
@@ -746,7 +826,8 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         var next = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         next.StepId.Should().Be("s2");
-        ctx.Canceled.Should().ContainSingle(x => x.CallbackId == "workflow-step-timeout:run-cancel-timeout:s1");
+        ctx.Canceled.Should().ContainSingle(x =>
+            x.CallbackId.StartsWith("workflow-step-timeout:run-cancel-timeout:s1:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -878,11 +959,8 @@ public sealed class WorkflowLoopModuleCoverageTests
                 RunId = runId,
                 Success = true,
                 Output = "ignored",
-                Metadata =
-                {
-                    ["assign.target"] = "counter",
-                    ["assign.value"] = "1",
-                },
+                AssignedVariable = "counter",
+                AssignedValue = "1",
             }),
             ctx,
             CancellationToken.None);
@@ -962,8 +1040,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 

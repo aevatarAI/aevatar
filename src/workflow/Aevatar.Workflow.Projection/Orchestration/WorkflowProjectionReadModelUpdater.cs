@@ -50,7 +50,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
             report.Id = actorId;
             if (string.IsNullOrWhiteSpace(report.RootActorId))
                 report.RootActorId = actorId;
-            if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
+            if (report.CompletionStatus is WorkflowExecutionCompletionStatus.Running or WorkflowExecutionCompletionStatus.Unknown)
                 report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
 
             if (report.EndedAt < report.StartedAt)

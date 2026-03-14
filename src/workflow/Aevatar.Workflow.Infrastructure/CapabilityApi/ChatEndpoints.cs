@@ -1,20 +1,26 @@
 using System.Net.WebSockets;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class WorkflowCapabilityEndpoints
 {
+    private const string WorkflowRuntimeDefaultsSectionName = "WorkflowRuntimeDefaults";
+
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
@@ -53,7 +59,7 @@ public static class WorkflowCapabilityEndpoints
     internal static async Task HandleChat(
         HttpContext http,
         ChatInput input,
-        IWorkflowRunInteractionService chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
@@ -70,7 +76,12 @@ public static class WorkflowCapabilityEndpoints
 
         try
         {
-            var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+            var capabilities = TryResolveCapabilities(serviceProvider, logger);
+            var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
+            var normalizedRequest = ChatRunRequestNormalizer.Normalize(
+                input,
+                capabilities,
+                defaultMetadata);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -96,7 +107,7 @@ public static class WorkflowCapabilityEndpoints
                 },
                 ct);
 
-            if (result.Error != WorkflowChatRunStartError.None && !writer.Started)
+            if (!result.Succeeded && !writer.Started)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);
                 var statusCode = ChatRunStartErrorMapper.ToHttpStatusCode(result.Error);
@@ -130,7 +141,8 @@ public static class WorkflowCapabilityEndpoints
         ChatInput input,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> chatRunService,
         ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
@@ -144,7 +156,7 @@ public static class WorkflowCapabilityEndpoints
             });
         }
 
-        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input);
+        var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -189,22 +201,19 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
-        [FromServices] IActorRuntime runtime,
-        [FromServices] IActorDispatchPort dispatchPort,
-        [FromServices] IWorkflowActorBindingReader bindingReader,
+        [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(dispatchPort);
-        ArgumentNullException.ThrowIfNull(bindingReader);
+        ArgumentNullException.ThrowIfNull(resumeService);
 
         try
         {
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var stepId = (input.StepId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
                 string.IsNullOrWhiteSpace(stepId))
@@ -213,59 +222,34 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and stepId are required." });
             }
 
-            var actor = await runtime.GetAsync(actorId);
-            if (actor == null)
-            {
-                scope.MarkResult(StatusCodes.Status404NotFound);
-                return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
-            }
-
-            var binding = await bindingReader.GetAsync(actorId, ct);
-            if (binding?.ActorKind != WorkflowActorKind.Run)
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
-            }
-
-            var resumed = new WorkflowResumedEvent
-            {
-                RunId = runId,
-                StepId = stepId,
-                Approved = input.Approved,
-                UserInput = input.UserInput ?? string.Empty,
-            };
-            if (input.Metadata is { Count: > 0 })
-            {
-                foreach (var (key, value) in input.Metadata)
-                    resumed.Metadata[key] = value;
-            }
-            var commandId = (input.CommandId ?? string.Empty).Trim();
-            var correlationId = string.IsNullOrWhiteSpace(commandId)
-                ? Guid.NewGuid().ToString("N")
-                : commandId;
-
-            await dispatchPort.DispatchAsync(
-                actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(resumed),
-                    PublisherId = "api.workflow.resume",
-                    Direction = EventDirection.Self,
-                    CorrelationId = correlationId,
-                    TargetActorId = actor.Id,
-                },
+            var dispatch = await resumeService.DispatchAsync(
+                new WorkflowResumeCommand(
+                    actorId,
+                    runId,
+                    stepId,
+                    commandId,
+                    input.Approved,
+                    input.UserInput,
+                    NormalizeMetadata(input.Metadata)),
                 ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
 
             return Results.Ok(new
             {
                 accepted = true,
-                actorId,
-                runId,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
                 stepId,
-                commandId = correlationId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
             });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -276,22 +260,20 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task<IResult> HandleSignal(
         WorkflowSignalInput input,
-        [FromServices] IActorRuntime runtime,
-        [FromServices] IActorDispatchPort dispatchPort,
-        [FromServices] IWorkflowActorBindingReader bindingReader,
+        [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(dispatchPort);
-        ArgumentNullException.ThrowIfNull(bindingReader);
+        ArgumentNullException.ThrowIfNull(signalService);
 
         try
         {
             var actorId = (input.ActorId ?? string.Empty).Trim();
             var runId = (input.RunId ?? string.Empty).Trim();
             var signalName = (input.SignalName ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
+            var stepId = NormalizeOptional(input.StepId);
             if (string.IsNullOrWhiteSpace(actorId) ||
                 string.IsNullOrWhiteSpace(runId) ||
                 string.IsNullOrWhiteSpace(signalName))
@@ -300,52 +282,34 @@ public static class WorkflowCapabilityEndpoints
                 return Results.BadRequest(new { error = "actorId, runId and signalName are required." });
             }
 
-            var actor = await runtime.GetAsync(actorId);
-            if (actor == null)
-            {
-                scope.MarkResult(StatusCodes.Status404NotFound);
-                return Results.NotFound(new { error = $"Actor '{actorId}' not found." });
-            }
-
-            var binding = await bindingReader.GetAsync(actorId, ct);
-            if (binding?.ActorKind != WorkflowActorKind.Run)
-            {
-                scope.MarkResult(StatusCodes.Status400BadRequest);
-                return Results.BadRequest(new { error = $"Actor '{actorId}' is not a workflow run actor." });
-            }
-
-            var commandId = (input.CommandId ?? string.Empty).Trim();
-            var correlationId = string.IsNullOrWhiteSpace(commandId)
-                ? Guid.NewGuid().ToString("N")
-                : commandId;
-
-            await dispatchPort.DispatchAsync(
-                actor.Id,
-                new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                    Payload = Any.Pack(new SignalReceivedEvent
-                    {
-                        RunId = runId,
-                        SignalName = signalName,
-                        Payload = input.Payload ?? string.Empty,
-                    }),
-                    PublisherId = "api.workflow.signal",
-                    Direction = EventDirection.Self,
-                    CorrelationId = correlationId,
-                    TargetActorId = actor.Id,
-                },
+            var dispatch = await signalService.DispatchAsync(
+                new WorkflowSignalCommand(
+                    actorId,
+                    runId,
+                    signalName,
+                    commandId,
+                    input.Payload,
+                    stepId),
                 ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
 
             return Results.Ok(new
             {
                 accepted = true,
-                actorId,
-                runId,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
                 signalName,
-                commandId = correlationId,
+                stepId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
             });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -354,19 +318,88 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    private static WorkflowOutputFrame BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
+    private static WorkflowRunEventEnvelope BuildRunContextFrame(WorkflowChatRunAcceptedReceipt receipt) =>
         new()
         {
-            Type = WorkflowRunEventTypes.Custom,
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Name = "aevatar.run.context",
-            Value = new
+            Custom = new WorkflowCustomEventPayload
             {
-                receipt.ActorId,
-                receipt.WorkflowName,
-                receipt.CommandId,
+                Name = "aevatar.run.context",
+                Payload = Any.Pack(new WorkflowRunContextPayload
+                {
+                    ActorId = receipt.ActorId,
+                    WorkflowName = receipt.WorkflowName,
+                    CommandId = receipt.CommandId,
+                }),
             },
         };
+
+    private static IResult MapRunControlDispatchFailure(
+        WorkflowRunControlStartError error,
+        ApiRequestScope scope)
+    {
+        var (statusCode, message) = error.Code switch
+        {
+            WorkflowRunControlStartErrorCode.InvalidActorId => (
+                StatusCodes.Status400BadRequest,
+                "actorId is required."),
+            WorkflowRunControlStartErrorCode.InvalidRunId => (
+                StatusCodes.Status400BadRequest,
+                "runId is required."),
+            WorkflowRunControlStartErrorCode.InvalidStepId => (
+                StatusCodes.Status400BadRequest,
+                "stepId is required."),
+            WorkflowRunControlStartErrorCode.InvalidSignalName => (
+                StatusCodes.Status400BadRequest,
+                "signalName is required."),
+            WorkflowRunControlStartErrorCode.ActorNotFound => (
+                StatusCodes.Status404NotFound,
+                $"Actor '{error.ActorId}' not found."),
+            WorkflowRunControlStartErrorCode.ActorNotWorkflowRun => (
+                StatusCodes.Status400BadRequest,
+                $"Actor '{error.ActorId}' is not a workflow run actor."),
+            WorkflowRunControlStartErrorCode.RunBindingMissing => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' does not have a bound run id."),
+            WorkflowRunControlStartErrorCode.RunBindingMismatch => (
+                StatusCodes.Status409Conflict,
+                $"Actor '{error.ActorId}' is bound to run '{error.BoundRunId}', not '{error.RequestedRunId}'."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Workflow control dispatch failed."),
+        };
+        scope.MarkResult(statusCode);
+        return Results.Json(new { error = message }, statusCode: statusCode);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? null
+            : normalized;
+    }
+
+    private static IReadOnlyDictionary<string, string>? NormalizeMetadata(IDictionary<string, string>? metadata)
+    {
+        if (metadata == null || metadata.Count == 0)
+            return null;
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            var normalizedValue = NormalizeOptional(value);
+            if (normalizedKey == null || normalizedValue == null)
+                continue;
+
+            normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized.Count == 0
+            ? null
+            : normalized;
+    }
 
     private static async Task WriteJsonErrorResponseAsync(
         HttpContext http,
@@ -395,12 +428,14 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             await writer.WriteAsync(
-                new WorkflowOutputFrame
+                new WorkflowRunEventEnvelope
                 {
-                    Type = WorkflowRunEventTypes.RunError,
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    Code = "EXECUTION_FAILED",
-                    Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                    RunError = new WorkflowRunErrorEventPayload
+                    {
+                        Code = "EXECUTION_FAILED",
+                        Message = $"Workflow execution failed: {SanitizeErrorMessage(ex.Message)}",
+                    },
                 },
                 ct);
         }
@@ -423,7 +458,7 @@ public static class WorkflowCapabilityEndpoints
 
     internal static async Task HandleChatWebSocket(
         HttpContext http,
-        IWorkflowRunInteractionService chatRunService,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -463,7 +498,16 @@ public static class WorkflowCapabilityEndpoints
             }
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
-            await ChatWebSocketRunCoordinator.ExecuteAsync(socket, command, chatRunService, scope, ct);
+            var capabilities = TryResolveCapabilities(http.RequestServices, logger);
+            var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
+            await ChatWebSocketRunCoordinator.ExecuteAsync(
+                socket,
+                command,
+                chatRunService,
+                scope,
+                ct,
+                capabilities,
+                defaultMetadata);
         }
         catch (OperationCanceledException)
         {
@@ -490,6 +534,76 @@ public static class WorkflowCapabilityEndpoints
         {
             await ChatWebSocketProtocol.CloseAsync(socket, ct);
         }
+    }
+
+    private static WorkflowCapabilitiesDocument? TryResolveCapabilities(IServiceProvider? serviceProvider, ILogger? logger)
+    {
+        if (serviceProvider == null)
+            return null;
+
+        try
+        {
+            var queryService = serviceProvider.GetService(typeof(IWorkflowExecutionQueryApplicationService))
+                               as IWorkflowExecutionQueryApplicationService;
+            return queryService?.GetCapabilities();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to resolve capabilities for workflow authoring prompt augmentation.");
+            return null;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> TryResolveRuntimeDefaultMetadata(
+        IServiceProvider? serviceProvider,
+        ILogger? logger)
+    {
+        if (serviceProvider == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            var configuration = serviceProvider.GetService(typeof(IConfiguration)) as IConfiguration;
+            return ParseRuntimeDefaultMetadata(configuration);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex, "Failed to resolve workflow runtime default metadata from configuration.");
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseRuntimeDefaultMetadata(IConfiguration? configuration)
+    {
+        if (configuration == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var section = configuration.GetSection(WorkflowRuntimeDefaultsSectionName);
+        if (!section.Exists())
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (rawKey, rawValue) in section.AsEnumerable(makePathsRelative: true))
+        {
+            var normalizedKey = NormalizeRuntimeDefaultKey(rawKey);
+            var normalizedValue = string.IsNullOrWhiteSpace(rawValue) ? string.Empty : rawValue.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            metadata[normalizedKey] = normalizedValue;
+        }
+
+        return metadata;
+    }
+
+    private static string NormalizeRuntimeDefaultKey(string? rawKey)
+    {
+        if (string.IsNullOrWhiteSpace(rawKey))
+            return string.Empty;
+
+        return rawKey
+            .Trim()
+            .Replace(':', '.');
     }
 
 }

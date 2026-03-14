@@ -48,7 +48,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = false,
                     Error = "delay step requires non-empty run_id and step_id",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -79,13 +79,20 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Success = true,
                     Output = request.Input ?? string.Empty,
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
-            var callbackId = BuildDelayCallbackId(runId, stepId);
+            state.Pending[BuildPendingKey(pendingKey)] = new PendingDelayState
+            {
+                Input = request.Input ?? string.Empty,
+                CallbackId = BuildDelayCallbackId(runId, stepId, ResolveOriginEnvelopeId(envelope)),
+            };
+            await SaveStateAsync(state, ctx, ct);
+
+            var pendingState = state.Pending[BuildPendingKey(pendingKey)];
             var lease = await ctx.ScheduleSelfDurableTimeoutAsync(
-                callbackId,
+                pendingState.CallbackId,
                 TimeSpan.FromMilliseconds(durationMs),
                 new DelayStepTimeoutFiredEvent
                 {
@@ -95,11 +102,8 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
                 },
                 ct: ct);
 
-            state.Pending[BuildPendingKey(pendingKey)] = new PendingDelayState
-            {
-                Lease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease),
-                Input = request.Input ?? string.Empty,
-            };
+            pendingState.Lease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            state.Pending[BuildPendingKey(pendingKey)] = pendingState;
             await SaveStateAsync(state, ctx, ct);
             return;
         }
@@ -118,7 +122,7 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
         if (!stateForCallback.Pending.TryGetValue(BuildPendingKey(firedKey), out var pending))
             return;
 
-        if (!WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease))
+        if (!MatchesPendingCallback(envelope, pending))
         {
             ctx.Logger.LogDebug(
                 "Delay {StepId}: ignore callback without matching lease metadata run={RunId}",
@@ -127,16 +131,16 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        stateForCallback.Pending.Remove(BuildPendingKey(firedKey));
-        await SaveStateAsync(stateForCallback, ctx, ct);
-
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = stepIdFired,
             RunId = runIdFired,
             Success = true,
             Output = pending.Input,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
+
+        stateForCallback.Pending.Remove(BuildPendingKey(firedKey));
+        await SaveStateAsync(stateForCallback, ctx, ct);
     }
 
     private async Task CancelPendingAsync(
@@ -148,13 +152,26 @@ public sealed class DelayModule : IEventModule<IWorkflowExecutionContext>
         if (!state.Pending.Remove(BuildPendingKey(key), out var pending))
             return;
 
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
-
         await SaveStateAsync(state, ctx, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
     }
 
-    private static string BuildDelayCallbackId(string runId, string stepId) =>
-        RuntimeCallbackKeyComposer.BuildCallbackId("delay-step", runId, stepId);
+    private static bool MatchesPendingCallback(EventEnvelope envelope, PendingDelayState pending)
+    {
+        if (pending.Lease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, pending.Lease);
+
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.CallbackId, StringComparison.Ordinal);
+    }
+
+    private static string ResolveOriginEnvelopeId(EventEnvelope envelope) =>
+        string.IsNullOrWhiteSpace(envelope.Id)
+            ? Guid.NewGuid().ToString("N")
+            : envelope.Id;
+
+    private static string BuildDelayCallbackId(string runId, string stepId, string originEnvelopeId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("delay-step", runId, stepId, originEnvelopeId);
 
     private readonly record struct DelayPendingKey(string RunId, string StepId);
 

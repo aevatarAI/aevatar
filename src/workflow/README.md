@@ -24,7 +24,8 @@
 - source actor inspection 统一走 workflow 专用 `IWorkflowActorBindingReader`；command path 通过 actor-owned query/reply 读取 binding，不再依赖 `actor.Agent` 具体实例形状，也不再暴露 generic raw-state probing。
 - `/api/workflows/resume` 与 `/api/workflows/signal` 必须指向 run actor id，而不是 definition actor id。
 - run actor 的投影、实时输出、查询默认都以 run actor id 为作用域。
-- 显式传入的 definition actor id 是强约束：若该 actor 不存在，则按该 id 创建；若已存在且是 `WorkflowGAgent`，则原地复用或重绑；若已存在但不是 workflow definition actor，则直接失败，不再静默退化成新的隐藏 definition actor。
+- 显式传入的 definition actor id 是强约束：若该 actor 不存在，则按该 id 创建；若已存在且是 `WorkflowGAgent`，则仅在 workflow name 一致时原地复用或更新 definition payload；若已绑定到不同 workflow name，直接失败；若已存在但不是 workflow definition actor，也直接失败，不再静默退化成新的隐藏 definition actor。
+- 内置模块包提供最小跨 actor 发送模块 `actor_send`，直接复用 `IWorkflowExecutionContext.SendToAsync(...)`，不再在 Foundation 上叠一层公共 messaging port。
 
 补充口径：
 
@@ -60,7 +61,8 @@ flowchart LR
 4. `WorkflowRunCommandTargetBinder` 为 run actor 建立 projection lease 与 live sink，并由 `WorkflowRunAcceptedReceiptFactory` 生成 accepted receipt。
 5. `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 把 `ChatRequestEvent` 包进 `EventEnvelope` 后投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责。
 6. `WorkflowRunGAgent` 在自己的事件管线中驱动 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。
-7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `IWorkflowRunInteractionService` 负责把输出帧持续回推给客户端。
+7. Projection 与 AGUI 从同一条 run actor envelope 流投影出查询模型和实时事件；SSE/WS 路径由 `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 持续回推事件给客户端。
+8. `resume/signal` 命令同样先进入 CQRS `ICommandDispatchService`，再由 `WorkflowResumeCommandEnvelopeFactory` / `WorkflowSignalCommandEnvelopeFactory` 构建 run control envelope。
 
 ## 状态边界
 
@@ -77,6 +79,18 @@ flowchart LR
   - 所有模块运行态（通过 `WorkflowRunState.ExecutionStates` 以 `scope_key -> google.protobuf.Any` 形式持久化）
 
 模块私有字段不再作为 `run/step/session` 的事实源。`delay / wait_signal / human_* / parallel* / map_reduce / llm_call / evaluate / reflect / while / foreach / race / cache` 等运行态都必须落到 run actor 状态里。
+
+补充约束：
+
+- 通用 actor 发送态使用 `ActorSendState`（`target_actor_id + payload`）。
+
+这个 typed wrapper 定义在 `src/workflow/Aevatar.Workflow.Core/workflow_state.proto`，并通过 `WorkflowRunState.ExecutionStates` 持久化。
+
+## 通用 Actor 通信模块
+
+- `actor_send`：从 `send_state_key` 读取 `ActorSendState`，直接调用 `IWorkflowExecutionContext.SendToAsync(...)`，再发出最小 `StepCompletedEvent`。
+- protocol-specific query/reply 不再由 `Workflow.Core` 提供通用反射模块；需要 query 时应由协议拥有者定义强类型步骤或在 source actor 中显式完成 request/reply。
+- `actor_send` 注册在 `WorkflowCoreModulePack`，普通 workflow host/runtime 装配后即可直接使用。
 
 ## Projection 语义
 

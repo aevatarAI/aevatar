@@ -16,12 +16,15 @@ public sealed class PropagationPolicyTests
         var inbound = new EventEnvelope
         {
             Id = "evt-in-1",
-            CorrelationId = "corr-1",
             Payload = Any.Pack(new PingEvent { Message = "in" }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+            },
         };
-        inbound.Metadata["tenant"] = "acme";
-        inbound.Metadata["trace.causation_id"] = "old";
-        inbound.Metadata["command.id"] = "cmd-1";
+        inbound.Propagation.Baggage["tenant"] = "acme";
+        inbound.Propagation.CausationEventId = "old";
+        inbound.Propagation.Baggage["command.id"] = "cmd-1";
 
         var outbound = new EventEnvelope
         {
@@ -31,10 +34,10 @@ public sealed class PropagationPolicyTests
 
         Policy.Apply(outbound, inbound);
 
-        outbound.CorrelationId.ShouldBe("corr-1");
-        outbound.Metadata["tenant"].ShouldBe("acme");
-        outbound.Metadata[EnvelopeMetadataKeys.TraceCausationId].ShouldBe("evt-in-1");
-        outbound.Metadata.ContainsKey("command.id").ShouldBeFalse();
+        outbound.Propagation.CorrelationId.ShouldBe("corr-1");
+        outbound.Propagation.Baggage["tenant"].ShouldBe("acme");
+        outbound.Propagation.CausationEventId.ShouldBe("evt-in-1");
+        outbound.Propagation.Baggage["command.id"].ShouldBe("cmd-1");
     }
 
     [Fact]
@@ -43,21 +46,62 @@ public sealed class PropagationPolicyTests
         var inbound = new EventEnvelope
         {
             Id = "evt-in-2",
-            CorrelationId = "corr-inbound",
             Payload = Any.Pack(new PingEvent { Message = "in" }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-inbound",
+            },
         };
 
         var outbound = new EventEnvelope
         {
             Id = "evt-out-2",
-            CorrelationId = "corr-explicit",
+            Payload = Any.Pack(new PongEvent { Reply = "out" }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-explicit",
+            },
+        };
+
+        Policy.Apply(outbound, inbound);
+
+        outbound.Propagation.CorrelationId.ShouldBe("corr-explicit");
+        outbound.Propagation.CausationEventId.ShouldBe("evt-in-2");
+    }
+
+    [Fact]
+    public void Apply_ShouldNotPropagateRuntimeDedupOriginMetadata()
+    {
+        var inbound = new EventEnvelope
+        {
+            Id = "evt-in-dedup",
+            Payload = Any.Pack(new PingEvent { Message = "in" }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-dedup",
+            },
+            Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = "dispatch-op-1",
+                },
+            },
+        };
+        inbound.Propagation.Baggage["tenant"] = "acme";
+
+        var outbound = new EventEnvelope
+        {
+            Id = "evt-out-dedup",
             Payload = Any.Pack(new PongEvent { Reply = "out" }),
         };
 
         Policy.Apply(outbound, inbound);
 
-        outbound.CorrelationId.ShouldBe("corr-explicit");
-        outbound.Metadata[EnvelopeMetadataKeys.TraceCausationId].ShouldBe("evt-in-2");
+        outbound.Runtime.ShouldBeNull();
+        outbound.Propagation.Baggage["tenant"].ShouldBe("acme");
+        outbound.Propagation.CausationEventId.ShouldBe("evt-in-dedup");
+        outbound.Propagation.CorrelationId.ShouldBe("corr-dedup");
     }
 
     [Fact]
@@ -66,8 +110,11 @@ public sealed class PropagationPolicyTests
         var firstInbound = new EventEnvelope
         {
             Id = "evt-1",
-            CorrelationId = "corr-chain",
             Payload = Any.Pack(new PingEvent { Message = "first" }),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-chain",
+            },
         };
 
         var secondEnvelope = new EventEnvelope
@@ -84,7 +131,7 @@ public sealed class PropagationPolicyTests
         };
         Policy.Apply(thirdEnvelope, secondEnvelope);
 
-        thirdEnvelope.CorrelationId.ShouldBe("corr-chain");
-        thirdEnvelope.Metadata[EnvelopeMetadataKeys.TraceCausationId].ShouldBe("evt-2");
+        thirdEnvelope.Propagation.CorrelationId.ShouldBe("corr-chain");
+        thirdEnvelope.Propagation.CausationEventId.ShouldBe("evt-2");
     }
 }

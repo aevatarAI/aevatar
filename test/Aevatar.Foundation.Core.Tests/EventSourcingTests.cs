@@ -2,6 +2,7 @@
 
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Helpers;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -477,6 +478,42 @@ public class StateEventApplierIntegrationTests
         agent2.State.Count.ShouldBe(5);
     }
 
+    [Fact]
+    public async Task PersistDomainEventAsync_ShouldPublishCommittedEvents_AsObservation()
+    {
+        var store = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var services = new ServiceCollection()
+            .AddRuntimeScheduler()
+            .AddSingleton<IEventStore>(store)
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>(Array.Empty<IGAgentExecutionHook>())
+            .BuildServiceProvider();
+
+        var agent = new ApplierBackedCounterAgent
+        {
+            Services = services,
+            EventPublisher = publisher,
+            CommittedStateEventPublisher = publisher,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
+        };
+        agent.SetId("observe-agent");
+
+        await agent.ActivateAsync();
+        var inbound = TestHelper.Envelope(new IncrementEvent { Amount = 4 });
+        await agent.HandleEventAsync(inbound);
+
+        agent.State.Count.ShouldBe(4);
+        publisher.Observed.ShouldHaveSingleItem();
+        var published = publisher.Observed[0].Event.ShouldBeOfType<CommittedStateEventPublished>();
+        published.StateEvent.ShouldNotBeNull();
+        published.StateEvent.AgentId.ShouldBe("observe-agent");
+        published.StateEvent.EventData.Unpack<IncrementEvent>().Amount.ShouldBe(4);
+        publisher.Observed[0].SourceEnvelope.ShouldBeSameAs(inbound);
+    }
+
     private sealed class ApplierBackedCounterAgent : TestGAgentBase<CounterState>
     {
         [EventHandler]
@@ -508,6 +545,56 @@ public class StateEventApplierIntegrationTests
                 Count = current.Count - evt.Amount,
                 Name = current.Name,
             };
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher, ICommittedStateEventPublisher
+    {
+        public List<(IMessage Event, TopologyAudience Direction, EventEnvelope? SourceEnvelope)> Published { get; } = [];
+        public List<(IMessage Event, EventEnvelope? SourceEnvelope)> Observed { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Published.Add((evt, direction, sourceEnvelope));
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = evt;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PublishAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = audience;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
+            Observed.Add((evt, sourceEnvelope));
+            return Task.CompletedTask;
+        }
     }
 }
 

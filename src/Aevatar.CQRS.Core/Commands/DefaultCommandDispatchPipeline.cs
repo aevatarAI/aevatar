@@ -33,30 +33,36 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         TCommand command,
         CancellationToken ct = default)
     {
+        var prepared = await PrepareAsync(command, ct);
+        if (!prepared.Succeeded || prepared.Target == null)
+            return prepared;
+
+        await DispatchPreparedAsync(prepared.Target, ct);
+        return prepared;
+    }
+
+    public async Task<CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>> PrepareAsync(
+        TCommand command,
+        CancellationToken ct = default)
+    {
         var resolution = await _targetResolver.ResolveAsync(command, ct);
         if (!resolution.Succeeded || resolution.Target == null)
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(resolution.Error);
 
         var target = resolution.Target;
-        var context = _contextPolicy.Create(target.TargetId);
+        var seed = command is ICommandContextSeed contextSeed
+            ? contextSeed
+            : null;
+        var context = _contextPolicy.Create(
+            target.TargetId,
+            seed?.Headers,
+            seed?.CommandId,
+            seed?.CorrelationId);
         var binding = await _targetBinder.BindAsync(command, target, context, ct);
         if (!binding.Succeeded)
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(binding.Error);
 
         var envelope = _envelopeFactory.CreateEnvelope(command, context);
-
-        try
-        {
-            await _targetDispatcher.DispatchAsync(target, envelope, ct);
-        }
-        catch
-        {
-            if (target is ICommandDispatchCleanupAware cleanupAware)
-                await cleanupAware.CleanupAfterDispatchFailureAsync(CancellationToken.None);
-
-            throw;
-        }
-
         var receipt = _receiptFactory.Create(target, context);
         return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
             new CommandDispatchExecution<TTarget, TReceipt>
@@ -66,5 +72,25 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
                 Envelope = envelope,
                 Receipt = receipt,
             });
+    }
+
+    public async Task DispatchPreparedAsync(
+        CommandDispatchExecution<TTarget, TReceipt> execution,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        var target = execution.Target;
+
+        try
+        {
+            await _targetDispatcher.DispatchAsync(target, execution.Envelope, ct);
+        }
+        catch
+        {
+            if (target is ICommandDispatchCleanupAware cleanupAware)
+                await cleanupAware.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+            throw;
+        }
     }
 }

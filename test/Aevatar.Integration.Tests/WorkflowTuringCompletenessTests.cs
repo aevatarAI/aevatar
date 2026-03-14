@@ -327,8 +327,7 @@ public sealed class WorkflowTuringCompletenessTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "workflow-turing-test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("workflow-turing-test", TopologyAudience.Self),
         };
     }
 

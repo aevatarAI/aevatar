@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
-internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext
+internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowExecutionContext, IWorkflowExecutionItemsContext
 {
     private readonly Dictionary<string, long> _generations = new(StringComparer.Ordinal);
 
@@ -22,10 +22,11 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         InboundEnvelope = new EventEnvelope();
     }
 
-    public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+    public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
+    public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
     public List<ScheduledCallback> Scheduled { get; } = [];
     public List<CanceledCallback> Canceled { get; } = [];
-    public Action<IMessage, EventDirection>? OnPublish { get; set; }
+    public Action<IMessage, TopologyAudience>? OnPublish { get; set; }
 
     public EventEnvelope InboundEnvelope { get; }
     public string AgentId => Agent.Id;
@@ -93,12 +94,45 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         return host.ClearExecutionStateAsync(scopeKey, ct);
     }
 
+    public bool TryGetItem<TItem>(string itemKey, out TItem? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (Agent is IWorkflowExecutionStateHost host &&
+            host.TryGetExecutionItem(itemKey, out var boxed) &&
+            boxed is TItem typed)
+        {
+            value = typed;
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
+    public void SetItem(string itemKey, object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (Agent is not IWorkflowExecutionStateHost host)
+            throw new InvalidOperationException("Workflow execution items host is required.");
+
+        host.SetExecutionItem(itemKey, value);
+    }
+
+    public bool RemoveItem(string itemKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return Agent is IWorkflowExecutionStateHost host &&
+               host.RemoveExecutionItem(itemKey);
+    }
+
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default)
+        TopologyAudience direction = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
+        _ = options;
         Published.Add((evt, direction));
         OnPublish?.Invoke(evt, direction);
         return Task.CompletedTask;
@@ -107,21 +141,23 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
     public Task SendToAsync<TEvent>(
         string targetActorId,
         TEvent evt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
-        _ = targetActorId;
-        return PublishAsync(evt, EventDirection.Self, ct);
+        Sent.Add((targetActorId, evt));
+        _ = options;
+        return PublishAsync(evt, TopologyAudience.Self, ct);
     }
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
-        var lease = Schedule(callbackId, evt, dueTime, period: null, metadata);
+        var lease = Schedule(callbackId, evt, dueTime, period: null, options);
         return Task.FromResult(lease);
     }
 
@@ -130,10 +166,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
-        var lease = Schedule(callbackId, evt, dueTime, period, metadata);
+        var lease = Schedule(callbackId, evt, dueTime, period, options);
         return Task.FromResult(lease);
     }
 
@@ -155,19 +191,22 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(callback.Event),
-            PublisherId = publisherId ?? AgentId,
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId ?? AgentId, TopologyAudience.Self),
         };
 
-        foreach (var pair in callback.Metadata)
-            envelope.Metadata[pair.Key] = pair.Value;
+        if (callback.Options?.Propagation != null)
+            ApplyPropagationOverrides(envelope.EnsurePropagation(), callback.Options.Propagation);
 
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId;
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration] =
-            callback.Generation.ToString(CultureInfo.InvariantCulture);
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex] = "0";
-        envelope.Metadata[RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] =
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(callback.Options?.Delivery?.DeduplicationOperationId))
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = callback.Options.Delivery.DeduplicationOperationId;
+
+        envelope.EnsureRuntime().Callback = new EnvelopeCallbackContext
+        {
+            CallbackId = callback.CallbackId,
+            Generation = callback.Generation,
+            FireIndex = 0,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
         return envelope;
     }
 
@@ -176,14 +215,10 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
         IMessage evt,
         TimeSpan dueTime,
         TimeSpan? period,
-        IReadOnlyDictionary<string, string>? metadata)
+        EventEnvelopePublishOptions? options)
     {
         var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
         _generations[callbackId] = generation;
-
-        var copiedMetadata = metadata is null
-            ? new Dictionary<string, string>(StringComparer.Ordinal)
-            : new Dictionary<string, string>(metadata, StringComparer.Ordinal);
 
         Scheduled.Add(new ScheduledCallback(
             callbackId,
@@ -191,9 +226,32 @@ internal sealed class TestEventHandlerContext : IEventHandlerContext, IWorkflowE
             evt,
             dueTime,
             period,
-            copiedMetadata));
+            CloneOptions(options)));
 
         return new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory);
+    }
+
+    private static EventEnvelopePublishOptions? CloneOptions(EventEnvelopePublishOptions? options)
+    {
+        if (options == null)
+            return null;
+
+        return options.DeepClone();
+    }
+
+    private static void ApplyPropagationOverrides(
+        EnvelopePropagation target,
+        EventEnvelopePropagationOverrides overrides)
+    {
+        if (!string.IsNullOrWhiteSpace(overrides.CorrelationId))
+            target.CorrelationId = overrides.CorrelationId;
+        if (!string.IsNullOrWhiteSpace(overrides.CausationEventId))
+            target.CausationEventId = overrides.CausationEventId;
+        if (overrides.Trace != null)
+            target.Trace = overrides.Trace.Clone();
+
+        foreach (var pair in overrides.Baggage)
+            target.Baggage[pair.Key] = pair.Value;
     }
 }
 
@@ -203,7 +261,7 @@ internal sealed record ScheduledCallback(
     IMessage Event,
     TimeSpan DueTime,
     TimeSpan? Period,
-    IReadOnlyDictionary<string, string> Metadata);
+    EventEnvelopePublishOptions? Options);
 
 internal sealed record CanceledCallback(
     RuntimeCallbackLease Lease)
@@ -216,6 +274,7 @@ internal sealed record CanceledCallback(
 internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWorkflowExecutionStateHost
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
@@ -226,6 +285,15 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         _executionStates.ToList();
+
+    public bool TryGetExecutionItem(string itemKey, out object? value) =>
+        _executionItems.TryGetValue(itemKey, out value);
+
+    public void SetExecutionItem(string itemKey, object? value) =>
+        _executionItems[itemKey] = value;
+
+    public bool RemoveExecutionItem(string itemKey) =>
+        _executionItems.Remove(itemKey);
 
     public Task UpsertExecutionStateAsync(
         string scopeKey,
@@ -261,6 +329,7 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
 internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IWorkflowExecutionStateHost
 {
     private readonly Dictionary<string, Any> _executionStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object?> _executionItems = new(StringComparer.Ordinal);
 
     public string Id { get; } = id;
 
@@ -271,6 +340,15 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
 
     public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() =>
         _executionStates.ToList();
+
+    public bool TryGetExecutionItem(string itemKey, out object? value) =>
+        _executionItems.TryGetValue(itemKey, out value);
+
+    public void SetExecutionItem(string itemKey, object? value) =>
+        _executionItems[itemKey] = value;
+
+    public bool RemoveExecutionItem(string itemKey) =>
+        _executionItems.Remove(itemKey);
 
     public Task UpsertExecutionStateAsync(
         string scopeKey,

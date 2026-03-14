@@ -32,6 +32,6 @@ public sealed class LLMCallContext
     /// <summary>Whether this is a streaming call.</summary>
     public bool IsStreaming { get; init; }
 
-    /// <summary>Arbitrary metadata shared across the middleware chain.</summary>
-    public IDictionary<string, object> Metadata { get; } = new Dictionary<string, object>();
+    /// <summary>Arbitrary items shared across the middleware chain.</summary>
+    public IDictionary<string, object> Items { get; } = new Dictionary<string, object>();
 }

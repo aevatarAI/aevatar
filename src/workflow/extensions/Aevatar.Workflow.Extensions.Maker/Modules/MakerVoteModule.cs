@@ -97,16 +97,16 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
             Success = true,
             Output = winner,
         };
-        completed.Metadata["maker_vote.total_candidates"] = rawCandidates.Length.ToString();
-        completed.Metadata["maker_vote.red_flagged"] = flagged.ToString();
-        completed.Metadata["maker_vote.valid_candidates"] = valid.Count.ToString();
-        completed.Metadata["maker_vote.k"] = k.ToString();
-        completed.Metadata["maker_vote.max_response_length"] = maxLen.ToString();
-        completed.Metadata["maker_vote.top_votes"] = topVotes.ToString();
-        completed.Metadata["maker_vote.runner_up_votes"] = runnerUpVotes.ToString();
-        completed.Metadata["maker_vote.used_majority_fallback"] = useMajorityFallback.ToString();
+        completed.Annotations["maker_vote.total_candidates"] = rawCandidates.Length.ToString();
+        completed.Annotations["maker_vote.red_flagged"] = flagged.ToString();
+        completed.Annotations["maker_vote.valid_candidates"] = valid.Count.ToString();
+        completed.Annotations["maker_vote.k"] = k.ToString();
+        completed.Annotations["maker_vote.max_response_length"] = maxLen.ToString();
+        completed.Annotations["maker_vote.top_votes"] = topVotes.ToString();
+        completed.Annotations["maker_vote.runner_up_votes"] = runnerUpVotes.ToString();
+        completed.Annotations["maker_vote.used_majority_fallback"] = useMajorityFallback.ToString();
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static async Task PublishFailureAsync(
@@ -114,7 +114,7 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
         StepRequestEvent request,
         string error,
         CancellationToken ct,
-        Dictionary<string, string>? metadata = null,
+        Dictionary<string, string>? annotations = null,
         string runId = "")
     {
         var completed = new StepCompletedEvent
@@ -124,12 +124,12 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
             Success = false,
             Error = error,
         };
-        if (metadata != null)
+        if (annotations != null)
         {
-            foreach (var (key, value) in metadata)
-                completed.Metadata[key] = value;
+            foreach (var (key, value) in annotations)
+                completed.Annotations[key] = value;
         }
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

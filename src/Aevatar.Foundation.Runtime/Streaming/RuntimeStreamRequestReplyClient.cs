@@ -87,6 +87,35 @@ public sealed class RuntimeStreamRequestReplyClient : IStreamRequestReplyClient
             ct);
     }
 
+    public Task<TResponse> QueryActorAsync<TResponse>(
+        IStreamProvider streams,
+        string actorId,
+        IActorDispatchPort dispatchPort,
+        string replyStreamPrefix,
+        TimeSpan timeout,
+        Func<string, string, EventEnvelope> envelopeFactory,
+        Func<TResponse, string, bool> isMatch,
+        Func<string, string> timeoutMessageFactory,
+        CancellationToken ct = default)
+        where TResponse : IMessage, new()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(dispatchPort);
+        ArgumentNullException.ThrowIfNull(envelopeFactory);
+
+        return QueryAsync<TResponse>(
+            streams,
+            replyStreamPrefix,
+            timeout,
+            (requestId, replyStreamId) => dispatchPort.DispatchAsync(
+                actorId,
+                envelopeFactory(requestId, replyStreamId),
+                ct),
+            isMatch,
+            timeoutMessageFactory,
+            ct);
+    }
+
     private static async Task<TResponse> WaitForResponseAsync<TResponse>(
         Task<TResponse> responseTask,
         TimeSpan timeout,

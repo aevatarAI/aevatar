@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package aevatar.protocols;
+
+option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
+
+message TextNormalizationReadModel {
+  bool has_value = 1;
+  string last_command_id = 2;
+  string input_text = 3;
+  string normalized_text = 4;
+}
+
+message TextNormalizationRequested {
+  string command_id = 1;
+  string input_text = 2;
+}
+
+message TextNormalizationCompleted {
+  string command_id = 1;
+  TextNormalizationReadModel current = 2;
+}
+
+message TextNormalizationQueryRequested {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message TextNormalizationQueryResponded {
+  string request_id = 1;
+  TextNormalizationReadModel current = 2;
+}

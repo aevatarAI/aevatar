@@ -1,0 +1,19 @@
+name: conditional
+description: |
+  Demonstrates the `conditional` primitive — keyword condition check.
+  Checks if input contains "URGENT", then passes through to a transform step.
+  The conditional module evaluates and logs the branch decision.
+
+roles: []
+
+steps:
+  - id: check_urgent
+    type: conditional
+    parameters:
+      condition: "URGENT"
+    next: format_output
+
+  - id: format_output
+    type: transform
+    parameters:
+      op: "uppercase"

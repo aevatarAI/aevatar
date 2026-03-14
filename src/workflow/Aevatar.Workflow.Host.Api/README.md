@@ -15,7 +15,7 @@
   - `GET /api/agents`、`GET /api/workflows`、`GET /api/actors/{actorId}`、`GET /api/actors/{actorId}/timeline`
   - `chat` payload 支持 `prompt` + `agentId` 复用已绑定 Actor，也支持 `workflow`（注册表名称 lookup，含内建与文件工作流）或 `workflowYamls`（inline YAML bundle）；仅在新建 Actor 且 `workflow/workflowYamls` 同时为空时，外部 API 默认走 `auto`
 - 调用应用层：
-  - `IWorkflowRunInteractionService`
+  - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`
   - `ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>`
   - `IWorkflowExecutionQueryApplicationService`
 - 不承载 workflow/cqrs 业务编排。
@@ -54,6 +54,7 @@
 
 - API 输入先被规范化为 `WorkflowChatRunRequest` 等应用命令模型，再走 CQRS 标准命令骨架：`target resolve -> command context -> envelope -> dispatch port -> accepted receipt`。
 - Workflow Host 只消费这条 CQRS 骨架，不自定义通用 command lifecycle；workflow 领域只负责目标解析、payload 映射与读侧观察映射。
+- `resume/signal` 也复用同一条骨架，Host 只依赖对应的 `ICommandDispatchService<...>`，不再直接注入 `IActorRuntime/IActorDispatchPort`。
 - 命令最终会被包装成 `EventEnvelope`；目标 Actor 的获取/创建由 `IActorRuntime` 负责，envelope 投递由 `IActorDispatchPort` 完成，CQRS 侧由 `ActorCommandTargetDispatcher` 承接 target dispatch。
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 仅用于 actor envelope 的投影与实时输出。

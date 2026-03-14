@@ -52,6 +52,21 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+if rg -n "CommandContext\.Metadata|AgentRunContext\.Metadata|LLMCallContext\.Metadata|ToolCallContext\.Metadata|GAgentExecutionHookContext\.Metadata" \
+  src test
+then
+  echo "Legacy internal metadata bags are forbidden in core contexts. Use Headers / Items / typed fields where semantics are explicit."
+  exit 1
+fi
+
+if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadata|WorkflowRunCommandMetadataKeys\.SessionId|EventEnvelope\.CorrelationId" \
+  docs src/Aevatar.Foundation.Core/README.md \
+  -g '!docs/architecture/*blueprint*.md'
+then
+  echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
+  exit 1
+fi
+
 if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver|ProjectionReadModelBindingException" src test; then
   echo "BindingResolver-based projection routing is forbidden. Use capability-based Document/Graph routing."
   exit 1
@@ -273,6 +288,61 @@ if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
   exit 1
 fi
 
+actor_id_parsing_hits="$(
+  rg -n "[A-Za-z0-9_]*ActorId[A-Za-z0-9_]*\s*\.(StartsWith|EndsWith|Contains|Split|Substring)\(" \
+    src/Aevatar.Mainnet.Host.Api \
+    src/workflow/Aevatar.Workflow.Host.Api \
+    src/workflow/Aevatar.Workflow.Application \
+    src/Aevatar.Scripting.Application \
+    -g '*.cs' || true
+)"
+
+if [ -n "${actor_id_parsing_hits}" ]; then
+  echo "${actor_id_parsing_hits}"
+  echo "Host/Application must not parse actorId strings for source/type branching. Use actor-owned binding queries or typed target resolvers."
+  exit 1
+fi
+
+source_named_runtime_port_hits="$(
+  rg -n "\b(interface|class|record)\s+I?(Workflow|Script|Scripting|Static)[A-Za-z0-9_]*(GAgentRuntimePort|ActorRuntimePort|ActorCommunicationPort|ActorInvocationPort|ActorDispatchPort)\b" \
+    src test \
+    -g '*.cs' || true
+)"
+
+if [ -n "${source_named_runtime_port_hits}" ]; then
+  echo "${source_named_runtime_port_hits}"
+  echo "Source-named generic actor communication abstractions are forbidden. Keep lifecycle on IActorRuntime and use subsystem-local typed/contextual adapters."
+  exit 1
+fi
+
+legacy_runtime_port_hits="$(
+  rg -n "\b(interface|class|record)\s+(IGAgentRuntimePort|RuntimeGAgentRuntimePort)\b" \
+    src test \
+    -g '*.cs' || true
+)"
+
+if [ -n "${legacy_runtime_port_hits}" ]; then
+  echo "${legacy_runtime_port_hits}"
+  echo "Legacy fat runtime-port abstractions are forbidden. Foundation must keep lifecycle/topology on IActorRuntime and message execution on context/publisher."
+  exit 1
+fi
+
+if rg -n "IActorMessagingPort|IActorMessagingSession|IActorMessagingSessionFactory|RuntimeActorMessagingPort|RuntimeActorMessagingSessionFactory" \
+  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  -g '!docs/architecture/*'
+then
+  echo "Public actor messaging port/session abstractions are forbidden. Use IActorRuntime + IActorDispatchPort + IEventContext/IEventPublisher or subsystem-local typed adapters."
+  exit 1
+fi
+
+if rg -n "\bgagent_query\b|GAgentQueryState|GAgentQueryResultState|GAgentDispatchState|\bgagent_send\b" \
+  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  -g '!docs/architecture/*'
+then
+  echo "Legacy gagent_* generic communication modules/states are forbidden. Use actor_send plus protocol-specific typed query/reply paths."
+  exit 1
+fi
+
 if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
   echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowGAgent persisted state."
   exit 1
@@ -396,8 +466,14 @@ bash tools/ci/workflow_runid_guard.sh
 echo "Running workflow binding boundary guard..."
 bash tools/ci/workflow_binding_boundary_guard.sh
 
+echo "Running playground asset drift guard..."
+bash tools/ci/playground_asset_drift_guard.sh
+
 echo "Running script inheritance guard..."
 bash tools/ci/script_inheritance_guard.sh
+
+echo "Running scripting interaction boundary guard..."
+bash tools/ci/scripting_interaction_boundary_guard.sh
 
 if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
   echo "Workflows.Core must not reference AI.Core."
@@ -535,8 +611,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionLifecycleService.cs; then
-  echo "WorkflowExecutionProjectionLifecycleService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPortService.cs; then
+  echo "WorkflowExecutionProjectionPortService must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -545,7 +621,7 @@ if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Or
   exit 1
 fi
 
-lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionLifecyclePort.cs"
+lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
 query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
 
 if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then

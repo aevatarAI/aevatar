@@ -93,9 +93,11 @@ public class MakerRunReportVerificationTests
                 WorkflowYaml = workflowYaml,
                 WorkflowName = "maker_report_verification",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -109,9 +111,11 @@ public class MakerRunReportVerificationTests
                 WorkflowName = "maker_report_verification",
                 RunId = "maker-report-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
@@ -132,8 +136,7 @@ public class MakerRunReportVerificationTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-verification" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));

@@ -46,6 +46,8 @@ steps:                          # required in practice
     target_role: analyst        # optional, alias: role
     parameters:                 # optional, Dict<string,string>
       prompt_prefix: "Analyze:"
+      agent_type: TelegramBridgeGAgent  # optional: direct GAgent type dispatch (llm/evaluate/reflect)
+      agent_id: bridge:telegram:default # optional: explicit target actor id
     next: step2                 # optional
     children: []                # optional, recursive
     branches:                   # optional, Dict<string,string>
@@ -79,6 +81,10 @@ steps:                          # required in practice
    - `http_get/http_post/http_put/http_delete/mcp_call/cli_call` -> `connector_call`
    - `foreach_llm` -> `foreach`
    - `map_reduce_llm` -> `map_reduce`
+12. `parameters.agent_type` is supported for `llm_call` / `evaluate` / `reflect` and can directly target a GAgent type.
+13. When `parameters.agent_type` is present, `target_role` can be omitted and is not required for target resolution.
+14. `parameters.agent_id` is optional; if omitted, runtime generates a stable actor id from workflow actor + step + agent type.
+15. In agent-type dispatch mode, step `parameters` are forwarded as chat metadata except `agent_type` and `agent_id`.
 
 ## Validation Constraints
 
@@ -207,6 +213,172 @@ steps:
     type: llm_call
     role: advisor
 ```
+
+### Direct GAgent Type Dispatch (No YAML role)
+
+Use when a step should call a concrete GAgent directly:
+
+```yaml
+steps:
+  - id: send_to_telegram_bridge
+    type: llm_call
+    parameters:
+      agent_type: TelegramBridgeGAgent
+      agent_id: bridge:telegram:openclaw
+      connector: telegram
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+```
+
+The same `agent_type` pattern also works for `evaluate` and `reflect`.
+
+### Task Delegation via BridgeGAgent (e.g., TelegramUserBridgeGAgent)
+
+When you need Aevatar to delegate heavy lifting (like codebase research, file operations, or complex execution) to an external agent like OpenClaw in a Telegram group, use the `TelegramUserBridgeGAgent` (or `TelegramBridgeGAgent`). The pattern is: send the request to the group, then wait for the response/signal.
+
+```yaml
+steps:
+  - id: send_task_to_openclaw
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+      timeout_ms: "30000"
+      prompt_prefix: |
+        @${telegram.openclaw_bot_username}
+        Please research this repository and summarize the architecture.
+        Repo URL: ${collect_repo_url}
+        Please include final architecture details in your reply.
+    next: wait_openclaw_reply
+
+  - id: wait_openclaw_reply
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      # Wait config
+      wait_timeout_ms: "180000"     # Max time to wait for the reply
+      poll_timeout_sec: "8"         # Long-polling seconds per request
+      start_from_latest: "true"     # Ignore old messages before this step started
+      collect_all_replies: "true"   # If OpenClaw sends multiple chunks, collect them all
+      settle_polls_after_match: "2" # Wait for 2 more polls after the first match to ensure no trailing chunks are missed
+      timeout_ms: "190000"          # Step-level timeout (slightly larger than wait_timeout_ms)
+      prompt_prefix: "Waiting for OpenClaw's architecture summary."
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+    next: process_openclaw_result
+
+  - id: process_openclaw_result
+    type: assign
+    parameters:
+      target: "architecture_summary"
+      value: "${wait_openclaw_reply}"  # The accumulated response from the wait step
+
+  - id: timeout_fallback
+    type: assign
+    parameters:
+      target: bridge_timeout
+      value: "OpenClaw reply timeout"
+```
+
+**Key Points for Bridge Delegation:**
+1. **`operation: /sendMessage`**: Issues the command to the external bot in the shared chat. Mention the bot via `@${telegram.openclaw_bot_username}` to ensure it picks up the request.
+2. **`operation: /waitReply`**: Blocks the workflow execution and polls the group chat until a response from `expected_from_username` is received. 
+3. **Chunked Responses**: External bots (like OpenClaw) often split long responses into multiple Telegram messages. Use `collect_all_replies: "true"` and `settle_polls_after_match: "N"` to stitch these chunks together.
+4. **Timeouts**: `timeout_ms` on the `/waitReply` step MUST be greater than `wait_timeout_ms` to avoid the workflow runtime aborting the step before the graceful wait timeout concludes.
+
+### Prompt Composition for External Agents (Telegram/OpenClaw)
+
+When `llm_call` is used as a bridge message to an external agent, prompt quality matters more than strict format contracts.
+
+Use this structure:
+
+1. **Who + objective** (one short line)
+2. **Concrete task list** (3-6 numbered items)
+3. **Resolved runtime parameters** (single final values only)
+4. **Minimal output hint** (soft preference, not hard protocol)
+
+Key rules:
+
+- Resolve workflow decisions first, then send only final facts.
+  - Good: `report_output_directory: /Users/me/Report`
+  - Bad: `if user says yes then use path A else path B`
+- Do not forward raw control signals (`yes`, `no`, `true`, `false`) without context.
+  - Convert them into explicit business meaning before sending.
+- Prefer soft wording for external agents:
+  - `please include ... if possible` / `尽量包含`
+  - Avoid brittle `must return exact JSON` unless the target is known to obey it.
+- Keep bridge prompts short and actionable; avoid policy/debug text irrelevant to the target.
+- When sending user-provided paths/URLs (e.g. `~/Report`, `REPORT_PATH`), prefer plain text transport.
+  - Avoid `parse_mode: Markdown` unless you fully escape Markdown symbols.
+  - Otherwise `~`, `_`, `*`, `[]`, `()` may alter visible text.
+
+Anti-pattern (bad):
+
+```yaml
+prompt_prefix: |
+  Default dir: ~/Report
+  Human decision: ${collect_report_directory_decision}
+  If human says yes:/path then use that path else default.
+```
+
+Better (good):
+
+```yaml
+steps:
+  - id: route_report_directory
+    type: conditional
+    parameters:
+      condition: "/"
+    branches:
+      true: set_custom_report_directory
+      false: set_default_report_directory
+
+  - id: set_default_report_directory
+    type: assign
+    parameters:
+      target: "report_output_directory"
+      value: "~/Report"
+
+  - id: set_custom_report_directory
+    type: assign
+    parameters:
+      target: "report_output_directory"
+      value: "$input"
+
+  - id: send_to_openclaw
+    type: llm_call
+    parameters:
+      prompt_prefix: |
+        @${telegram.openclaw_bot_username}
+        Please research this repository and write a report.
+        Repo URL: ${collect_repo_url}
+        Report output directory: ${report_output_directory}
+        Please include final REPORT_PATH if possible.
+```
+
+### Runtime Defaults From config.json
+
+You can inject shared runtime values via `WorkflowRuntimeDefaults` in host `config.json`; they become run metadata variables and can be referenced as `${...}` in workflow YAML.
+
+```json
+{
+  "WorkflowRuntimeDefaults": {
+    "telegram.chat_id": "-1001234567890",
+    "telegram.openclaw_bot_username": "openclaw_bot"
+  }
+}
+```
+
+Request metadata with the same key overrides configured defaults.
 
 ### Switch Branching
 

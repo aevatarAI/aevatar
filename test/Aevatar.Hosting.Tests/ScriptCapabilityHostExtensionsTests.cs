@@ -1,10 +1,14 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Hosting;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Runtime;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -61,12 +65,34 @@ public class ScriptCapabilityHostExtensionsTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IScriptDefinitionSnapshotPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptLifecyclePort));
+            x.ServiceType == typeof(IScriptEvolutionProposalPort));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IScriptEvolutionFlowPort) &&
-            x.ImplementationType == typeof(RuntimeScriptEvolutionFlowPort));
+            x.ServiceType == typeof(ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IGAgentRuntimePort));
+            x.ServiceType == typeof(IScriptDefinitionCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptRuntimeProvisioningPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptRuntimeCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogCommandPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogQueryPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionPolicyEvaluator) &&
+            x.ImplementationType == typeof(DefaultScriptEvolutionPolicyEvaluator));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionValidationService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionValidationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptCatalogBaselineReader) &&
+            x.ImplementationType == typeof(RuntimeScriptCatalogBaselineReader));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptPromotionCompensationService) &&
+            x.ImplementationType == typeof(RuntimeScriptPromotionCompensationService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IScriptEvolutionRollbackService) &&
+            x.ImplementationType == typeof(RuntimeScriptEvolutionRollbackService));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IAICapability));
     }

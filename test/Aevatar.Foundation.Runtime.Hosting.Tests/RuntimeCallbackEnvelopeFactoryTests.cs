@@ -9,18 +9,22 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class RuntimeCallbackEnvelopeFactoryTests
 {
     [Fact]
-    public void CreateFiredEnvelope_ShouldPreserveOriginalEnvelopeSemantics()
+    public void CreateFiredEnvelope_ShouldPublishSelfContinuationWithoutOverwritingPublisher()
     {
         var triggerEnvelope = new EventEnvelope
         {
             Id = "origin-envelope",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
             Payload = Any.Pack(new StringValue { Value = "retry" }),
-            PublisherId = "child-actor",
-            TargetActorId = "workflow-parent",
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateDirect("child-actor", "workflow-parent"),
+            Propagation = new EnvelopePropagation
+            {
+                Baggage =
+                {
+                    ["custom.trace_id"] = "trace-1",
+                },
+            },
         };
-        triggerEnvelope.Metadata["custom.trace_id"] = "trace-1";
 
         var fired = RuntimeCallbackEnvelopeFactory.CreateFiredEnvelope(
             actorId: "workflow-parent",
@@ -31,27 +35,26 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
 
         fired.Id.Should().NotBe("origin-envelope");
         fired.Timestamp.Should().NotBeNull();
-        fired.PublisherId.Should().Be("child-actor");
-        fired.TargetActorId.Should().Be("workflow-parent");
-        fired.Direction.Should().Be(EventDirection.Down);
-        fired.Metadata["custom.trace_id"].Should().Be("trace-1");
-        fired.Metadata[RuntimeCallbackMetadataKeys.CallbackId].Should().Be("retry-callback");
-        fired.Metadata[RuntimeCallbackMetadataKeys.CallbackGeneration].Should().Be("3");
-        fired.Metadata[RuntimeCallbackMetadataKeys.CallbackFireIndex].Should().Be("1");
-        fired.Metadata.ContainsKey(RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs).Should().BeTrue();
+        fired.Route!.PublisherActorId.Should().Be("child-actor");
+        fired.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        fired.Route.IsTopologyPublication().Should().BeTrue();
+        fired.Route.GetTargetActorId().Should().BeEmpty();
+        fired.Propagation!.Baggage["custom.trace_id"].Should().Be("trace-1");
+        fired.Runtime!.Callback!.CallbackId.Should().Be("retry-callback");
+        fired.Runtime.Callback.Generation.Should().Be(3);
+        fired.Runtime.Callback.FireIndex.Should().Be(1);
+        fired.Runtime.Callback.FiredAtUnixTimeMs.Should().BePositive();
     }
 
     [Fact]
-    public void CreateScheduledEnvelope_ShouldPreservePublisher_WhenConfiguredForEnvelopeRedelivery()
+    public void CreateScheduledEnvelope_ShouldPreserveDirectRoute_WhenConfiguredForEnvelopeRedelivery()
     {
         var triggerEnvelope = new EventEnvelope
         {
             Id = "retry-envelope",
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
             Payload = Any.Pack(new StringValue { Value = "retry" }),
-            PublisherId = "child-actor",
-            TargetActorId = "workflow-parent",
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateDirect("child-actor", "workflow-parent"),
         };
 
         var redelivered = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
@@ -62,10 +65,10 @@ public sealed class RuntimeCallbackEnvelopeFactoryTests
             triggerEnvelope,
             RuntimeCallbackDeliveryMode.EnvelopeRedelivery);
 
-        redelivered.PublisherId.Should().Be("child-actor");
-        redelivered.Direction.Should().Be(EventDirection.Down);
-        redelivered.TargetActorId.Should().Be("workflow-parent");
+        redelivered.Route!.PublisherActorId.Should().Be("child-actor");
+        redelivered.Route.IsDirect().Should().BeTrue();
+        redelivered.Route.GetTargetActorId().Should().Be("workflow-parent");
         redelivered.Id.Should().Be("retry-envelope");
-        redelivered.Metadata.ContainsKey(RuntimeCallbackMetadataKeys.CallbackId).Should().BeFalse();
+        redelivered.Runtime?.Callback.Should().BeNull();
     }
 }

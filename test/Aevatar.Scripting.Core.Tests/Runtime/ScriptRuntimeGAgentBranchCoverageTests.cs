@@ -16,11 +16,9 @@ public class ScriptRuntimeGAgentBranchCoverageTests
     [Fact]
     public void Ctor_ShouldThrow_WhenDependenciesAreNull()
     {
-        Action actWithNullOrchestrator = () => new ScriptRuntimeGAgent(null!, new DirectSnapshotPort());
-        Action actWithNullSnapshotPort = () => new ScriptRuntimeGAgent(new NoopOrchestrator(), null!);
+        Action actWithNullOrchestrator = () => new ScriptRuntimeGAgent(null!);
 
         actWithNullOrchestrator.Should().Throw<ArgumentNullException>();
-        actWithNullSnapshotPort.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -162,7 +160,7 @@ public class ScriptRuntimeGAgentBranchCoverageTests
 
     private static ScriptRuntimeGAgent CreateAgent()
     {
-        return new ScriptRuntimeGAgent(new NoopOrchestrator(), new DirectSnapshotPort())
+        return new ScriptRuntimeGAgent(new NoopOrchestrator())
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
                 new InMemoryEventStore()),
@@ -194,27 +192,6 @@ public class ScriptRuntimeGAgentBranchCoverageTests
             _ = request;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<IMessage>>([]);
-        }
-    }
-
-    private sealed class DirectSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => false;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: "class Runtime {}",
-                ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "hash-v1"));
         }
     }
 }

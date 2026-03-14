@@ -11,7 +11,7 @@ internal static class WorkflowRuntimeCallbackLeaseSupport
         WorkflowRuntimeCallbackLeaseState? state)
     {
         var lease = WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(state);
-        return lease != null && RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, lease);
+        return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
     public static Task CancelAsync(

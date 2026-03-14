@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+    <ProjectReference Include="..\..\tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
@@ -35,10 +36,18 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos/text_normalization_protocol.proto" GrpcServices="None" />
+    <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Aevatar.Scripting.Abstractions" />

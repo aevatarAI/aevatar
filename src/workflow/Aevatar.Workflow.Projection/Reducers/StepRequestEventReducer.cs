@@ -23,7 +23,7 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
             now,
             "step.request",
             $"{evt.StepId} ({evt.StepType})",
-            envelope.PublisherId,
+            envelope.Route?.PublisherActorId ?? string.Empty,
             evt.StepId,
             evt.StepType,
             envelope.Payload?.TypeUrl ?? "",

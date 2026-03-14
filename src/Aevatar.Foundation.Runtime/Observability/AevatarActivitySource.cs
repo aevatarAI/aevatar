@@ -60,9 +60,9 @@ public static class AevatarActivitySource
             activity.SetTag(EventTypeTag, eventTypeUrl);
         else if (!string.IsNullOrWhiteSpace(eventTypeName))
             activity.SetTag(EventTypeTag, eventTypeName);
-        activity.SetTag(EventDirectionTag, envelope.Direction.ToString());
-        if (!string.IsNullOrWhiteSpace(envelope.PublisherId))
-            activity.SetTag(EventPublisherTag, envelope.PublisherId);
+        activity.SetTag(EventDirectionTag, envelope.Route.Describe());
+        if (!string.IsNullOrWhiteSpace(envelope.Route?.PublisherActorId))
+            activity.SetTag(EventPublisherTag, envelope.Route.PublisherActorId);
 
         return activity;
     }
@@ -93,19 +93,19 @@ public static class AevatarActivitySource
 
     private static Activity? TryStartWithEnvelopeParent(string operationName, EventEnvelope envelope)
     {
-        if (!envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceId, out var traceIdText) ||
-            string.IsNullOrWhiteSpace(traceIdText) ||
-            !envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceSpanId, out var spanIdText) ||
-            string.IsNullOrWhiteSpace(spanIdText))
+        var trace = envelope.Propagation?.Trace;
+        if (trace == null ||
+            string.IsNullOrWhiteSpace(trace.TraceId) ||
+            string.IsNullOrWhiteSpace(trace.SpanId))
         {
             return null;
         }
 
         try
         {
-            var traceId = ActivityTraceId.CreateFromString(traceIdText.AsSpan());
-            var spanId = ActivitySpanId.CreateFromString(spanIdText.AsSpan());
-            var traceFlags = ResolveTraceFlags(envelope);
+            var traceId = ActivityTraceId.CreateFromString(trace.TraceId.AsSpan());
+            var spanId = ActivitySpanId.CreateFromString(trace.SpanId.AsSpan());
+            var traceFlags = ResolveTraceFlags(trace.TraceFlags);
             var parent = new ActivityContext(traceId, spanId, traceFlags);
             return Source.StartActivity(operationName, ActivityKind.Internal, parent);
         }
@@ -115,10 +115,9 @@ public static class AevatarActivitySource
         }
     }
 
-    private static ActivityTraceFlags ResolveTraceFlags(EventEnvelope envelope)
+    private static ActivityTraceFlags ResolveTraceFlags(string? flagsText)
     {
-        if (!envelope.Metadata.TryGetValue(EnvelopeMetadataKeys.TraceFlags, out var flagsText) ||
-            string.IsNullOrWhiteSpace(flagsText))
+        if (string.IsNullOrWhiteSpace(flagsText))
         {
             return ActivityTraceFlags.None;
         }

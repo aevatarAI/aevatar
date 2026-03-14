@@ -1,7 +1,12 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.DependencyInjection;
@@ -157,24 +162,60 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void AddWorkflowApplication_ShouldWireWorkflowRunOutputStreamerAcrossAbstractions()
+    public void AddWorkflowApplication_ShouldWireGenericEventStreamingAndInteractionServices()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(IdentityEventFrameMapper<WorkflowRunEventEnvelope>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>) &&
+            x.ImplementationType == typeof(WorkflowRunFinalizeEmitter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationType == typeof(DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(WorkflowRunDetachedDispatchService) &&
+            x.ImplementationType == typeof(WorkflowRunDetachedDispatchService));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandFallbackPolicy<WorkflowChatRunRequest>) &&
+            x.ImplementationFactory != null);
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+    }
+
+    [Fact]
+    public void AddWorkflowApplication_ShouldShareRegistryBackedCatalogAcrossQueryPorts()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
         using var provider = services.BuildServiceProvider();
 
-        var concrete = provider.GetRequiredService<WorkflowRunOutputStreamer>();
-        var outputStreamer = provider.GetRequiredService<IWorkflowRunOutputStreamer>();
-        var eventOutputStream = provider.GetRequiredService<IEventOutputStream<WorkflowRunEvent, WorkflowOutputFrame>>();
-        var frameMapper = provider.GetRequiredService<IEventFrameMapper<WorkflowRunEvent, WorkflowOutputFrame>>();
+        var catalogPort = provider.GetRequiredService<IWorkflowCatalogPort>();
+        var capabilitiesPort = provider.GetRequiredService<IWorkflowCapabilitiesPort>();
 
-        outputStreamer.Should().BeSameAs(concrete);
-        eventOutputStream.Should().BeSameAs(concrete);
-        frameMapper.Should().BeSameAs(concrete);
+        catalogPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        capabilitiesPort.GetType().Name.Should().Be("RegistryBackedWorkflowCatalogPort");
+        catalogPort.Should().BeSameAs(capabilitiesPort);
     }
 
     [Fact]
-    public void EnvelopeFactory_ShouldUseSessionIdFromMetadata()
+    public void EnvelopeFactory_ShouldMergeHeadersAndCommandMetadata()
     {
         var services = new ServiceCollection();
         services.AddWorkflowApplication();
@@ -184,21 +225,34 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             TargetId: "actor-1",
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#ops",
+                ["source"] = "headers",
+            });
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            "direct",
+            "actor-1",
+            SessionId: "session-42",
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "session-42",
+                [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
+                [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
             });
-        var command = new WorkflowChatRunRequest("hello", "direct", "actor-1");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
-        envelope.TargetActorId.Should().Be("actor-1");
-        envelope.CorrelationId.Should().Be("corr-1");
-        envelope.Direction.Should().Be(EventDirection.Self);
-        envelope.PublisherId.Should().Be("api");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("corr-1");
+        envelope.Route.IsDirect().Should().BeTrue();
+        envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
+        request.Metadata["source"].Should().Be("headers");
     }
 
     [Fact]
@@ -217,14 +271,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             new Dictionary<string, string>()));
         noMetadata.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-2");
 
-        var whiteSpaceSession = factory.CreateEnvelope(command, new CommandContext(
+        var whiteSpaceSession = factory.CreateEnvelope(new WorkflowChatRunRequest("hello", null, null, SessionId: "   "), new CommandContext(
             "actor-3",
             "cmd-3",
             "corr-3",
-            new Dictionary<string, string>
-            {
-                [WorkflowRunCommandMetadataKeys.SessionId] = "   ",
-            }));
+            new Dictionary<string, string>()));
         whiteSpaceSession.Payload.Unpack<ChatRequestEvent>().SessionId.Should().Be("corr-3");
     }
 }

@@ -33,7 +33,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
             if (GenAIActivitySource.EnableSensitiveData && context.Result != null)
                 activity?.SetTag("gen_ai.response.output", context.Result);
 
-            if (context.Metadata.TryGetValue("gen_ai.provider.name", out var providerObj) &&
+            if (context.Items.TryGetValue("gen_ai.provider.name", out var providerObj) &&
                 providerObj is string providerName &&
                 !string.IsNullOrWhiteSpace(providerName))
             {
@@ -61,6 +61,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
         var model = context.Request.Model;
         using var activity = GenAIActivitySource.StartChat(model);
         activity?.SetTag("gen_ai.provider.name", string.IsNullOrWhiteSpace(context.Provider.Name) ? "unknown" : context.Provider.Name);
+        SetRequestIdTag(activity, context);
 
         if (GenAIActivitySource.EnableSensitiveData)
         {
@@ -72,6 +73,7 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
         try
         {
             await next();
+            SetRequestIdTag(activity, context);
 
             var response = context.Response;
             if (response?.Usage != null)
@@ -106,6 +108,23 @@ public sealed class GenAIObservabilityMiddleware : IAgentRunMiddleware, IToolCal
             GenAIActivitySource.OperationDuration.Record(sw.Elapsed.TotalMilliseconds,
                 new TagList { { "gen_ai.request.model", model ?? "unknown" } });
         }
+    }
+
+    private static void SetRequestIdTag(Activity? activity, LLMCallContext context)
+    {
+        if (activity == null)
+            return;
+
+        var requestId = context.Request.RequestId;
+        if (string.IsNullOrWhiteSpace(requestId) &&
+            context.Items.TryGetValue(LLMRequestMetadataKeys.RequestId, out var requestIdObj) &&
+            requestIdObj is string metadataRequestId)
+        {
+            requestId = metadataRequestId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestId))
+            activity.SetTag("gen_ai.request.id", requestId);
     }
 
     // ─── Tool Call ───

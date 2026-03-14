@@ -50,6 +50,15 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             workflowNameForRun = inlineBundle.EntryWorkflowName;
             workflowYamlForRun = inlineBundle.EntryWorkflowYaml;
             inlineWorkflowYamlMapForRun = inlineBundle.WorkflowYamlsByName;
+
+            if (hasRequestedWorkflowName &&
+                !string.Equals(requestedWorkflowName, workflowNameForRun, StringComparison.OrdinalIgnoreCase))
+            {
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.WorkflowNameMismatch);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(request.ActorId))
@@ -122,7 +131,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
             var inlineRunActor = await CreateRunActorAsync(
                 new WorkflowDefinitionBinding(
-                    sourceBinding.EffectiveDefinitionActorId,
+                    string.Empty,
                     workflowNameForRun,
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun),

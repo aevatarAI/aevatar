@@ -14,6 +14,20 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowRunActorPortBranchTests
 {
     [Fact]
+    public async Task CreateDefinitionAsync_ShouldForwardPreferredActorId()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-preferred", new WorkflowGAgent()));
+        var port = CreatePort(runtime);
+
+        var actor = await port.CreateDefinitionAsync("definition-preferred", CancellationToken.None);
+
+        actor.Id.Should().Be("definition-preferred");
+        runtime.CreateRequests.Should().ContainSingle()
+            .Which.Should().Be((typeof(WorkflowGAgent), "definition-preferred"));
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionMatches_ShouldReuseDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -64,12 +78,12 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
-    public async Task CreateRunAsync_WhenExistingDefinitionDiffers_ShouldRebindExistingDefinitionActor()
+    public async Task CreateRunAsync_WhenExistingDefinitionYamlDiffersButWorkflowNameMatches_ShouldRebindExistingDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
-        definitionAgent.State.WorkflowName = "other";
-        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: old\n    type: delay\n";
         runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-3", new StubAgent("run-3")));
         var port = CreatePort(runtime);
@@ -90,6 +104,29 @@ public sealed class WorkflowRunActorPortBranchTests
         ((RecordingActor)runtime.StoredActors["definition-3"]).LastHandledEnvelope!.Payload!
             .Is(BindWorkflowDefinitionEvent.Descriptor)
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenExistingDefinitionWorkflowNameDiffers_ShouldFailFast()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "other";
+        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-3",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to workflow 'other'*cannot switch to 'direct'*");
+        runtime.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -134,6 +171,30 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_WhenBindingReaderReturnsNullForExistingActor_ShouldFailFast()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.StoredActors["definition-missing-binding"] = new RecordingActor("definition-missing-binding", new WorkflowGAgent());
+        var port = CreatePort(
+            runtime,
+            new StaticWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
+            {
+                ["definition-missing-binding"] = null,
+            }));
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-missing-binding",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not a workflow definition actor*");
+    }
+
+    [Fact]
     public async Task ParseWorkflowYamlAsync_WhenEmptyOrMissingName_ShouldReturnInvalid()
     {
         var port = CreatePort(new RecordingActorRuntime());
@@ -150,6 +211,24 @@ public sealed class WorkflowRunActorPortBranchTests
         empty.Error.Should().Contain("required");
         missingName.Succeeded.Should().BeFalse();
         missingName.Error.Should().Contain("name");
+    }
+
+    [Fact]
+    public async Task ParseWorkflowYamlAsync_WhenStepTypeUnknown_ShouldReturnInvalid()
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            """
+            name: sample
+            steps:
+              - id: step1
+                type: does_not_exist
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain("does_not_exist");
     }
 
     [Fact]
@@ -194,6 +273,41 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task BindWorkflowDefinitionAsync_ShouldDispatchEnvelopeWithInlineWorkflowMap()
+    {
+        var runtime = new RecordingActorRuntime();
+        var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
+        runtime.StoredActors[actor.Id] = actor;
+        var port = CreatePort(runtime);
+
+        await port.BindWorkflowDefinitionAsync(
+            actor,
+            "name: direct\nroles: []\nsteps: []\n",
+            "direct",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["child"] = "name: child\nroles: []\nsteps: []\n",
+            },
+            CancellationToken.None);
+
+        actor.LastHandledEnvelope.Should().NotBeNull();
+        actor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
+        var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
+        bind.WorkflowName.Should().Be("direct");
+        bind.InlineWorkflowYamls.Should().ContainKey("child");
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldRejectBlankActorId()
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var act = async () => await port.DestroyAsync(" ", CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenBindingReaderMarksProxyAsDefinition_ShouldReuseDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -228,6 +342,96 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.Linked.Should().ContainSingle(x => x.ParentId == "definition-proxy" && x.ChildId == "run-proxy");
     }
 
+    [Fact]
+    public async Task CreateRunAsync_WhenDefinitionBindFails_ShouldDestroyCreatedDefinitionActor()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            DispatchExceptionFactory = (actorId, envelope) =>
+                actorId == "definition-fail" &&
+                envelope.Payload?.Is(BindWorkflowDefinitionEvent.Descriptor) == true
+                    ? new InvalidOperationException("definition bind failed")
+                    : null,
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-fail", new WorkflowGAgent()));
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                string.Empty,
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("definition bind failed");
+        runtime.Destroyed.Should().Equal("definition-fail");
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenRunBindFails_ShouldDestroyCreatedRunAndDefinitionActors()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            DispatchExceptionFactory = (actorId, envelope) =>
+                actorId == "run-fail" &&
+                envelope.Payload?.Is(BindWorkflowRunDefinitionEvent.Descriptor) == true
+                    ? new InvalidOperationException("run bind failed")
+                    : null,
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("definition-fail", new WorkflowGAgent()));
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-fail", new StubAgent("run-fail")));
+        var port = CreatePort(runtime);
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                string.Empty,
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("run bind failed");
+        runtime.Destroyed.Should().Equal("run-fail", "definition-fail");
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenDefinitionCreateRaces_ShouldReuseWinnerAndContinue()
+    {
+        var runtime = new RecordingActorRuntime();
+        var racedDefinition = new RecordingActor("definition-race", new WorkflowGAgent());
+        runtime.CreateExceptionFactory = (agentType, requestedId) =>
+        {
+            if (agentType == typeof(WorkflowGAgent) &&
+                string.Equals(requestedId, "definition-race", StringComparison.Ordinal))
+            {
+                runtime.StoredActors["definition-race"] = racedDefinition;
+                return new InvalidOperationException("Actor definition-race already exists");
+            }
+
+            return null;
+        };
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-race", new StubAgent("run-race")));
+        var port = CreatePort(runtime);
+
+        var result = await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-race",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        result.DefinitionActorId.Should().Be("definition-race");
+        result.CreatedActorIds.Should().Equal("run-race");
+        runtime.CreateRequests.Should().Contain((typeof(WorkflowGAgent), "definition-race"));
+        runtime.CreateRequests.Should().Contain((typeof(WorkflowRunGAgent), (string?)null));
+        racedDefinition.LastHandledEnvelope.Should().NotBeNull();
+        racedDefinition.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null) =>
@@ -244,6 +448,9 @@ public sealed class WorkflowRunActorPortBranchTests
         public List<(Type AgentType, string? RequestedId)> CreateRequests { get; } = [];
 
         public List<(string ParentId, string ChildId)> Linked { get; } = [];
+        public List<string> Destroyed { get; } = [];
+        public Func<Type, string?, Exception?>? CreateExceptionFactory { get; set; }
+        public Func<string, EventEnvelope, Exception?>? DispatchExceptionFactory { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -253,6 +460,10 @@ public sealed class WorkflowRunActorPortBranchTests
         {
             ct.ThrowIfCancellationRequested();
             CreateRequests.Add((agentType, id));
+            var createException = CreateExceptionFactory?.Invoke(agentType, id);
+            if (createException != null)
+                throw createException;
+
             if (ActorsToCreate.Count > 0)
             {
                 var createdActor = ActorsToCreate.Dequeue();
@@ -270,6 +481,7 @@ public sealed class WorkflowRunActorPortBranchTests
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Destroyed.Add(id);
             StoredActors.Remove(id);
             return Task.CompletedTask;
         }
@@ -285,6 +497,10 @@ public sealed class WorkflowRunActorPortBranchTests
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var dispatchException = DispatchExceptionFactory?.Invoke(actorId, envelope);
+            if (dispatchException != null)
+                throw dispatchException;
+
             var actor = await GetAsync(actorId) ?? throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
         }

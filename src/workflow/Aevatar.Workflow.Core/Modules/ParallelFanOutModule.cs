@@ -77,7 +77,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     RunId = runId,
                     Success = false,
                     Error = "parallel requires parameters.workers (CSV/JSON list) or target_role",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -116,7 +116,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     RunId = runId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
         }
         else
@@ -145,13 +145,13 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     WorkerId = evt.WorkerId,
                 };
 
-                foreach (var (key, value) in evt.Metadata)
-                    final.Metadata[key] = value;
-                final.Metadata["parallel.used_vote"] = "true";
-                final.Metadata["parallel.vote_step_id"] = evt.StepId;
-                final.Metadata["parallel.workers_success"] = workersSuccess.ToString();
+                foreach (var (key, value) in evt.Annotations)
+                    final.Annotations[key] = value;
+                final.Annotations["parallel.used_vote"] = "true";
+                final.Annotations["parallel.vote_step_id"] = evt.StepId;
+                final.Annotations["parallel.workers_success"] = workersSuccess.ToString();
 
-                await ctx.PublishAsync(final, EventDirection.Self, ct);
+                await ctx.PublishAsync(final, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -191,7 +191,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         "ParallelFanOut: step={StepId} dispatch vote step={VoteStepId} type={VoteType}",
                         parent, voteStepId, parentState.VoteConfig.StepType);
 
-                    await ctx.PublishAsync(voteReq, EventDirection.Self, ct);
+                    await ctx.PublishAsync(voteReq, TopologyAudience.Self, ct);
                 }
                 else
                 {
@@ -204,8 +204,8 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                         Success = allSuccess,
                         Output = merged,
                     };
-                    completed.Metadata["parallel.used_vote"] = "false";
-                    await ctx.PublishAsync(completed, EventDirection.Self, ct);
+                    completed.Annotations["parallel.used_vote"] = "false";
+                    await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 }
             }
             else

@@ -35,20 +35,32 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
                 RunId = request.RunId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
         var errors = DynamicWorkflowModule.ValidateWorkflowYaml(yaml, ctx);
         if (errors.Count > 0)
         {
+            var validationDetails = string.Join("; ", errors);
             await ctx.PublishAsync(new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                Output = $"""
+Previous workflow draft:
+```yaml
+{yaml}
+```
+
+Validation error:
+{validationDetails}
+
+Return a corrected full workflow YAML only in a single ```yaml fenced block.
+""",
                 Success = false,
-                Error = $"Invalid workflow YAML: {string.Join("; ", errors)}",
-            }, EventDirection.Self, ct);
+                Error = $"Invalid workflow YAML: {validationDetails}",
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -58,6 +70,6 @@ public sealed class WorkflowYamlValidateModule : IEventModule<IWorkflowExecution
             RunId = request.RunId,
             Success = true,
             Output = $"```yaml\n{yaml}\n```",
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

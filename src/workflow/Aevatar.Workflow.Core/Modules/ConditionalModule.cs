@@ -40,9 +40,9 @@ public sealed class ConditionalModule : IEventModule<IWorkflowExecutionContext>
             StepId = request.StepId,
             RunId = request.RunId,
             Success = true, Output = input,
+            BranchKey = branchKey,
         };
-        completed.Metadata["branch"] = branchKey;
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     private static bool TryParseBoolean(string value, out bool result)

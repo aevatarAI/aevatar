@@ -1,6 +1,4 @@
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 
@@ -8,12 +6,6 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 internal sealed class ChatSseResponseWriter
 {
-    private static readonly JsonSerializerOptions OutputJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private readonly HttpResponse _response;
     private bool _started;
 
@@ -38,10 +30,10 @@ internal sealed class ChatSseResponseWriter
         return new ValueTask(_response.StartAsync(ct));
     }
 
-    public async ValueTask WriteAsync(WorkflowOutputFrame frame, CancellationToken ct = default)
+    public async ValueTask WriteAsync(WorkflowRunEventEnvelope frame, CancellationToken ct = default)
     {
         await StartAsync(ct);
-        var payload = JsonSerializer.Serialize(frame, OutputJsonOptions);
+        var payload = ChatJsonPayloads.Format(frame);
         var bytes = Encoding.UTF8.GetBytes($"data: {payload}\n\n");
         await _response.Body.WriteAsync(bytes, ct);
         await _response.Body.FlushAsync(ct);

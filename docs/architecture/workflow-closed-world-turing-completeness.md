@@ -27,12 +27,12 @@
 
 ### 2. 分支语义闭合
 
-- `ConditionalModule` 必须回传 `metadata["branch"]`。
+- `ConditionalModule` 必须回传 `StepCompletedEvent.BranchKey`。
 - `WorkflowLoopModule` 以 `branch` 决定 `GetNextStep(current, branchKey)`。
 
 ### 3. 状态语义闭合
 
-- `AssignModule` 通过 `assign.target/assign.value` 元数据声明变量写入。
+- `AssignModule` 通过 `assigned_variable/assigned_value` 强类型字段声明变量写入。
 - `WorkflowLoopModule` 在 run 变量表 `_variablesByRunId` 应用赋值，保证后续表达式可见。
 
 ### 4. 循环语义通用化

@@ -1,0 +1,19 @@
+name: assign
+description: |
+  Demonstrates the `assign` primitive — variable assignment.
+  Assigns the input to a variable via dollar-path, then transforms it.
+
+roles: []
+
+steps:
+  - id: save_input
+    type: assign
+    parameters:
+      target: "original_text"
+      value: "$input"
+    next: transform_it
+
+  - id: transform_it
+    type: transform
+    parameters:
+      op: "uppercase"

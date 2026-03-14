@@ -1,6 +1,7 @@
-using Aevatar.Foundation.Runtime.Routing;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
+using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.Logging;
 
@@ -9,31 +10,34 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 public sealed class LocalActor : IActor
 {
     private readonly SemaphoreSlim _mailbox = new(1, 1);
-    private readonly EventRouter _router;
+    private readonly HashSet<string> _childrenIds = [];
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
+    private readonly IEventDeduplicator? _deduplicator;
     private IAsyncDisposable? _selfSubscription;
+    private string? _parentId;
 
     public LocalActor(
         IAgent agent,
         string id,
-        EventRouter router,
         IStreamProvider streams,
         ILogger logger,
-        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
+        IEventDeduplicator? deduplicator = null)
     {
         Agent = agent;
         Id = id;
-        _router = router;
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
+        _deduplicator = deduplicator;
     }
 
     public string Id { get; }
     public IAgent Agent { get; }
-    internal EventRouter Router => _router;
+    internal string? ParentId => _parentId;
+    internal int ChildrenCount => _childrenIds.Count;
 
     public async Task ActivateAsync(CancellationToken ct = default)
     {
@@ -41,8 +45,22 @@ public sealed class LocalActor : IActor
         var selfStream = _streams.GetStream(Id);
         _selfSubscription = await selfStream.SubscribeAsync<EventEnvelope>(async envelope =>
         {
+            var route = envelope.Route;
+            var direction = route.GetTopologyAudience();
+            var publisherActorId = route?.PublisherActorId;
+
+            if (route.IsObserverPublication())
+                return;
+
+            if (route.IsDirect())
+            {
+                if (string.Equals(route.GetTargetActorId(), Id, StringComparison.Ordinal))
+                    await EnqueueAsync(envelope);
+                return;
+            }
+
             // Handle Self events directly.
-            if (envelope.Direction == EventDirection.Self)
+            if (direction == TopologyAudience.Self)
             {
                 await EnqueueAsync(envelope);
                 return;
@@ -50,16 +68,16 @@ public sealed class LocalActor : IActor
 
             // Handle Up events from children (they produce to parent's stream).
             // Child events may use Both (self + parent), so treat direct-child Both as upward.
-            if (envelope.Direction == EventDirection.Up ||
-                (envelope.Direction == EventDirection.Both &&
-                 !string.IsNullOrWhiteSpace(envelope.PublisherId) &&
-                 _router.ChildrenIds.Contains(envelope.PublisherId)))
+            if (direction == TopologyAudience.Parent ||
+                (direction == TopologyAudience.ParentAndChildren &&
+                 !string.IsNullOrWhiteSpace(publisherActorId) &&
+                 _childrenIds.Contains(publisherActorId)))
             {
                 await EnqueueAsync(envelope);
                 return;
             }
 
-            if (envelope.Direction is EventDirection.Down or EventDirection.Both &&
+            if (direction is TopologyAudience.Children or TopologyAudience.ParentAndChildren &&
                 StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id))
             {
                 if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
@@ -85,25 +103,25 @@ public sealed class LocalActor : IActor
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
         EnqueueAsync(envelope, propagateFailure: true);
 
-    public Task<string?> GetParentIdAsync() => Task.FromResult(_router.ParentId);
+    public Task<string?> GetParentIdAsync() => Task.FromResult(_parentId);
     public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-        Task.FromResult<IReadOnlyList<string>>(_router.ChildrenIds.ToList());
+        Task.FromResult<IReadOnlyList<string>>([.. _childrenIds]);
 
     // Hierarchy operations (called by LocalActorRuntime)
 
-    internal void AddChild(string childId) => _router.AddChild(childId);
-    internal void RemoveChild(string childId) => _router.RemoveChild(childId);
+    internal void AddChild(string childId) => _childrenIds.Add(childId);
+    internal void RemoveChild(string childId) => _childrenIds.Remove(childId);
 
     internal Task SubscribeToParentAsync(string parentId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        _router.SetParent(parentId);
+        _parentId = parentId;
         return Task.CompletedTask;
     }
 
     internal Task UnsubscribeFromParentAsync()
     {
-        _router.ClearParent();
+        _parentId = null;
         return Task.CompletedTask;
     }
 
@@ -111,21 +129,39 @@ public sealed class LocalActor : IActor
 
     private async Task EnqueueAsync(EventEnvelope envelope, bool propagateFailure = false)
     {
-        using var scope = EventHandleScope.Begin(_logger, Id, envelope);
+        EventHandleScope scope = default;
+        var scopeCreated = false;
         await _mailbox.WaitAsync();
         try
         {
+            if (_deduplicator != null &&
+                RuntimeEnvelopeDeduplication.TryBuildDedupKey(Id, envelope, out var dedupKey) &&
+                !await _deduplicator.TryRecordAsync(dedupKey))
+            {
+                _logger.LogDebug(
+                    "LocalActor {Id} dropped duplicate envelope {EnvelopeId} with dedup key {DedupKey}",
+                    Id,
+                    envelope.Id,
+                    dedupKey);
+                return;
+            }
+
+            scope = EventHandleScope.Begin(_logger, Id, envelope);
+            scopeCreated = true;
             await Agent.HandleEventAsync(envelope);
         }
         catch (Exception ex)
         {
-            scope.MarkError(ex);
+            if (scopeCreated)
+                scope.MarkError(ex);
             _logger.LogError(ex, "LocalActor {Id} failed to handle event", Id);
             if (propagateFailure)
                 throw;
         }
         finally
         {
+            if (scopeCreated)
+                scope.Dispose();
             _mailbox.Release();
         }
     }

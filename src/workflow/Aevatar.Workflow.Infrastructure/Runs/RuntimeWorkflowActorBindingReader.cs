@@ -9,17 +9,13 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 internal sealed class RuntimeWorkflowActorBindingReader : IWorkflowActorBindingReader
 {
     private static readonly TimeSpan DefaultQueryTimeout = TimeSpan.FromSeconds(5);
-    private readonly RuntimeWorkflowActorAccessor _actorAccessor;
+    private static readonly TimeSpan UnsupportedActorProbeTimeout = TimeSpan.FromSeconds(1);
     private readonly RuntimeWorkflowQueryClient _queryClient;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
-    private readonly QueryWorkflowActorBindingRequestAdapter _queryAdapter = new();
-
     public RuntimeWorkflowActorBindingReader(
-        RuntimeWorkflowActorAccessor actorAccessor,
         RuntimeWorkflowQueryClient queryClient,
         IAgentTypeVerifier agentTypeVerifier)
     {
-        _actorAccessor = actorAccessor ?? throw new ArgumentNullException(nameof(actorAccessor));
         _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
         _agentTypeVerifier = agentTypeVerifier ?? throw new ArgumentNullException(nameof(agentTypeVerifier));
     }
@@ -29,39 +25,38 @@ internal sealed class RuntimeWorkflowActorBindingReader : IWorkflowActorBindingR
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
 
-        var actor = await _actorAccessor.GetAsync(actorId, ct);
-        if (actor == null)
+        var isWorkflowActor = await IsWorkflowActorAsync(actorId, ct);
+
+        try
+        {
+            var response = await _queryClient.QueryActorAsync<WorkflowActorBindingRespondedEvent>(
+                actorId,
+                WorkflowQueryRouteConventions.ActorBindingReplyStreamPrefix,
+                isWorkflowActor ? DefaultQueryTimeout : UnsupportedActorProbeTimeout,
+                (requestId, replyStreamId) => WorkflowActorBindingQueryEnvelopeFactory.Create(actorId, requestId, replyStreamId),
+                static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
+                WorkflowQueryRouteConventions.BuildActorBindingTimeoutMessage,
+                ct);
+
+            return MapResponse(response, actorId);
+        }
+        catch (TimeoutException) when (!isWorkflowActor)
+        {
+            return WorkflowActorBinding.Unsupported(actorId);
+        }
+        catch (InvalidOperationException ex) when (LooksLikeMissingActor(ex))
+        {
             return null;
-
-        if (!await IsWorkflowActorAsync(actor, ct))
-            return WorkflowActorBinding.Unsupported(actor.Id);
-
-        var response = await _queryClient.QueryActorAsync<WorkflowActorBindingRespondedEvent>(
-            actor,
-            WorkflowQueryRouteConventions.ActorBindingReplyStreamPrefix,
-            DefaultQueryTimeout,
-            (requestId, replyStreamId) => _queryAdapter.Map(actor.Id, requestId, replyStreamId),
-            static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-            WorkflowQueryRouteConventions.BuildActorBindingTimeoutMessage,
-            ct);
-
-        return MapResponse(response, actor.Id);
+        }
     }
 
-    private async Task<bool> IsWorkflowActorAsync(IActor actor, CancellationToken ct)
+    private async Task<bool> IsWorkflowActorAsync(string actorId, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
 
-        var runtimeType = actor.Agent.GetType();
-        if (typeof(WorkflowGAgent).IsAssignableFrom(runtimeType) ||
-            typeof(WorkflowRunGAgent).IsAssignableFrom(runtimeType))
-        {
-            return true;
-        }
-
-        return await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowGAgent), ct) ||
-               await _agentTypeVerifier.IsExpectedAsync(actor.Id, typeof(WorkflowRunGAgent), ct);
+        return await _agentTypeVerifier.IsExpectedAsync(actorId, typeof(WorkflowGAgent), ct) ||
+               await _agentTypeVerifier.IsExpectedAsync(actorId, typeof(WorkflowRunGAgent), ct);
     }
 
     private static WorkflowActorBinding MapResponse(
@@ -95,4 +90,11 @@ internal sealed class RuntimeWorkflowActorBindingReader : IWorkflowActorBindingR
             "run" => WorkflowActorKind.Run,
             _ => WorkflowActorKind.Unsupported,
         };
+
+    private static bool LooksLikeMissingActor(InvalidOperationException ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("not initialized", StringComparison.OrdinalIgnoreCase);
+    }
 }

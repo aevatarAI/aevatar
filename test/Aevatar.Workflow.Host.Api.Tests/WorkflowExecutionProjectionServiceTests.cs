@@ -84,7 +84,7 @@ public class WorkflowExecutionProjectionServiceTests
             out _,
             out _);
 
-        var sink = new EventChannel<WorkflowRunEvent>();
+        var sink = new EventChannel<WorkflowRunEventEnvelope>();
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         lease.Should().BeNull();
 
@@ -205,7 +205,7 @@ public class WorkflowExecutionProjectionServiceTests
         beforeAttach.StartedAt.Should().Be(initialStartedAt);
 
         clock.UtcNow = initialStartedAt.AddMinutes(10);
-        var sink = new EventChannel<WorkflowRunEvent>();
+        var sink = new EventChannel<WorkflowRunEventEnvelope>();
         await service.AttachLiveSinkAsync(lease!, sink);
 
         var afterAttach = await store.GetAsync("root");
@@ -274,7 +274,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
         lease.Should().NotBeNull();
-        var sink = new EventChannel<WorkflowRunEvent>();
+        var sink = new EventChannel<WorkflowRunEventEnvelope>();
         await service.AttachLiveSinkAsync(lease!, sink);
         await service.ReleaseActorProjectionAsync(lease!);
         await streams.GetStream("root").ProduceAsync(Wrap(new StartWorkflowEvent
@@ -290,7 +290,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkBackpressure_ShouldPublishRunErrorAndDetachFailingSink()
+    public async Task AttachLiveSinkAsync_WhenSinkBackpressure_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -310,38 +310,38 @@ public class WorkflowExecutionProjectionServiceTests
         await service.AttachLiveSinkAsync(lease!, failingSink);
         await service.AttachLiveSinkAsync(lease!, recordingSink);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowRunStartedEvent
-        {
-            ThreadId = "thread-1",
-        });
+        await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt is WorkflowRunErrorEvent x && x.Code == "RUN_SINK_BACKPRESSURE",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_BACKPRESSURE",
             TimeSpan.FromSeconds(2));
 
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowStepStartedEvent
-        {
-            StepName = "step-2",
-        });
+        await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepStarted
+                && evt.StepStarted.StepName == "step-2",
             TimeSpan.FromSeconds(2));
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
-        var errorEvent = recordingSink.SnapshotEvents()
-            .OfType<WorkflowRunErrorEvent>()
-            .Single(x => x.Code == "RUN_SINK_BACKPRESSURE");
-        errorEvent.Message.Should().Contain("eventType=RUN_STARTED");
+        var failureEvent = recordingSink.SnapshotEvents()
+            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom)
+            .Select(x => x.Custom)
+            .Single(x => x.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName);
+        failureEvent.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().EventType
+            .Should().Be(WorkflowRunEventTypes.RunStarted);
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkThrowsInvalidOperation_ShouldPublishRunErrorAndDetachFailingSink()
+    public async Task AttachLiveSinkAsync_WhenSinkThrowsInvalidOperation_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -361,33 +361,31 @@ public class WorkflowExecutionProjectionServiceTests
         await service.AttachLiveSinkAsync(lease!, failingSink);
         await service.AttachLiveSinkAsync(lease!, recordingSink);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowRunStartedEvent
-        {
-            ThreadId = "thread-1",
-        });
+        await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt is WorkflowRunErrorEvent x && x.Code == "RUN_SINK_WRITE_FAILED",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_WRITE_FAILED",
             TimeSpan.FromSeconds(2));
 
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        await failingSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowStepStartedEvent
-        {
-            StepName = "step-2",
-        });
+        await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
 
         await recordingSink.WaitForEventAsync(
-            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepStarted
+                && evt.StepStarted.StepName == "step-2",
             TimeSpan.FromSeconds(2));
-        failingSink.PushAsyncCallCount.Should().Be(1);
+        failingSink.PushAsyncCallCount.Should().Be(2);
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldDetachWithoutPublishingRunError()
+    public async Task AttachLiveSinkAsync_WhenSinkCompleted_ShouldPublishCustomFailureAndDetachFailingSink()
     {
         var service = CreateService(
             new WorkflowExecutionProjectionOptions
@@ -407,22 +405,25 @@ public class WorkflowExecutionProjectionServiceTests
         await service.AttachLiveSinkAsync(lease!, completedSink);
         await service.AttachLiveSinkAsync(lease!, recordingSink);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowRunStartedEvent
-        {
-            ThreadId = "thread-1",
-        });
-        await completedSink.WaitForCallCountAsync(1, TimeSpan.FromSeconds(2));
+        await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
+        await completedSink.WaitForCallCountAsync(2, TimeSpan.FromSeconds(2));
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowStepStartedEvent
-        {
-            StepName = "step-2",
-        });
         await recordingSink.WaitForEventAsync(
-            evt => evt is WorkflowStepStartedEvent x && x.StepName == "step-2",
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom
+                && evt.Custom.Name == WorkflowProjectionSinkFailurePolicy.ProjectionSinkFailureEventName
+                && evt.Custom.Payload.Unpack<WorkflowProjectionSinkFailureCustomPayload>().Code == "RUN_SINK_WRITE_FAILED",
             TimeSpan.FromSeconds(2));
 
-        completedSink.PushAsyncCallCount.Should().Be(1);
-        recordingSink.SnapshotEvents().OfType<WorkflowRunErrorEvent>().Should().BeEmpty();
+        await runEventHub.PublishAsync("root", "cmd-1", BuildStepStartedEvent("step-2"));
+        await recordingSink.WaitForEventAsync(
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.StepStarted
+                && evt.StepStarted.StepName == "step-2",
+            TimeSpan.FromSeconds(2));
+
+        completedSink.PushAsyncCallCount.Should().Be(2);
+        recordingSink.SnapshotEvents()
+            .Where(x => x.EventCase == WorkflowRunEventEnvelope.EventOneofCase.Custom)
+            .Should().ContainSingle();
 
         await service.DetachLiveSinkAsync(lease!, recordingSink);
         await service.ReleaseActorProjectionAsync(lease!);
@@ -450,12 +451,9 @@ public class WorkflowExecutionProjectionServiceTests
         await service.AttachLiveSinkAsync(lease!, sink);
         await service.AttachLiveSinkAsync(lease!, probeSink);
 
-        await runEventHub.PublishAsync("root", "cmd-1", new WorkflowRunStartedEvent
-        {
-            ThreadId = "thread-1",
-        });
+        await runEventHub.PublishAsync("root", "cmd-1", BuildRunStartedEvent("thread-1"));
         await probeSink.WaitForEventAsync(
-            evt => evt is WorkflowRunStartedEvent,
+            evt => evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunStarted,
             TimeSpan.FromSeconds(2));
 
         sink.SnapshotEvents().Should().HaveCount(1);
@@ -504,7 +502,7 @@ public class WorkflowExecutionProjectionServiceTests
             },
             out _,
             out _);
-        var sink = new EventChannel<WorkflowRunEvent>();
+        var sink = new EventChannel<WorkflowRunEventEnvelope>();
 
         var act = async () => await service.AttachLiveSinkAsync(new ExternalLease("root", "cmd"), sink);
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -531,7 +529,7 @@ public class WorkflowExecutionProjectionServiceTests
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
         out ObservableWorkflowExecutionDocumentStore store,
-        out IProjectionSessionEventHub<WorkflowRunEvent> runEventStreamHub,
+        out IProjectionSessionEventHub<WorkflowRunEventEnvelope> runEventStreamHub,
         IProjectionClock? clock = null)
     {
         var forwardingRegistry = new InMemoryStreamForwardingRegistry();
@@ -584,12 +582,13 @@ public class WorkflowExecutionProjectionServiceTests
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             dispatchPort,
-            ownershipTypeVerifier);
-        runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEvent>(
+            ownershipTypeVerifier,
+            runtimeProvider.GetRequiredService<IEventStore>());
+        runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
         var mapper = new WorkflowExecutionReadModelMapper();
-        var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(runEventStreamHub);
+        var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
@@ -606,9 +605,9 @@ public class WorkflowExecutionProjectionServiceTests
             lifecycle,
             readModelUpdater,
             ownershipCoordinator);
-        var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(sinkFailurePolicy);
+        var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(sinkFailurePolicy);
 
-        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
+        var projectionPort = new WorkflowExecutionProjectionPortService(
             options,
             activationService,
             releaseService,
@@ -617,7 +616,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryPort = new WorkflowExecutionProjectionQueryService(
             options,
             queryReader);
-        return new ProjectionPortsHarness(lifecyclePort, queryPort);
+        return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
     private static ProjectionPortsHarness CreateServiceForStartFailure(
@@ -635,7 +634,7 @@ public class WorkflowExecutionProjectionServiceTests
         var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
-        var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(runEventHub);
+        var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
         var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, clock);
         var queryReader = new WorkflowProjectionQueryReader(
@@ -652,14 +651,14 @@ public class WorkflowExecutionProjectionServiceTests
             lifecycle,
             readModelUpdater,
             ownershipCoordinator);
-        var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>(sinkFailurePolicy);
+        var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(sinkFailurePolicy);
 
         var options = new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
             EnableActorQueryEndpoints = true,
         };
-        var lifecyclePort = new WorkflowExecutionProjectionLifecycleService(
+        var projectionPort = new WorkflowExecutionProjectionPortService(
             options,
             activationService,
             releaseService,
@@ -668,7 +667,7 @@ public class WorkflowExecutionProjectionServiceTests
         var queryPort = new WorkflowExecutionProjectionQueryService(
             options,
             queryReader);
-        return new ProjectionPortsHarness(lifecyclePort, queryPort);
+        return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
     private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
@@ -700,9 +699,26 @@ public class WorkflowExecutionProjectionServiceTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = publisherId,
-        Direction = EventDirection.Down,
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
     };
+
+    private static WorkflowRunEventEnvelope BuildRunStartedEvent(string threadId) =>
+        new()
+        {
+            RunStarted = new WorkflowRunStartedEventPayload
+            {
+                ThreadId = threadId,
+            },
+        };
+
+    private static WorkflowRunEventEnvelope BuildStepStartedEvent(string stepName) =>
+        new()
+        {
+            StepStarted = new WorkflowStepStartedEventPayload
+            {
+                StepName = stepName,
+            },
+        };
 
     private static async Task WaitForProducedEventDispatchAsync<TEvent>(
         InMemoryStreamProvider streams,
@@ -747,21 +763,21 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ProjectionPortsHarness
-        : IWorkflowExecutionProjectionLifecyclePort,
+        : IWorkflowExecutionProjectionPort,
           IWorkflowExecutionProjectionQueryPort
     {
-        private readonly IWorkflowExecutionProjectionLifecyclePort _lifecyclePort;
+        private readonly IWorkflowExecutionProjectionPort _projectionPort;
         private readonly IWorkflowExecutionProjectionQueryPort _queryPort;
 
         public ProjectionPortsHarness(
-            IWorkflowExecutionProjectionLifecyclePort lifecyclePort,
+            IWorkflowExecutionProjectionPort projectionPort,
             IWorkflowExecutionProjectionQueryPort queryPort)
         {
-            _lifecyclePort = lifecyclePort;
+            _projectionPort = projectionPort;
             _queryPort = queryPort;
         }
 
-        public bool ProjectionEnabled => _lifecyclePort.ProjectionEnabled;
+        public bool ProjectionEnabled => _projectionPort.ProjectionEnabled;
 
         public bool EnableActorQueryEndpoints => _queryPort.EnableActorQueryEndpoints;
 
@@ -771,24 +787,24 @@ public class WorkflowExecutionProjectionServiceTests
             string input,
             string commandId,
             CancellationToken ct = default)
-            => _lifecyclePort.EnsureActorProjectionAsync(rootActorId, workflowName, input, commandId, ct);
+            => _projectionPort.EnsureActorProjectionAsync(rootActorId, workflowName, input, commandId, ct);
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
-            => _lifecyclePort.AttachLiveSinkAsync(lease, sink, ct);
+            => _projectionPort.AttachLiveSinkAsync(lease, sink, ct);
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEvent> sink,
+            IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
-            => _lifecyclePort.DetachLiveSinkAsync(lease, sink, ct);
+            => _projectionPort.DetachLiveSinkAsync(lease, sink, ct);
 
         public Task ReleaseActorProjectionAsync(
             IWorkflowExecutionProjectionLease lease,
             CancellationToken ct = default)
-            => _lifecyclePort.ReleaseActorProjectionAsync(lease, ct);
+            => _projectionPort.ReleaseActorProjectionAsync(lease, ct);
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
             string actorId,
@@ -940,20 +956,20 @@ public class WorkflowExecutionProjectionServiceTests
         }
     }
 
-    private sealed class BackpressureFailingSink : IEventSink<WorkflowRunEvent>
+    private sealed class BackpressureFailingSink : IEventSink<WorkflowRunEventEnvelope>
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
 
         public int PushAsyncCallCount { get; private set; }
 
-        public void Push(WorkflowRunEvent evt)
+        public void Push(WorkflowRunEventEnvelope evt)
         {
             ArgumentNullException.ThrowIfNull(evt);
             throw new EventSinkBackpressureException();
         }
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
@@ -981,7 +997,7 @@ public class WorkflowExecutionProjectionServiceTests
         {
         }
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;
@@ -1009,20 +1025,20 @@ public class WorkflowExecutionProjectionServiceTests
         }
     }
 
-    private sealed class InvalidOperationFailingSink : IEventSink<WorkflowRunEvent>
+    private sealed class InvalidOperationFailingSink : IEventSink<WorkflowRunEventEnvelope>
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
 
         public int PushAsyncCallCount { get; private set; }
 
-        public void Push(WorkflowRunEvent evt)
+        public void Push(WorkflowRunEventEnvelope evt)
         {
             ArgumentNullException.ThrowIfNull(evt);
             throw new InvalidOperationException("sink write failed");
         }
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
@@ -1050,7 +1066,7 @@ public class WorkflowExecutionProjectionServiceTests
         {
         }
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;
@@ -1078,20 +1094,20 @@ public class WorkflowExecutionProjectionServiceTests
         }
     }
 
-    private sealed class CompletedFailingSink : IEventSink<WorkflowRunEvent>
+    private sealed class CompletedFailingSink : IEventSink<WorkflowRunEventEnvelope>
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
 
         public int PushAsyncCallCount { get; private set; }
 
-        public void Push(WorkflowRunEvent evt)
+        public void Push(WorkflowRunEventEnvelope evt)
         {
             ArgumentNullException.ThrowIfNull(evt);
             throw new EventSinkCompletedException();
         }
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
@@ -1119,7 +1135,7 @@ public class WorkflowExecutionProjectionServiceTests
         {
         }
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;
@@ -1147,14 +1163,14 @@ public class WorkflowExecutionProjectionServiceTests
         }
     }
 
-    private sealed class RecordingWorkflowRunEventSink : IEventSink<WorkflowRunEvent>
+    private sealed class RecordingWorkflowRunEventSink : IEventSink<WorkflowRunEventEnvelope>
     {
         private readonly object _gate = new();
-        private readonly List<WorkflowRunEvent> _events = [];
+        private readonly List<WorkflowRunEventEnvelope> _events = [];
         private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _countWaiters = [];
-        private readonly List<(Func<WorkflowRunEvent, bool> Predicate, TaskCompletionSource<bool> Signal)> _predicateWaiters = [];
+        private readonly List<(Func<WorkflowRunEventEnvelope, bool> Predicate, TaskCompletionSource<bool> Signal)> _predicateWaiters = [];
 
-        public IReadOnlyList<WorkflowRunEvent> SnapshotEvents()
+        public IReadOnlyList<WorkflowRunEventEnvelope> SnapshotEvents()
         {
             lock (_gate)
                 return _events.ToList();
@@ -1176,7 +1192,7 @@ public class WorkflowExecutionProjectionServiceTests
             return waitTask.WaitAsync(timeout);
         }
 
-        public Task WaitForEventAsync(Func<WorkflowRunEvent, bool> predicate, TimeSpan timeout)
+        public Task WaitForEventAsync(Func<WorkflowRunEventEnvelope, bool> predicate, TimeSpan timeout)
         {
             ArgumentNullException.ThrowIfNull(predicate);
             Task waitTask;
@@ -1193,13 +1209,13 @@ public class WorkflowExecutionProjectionServiceTests
             return waitTask.WaitAsync(timeout);
         }
 
-        public void Push(WorkflowRunEvent evt)
+        public void Push(WorkflowRunEventEnvelope evt)
         {
             ArgumentNullException.ThrowIfNull(evt);
             Append(evt);
         }
 
-        public ValueTask PushAsync(WorkflowRunEvent evt, CancellationToken ct = default)
+        public ValueTask PushAsync(WorkflowRunEventEnvelope evt, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(evt);
             ct.ThrowIfCancellationRequested();
@@ -1211,7 +1227,7 @@ public class WorkflowExecutionProjectionServiceTests
         {
         }
 
-        public async IAsyncEnumerable<WorkflowRunEvent> ReadAllAsync(
+        public async IAsyncEnumerable<WorkflowRunEventEnvelope> ReadAllAsync(
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;
@@ -1221,7 +1237,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        private void Append(WorkflowRunEvent evt)
+        private void Append(WorkflowRunEventEnvelope evt)
         {
             lock (_gate)
             {
@@ -1262,6 +1278,9 @@ public class WorkflowExecutionProjectionServiceTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> HasActiveLeaseAsync(string scopeId, string sessionId, CancellationToken ct = default) =>
+            Task.FromResult(Acquired.Contains((scopeId, sessionId)) && !Released.Contains((scopeId, sessionId)));
+
         public Task ReleaseAsync(string scopeId, string sessionId, CancellationToken ct = default)
         {
             Released.Add((scopeId, sessionId));
@@ -1281,15 +1300,15 @@ public class WorkflowExecutionProjectionServiceTests
         public Task CompleteAsync(WorkflowExecutionProjectionContext context, IReadOnlyList<WorkflowExecutionTopologyEdge> completion, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NoOpWorkflowRunEventHub : IProjectionSessionEventHub<WorkflowRunEvent>
+    private sealed class NoOpWorkflowRunEventHub : IProjectionSessionEventHub<WorkflowRunEventEnvelope>
     {
-        public Task PublishAsync(string scopeId, string sessionId, WorkflowRunEvent evt, CancellationToken ct = default) =>
+        public Task PublishAsync(string scopeId, string sessionId, WorkflowRunEventEnvelope evt, CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task<IAsyncDisposable> SubscribeAsync(
             string scopeId,
             string sessionId,
-            Func<WorkflowRunEvent, ValueTask> handler,
+            Func<WorkflowRunEventEnvelope, ValueTask> handler,
             CancellationToken ct = default) =>
             Task.FromResult<IAsyncDisposable>(new NoOpAsyncDisposable());
     }

@@ -72,7 +72,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
-    public async Task AgentRun_WithProviderMetadata_SetsProviderTag()
+    public async Task AgentRun_WithProviderNameItem_SetsProviderTag()
     {
         _activities.Clear();
 
@@ -82,7 +82,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
             AgentId = "agent-1",
             AgentName = "TestAgent",
         };
-        ctx.Metadata["gen_ai.provider.name"] = "openai";
+        ctx.Items["gen_ai.provider.name"] = "openai";
 
         await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
@@ -91,7 +91,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
     }
 
     [Fact]
-    public async Task AgentRun_WithInvalidProviderMetadata_DoesNotSetProviderTag()
+    public async Task AgentRun_WithInvalidProviderNameItem_DoesNotSetProviderTag()
     {
         _activities.Clear();
 
@@ -101,7 +101,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
             AgentId = "agent-1",
             AgentName = "TestAgent",
         };
-        ctx.Metadata["gen_ai.provider.name"] = "   ";
+        ctx.Items["gen_ai.provider.name"] = "   ";
 
         await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
 
@@ -139,6 +139,24 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
         activity.GetTagItem("gen_ai.usage.input_tokens").Should().Be(10);
         activity.GetTagItem("gen_ai.usage.output_tokens").Should().Be(5);
         activity.GetTagItem("gen_ai.response.finish_reason").Should().Be("stop");
+    }
+
+    [Fact]
+    public async Task LLMCall_WithRequestId_ShouldSetRequestIdTag()
+    {
+        _activities.Clear();
+
+        var ctx = new LLMCallContext
+        {
+            Request = new LLMRequest { Messages = [], Model = "gpt-4", RequestId = "session-42" },
+            Provider = new FakeLLMProvider(),
+        };
+
+        await _middleware.InvokeAsync(ctx, () => Task.CompletedTask);
+
+        var activity = _activities.Where(a =>
+            a.GetTagItem("gen_ai.operation.name")?.ToString() == "chat").Last();
+        activity.GetTagItem("gen_ai.request.id").Should().Be("session-42");
     }
 
     [Fact]

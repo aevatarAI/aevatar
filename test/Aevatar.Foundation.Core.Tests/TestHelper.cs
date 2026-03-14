@@ -14,8 +14,7 @@ public static class TestHelper
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId,
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
         };
 }
 

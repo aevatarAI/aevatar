@@ -12,9 +12,9 @@ public interface IEventStore
 {
     /// <summary>
     /// Append state events. expectedVersion is used for optimistic concurrency control.
-    /// Returns the latest version number after appending.
+    /// Returns the committed event records and latest version after appending.
     /// </summary>
-    Task<long> AppendAsync(
+    Task<EventStoreCommitResult> AppendAsync(
         string agentId,
         IEnumerable<StateEvent> events,
         long expectedVersion,

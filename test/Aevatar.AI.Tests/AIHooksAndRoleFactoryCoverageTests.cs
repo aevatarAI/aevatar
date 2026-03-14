@@ -14,6 +14,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Tests;
@@ -39,11 +40,11 @@ public class AIHooksAndRoleFactoryCoverageTests
 
         // Budget false branch: missing/invalid history_count.
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
-        ctx.Metadata["history_count"] = "invalid";
+        ctx.Items["history_count"] = "invalid";
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
 
         // Budget true branch: numeric history_count over threshold.
-        ctx.Metadata["history_count"] = 3;
+        ctx.Items["history_count"] = 3;
         await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
 
         // Tool truncation: null/short branch.
@@ -73,6 +74,29 @@ public class AIHooksAndRoleFactoryCoverageTests
         await trace.OnLLMRequestEndAsync(ctx, CancellationToken.None);
         await trace.OnToolExecuteStartAsync(ctx, CancellationToken.None);
         await trace.OnToolExecuteEndAsync(ctx, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task BudgetMonitorHook_ShouldWarnOnlyWhenHistoryCountExceedsThreshold()
+    {
+        var logger = new RecordingLogger();
+        var budget = new BudgetMonitorHook(logger)
+        {
+            WarningThreshold = 2,
+        };
+        var ctx = new AIGAgentExecutionHookContext();
+
+        budget.Name.Should().Be("budget_monitor");
+        budget.Priority.Should().Be(-500);
+
+        ctx.Items["history_count"] = 2;
+        await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
+
+        ctx.Items["history_count"] = 3;
+        await budget.OnLLMRequestStartAsync(ctx, CancellationToken.None);
+
+        logger.Warnings.Should().ContainSingle();
+        logger.Warnings[0].Should().Contain("超过阈值");
     }
 
     [Fact]
@@ -254,6 +278,35 @@ public class AIHooksAndRoleFactoryCoverageTests
     {
         public string Name => "minimal";
         public int Priority => 0;
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NoopDisposable.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
+
+        private sealed class NoopDisposable : IDisposable
+        {
+            public static readonly NoopDisposable Instance = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 
     private sealed class StubEventModuleFactory : IEventModuleFactory<IEventHandlerContext>

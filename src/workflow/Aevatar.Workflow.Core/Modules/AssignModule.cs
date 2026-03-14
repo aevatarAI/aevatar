@@ -44,10 +44,10 @@ public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
         };
         if (!string.IsNullOrWhiteSpace(target))
         {
-            completed.Metadata["assign.target"] = target;
-            completed.Metadata["assign.value"] = resolvedValue;
+            completed.AssignedVariable = target;
+            completed.AssignedValue = resolvedValue;
         }
 
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }

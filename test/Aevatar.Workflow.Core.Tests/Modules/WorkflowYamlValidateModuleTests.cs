@@ -162,7 +162,7 @@ public sealed class WorkflowYamlValidateModuleTests
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new() => new();
@@ -177,8 +177,9 @@ public sealed class WorkflowYamlValidateModuleTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -186,14 +187,15 @@ public sealed class WorkflowYamlValidateModuleTests
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage => Task.CompletedTask;
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 1, RuntimeCallbackBackend.InMemory));
 
@@ -202,7 +204,7 @@ public sealed class WorkflowYamlValidateModuleTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default) =>
             Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, 2, RuntimeCallbackBackend.InMemory));
 

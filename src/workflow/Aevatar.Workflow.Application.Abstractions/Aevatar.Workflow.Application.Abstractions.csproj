@@ -10,4 +10,14 @@
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Runs/workflow_run_events.proto" GrpcServices="None" />
+  </ItemGroup>
 </Project>

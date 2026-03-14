@@ -44,7 +44,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 await ctx.PublishAsync(new StepCompletedEvent
                 {
                     StepId = request.StepId, RunId = runId, Success = true, Output = "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -94,7 +94,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     RunId = runId,
                     Input = items[i],
                     TargetRole = mapRole ?? "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
@@ -112,8 +112,8 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = reduceParent, RunId = runId, Success = evt.Success, Output = evt.Output, Error = evt.Error,
                 };
-                completed.Metadata["map_reduce.phase"] = "reduce";
-                await ctx.PublishAsync(completed, EventDirection.Self, ct);
+                completed.Annotations["map_reduce.phase"] = "reduce";
+                await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -140,7 +140,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
                     Error = allSuccess ? "" : "one or more map steps failed",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
                 return;
             }
 
@@ -161,7 +161,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 RunId = runId,
                 Input = reduceInput,
                 TargetRole = parentState.ReduceRole,
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
         }
     }
 

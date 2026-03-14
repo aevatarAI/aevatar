@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
@@ -67,7 +68,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         var options = BuildOptions(request);
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
-        var emittedOutputChunk = false;
+        var emittedStreamChunk = false;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
@@ -80,20 +81,21 @@ public sealed class MEAILLMProvider : ILLMProvider
                     {
                         case TextContent textContent when !string.IsNullOrEmpty(textContent.Text):
                             emittedTextFromContents = true;
-                            emittedOutputChunk = true;
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaContent = textContent.Text,
                             };
                             break;
                         case TextReasoningContent reasoningContent when !string.IsNullOrEmpty(reasoningContent.Text):
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaReasoningContent = reasoningContent.Text,
                             };
                             break;
                         case FunctionCallContent functionCall:
-                            emittedOutputChunk = true;
+                            emittedStreamChunk = true;
                             yield return new LLMStreamChunk
                             {
                                 DeltaToolCall = ConvertFunctionCallDelta(functionCall),
@@ -105,7 +107,7 @@ public sealed class MEAILLMProvider : ILLMProvider
 
             if (!emittedTextFromContents && !string.IsNullOrEmpty(update.Text))
             {
-                emittedOutputChunk = true;
+                emittedStreamChunk = true;
                 yield return new LLMStreamChunk
                 {
                     DeltaContent = update.Text,
@@ -113,12 +115,12 @@ public sealed class MEAILLMProvider : ILLMProvider
             }
         }
 
-        // Some models/providers may produce a streaming sequence without user-visible text/tool chunks.
-        // In that case, do a single non-streaming fallback call to avoid returning an empty assistant output.
-        if (!emittedOutputChunk)
+        // Some providers may terminate a streaming call without emitting any chunk at all.
+        // Only in that case do a single non-streaming fallback call.
+        if (!emittedStreamChunk)
         {
             _logger.LogWarning(
-                "MEAI ChatStreamAsync emitted no content/tool chunks for provider={Provider}; fallback to non-streaming response.",
+                "MEAI ChatStreamAsync emitted no chunks for provider={Provider}; fallback to non-streaming response.",
                 Name);
 
             var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
@@ -172,19 +174,28 @@ public sealed class MEAILLMProvider : ILLMProvider
             };
 
             var meaiMsg = new Microsoft.Extensions.AI.ChatMessage(role, msg.Content ?? "");
+            if (msg.ContentParts is { Count: > 0 })
+            {
+                meaiMsg.Contents.Clear();
+                AppendContentParts(meaiMsg, msg.ContentParts);
+                if (meaiMsg.Contents.Count == 0 && !string.IsNullOrEmpty(msg.Content))
+                    meaiMsg.Contents.Add(new TextContent(msg.Content));
+            }
 
             // 处理 Tool Call 结果
             if (msg.Role == "tool" && msg.ToolCallId != null)
             {
                 meaiMsg.Contents.Clear();
-                meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, msg.Content ?? ""));
+                meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
             // 处理 Assistant 的 Tool Calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
-                if (msg.Content != null)
+                if (msg.ContentParts is { Count: > 0 })
+                    AppendContentParts(meaiMsg, msg.ContentParts);
+                else if (msg.Content != null)
                     meaiMsg.Contents.Add(new TextContent(msg.Content));
 
                 foreach (var tc in msg.ToolCalls)
@@ -210,14 +221,104 @@ public sealed class MEAILLMProvider : ILLMProvider
         return result;
     }
 
+    private static void AppendContentParts(
+        Microsoft.Extensions.AI.ChatMessage message,
+        IReadOnlyList<ContentPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part == null || string.IsNullOrWhiteSpace(part.Type))
+                continue;
+
+            if (string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(part.Text))
+                    message.Contents.Add(new TextContent(part.Text));
+                continue;
+            }
+
+            if (!string.Equals(part.Type, "image", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (TryCreateImageDataContent(part, out var dataContent) && dataContent != null)
+                message.Contents.Add(dataContent);
+        }
+    }
+
+    private static bool TryCreateImageDataContent(ContentPart part, out DataContent? content)
+    {
+        content = null;
+        if (string.IsNullOrWhiteSpace(part.ImageBase64))
+            return false;
+
+        var mediaType = string.IsNullOrWhiteSpace(part.ImageMediaType) ? "image/png" : part.ImageMediaType!;
+        var base64 = part.ImageBase64!.Trim();
+
+        // Accept both plain base64 and data-uri input.
+        if (base64.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var commaIndex = base64.IndexOf(',');
+            if (commaIndex > 5)
+            {
+                var meta = base64[5..commaIndex];
+                if (meta.EndsWith(";base64", StringComparison.OrdinalIgnoreCase))
+                    meta = meta[..^7];
+                if (!string.IsNullOrWhiteSpace(meta))
+                    mediaType = meta;
+                base64 = base64[(commaIndex + 1)..];
+            }
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            content = new DataContent(bytes, mediaType);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static object BuildToolResultPayload(Aevatar.AI.Abstractions.LLMProviders.ChatMessage message)
+    {
+        if (message.ContentParts is not { Count: > 0 })
+            return message.Content ?? string.Empty;
+
+        return new
+        {
+            text = message.Content,
+            content_parts = message.ContentParts.Select(p => new
+            {
+                type = p.Type,
+                text = p.Text,
+                image_base64 = p.ImageBase64,
+                image_media_type = p.ImageMediaType,
+            }).ToArray(),
+        };
+    }
+
     private static ChatOptions? BuildOptions(LLMRequest request)
     {
         var options = new ChatOptions();
         var hasOptions = false;
 
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+        {
+            options.ConversationId = request.RequestId.Trim();
+            hasOptions = true;
+        }
+
         if (request.Model != null) { options.ModelId = request.Model; hasOptions = true; }
         if (request.Temperature.HasValue) { options.Temperature = (float)request.Temperature.Value; hasOptions = true; }
         if (request.MaxTokens.HasValue) { options.MaxOutputTokens = request.MaxTokens.Value; hasOptions = true; }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId) || request.Metadata is { Count: > 0 })
+        {
+            options.AdditionalProperties = BuildAdditionalProperties(request);
+            hasOptions = true;
+        }
 
         // 注册 Tools
         if (request.Tools is { Count: > 0 })
@@ -234,6 +335,22 @@ public sealed class MEAILLMProvider : ILLMProvider
         }
 
         return hasOptions ? options : null;
+    }
+
+    private static AdditionalPropertiesDictionary BuildAdditionalProperties(LLMRequest request)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        if (request.Metadata != null)
+        {
+            foreach (var pair in request.Metadata)
+                properties[pair.Key] = pair.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+            properties[LLMRequestMetadataKeys.RequestId] = request.RequestId.Trim();
+
+        return new AdditionalPropertiesDictionary(properties);
     }
 
     // ─── 转换：MEAI → Aevatar ───

@@ -19,6 +19,7 @@ src/
 | Agent | 业务逻辑单元，处理事件、维护状态 | `IAgent` / `IAgent<TState>` |
 | Actor | Agent 的运行容器，提供串行处理与层级关系 | `IActor` |
 | Runtime | 构建在 Stream 之上的 Actor 语义层，负责生命周期、寻址、邮箱串行与拓扑管理 | `IActorRuntime` / `IActorDispatchPort` |
+| Event Context | 当前 Actor 执行中的消息上下文，负责 publish/send 语义 | `IEventPublisher` / `IEventContext` |
 | Stream | `EventEnvelope` 的传输骨架与传播通道 | `IStream` / `IStreamProvider` |
 
 ## Aevatar.Foundation.Abstractions
@@ -33,7 +34,13 @@ src/
 - Hook 扩展点：`IGAgentExecutionHook`、`GAgentExecutionHookContext`
 - 核心 Proto：`agent_messages.proto`
 
-`EventEnvelope` 保持最小语义字段（id、timestamp、payload、publisher、direction、correlation、target、metadata），路由传播细节放在运行时实现中。
+`EventEnvelope` 保持最小语义字段（`id`、`timestamp`、`payload`、`route`、`propagation`、`runtime`），路由传播细节通过 typed 子消息表达。
+
+补充口径：
+
+- Foundation 只保留稳定原语：`IActorRuntime` 负责 lifecycle/topology/lookup，`IActorDispatchPort` 负责外部 envelope 投递，`IEventPublisher` / `IEventContext` 负责当前 actor 执行中的 publish/send。
+- workflow、scripting 等上层如果需要更友好的能力面，应在各自子系统内部适配，不再向 Foundation 增加公共 messaging/session 门面。
+- 跨来源协议样例属于测试契约，不进入 Foundation 生产契约层。
 
 这里要明确一个经常被混淆的边界：
 
@@ -47,7 +54,7 @@ src/
 
 1. **统一消息传输契约**：外部 command、内部 signal、reply、timeout、业务事件等，都以 `EventEnvelope.payload` 形式进入 Actor 消息流。
 2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑；`IActorDispatchPort` 负责 envelope 的定向投递。
-3. **统一路由执行**：`LocalActorPublisher` 按 `EventDirection`（`Self/Down/Up/Both`）路由到目标 Stream，`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
+3. **统一路由执行**：`LocalActorPublisher` 对外暴露 `PublishAsync/SendToAsync`；其中 `PublishAsync` 构造 `PublicationRoute.topology(Self/Parent/Children/ParentAndChildren)`，`SendToAsync` 构造 `DirectRoute`。Event Sourcing commit 后的 `PublicationRoute.observer(CommittedFacts)` 由框架内部 `ICommittedStateEventPublisher` 发出，不进入业务 actor 公共能力面；`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
 4. **领域事实显式持久化**：有状态 Actor 只有在显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 后，领域事件才进入 `EventStore` 成为事实源。
 5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
 
@@ -98,7 +105,6 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 `Aevatar.Foundation.Runtime`（通用层）包含：
 
 - `InMemoryStream` / `InMemoryStreamProvider`：内存流与订阅分发
-- `EventRouter` / `InMemoryRouterStore`：层级路由与路由快照存储
 - `InMemoryStateStore` / `InMemoryEventStore`：默认内存持久化
 - `MemoryCacheDeduplicator`：事件去重
 - `IActorDeactivationHook*` / `EventStoreCompactionDeactivationHook`：停用钩子与裁剪触发
@@ -107,9 +113,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 
 - `LocalActorRuntime`：创建/销毁/查找/链接 Actor（按需激活）
 - `LocalActor`：邮箱串行处理、父流订阅、子节点传播
-- `LocalActorPublisher`：按 `EventDirection` 路由事件
+- `LocalActorPublisher`：按 `EnvelopeRoute` 的 `direct/publication(topology|observer)` 变体发布事件
 - `LocalActorTypeProbe`：运行时类型探测
-- `AddAevatarRuntime()`：一键注册本地运行时依赖
+- `AddAevatarRuntime()`：一键注册本地运行时依赖（含 request/reply client）
 
 口径说明：
 
@@ -123,20 +129,28 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 3. 投影相关编排运行态通过 Actor 化承载；中间层服务不持有跨节点事实态。
 4. `InMemory*` 仅保留本地开发与自动化测试使用。
 
+`AddAevatarFoundationRuntimeOrleans()` 与本地 `AddAevatarRuntime()` 保持同一口径：都只暴露 `IActorRuntime` / `IActorDispatchPort` / `IEventPublisher` 这组基础原语；生命周期/拓扑仍由 `IActorRuntime` 提供，上层能力不依赖具体 runtime provider。
+
 ### Routing 细节
 
 `Routing` 现在由两部分组成：
 
-- 路由执行：`EventRouter`
-- 层级持久化：`IRouterHierarchyStore` + `InMemoryRouterStore`
+- 拓扑状态：`LocalActor` / `RuntimeActorGrainState` 自身持有 parent/children
+- 消息传播：stream-level forwarding + runtime ingress demux
 
-`EventRouter.RouteAsync(...)` 的核心行为：
+当前拓扑事实已经直接收口到 runtime actor 自身：
 
-1. 检查 `metadata["__publishers"]`，如果当前 Actor 已处理过则直接跳过（环路保护）
-2. 当前 Actor 先处理事件
-3. 按 `EventDirection` 转发到父/子节点
+1. Local runtime：`LocalActor` 内存态持有 `parent/children`
+2. Orleans runtime：`RuntimeActorGrainState` 持久态持有 `ParentId/Children`
+3. `LinkAsync/UnlinkAsync` 同时更新拓扑状态和 stream relay binding
 
-这让路由逻辑和运行时实现解耦：Actor 可以专注于消费和传播 envelope 消息，层级快照则交给 Store 管理。
+实际消息行为已经收敛为：
+
+1. `DirectRoute` 由 runtime 直接投递到目标 actor inbox
+2. `PublicationRoute.topology` 由 stream forwarding / relay binding 负责传播
+3. `PublicationRoute.observer` 只给 projection / live sink / observer，可见但不进业务 actor inbox
+
+也就是说，拓扑状态和 fan-out 已不再通过单独 `EventRouter` 对象承载；真正的 fan-out 仍由 stream forwarding / relay binding 执行。
 
 ## CQRS 与 Projection 落点
 
@@ -151,7 +165,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionLifecycleService`（生命周期端口）与 `WorkflowExecutionProjectionQueryService`（查询端口）
+  - `WorkflowExecutionProjectionPortService`（投影端口）与 `WorkflowExecutionProjectionQueryService`（查询端口）
   - 两者复用 `Aevatar.CQRS.Projection.Core` 的通用基类：`ProjectionLifecyclePortServiceBase<>` / `ProjectionQueryPortServiceBase<>`
   - `WorkflowProjectionActivationService` 负责 projection 启动与上下文激活
   - `WorkflowProjectionReleaseService` 负责 idle 检测与 stop/release
@@ -164,8 +178,9 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
   - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
-  - `WorkflowRunInteractionService` 负责完整交互路径（dispatch + sink consume + finalize）
-  - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径
+  - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
+  - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径（detach live sink 后按 durable completion 收敛）
+  - `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` 负责 run control 命令入口
   - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
   - `WorkflowRunCommandTargetBinder` 负责 projection lease/live sink 绑定与清理兜底
   - `WorkflowRunAcceptedReceiptFactory` 负责 `actorId + commandId + correlationId` receipt 生成
@@ -181,7 +196,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
-- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
+- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.Propagation.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：
@@ -223,7 +238,7 @@ await runtime.LinkAsync("parent", "child");
 
 ```csharp
 await ((GAgentBase)parent.Agent).EventPublisher
-    .PublishAsync(new PingEvent { Message = "hello" }, EventDirection.Down);
+    .PublishAsync(new PingEvent { Message = "hello" }, TopologyAudience.Children);
 ```
 
 ## 当前状态说明

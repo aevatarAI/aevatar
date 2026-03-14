@@ -194,14 +194,14 @@ steps:
 ```
 POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │
-  ├── IWorkflowRunInteractionService.ExecuteAsync
+  ├── ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>.ExecuteAsync
   │     ├── WorkflowRunCommandTargetResolver: workflowYaml 优先；否则按 workflow 名查 registry；仅当 workflow/workflowYaml 同时为空时走默认 workflow（默认 direct，可配置为 auto）
   │     ├── WorkflowRunCommandTargetBinder: 建立 projection lease + live sink + accepted receipt
   │     └── DefaultCommandDispatchPipeline / ActorCommandTargetDispatcher: 将 `ChatRequestEvent` 包装为 `EventEnvelope`，由 `IActorDispatchPort` 投递到 run actor；目标 actor 的获取/创建仍由 `IActorRuntime` 负责
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
-  │     └── 发布 StartWorkflowEvent (EventDirection.Self)
+  │     └── 发布 StartWorkflowEvent (TopologyAudience.Self)
   │
   ├── WorkflowExecutionKernel 收到 StartWorkflowEvent
   │     └── 取第一个步骤，发布 StepRequestEvent
@@ -220,7 +220,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     ├── WorkflowExecutionReadModelProjector: reducer 链更新 ReadModel
   │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
   │
-  ├── WorkflowRunOutputStreamer: 从 sink 读事件 → 映射 WorkflowOutputFrame → emitAsync
+  ├── DefaultEventOutputStream + IdentityEventFrameMapper: 从 sink 读事件 → 透传 WorkflowRunEventEnvelope → emitAsync
   └── SSE 流返回客户端
 ```
 
@@ -475,7 +475,7 @@ steps:
 | 4 | `src/workflow/Aevatar.Workflow.Core/Modules/ParallelFanOutModule.cs` | 并行：扇出/收集/合并/投票 |
 | 5 | `src/workflow/Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` | Connector：安全校验、重试、容错 |
 | 6 | `src/workflow/Aevatar.Workflow.Core/Composition/` | 模块装配策略：expander + configurator |
-| 7 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunInteractionService.cs` | 应用层交互编排：dispatch → stream → finalize |
+| 7 | `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs` | 通用交互编排：dispatch → stream → finalize |
 | 8 | `src/workflow/Aevatar.Workflow.Projection/` | 投影管线：reducer → ReadModel、AGUI 输出 |
 | 9 | `src/Aevatar.Foundation.Core/GAgentBase.cs` | 模块如何进入统一事件管线 |
 
@@ -509,7 +509,7 @@ steps:
 - 不要在模块里藏隐式状态，状态尽量显式放在 workflow vars 或事件里
 - 模块保持单一职责：一个模块处理一种 step type
 - YAML 只写 connector 名称和调用意图，连接细节与安全策略放配置
-- 每次 connector 调用的元数据会写入 `StepCompletedEvent.Metadata`，便于回放与审计
+- 每次 connector 调用的运行注解会写入 `StepCompletedEvent.Annotations`，便于回放与审计
 
 ---
 

@@ -15,6 +15,16 @@ public static class ChatQueryEndpoints
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
 
+        group.MapGet("/workflow-catalog", ListWorkflowCatalog)
+            .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/capabilities", GetCapabilities)
+            .Produces(StatusCodes.Status200OK);
+
+        group.MapGet("/workflows/{workflowName}", GetWorkflowDetail)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapGet("/actors/{actorId}", GetActorSnapshot)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
@@ -43,6 +53,20 @@ public static class ChatQueryEndpoints
 
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
         Results.Ok(queryService.ListWorkflows());
+
+    internal static IResult ListWorkflowCatalog(IWorkflowExecutionQueryApplicationService queryService) =>
+        Results.Ok(queryService.ListWorkflowCatalog());
+
+    internal static IResult GetCapabilities(IWorkflowExecutionQueryApplicationService queryService) =>
+        Results.Ok(queryService.GetCapabilities());
+
+    internal static IResult GetWorkflowDetail(
+        string workflowName,
+        IWorkflowExecutionQueryApplicationService queryService)
+    {
+        var detail = queryService.GetWorkflowDetail(workflowName);
+        return detail == null ? Results.NotFound() : Results.Ok(detail);
+    }
 
     internal static async Task<IResult> GetActorSnapshot(
         string actorId,

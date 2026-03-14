@@ -30,7 +30,7 @@ public interface IWorkflowExecutionContext
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default);
 
     Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
@@ -38,7 +38,7 @@ public interface IWorkflowExecutionContext
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default);
 
     Task CancelDurableCallbackAsync(

@@ -26,10 +26,11 @@ public class ScriptEvolutionReadModelProjectorTests
                 new ScriptEvolutionPromotedEventReducer(),
             ]);
 
-        var context = new ScriptEvolutionProjectionContext
+        var context = new ScriptEvolutionSessionProjectionContext
         {
             ProjectionId = "projection-evolution-1",
             RootActorId = "evolution-manager-1",
+            ProposalId = "proposal-1",
         };
 
         await projector.InitializeAsync(context, CancellationToken.None);
@@ -101,10 +102,11 @@ public class ScriptEvolutionReadModelProjectorTests
                 new ScriptEvolutionRolledBackEventReducer(),
             ]);
 
-        var context = new ScriptEvolutionProjectionContext
+        var context = new ScriptEvolutionSessionProjectionContext
         {
             ProjectionId = "projection-evolution-2",
             RootActorId = "evolution-manager-2",
+            ProposalId = "proposal-2",
         };
 
         await projector.InitializeAsync(context, CancellationToken.None);
@@ -166,9 +168,11 @@ public class ScriptEvolutionReadModelProjectorTests
             Id = id,
             Payload = payload,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = "projection-test",
-            Direction = EventDirection.Self,
-            CorrelationId = id,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = id,
+            },
         };
     }
 

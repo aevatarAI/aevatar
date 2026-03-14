@@ -127,6 +127,7 @@ public class AIComponentCoverageTests
     {
         ChatOptions? capturedOptions = null;
         IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        ChatOptions? capturedStreamingOptions = null;
 
         var client = new StubChatClient
         {
@@ -152,7 +153,11 @@ public class AIComponentCoverageTests
                 };
                 return Task.FromResult(response);
             },
-            OnGetStreamingResponse = (messages, options, _) => Stream(["a", "b"]),
+            OnGetStreamingResponse = (_, options, _) =>
+            {
+                capturedStreamingOptions = options;
+                return Stream(["a", "b"]);
+            },
         };
 
         var provider = new MEAILLMProvider("meai", client);
@@ -160,6 +165,11 @@ public class AIComponentCoverageTests
         var tool = new StubTool("search");
         var response = await provider.ChatAsync(new LLMRequest
         {
+            RequestId = "session-1",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflow.run_id"] = "run-1",
+            },
             Model = "demo-model",
             Temperature = 0.7,
             MaxTokens = 42,
@@ -199,6 +209,10 @@ public class AIComponentCoverageTests
         capturedMessages[1].Role.Should().Be(ChatRole.Tool);
         capturedOptions.Should().NotBeNull();
         capturedOptions!.ModelId.Should().Be("demo-model");
+        capturedOptions.ConversationId.Should().Be("session-1");
+        capturedOptions.AdditionalProperties.Should().NotBeNull();
+        capturedOptions.AdditionalProperties![LLMRequestMetadataKeys.RequestId].Should().Be("session-1");
+        capturedOptions.AdditionalProperties["workflow.run_id"].Should().Be("run-1");
         capturedOptions.MaxOutputTokens.Should().Be(42);
         capturedOptions.Tools.Should().NotBeNull();
         capturedOptions.Tools.Should().ContainSingle();
@@ -206,6 +220,11 @@ public class AIComponentCoverageTests
         var chunks = new List<LLMStreamChunk>();
         await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
         {
+            RequestId = "session-stream",
+            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflow.step_id"] = "llm-1",
+            },
             Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
         }))
         {
@@ -214,6 +233,11 @@ public class AIComponentCoverageTests
 
         chunks.Select(x => x.DeltaContent).Should().ContainInOrder("a", "b");
         chunks.Last().IsLast.Should().BeTrue();
+        capturedStreamingOptions.Should().NotBeNull();
+        capturedStreamingOptions!.ConversationId.Should().Be("session-stream");
+        capturedStreamingOptions.AdditionalProperties.Should().NotBeNull();
+        capturedStreamingOptions.AdditionalProperties![LLMRequestMetadataKeys.RequestId].Should().Be("session-stream");
+        capturedStreamingOptions.AdditionalProperties["workflow.step_id"].Should().Be("llm-1");
 
         var nonStreamingFallbackCalls = 0;
         var emptyStreamClient = new StubChatClient
@@ -238,6 +262,30 @@ public class AIComponentCoverageTests
         nonStreamingFallbackCalls.Should().Be(1);
         emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
         emptyStreamChunks.Last().IsLast.Should().BeTrue();
+
+        var reasoningOnlyFallbackCalls = 0;
+        var reasoningOnlyClient = new StubChatClient
+        {
+            OnGetStreamingResponse = static (_, _, _) => StreamWithReasoningOnly(),
+            OnGetResponse = (_, _, _) =>
+            {
+                reasoningOnlyFallbackCalls++;
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "should-not-run")));
+            },
+        };
+        var reasoningOnlyProvider = new MEAILLMProvider("meai-reasoning-only", reasoningOnlyClient);
+        var reasoningOnlyChunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in reasoningOnlyProvider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "reasoning only" }],
+        }))
+        {
+            reasoningOnlyChunks.Add(chunk);
+        }
+
+        reasoningOnlyFallbackCalls.Should().Be(0);
+        reasoningOnlyChunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-only");
+        reasoningOnlyChunks.Last().IsLast.Should().BeTrue();
 
         var toolStreamClient = new StubChatClient
         {
@@ -376,6 +424,11 @@ public class AIComponentCoverageTests
             "MapRequest",
             new LLMRequest
             {
+                RequestId = "session-tornado",
+                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["workflow.run_id"] = "run-tornado",
+                },
                 Temperature = 0.4,
                 MaxTokens = 128,
                 Messages =
@@ -398,6 +451,9 @@ public class AIComponentCoverageTests
         mappedRequest.Messages[4].Role.Should().Be(ChatMessageRoles.User);
         mappedRequest.Temperature.Should().Be(0.4);
         mappedRequest.MaxTokens.Should().Be(128);
+        mappedRequest.Metadata.Should().NotBeNull();
+        mappedRequest.Metadata![LLMRequestMetadataKeys.RequestId].Should().Be("session-tornado");
+        mappedRequest.Metadata["workflow.run_id"].Should().Be("run-tornado");
 
         var chatResult = new ChatResult
         {
@@ -461,6 +517,76 @@ public class AIComponentCoverageTests
         deltaToolCall.Id.Should().BeEmpty();
         deltaToolCall.Name.Should().Be("lookup");
         deltaToolCall.ArgumentsJson.Should().Be("{\"term\":\"aevatar\"}");
+    }
+
+    [Fact]
+    public void TornadoProvider_MapRequest_ShouldLeaveMetadataAndSamplingUnset_WhenRequestOmitsThem()
+    {
+        var provider = new TornadoLLMProvider(
+            "tor",
+            new LlmTornado.TornadoApi(LLmProviders.OpenAi, "key"),
+            "model-x");
+
+        var mappedRequest = InvokeNonPublic<LlmTornado.Chat.ChatRequest>(
+            provider,
+            "MapRequest",
+            new LLMRequest
+            {
+                Messages =
+                [
+                    new AevatarChatMessage { Role = "user", Content = null },
+                ],
+            });
+
+        mappedRequest.Messages.Should().ContainSingle();
+        mappedRequest.Messages[0].Content.Should().BeEmpty();
+        mappedRequest.Metadata.Should().BeNull();
+        mappedRequest.Temperature.Should().BeNull();
+        mappedRequest.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public void TornadoProvider_MapResponseAndToolCallConverters_ShouldHandleSparsePayloads()
+    {
+        var sparseResult = new ChatResult
+        {
+            Choices =
+            [
+                new ChatChoice
+                {
+                    Message = null,
+                    FinishReason = ChatMessageFinishReasons.Length,
+                },
+            ],
+        };
+
+        var response = InvokePrivateStatic<LLMResponse>(typeof(TornadoLLMProvider), "MapResponse", sparseResult);
+        response.Content.Should().BeNull();
+        response.ToolCalls.Should().BeNull();
+        response.Usage.Should().BeNull();
+        response.FinishReason.Should().Contain("Length");
+
+        var generatedToolCall = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCall",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                FunctionCall = null,
+            });
+        generatedToolCall.Id.Should().NotBeNullOrWhiteSpace();
+        generatedToolCall.Name.Should().BeEmpty();
+        generatedToolCall.ArgumentsJson.Should().Be("{}");
+
+        var emptyDelta = InvokePrivateStatic<Aevatar.AI.Abstractions.LLMProviders.ToolCall>(
+            typeof(TornadoLLMProvider),
+            "ConvertToolCallDelta",
+            new LlmTornado.ChatFunctions.ToolCall
+            {
+                FunctionCall = null,
+            });
+        emptyDelta.Id.Should().BeEmpty();
+        emptyDelta.Name.Should().BeEmpty();
+        emptyDelta.ArgumentsJson.Should().BeEmpty();
     }
 
     [Fact]
@@ -585,6 +711,16 @@ public class AIComponentCoverageTests
     {
         await Task.CompletedTask;
         yield break;
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> StreamWithReasoningOnly()
+    {
+        yield return new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [
+                new TextReasoningContent("thinking-only"),
+            ]);
+        await Task.Yield();
     }
 
     private sealed class StubTool : IAgentTool

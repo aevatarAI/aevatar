@@ -23,6 +23,8 @@ public sealed class OrleansActorDispatchPort : IActorDispatchPort
         if (!await grain.IsInitializedAsync())
             throw new InvalidOperationException($"Actor {actorId} is not initialized.");
 
-        await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+        var dispatchEnvelope = envelope.Clone();
+        dispatchEnvelope.EnsureRuntime().EnsureDispatch().PropagateFailure = true;
+        await grain.HandleEnvelopeAsync(dispatchEnvelope.ToByteArray());
     }
 }

@@ -24,4 +24,16 @@ public interface IStreamRequestReplyClient
         Func<string, string> timeoutMessageFactory,
         CancellationToken ct = default)
         where TResponse : IMessage, new();
+
+    Task<TResponse> QueryActorAsync<TResponse>(
+        IStreamProvider streams,
+        string actorId,
+        IActorDispatchPort dispatchPort,
+        string replyStreamPrefix,
+        TimeSpan timeout,
+        Func<string, string, EventEnvelope> envelopeFactory,
+        Func<TResponse, string, bool> isMatch,
+        Func<string, string> timeoutMessageFactory,
+        CancellationToken ct = default)
+        where TResponse : IMessage, new();
 }

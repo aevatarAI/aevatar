@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -16,6 +17,7 @@ using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
@@ -182,6 +184,7 @@ public class WorkflowGAgentCoverageTests
         var agent = CreateRunAgent(
             runtime: runtime,
             roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-rebind");
         agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -189,6 +192,7 @@ public class WorkflowGAgentCoverageTests
             "wf_valid",
             runId: "run-1");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -197,8 +201,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-
-        var oldChildActorId = runtime.CreatedActors.Single().Id;
+        runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -317,7 +320,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "done-via-envelope",
             },
             agent.Id,
-            EventDirection.Self));
+            TopologyAudience.Self));
 
         agent.State.Status.Should().Be("completed");
         agent.State.FinalOutput.Should().Be("done-via-envelope");
@@ -341,7 +344,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "ok",
             },
             "external-child",
-            EventDirection.Both));
+            TopologyAudience.ParentAndChildren));
 
         agent.State.Status.Should().BeEmpty();
         publisher.Published.Should().BeEmpty();
@@ -388,6 +391,7 @@ public class WorkflowGAgentCoverageTests
         var agent = CreateRunAgent(
             runtime: runtime,
             roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-replace");
         agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
@@ -395,6 +399,7 @@ public class WorkflowGAgentCoverageTests
             "wf_valid",
             runId: "run-replace");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+        var oldChildActorId = runtime.CreatedActors.Single().Id;
         await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
         await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
         {
@@ -403,8 +408,7 @@ public class WorkflowGAgentCoverageTests
             Success = true,
             Output = "done-a",
         });
-
-        var oldChildActorId = runtime.CreatedActors.Single().Id;
+        runtime.ThrowOnGetAsyncActorId = agent.Id;
 
         await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
         {
@@ -500,7 +504,7 @@ public class WorkflowGAgentCoverageTests
                 Output = "child-done",
             },
             pending.ChildActorId,
-            EventDirection.Both));
+            TopologyAudience.ParentAndChildren));
 
         agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
         agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
@@ -511,7 +515,7 @@ public class WorkflowGAgentCoverageTests
         parentCompletion.RunId.Should().Be("parent-run");
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("child-done");
-        parentCompletion.Metadata["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
     }
 
@@ -564,6 +568,37 @@ public class WorkflowGAgentCoverageTests
         runtime.Destroyed.Should().Contain(childActorByLifecycle["transient"]);
         runtime.Unlinked.Should().NotContain(childActorByLifecycle["singleton"]);
         runtime.Destroyed.Should().NotContain(childActorByLifecycle["singleton"]);
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenRunCompletes_ShouldCleanupRoleActors()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-complete");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "first", SessionId = "s1" });
+
+        var roleActorId = runtime.CreatedActors.Single().Id;
+
+        await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            WorkflowName = "wf_valid",
+            RunId = "run-complete",
+            Success = true,
+            Output = "done",
+        });
+
+        agent.State.Status.Should().Be("completed");
+        runtime.Unlinked.Should().Contain(roleActorId);
+        runtime.Destroyed.Should().Contain(roleActorId);
+        runtime.CreatedActors.Should().BeEmpty();
     }
 
     [Fact]
@@ -668,17 +703,28 @@ public class WorkflowGAgentCoverageTests
         return services.BuildServiceProvider();
     }
 
-    private static EventEnvelope Envelope(IMessage message, string publisherId, EventDirection direction)
+    private static EventEnvelope Envelope(IMessage message, string publisherId, TopologyAudience direction)
     {
         return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            PublisherId = publisherId,
-            Direction = direction,
             Payload = Any.Pack(message),
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         };
+    }
+
+    private static void SetAgentId(WorkflowRunGAgent agent, string agentId)
+    {
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [agentId]);
     }
 
     private static string BuildValidWorkflowYaml(
@@ -727,16 +773,19 @@ public class WorkflowGAgentCoverageTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = sourceEnvelope;
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
@@ -745,11 +794,28 @@ public class WorkflowGAgentCoverageTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             Sent.Add((targetActorId, evt));
-            Published.Add((evt, EventDirection.Self));
+            _ = sourceEnvelope;
+            _ = options;
+            Published.Add((evt, TopologyAudience.Self));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            Published.Add((evt, TopologyAudience.Self));
             return Task.CompletedTask;
         }
     }
@@ -762,6 +828,7 @@ public class WorkflowGAgentCoverageTests
         public List<(string parent, string child)> Linked { get; } = [];
         public List<string> Destroyed { get; } = [];
         public List<string> Unlinked { get; } = [];
+        public string? ThrowOnGetAsyncActorId { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
         {
@@ -797,7 +864,9 @@ public class WorkflowGAgentCoverageTests
         }
 
         public Task<IActor?> GetAsync(string id) =>
-            Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
+            string.Equals(id, ThrowOnGetAsyncActorId, StringComparison.Ordinal)
+                ? throw new InvalidOperationException($"Unexpected self GetAsync for actor '{id}'.")
+                : Task.FromResult<IActor?>(CreatedActors.FirstOrDefault(x => x.Id == id));
 
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {

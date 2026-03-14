@@ -9,8 +9,8 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Multi-way branching module.
 /// Matches the <c>on</c> parameter value against <c>StepDefinition.Branches</c>;
 /// falls back to <c>_default</c> when no key matches.
-/// Publishes <c>StepCompletedEvent</c> with <c>metadata["branch"]</c> indicating the chosen key.
-/// The <c>WorkflowLoopModule</c> uses the branch value to resolve the next step.
+/// Publishes <c>StepCompletedEvent.BranchKey</c> indicating the chosen branch.
+/// The <c>WorkflowLoopModule</c> uses this typed field to resolve the next step.
 /// </summary>
 public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -42,9 +42,9 @@ public sealed class SwitchModule : IEventModule<IWorkflowExecutionContext>
             RunId = request.RunId,
             Success = true,
             Output = request.Input ?? "",
+            BranchKey = branchKey,
         };
-        completed.Metadata["branch"] = branchKey;
-        await ctx.PublishAsync(completed, EventDirection.Self, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 
     /// <summary>

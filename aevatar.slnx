@@ -74,6 +74,7 @@
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Sdk/Aevatar.Workflow.Sdk.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
@@ -99,8 +100,10 @@
     <Project Path="test\Aevatar.Workflow.Core.Tests\Aevatar.Workflow.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
+    <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
+    <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </Folder>
 </Solution>

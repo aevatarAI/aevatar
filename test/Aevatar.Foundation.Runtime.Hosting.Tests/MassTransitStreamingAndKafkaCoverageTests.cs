@@ -25,7 +25,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-1",
             Payload = Any.Pack(new StringValue { Value = "direct" }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
         await stream.ProduceAsync(envelope);
         await stream.ProduceAsync(new StringValue { Value = "wrapped" });
@@ -84,7 +84,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-2",
             Payload = Any.Pack(new StringValue { Value = "ok" }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
         await transport.PushAsync(new MassTransitEnvelopeRecord
         {
@@ -97,7 +97,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         {
             Id = "evt-3",
             Payload = Any.Pack(new Int32Value { Value = 7 }),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
         await transport.PushAsync(new MassTransitEnvelopeRecord
         {

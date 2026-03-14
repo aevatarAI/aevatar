@@ -10,9 +10,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
 {
     public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
-        var sessionId = context.Metadata.TryGetValue(WorkflowRunCommandMetadataKeys.SessionId, out var metadataSessionId) &&
-                        !string.IsNullOrWhiteSpace(metadataSessionId)
-            ? metadataSessionId
+        var sessionId = !string.IsNullOrWhiteSpace(command.SessionId)
+            ? command.SessionId
             : context.CorrelationId;
 
         var chatRequest = new ChatRequestEvent
@@ -20,17 +19,39 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
         };
+        AppendMetadata(chatRequest.Metadata, context.Headers);
+        AppendMetadata(chatRequest.Metadata, command.Metadata);
+        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
-            PublisherId = "api",
-            Direction = EventDirection.Self,
-            CorrelationId = context.CorrelationId,
-            TargetActorId = context.TargetId,
+            Route = EnvelopeRouteSemantics.CreateDirect("api", context.TargetId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = context.CorrelationId,
+            },
         };
         return envelope;
+    }
+
+    private static void AppendMetadata(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            destination[normalizedKey] = normalizedValue;
+        }
     }
 }

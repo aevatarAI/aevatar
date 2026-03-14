@@ -65,11 +65,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-empty");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("No candidates provided");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("0");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.k"].Should().Be("1");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("2200");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("0");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.k"].Should().Be("1");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("2200");
     }
 
     [Fact]
@@ -98,11 +98,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-flagged");
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("red-flagged");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("2");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("2");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("0");
-        completed.Metadata["maker_vote.k"].Should().Be("2");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("3");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("2");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("2");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("0");
+        completed.Annotations["maker_vote.k"].Should().Be("2");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("3");
     }
 
     [Fact]
@@ -131,12 +131,12 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-ok");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("B");
-        completed.Metadata["maker_vote.total_candidates"].Should().Be("3");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("0");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("3");
-        completed.Metadata["maker_vote.top_votes"].Should().Be("2");
-        completed.Metadata["maker_vote.runner_up_votes"].Should().Be("1");
-        completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("True");
+        completed.Annotations["maker_vote.total_candidates"].Should().Be("3");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("0");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("3");
+        completed.Annotations["maker_vote.top_votes"].Should().Be("2");
+        completed.Annotations["maker_vote.runner_up_votes"].Should().Be("1");
+        completed.Annotations["maker_vote.used_majority_fallback"].Should().Be("True");
     }
 
     [Fact]
@@ -166,11 +166,11 @@ public class MakerVoteModuleCoverageTests
         completed.RunId.Should().Be("run-vote-defaults");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("short");
-        completed.Metadata["maker_vote.k"].Should().Be("1");
-        completed.Metadata["maker_vote.max_response_length"].Should().Be("2200");
-        completed.Metadata["maker_vote.red_flagged"].Should().Be("1");
-        completed.Metadata["maker_vote.valid_candidates"].Should().Be("1");
-        completed.Metadata["maker_vote.used_majority_fallback"].Should().Be("False");
+        completed.Annotations["maker_vote.k"].Should().Be("1");
+        completed.Annotations["maker_vote.max_response_length"].Should().Be("2200");
+        completed.Annotations["maker_vote.red_flagged"].Should().Be("1");
+        completed.Annotations["maker_vote.valid_candidates"].Should().Be("1");
+        completed.Annotations["maker_vote.used_majority_fallback"].Should().Be("False");
     }
 
     private static RecordingWorkflowExecutionContext CreateContext()
@@ -188,8 +188,7 @@ public class MakerVoteModuleCoverageTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test-publisher",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test-publisher", TopologyAudience.Self),
         };
     }
 
@@ -203,7 +202,7 @@ public class MakerVoteModuleCoverageTests
             InboundEnvelope = new EventEnvelope();
         }
 
-        public List<(IMessage evt, EventDirection direction)> Published { get; } = [];
+        public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
         public EventEnvelope InboundEnvelope { get; }
         public string AgentId { get; }
         public string RunId => AgentId;
@@ -242,32 +241,36 @@ public class MakerVoteModuleCoverageTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            _ = options;
             Published.Add((evt, direction));
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = targetActorId;
-            return PublishAsync(evt, EventDirection.Self, ct);
+            _ = options;
+            return PublishAsync(evt, TopologyAudience.Self, ct);
         }
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }
@@ -277,14 +280,14 @@ public class MakerVoteModuleCoverageTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = period;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }

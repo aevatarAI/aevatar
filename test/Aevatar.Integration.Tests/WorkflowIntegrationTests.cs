@@ -213,9 +213,11 @@ public class WorkflowIntegrationTests
                 WorkflowYaml = ResearchWorkflowYaml,
                 WorkflowName = "research_workflow",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         await runActor.HandleEventAsync(new EventEnvelope
@@ -229,9 +231,11 @@ public class WorkflowIntegrationTests
                 WorkflowName = "research_workflow",
                 RunId = "wf-1-run",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
@@ -244,9 +248,11 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-            CorrelationId = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
         });
 
         // Then
@@ -347,8 +353,7 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠",
                 SessionId = "test",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Children),
         };
 
         await actor.HandleEventAsync(envelope);
@@ -469,7 +474,7 @@ public class WorkflowIntegrationTests
     //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {

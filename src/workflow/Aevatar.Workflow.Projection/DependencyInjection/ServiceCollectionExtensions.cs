@@ -40,6 +40,9 @@ public static class ServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
         services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport, string>, WorkflowProjectionDurableOutboxCompensator>();
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowRunDetachedCleanupScheduler, ActorWorkflowRunDetachedCleanupOutbox>());
+        services.TryAddSingleton<IWorkflowRunDetachedCleanupOutbox>(sp =>
+            (ActorWorkflowRunDetachedCleanupOutbox)sp.GetRequiredService<IWorkflowRunDetachedCleanupScheduler>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
@@ -49,7 +52,7 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionProjectionContext,
             IReadOnlyList<WorkflowExecutionTopologyEdge>,
             WorkflowExecutionRuntimeLease,
-            WorkflowRunEvent,
+            WorkflowRunEventEnvelope,
             WorkflowProjectionSinkFailurePolicy>();
         services.TryAddSingleton<IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>, WorkflowProjectionDispatchFailureReporter>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
@@ -58,19 +61,22 @@ public static class ServiceCollectionExtensions
             LeaseTtlMs = sp.GetRequiredService<WorkflowExecutionProjectionOptions>().ProjectionOwnershipLeaseTtlMs,
         });
         services.TryAddSingleton<IProjectionOwnershipCoordinator, ActorProjectionOwnershipCoordinator>();
-        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEvent>, WorkflowRunEventSessionCodec>();
-        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEvent>, ProjectionSessionEventHub<WorkflowRunEvent>>();
+        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
+        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowProjectionControlEvent>, WorkflowProjectionControlEventSessionCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>, ProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
         services.TryAddSingleton<IProjectionPortActivationService<WorkflowExecutionRuntimeLease>, WorkflowProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, WorkflowProjectionReleaseService>();
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
-        services.TryAddSingleton<WorkflowExecutionProjectionLifecycleService>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionLifecyclePort>(sp =>
-            sp.GetRequiredService<WorkflowExecutionProjectionLifecycleService>());
+        services.TryAddSingleton<WorkflowExecutionProjectionPortService>();
+        services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionPortService>());
         services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
         services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowProjectionDispatchCompensationReplayHostedService>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowRunDetachedCleanupReplayHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         return services;
     }

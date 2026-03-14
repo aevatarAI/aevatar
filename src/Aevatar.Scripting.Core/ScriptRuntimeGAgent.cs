@@ -20,15 +20,12 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
     private static readonly TimeSpan PendingRunTimeout = TimeSpan.FromSeconds(45);
 
     private readonly IScriptRuntimeExecutionOrchestrator _orchestrator;
-    private readonly IScriptDefinitionSnapshotPort _snapshotPort;
     private readonly Dictionary<string, PendingRunRuntimeContext> _pendingDefinitionQueries = new(StringComparer.Ordinal);
 
     public ScriptRuntimeGAgent(
-        IScriptRuntimeExecutionOrchestrator orchestrator,
-        IScriptDefinitionSnapshotPort snapshotPort)
+        IScriptRuntimeExecutionOrchestrator orchestrator)
     {
         _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
-        _snapshotPort = snapshotPort ?? throw new ArgumentNullException(nameof(snapshotPort));
         InitializeId();
     }
 
@@ -66,36 +63,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
             evt.DefinitionActorId,
             evt.ScriptRevision);
 
-        if (_snapshotPort.UseEventDrivenDefinitionQuery)
-        {
-            await QueueRunByDefinitionQueryAsync(evt, CancellationToken.None);
-            return;
-        }
-
-        try
-        {
-            var snapshot = await LoadDefinitionSnapshotAsync(
-                evt.DefinitionActorId,
-                evt.ScriptRevision,
-                CancellationToken.None);
-            await PersistRunCommittedAsync(
-                evt,
-                snapshot,
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            await PersistRunFailureAsync(
-                evt,
-                $"Failed to execute script run without query pipeline: {ex.Message}",
-                CancellationToken.None);
-            Logger.LogError(
-                ex,
-                "Script run failed before commit. runtime_actor_id={RuntimeActorId} run_id={RunId} definition_actor_id={DefinitionActorId}",
-                Id,
-                evt.RunId,
-                evt.DefinitionActorId);
-        }
+        await QueueRunByDefinitionQueryAsync(evt, CancellationToken.None);
     }
 
     [EventHandler]
@@ -252,7 +220,7 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         }
 
         if (pending.TimeoutLease == null ||
-            !RuntimeCallbackEnvelopeMetadataReader.MatchesLease(envelope, pending.TimeoutLease))
+            !RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, pending.TimeoutLease))
         {
             Logger.LogDebug(
                 "Ignoring script definition query timeout without matching lease metadata. runtime_actor_id={RuntimeActorId} request_id={RequestId}",
@@ -494,7 +462,8 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
-                ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
+                MessageContext: new ScriptExecutionMessageContext(EventPublisher, ActiveInboundEnvelope)),
             ct);
         await PersistDomainEventsAsync(committedEvents, ct);
 
@@ -521,7 +490,8 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
                 ScriptRevision: snapshot.Revision,
                 SourceText: snapshot.SourceText,
                 ReadModelSchemaVersion: snapshot.ReadModelSchemaVersion,
-                ReadModelSchemaHash: snapshot.ReadModelSchemaHash),
+                ReadModelSchemaHash: snapshot.ReadModelSchemaHash,
+                MessageContext: new ScriptExecutionMessageContext(EventPublisher, ActiveInboundEnvelope)),
             ct);
         await PersistDomainEventsAsync(
             committedEvents.Concat<IMessage>([BuildDefinitionQueryClearedEvent(pending.RequestId)]),
@@ -739,14 +709,6 @@ public sealed class ScriptRuntimeGAgent : GAgentBase<ScriptRuntimeState>
         }
 
         return next;
-    }
-
-    private async Task<ScriptDefinitionSnapshot> LoadDefinitionSnapshotAsync(
-        string definitionActorId,
-        string requestedRevision,
-        CancellationToken ct)
-    {
-        return await _snapshotPort.GetRequiredAsync(definitionActorId, requestedRevision, ct);
     }
 
     private static IReadOnlyDictionary<string, Any> ClonePayloads(

@@ -382,9 +382,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                 RequestId = query.RequestId,
                 RunId = "run-no-metadata",
             }),
-            PublisherId = agent.Id,
-            TargetActorId = agent.Id,
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateDirect(agent.Id, agent.Id),
         });
 
         agent.State.LastRunId.Should().BeEmpty();
@@ -424,34 +422,6 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
 
         agent.State.LastRunId.Should().BeEmpty();
         HasPendingDefinitionQuery(agent, query.RequestId).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task DirectSnapshotFailure_ShouldPersistFailureWithoutDriftingActiveRevision()
-    {
-        var orchestrator = new RecordingOrchestrator();
-        var publisher = new RecordingEventPublisher();
-        var agent = new ScriptRuntimeGAgent(orchestrator, new FailingSnapshotPort())
-        {
-            EventPublisher = publisher,
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
-                new InMemoryEventStore()),
-            Services = BuildServices(new RecordingCallbackScheduler()),
-        };
-
-        await agent.HandleRunScriptRequested(new RunScriptRequestedEvent
-        {
-            RunId = "run-fail-1",
-            InputPayload = Any.Pack(new Struct()),
-            ScriptRevision = "rev-requested",
-            DefinitionActorId = "definition-fail-1",
-            RequestedEventType = "chat.requested",
-        });
-
-        orchestrator.Requests.Should().BeEmpty();
-        agent.State.LastRunId.Should().Be("run-fail-1");
-        agent.State.Revision.Should().BeEmpty();
-        agent.State.DefinitionActorId.Should().BeEmpty();
     }
 
     [Fact]
@@ -599,7 +569,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
         RecordingCallbackScheduler scheduler,
         InMemoryEventStore? eventStore = null)
     {
-        return new ScriptRuntimeGAgent(orchestrator, new EventDrivenSnapshotPort())
+        return new ScriptRuntimeGAgent(orchestrator)
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptRuntimeState>(
@@ -636,9 +606,7 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
                     RequestId = requestId,
                     RunId = runId,
                 }),
-                PublisherId = actorId,
-                TargetActorId = actorId,
-                Direction = EventDirection.Self,
+                Route = EnvelopeRouteSemantics.CreateDirect(actorId, actorId),
             });
     }
 
@@ -702,38 +670,6 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             CancellationToken.None);
     }
 
-    private sealed class EventDrivenSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => true;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException("Event-driven query path should not call snapshot port directly.");
-        }
-    }
-
-    private sealed class FailingSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public bool UseEventDrivenDefinitionQuery => false;
-
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("snapshot-load-failed");
-        }
-    }
-
     private sealed class RecordingOrchestrator : IScriptRuntimeExecutionOrchestrator
     {
         public List<ScriptRuntimeExecutionRequest> Requests { get; } = [];
@@ -767,14 +703,16 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
+            TopologyAudience direction = TopologyAudience.Children,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = evt;
             _ = direction;
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -783,14 +721,31 @@ public class ScriptRuntimeGAgentEventDrivenQueryTests
             string targetActorId,
             TEvent evt,
             CancellationToken ct = default,
-            EventEnvelope? sourceEnvelope = null)
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             _ = sourceEnvelope;
+            _ = options;
             ct.ThrowIfCancellationRequested();
             if (SendToException != null)
                 throw SendToException;
             Sent.Add(new PublishedMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task PublishCommittedStateEventAsync(
+            CommittedStateEventPublished evt,
+            ObserverAudience audience = ObserverAudience.CommittedFacts,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+        {
+            _ = evt;
+            _ = audience;
+            _ = sourceEnvelope;
+            _ = options;
+            ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

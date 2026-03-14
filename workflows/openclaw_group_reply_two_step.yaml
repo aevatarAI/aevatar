@@ -1,0 +1,32 @@
+name: openclaw_group_reply_two_step
+description: Call OpenClaw for generation first, then send the returned text to Telegram via OpenClaw.
+
+roles:
+  - id: openclaw_bridge
+    name: OpenClaw Bridge
+    system_prompt: ""
+    connectors:
+      - openclaw_agent_only
+      - openclaw_telegram_send
+
+steps:
+  - id: call_openclaw_agent
+    type: connector_call
+    role: openclaw_bridge
+    parameters:
+      connector: openclaw_agent_only
+      timeout_ms: "120000"
+      retry: "1"
+      on_missing: "fail"
+      on_error: "fail"
+    next: send_to_telegram
+
+  - id: send_to_telegram
+    type: connector_call
+    role: openclaw_bridge
+    parameters:
+      connector: openclaw_telegram_send
+      timeout_ms: "20000"
+      retry: "1"
+      on_missing: "fail"
+      on_error: "fail"

@@ -84,8 +84,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
         Payload = Any.Pack(evt),
-        PublisherId = "test",
-        Direction = EventDirection.Self,
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
     };
 
     private sealed class CapturingContext : IEventHandlerContext
@@ -101,9 +100,10 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         public IServiceProvider Services { get; } = new NullServiceProvider();
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
-        public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
+        public Task PublishAsync<TEvent>(TEvent evt, TopologyAudience direction = TopologyAudience.Children, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             Published.Add((evt, direction));
@@ -114,13 +114,13 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }
@@ -130,14 +130,14 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             _ = callbackId;
             _ = dueTime;
             _ = period;
             _ = evt;
-            _ = metadata;
+            _ = options;
             _ = ct;
             throw new NotSupportedException("This test context does not support scheduling.");
         }

@@ -20,8 +20,8 @@ public static class StreamForwardingRules
             ForwardingMode = forwardingMode,
             DirectionFilter =
             [
-                EventDirection.Down,
-                EventDirection.Both,
+                TopologyAudience.Children,
+                TopologyAudience.ParentAndChildren,
             ],
         };
     }
@@ -31,7 +31,8 @@ public static class StreamForwardingRules
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(envelope.Direction))
+        var direction = envelope.Route.GetTopologyAudience();
+        if (binding.DirectionFilter.Count > 0 && !binding.DirectionFilter.Contains(direction))
             return false;
 
         if (binding.EventTypeFilter.Count == 0)
@@ -50,7 +51,7 @@ public static class StreamForwardingRules
         if (string.Equals(sourceStreamId, targetStreamId, StringComparison.Ordinal))
             return false;
 
-        return !PublisherChainMetadata.Contains(envelope, targetStreamId);
+        return !ForwardingVisitChain.Contains(envelope, targetStreamId);
     }
 
     public static EventEnvelope BuildForwardedEnvelope(
@@ -64,15 +65,14 @@ public static class StreamForwardingRules
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
         var forwarded = envelope.Clone();
-        PublisherChainMetadata.AppendIfMissing(forwarded, sourceStreamId);
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardedKey] =
-            StreamForwardingEnvelopeMetadata.ForwardedValue;
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardSourceKey] = sourceStreamId;
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardTargetKey] = targetStreamId;
-        forwarded.Metadata[StreamForwardingEnvelopeMetadata.ForwardModeKey] = forwardingMode switch
+        ForwardingVisitChain.AppendIfMissing(forwarded, sourceStreamId);
+        var forwarding = forwarded.EnsureRuntime().EnsureForwarding();
+        forwarding.SourceStreamId = sourceStreamId;
+        forwarding.TargetStreamId = targetStreamId;
+        forwarding.Mode = forwardingMode switch
         {
-            StreamForwardingMode.TransitOnly => StreamForwardingEnvelopeMetadata.ForwardModeTransit,
-            _ => StreamForwardingEnvelopeMetadata.ForwardModeHandle,
+            StreamForwardingMode.TransitOnly => StreamForwardingHandleMode.TransitOnly,
+            _ => StreamForwardingHandleMode.HandleThenForward,
         };
 
         return forwarded;
@@ -108,22 +108,15 @@ public static class StreamForwardingRules
         ArgumentNullException.ThrowIfNull(envelope);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
 
-        if (!envelope.Metadata.TryGetValue(StreamForwardingEnvelopeMetadata.ForwardedKey, out var forwarded) ||
-            !string.Equals(forwarded, StreamForwardingEnvelopeMetadata.ForwardedValue, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return envelope.Metadata.TryGetValue(StreamForwardingEnvelopeMetadata.ForwardTargetKey, out var target) &&
-               string.Equals(target, targetStreamId, StringComparison.Ordinal);
+        return StreamForwardingEnvelopeState.IsForwarded(envelope) &&
+               string.Equals(StreamForwardingEnvelopeState.GetTargetStreamId(envelope), targetStreamId, StringComparison.Ordinal);
     }
 
     public static bool IsTransitOnlyForwarding(EventEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        return envelope.Metadata.TryGetValue(StreamForwardingEnvelopeMetadata.ForwardModeKey, out var mode) &&
-               string.Equals(mode, StreamForwardingEnvelopeMetadata.ForwardModeTransit, StringComparison.Ordinal);
+        return StreamForwardingEnvelopeState.GetMode(envelope) == StreamForwardingHandleMode.TransitOnly;
     }
 
     public static bool ShouldSkipTransitOnlyHandling(string selfActorId, EventEnvelope envelope)
@@ -131,7 +124,8 @@ public static class StreamForwardingRules
         ArgumentException.ThrowIfNullOrWhiteSpace(selfActorId);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (envelope.Direction is not EventDirection.Down and not EventDirection.Both)
+        var direction = envelope.Route.GetTopologyAudience();
+        if (direction is not TopologyAudience.Children and not TopologyAudience.ParentAndChildren)
             return false;
 
         return IsForwardedEnvelopeForTarget(envelope, selfActorId) &&

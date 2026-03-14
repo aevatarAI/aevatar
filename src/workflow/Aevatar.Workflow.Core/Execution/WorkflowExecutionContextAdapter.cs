@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext
+internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContext, IWorkflowExecutionItemsContext
 {
     private readonly IEventHandlerContext _inner;
     private readonly IWorkflowExecutionStateHost _stateHost;
@@ -87,30 +87,64 @@ internal sealed class WorkflowExecutionContextAdapter : IWorkflowExecutionContex
         return _stateHost.ClearExecutionStateAsync(scopeKey, ct);
     }
 
-    public Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down, CancellationToken ct = default)
-        where TEvent : IMessage =>
-        _inner.PublishAsync(evt, direction, ct);
+    public bool TryGetItem<TItem>(string itemKey, out TItem? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        if (_stateHost.TryGetExecutionItem(itemKey, out var boxed) &&
+            boxed is TItem typed)
+        {
+            value = typed;
+            return true;
+        }
 
-    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        value = default;
+        return false;
+    }
+
+    public void SetItem(string itemKey, object? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        _stateHost.SetExecutionItem(itemKey, value);
+    }
+
+    public bool RemoveItem(string itemKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
+        return _stateHost.RemoveExecutionItem(itemKey);
+    }
+
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        TopologyAudience direction = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage =>
-        _inner.SendToAsync(targetActorId, evt, ct);
+        _inner.PublishAsync(evt, direction, ct, options);
+
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage =>
+        _inner.SendToAsync(targetActorId, evt, ct, options);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
         string callbackId,
         TimeSpan dueTime,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default) =>
-        _inner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, metadata, ct);
+        _inner.ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
 
     public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
         string callbackId,
         TimeSpan dueTime,
         TimeSpan period,
         IMessage evt,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default) =>
-        _inner.ScheduleSelfDurableTimerAsync(callbackId, dueTime, period, evt, metadata, ct);
+        _inner.ScheduleSelfDurableTimerAsync(callbackId, dueTime, period, evt, options, ct);
 
     public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
         _inner.CancelDurableCallbackAsync(lease, ct);

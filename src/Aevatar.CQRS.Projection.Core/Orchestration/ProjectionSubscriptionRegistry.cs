@@ -85,7 +85,11 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
             if (dispatchToken.IsCancellationRequested)
                 return;
 
-            await _dispatcher.DispatchAsync(context, envelope, dispatchToken);
+            var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
+            if (normalized == null)
+                return;
+
+            await _dispatcher.DispatchAsync(context, normalized, dispatchToken);
         }
         catch (OperationCanceledException) when (dispatchToken.IsCancellationRequested)
         {

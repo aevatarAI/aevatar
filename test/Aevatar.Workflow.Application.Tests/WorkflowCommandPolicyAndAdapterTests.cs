@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
+using Aevatar.CQRS.Core.Commands;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
@@ -9,9 +10,9 @@ namespace Aevatar.Workflow.Application.Tests;
 public sealed class WorkflowCommandPolicyAndAdapterTests
 {
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldValidateTarget()
+    public void DefaultCommandContextPolicy_Create_ShouldValidateTarget()
     {
-        var policy = new WorkflowCommandContextPolicy();
+        var policy = new DefaultCommandContextPolicy();
 
         Action act = () => policy.Create(" ");
 
@@ -19,29 +20,29 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldGenerateIdsAndCopyMetadata()
+    public void DefaultCommandContextPolicy_Create_ShouldGenerateIdsAndCopyHeaders()
     {
-        var policy = new WorkflowCommandContextPolicy();
-        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var policy = new DefaultCommandContextPolicy();
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["k1"] = "v1",
         };
 
-        var context = policy.Create("actor-1", metadata);
+        var context = policy.Create("actor-1", headers);
 
         context.TargetId.Should().Be("actor-1");
         context.CommandId.Should().NotBeNullOrWhiteSpace();
         context.CorrelationId.Should().Be(context.CommandId);
-        context.Metadata.Should().ContainKey("k1").WhoseValue.Should().Be("v1");
+        context.Headers.Should().ContainKey("k1").WhoseValue.Should().Be("v1");
 
-        metadata["k1"] = "mutated";
-        context.Metadata["k1"].Should().Be("v1");
+        headers["k1"] = "mutated";
+        context.Headers["k1"].Should().Be("v1");
     }
 
     [Fact]
-    public void WorkflowCommandContextPolicy_Create_ShouldRespectProvidedIds()
+    public void DefaultCommandContextPolicy_Create_ShouldRespectProvidedIds()
     {
-        var policy = new WorkflowCommandContextPolicy();
+        var policy = new DefaultCommandContextPolicy();
 
         var context = policy.Create(
             "actor-2",
@@ -61,7 +62,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             actor,
             "direct",
             createdActorIds: [],
-            projectionPort);
+            projectionPort,
+            new NoOpWorkflowRunActorPort(),
+            new NoOpDetachedCleanupScheduler());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -74,7 +77,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
-    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionLifecyclePort
+    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
 
@@ -88,13 +91,13 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
 
         public Task AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task DetachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEvent> sink,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -102,6 +105,54 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             IWorkflowExecutionProjectionLease lease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class NoOpWorkflowRunActorPort : IWorkflowRunActorPort
+    {
+        public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowRunCreationResult> CreateRunAsync(WorkflowDefinitionBinding definition, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task BindWorkflowDefinitionAsync(
+            IActor actor,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class NoOpDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
+    {
+        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task MarkDispatchAcceptedAsync(
+            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeActor : IActor

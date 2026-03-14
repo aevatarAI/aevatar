@@ -79,7 +79,7 @@ public sealed class InMemoryStream : IStream
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
         return _ingressChannel.Writer.WriteAsync(wrapped, ct).AsTask();
     }
@@ -281,7 +281,7 @@ public sealed class InMemoryStream : IStream
             SourceStreamId = StreamId,
             TargetStreamId = binding.TargetStreamId,
             ForwardingMode = binding.ForwardingMode,
-            DirectionFilter = new HashSet<EventDirection>(binding.DirectionFilter),
+            DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,

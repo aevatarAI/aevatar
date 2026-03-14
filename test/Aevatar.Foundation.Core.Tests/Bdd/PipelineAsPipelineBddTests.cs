@@ -131,9 +131,10 @@ public class CollectingPublisher : IEventPublisher
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
-        EventDirection direction = EventDirection.Down,
+        TopologyAudience direction = TopologyAudience.Children,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         _published.Add(evt);
@@ -144,7 +145,8 @@ public class CollectingPublisher : IEventPublisher
         string targetActorId,
         TEvent evt,
         CancellationToken ct = default,
-        EventEnvelope? sourceEnvelope = null)
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
         where TEvent : IMessage
     {
         _published.Add(evt);

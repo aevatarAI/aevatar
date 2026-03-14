@@ -5,13 +5,11 @@ namespace Aevatar.Foundation.Core.Pipeline;
 
 internal static class SelfEventEnvelopeFactory
 {
-    private const string RuntimeRetryMetadataPrefix = "aevatar.retry.";
-
     public static EventEnvelope Create(
         string actorId,
         IMessage evt,
         EventEnvelope? inboundEnvelope = null,
-        IReadOnlyDictionary<string, string>? metadata = null)
+        EventEnvelopePublishOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(evt);
@@ -21,35 +19,41 @@ internal static class SelfEventEnvelopeFactory
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = actorId,
-            Direction = EventDirection.Self,
-            CorrelationId = inboundEnvelope?.CorrelationId ?? string.Empty,
-            TargetActorId = actorId,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
         };
 
-        if (inboundEnvelope != null)
+        if (inboundEnvelope?.Propagation != null)
+            envelope.Propagation = inboundEnvelope.Propagation.Clone();
+
+        if (!string.IsNullOrWhiteSpace(envelope.Propagation?.CorrelationId))
         {
-            foreach (var pair in inboundEnvelope.Metadata)
-            {
-                if (ShouldPropagateInboundMetadata(pair.Key))
-                    envelope.Metadata[pair.Key] = pair.Value;
-            }
+            envelope.EnsurePropagation().CorrelationId = envelope.Propagation.CorrelationId;
         }
 
-        if (metadata != null)
-        {
-            foreach (var pair in metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
-        }
+        if (options?.Propagation != null)
+            ApplyPropagationOverrides(envelope.EnsurePropagation(), options.Propagation);
+
+        if (!string.IsNullOrWhiteSpace(options?.Delivery?.DeduplicationOperationId))
+            envelope.EnsureRuntime().EnsureDeduplication().OperationId = options.Delivery.DeduplicationOperationId;
 
         return envelope;
     }
 
-    private static bool ShouldPropagateInboundMetadata(string key)
+    private static void ApplyPropagationOverrides(
+        EnvelopePropagation target,
+        EventEnvelopePropagationOverrides overrides)
     {
-        if (string.IsNullOrWhiteSpace(key))
-            return false;
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(overrides);
 
-        return !key.StartsWith(RuntimeRetryMetadataPrefix, StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(overrides.CorrelationId))
+            target.CorrelationId = overrides.CorrelationId;
+        if (!string.IsNullOrWhiteSpace(overrides.CausationEventId))
+            target.CausationEventId = overrides.CausationEventId;
+        if (overrides.Trace != null)
+            target.Trace = overrides.Trace.Clone();
+
+        foreach (var pair in overrides.Baggage)
+            target.Baggage[pair.Key] = pair.Value;
     }
 }

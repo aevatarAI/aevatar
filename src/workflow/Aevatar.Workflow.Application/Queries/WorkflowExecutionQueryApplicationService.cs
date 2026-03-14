@@ -8,13 +8,19 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
 {
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
     private readonly IWorkflowExecutionProjectionQueryPort _projectionPort;
+    private readonly IWorkflowCatalogPort _workflowCatalogPort;
+    private readonly IWorkflowCapabilitiesPort _workflowCapabilitiesPort;
 
     public WorkflowExecutionQueryApplicationService(
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionQueryPort projectionPort)
+        IWorkflowExecutionProjectionQueryPort projectionPort,
+        IWorkflowCatalogPort workflowCatalogPort,
+        IWorkflowCapabilitiesPort workflowCapabilitiesPort)
     {
         _workflowRegistry = workflowRegistry;
         _projectionPort = projectionPort;
+        _workflowCatalogPort = workflowCatalogPort ?? throw new ArgumentNullException(nameof(workflowCatalogPort));
+        _workflowCapabilitiesPort = workflowCapabilitiesPort ?? throw new ArgumentNullException(nameof(workflowCapabilitiesPort));
     }
 
     public bool ActorQueryEnabled => _projectionPort.EnableActorQueryEndpoints;
@@ -35,6 +41,20 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
     }
 
     public IReadOnlyList<string> ListWorkflows() => _workflowRegistry.GetNames();
+
+    public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() =>
+        _workflowCatalogPort.ListWorkflowCatalog();
+
+    public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName)
+    {
+        if (string.IsNullOrWhiteSpace(workflowName))
+            return null;
+
+        return _workflowCatalogPort.GetWorkflowDetail(workflowName);
+    }
+
+    public WorkflowCapabilitiesDocument GetCapabilities() =>
+        _workflowCapabilitiesPort.GetCapabilities();
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
     {

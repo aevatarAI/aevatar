@@ -203,6 +203,52 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "llm_call",
+                RunId = "run-llm-invalid",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.StepId.Should().BeEmpty();
+        failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
+    public async Task ReflectModule_ShouldPublishDeterministicFailure_WhenStepIdMissing()
+    {
+        var module = new ReflectModule();
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "",
+                StepType = "reflect",
+                RunId = "run-reflect-invalid",
+                Input = "draft",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.StepId.Should().BeEmpty();
+        failure.Error.Should().Contain("requires non-empty step_id");
+    }
+
+    [Fact]
     public async Task DynamicWorkflowModule_ShouldIgnoreUnsupportedPayload_AndValidateYamlBlocks()
     {
         var module = new DynamicWorkflowModule();
@@ -320,37 +366,32 @@ public sealed class WorkflowRuntimeModuleBranchTests
         errors.Should().BeEmpty();
     }
 
-    private static EventEnvelope Wrap(IMessage evt, IReadOnlyDictionary<string, string>? metadata = null)
+    private static EventEnvelope Wrap(IMessage evt, EnvelopeCallbackContext? callback = null)
     {
-        var envelope = new EventEnvelope
+        return new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Runtime = callback == null
+                ? null
+                : new EnvelopeRuntime
+                {
+                    Callback = callback.Clone(),
+                },
         };
-
-        if (metadata != null)
-        {
-            foreach (var pair in metadata)
-                envelope.Metadata[pair.Key] = pair.Value;
-        }
-
-        return envelope;
     }
 
-    private static IReadOnlyDictionary<string, string> MetadataFor(
+    private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,
         long? generation = null) =>
-        new Dictionary<string, string>(StringComparer.Ordinal)
+        new()
         {
-            [RuntimeCallbackMetadataKeys.CallbackId] = callback.CallbackId,
-            [RuntimeCallbackMetadataKeys.CallbackGeneration] = (generation ?? callback.Generation)
-                .ToString(CultureInfo.InvariantCulture),
-            [RuntimeCallbackMetadataKeys.CallbackFireIndex] = "0",
-            [RuntimeCallbackMetadataKeys.CallbackFiredAtUnixTimeMs] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                .ToString(CultureInfo.InvariantCulture),
+            CallbackId = callback.CallbackId,
+            Generation = generation ?? callback.Generation,
+            FireIndex = 0,
+            FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
     private sealed class RecordingWorkflowContext : IWorkflowExecutionContext
@@ -378,7 +419,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public ILogger Logger { get; } = NullLogger.Instance;
 
-        public List<(IMessage Event, EventDirection Direction)> Published { get; } = [];
+        public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
 
         public List<RecordedCallback> Scheduled { get; } = [];
 
@@ -418,8 +459,9 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
-            EventDirection direction = EventDirection.Down,
-            CancellationToken ct = default)
+            TopologyAudience direction = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
@@ -427,19 +469,20 @@ public sealed class WorkflowRuntimeModuleBranchTests
             return Task.CompletedTask;
         }
 
-        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default)
+        public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage => Task.CompletedTask;
 
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _ = dueTime;
-            _ = metadata;
+            _ = options;
             var generation = _callbackGenerations.GetValueOrDefault(callbackId, 0) + 1;
             _callbackGenerations[callbackId] = generation;
             Scheduled.Add(new RecordedCallback(callbackId, generation, evt));
@@ -451,9 +494,9 @@ public sealed class WorkflowRuntimeModuleBranchTests
             TimeSpan dueTime,
             TimeSpan period,
             IMessage evt,
-            IReadOnlyDictionary<string, string>? metadata = null,
+            EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default) =>
-            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime + period, evt, metadata, ct);
+            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime + period, evt, options, ct);
 
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
         {

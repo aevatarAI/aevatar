@@ -34,6 +34,6 @@ public class GAgentExecutionHookContext
     /// <summary>Exception thrown by the event handler, if any.</summary>
     public Exception? Exception { get; set; }
 
-    /// <summary>Extensible metadata.</summary>
-    public Dictionary<string, object?> Metadata { get; } = [];
+    /// <summary>Extensible items shared across the current hook invocation.</summary>
+    public Dictionary<string, object?> Items { get; } = [];
 }

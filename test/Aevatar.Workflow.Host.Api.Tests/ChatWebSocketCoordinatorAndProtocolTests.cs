@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
@@ -27,18 +29,23 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ExecuteAsync_ShouldSendAckAndAguiEvent()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var service = new FakeWorkflowRunInteractionService
+        var service = new FakeCommandInteractionService
         {
-            ResultFactory = async (emitAsync, onAcceptedAsync, ct) =>
+            Handler = async (_, emitAsync, onAcceptedAsync, ct) =>
             {
                 var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(receipt, ct);
-                await emitAsync(new WorkflowOutputFrame { Type = "delta", Delta = "hello" }, ct);
-                return new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.None,
-                    receipt,
-                    new WorkflowChatRunFinalizeResult(WorkflowProjectionCompletionStatus.Completed, true));
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "message-1",
+                        Delta = "hello",
+                    },
+                }, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
             },
         };
 
@@ -63,13 +70,11 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     public async Task ExecuteAsync_ShouldSendCommandError_WhenStartFails()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);
-        var service = new FakeWorkflowRunInteractionService
+        var service = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _) => Task.FromResult(
-                new WorkflowChatRunInteractionResult(
-                    WorkflowChatRunStartError.WorkflowNotFound,
-                    null,
-                    null)),
+            Handler = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.WorkflowNotFound)),
         };
 
         await ChatWebSocketRunCoordinator.ExecuteAsync(
@@ -87,19 +92,147 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         socket.SentTexts[0].Should().Contain("WORKFLOW_NOT_FOUND");
     }
 
-    private sealed class FakeWorkflowRunInteractionService : IWorkflowRunInteractionService
+    [Fact]
+    public async Task ExecuteAsync_WhenRuntimeDefaultMetadataProvided_ShouldMergeWithRequestMetadata()
     {
-        public Func<Func<WorkflowOutputFrame, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; } =
-            (_, _, _) => Task.FromResult(new WorkflowChatRunInteractionResult(WorkflowChatRunStartError.None, null, null));
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService
+        {
+            Handler = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound)),
+        };
 
-        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-defaults",
+                new ChatInput
+                {
+                    Prompt = "hello",
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["telegram.chat_id"] = "-100-request",
+                    },
+                },
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None,
+            defaultMetadata: new Dictionary<string, string>
+            {
+                ["telegram.chat_id"] = "-100-default",
+                ["telegram.openclaw_bot_username"] = "openclaw_bot",
+            });
+
+        var command = service.LastRequest;
+        command.Should().NotBeNull();
+        var metadata = command!.Metadata ?? throw new InvalidOperationException("Expected metadata capture.");
+        metadata["telegram.chat_id"].Should().Be("-100-request");
+        metadata["telegram.openclaw_bot_username"].Should().Be("openclaw_bot");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShouldAssembleTextChunks()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("hel"), false);
+        socket.EnqueueReceive(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("lo"), true);
+
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
+
+        frame.Should().NotBeNull();
+        frame!.Value.MessageType.Should().Be(WebSocketMessageType.Text);
+        Encoding.UTF8.GetString(frame.Value.Payload.Span).Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_ShouldReadBinaryMessage()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(WebSocketMessageType.Binary, [0x01, 0x02], false);
+        socket.EnqueueReceive(WebSocketMessageType.Binary, [0x03], true);
+
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
+
+        frame.Should().NotBeNull();
+        frame!.Value.MessageType.Should().Be(WebSocketMessageType.Binary);
+        frame.Value.Payload.ToArray().Should().Equal([0x01, 0x02, 0x03]);
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_WhenCloseFrame_ShouldReturnNull()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        socket.EnqueueReceive(WebSocketMessageType.Close, [], true);
+
+        var frame = await ChatWebSocketProtocol.ReceiveAsync(socket, CancellationToken.None);
+
+        frame.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SendAsync_ShouldRespectSocketStateAndSupportTextAndBinary()
+    {
+        var openSocket = new FakeWebSocket(WebSocketState.Open);
+        await ChatWebSocketProtocol.SendAsync(openSocket, new { RequestId = "r1", ValueNum = 2 }, CancellationToken.None);
+        await ChatWebSocketProtocol.SendAsync(openSocket, new { RequestId = "r2", ValueNum = 3 }, CancellationToken.None, WebSocketMessageType.Binary);
+
+        openSocket.SentTexts.Should().ContainSingle();
+        using (var doc = JsonDocument.Parse(openSocket.SentTexts[0]))
+        {
+            doc.RootElement.GetProperty("requestId").GetString().Should().Be("r1");
+            doc.RootElement.GetProperty("valueNum").GetInt32().Should().Be(2);
+        }
+
+        openSocket.SentBinaries.Should().ContainSingle();
+        using (var doc = JsonDocument.Parse(openSocket.SentBinaries[0]))
+        {
+            doc.RootElement.GetProperty("requestId").GetString().Should().Be("r2");
+            doc.RootElement.GetProperty("valueNum").GetInt32().Should().Be(3);
+        }
+
+        var closedSocket = new FakeWebSocket(WebSocketState.Closed);
+        await ChatWebSocketProtocol.SendAsync(closedSocket, new { RequestId = "x" }, CancellationToken.None);
+        closedSocket.SentTexts.Should().BeEmpty();
+        closedSocket.SentBinaries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CloseAsync_ShouldOnlyCloseOpenOrCloseReceivedSockets()
+    {
+        var open = new FakeWebSocket(WebSocketState.Open);
+        await ChatWebSocketProtocol.CloseAsync(open, CancellationToken.None);
+        open.CloseCalls.Should().Be(1);
+        open.State.Should().Be(WebSocketState.Closed);
+
+        var closeReceived = new FakeWebSocket(WebSocketState.CloseReceived);
+        await ChatWebSocketProtocol.CloseAsync(closeReceived, CancellationToken.None);
+        closeReceived.CloseCalls.Should().Be(1);
+
+        var aborted = new FakeWebSocket(WebSocketState.Aborted);
+        await ChatWebSocketProtocol.CloseAsync(aborted, CancellationToken.None);
+        aborted.CloseCalls.Should().Be(0);
+    }
+
+    private sealed class FakeCommandInteractionService
+        : ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>
+    {
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> Handler { get; set; } =
+            (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound));
+
+        public WorkflowChatRunRequest? LastRequest { get; private set; }
+
+        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
-            Func<WorkflowOutputFrame, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
-            _ = request;
-            return ResultFactory(emitAsync, onAcceptedAsync, ct);
+            LastRequest = request;
+            return Handler(request, emitAsync, onAcceptedAsync, ct);
         }
     }
 
@@ -117,11 +250,15 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         public List<string> SentTexts { get; } = [];
         public List<byte[]> SentBinaries { get; } = [];
+        public int CloseCalls { get; private set; }
 
         public override WebSocketCloseStatus? CloseStatus => _closeStatus;
         public override string? CloseStatusDescription => _closeStatusDescription;
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
+
+        public void EnqueueReceive(WebSocketMessageType type, byte[] data, bool endOfMessage) =>
+            _receiveQueue.Enqueue((type, data, endOfMessage));
 
         public override void Abort()
         {
@@ -131,6 +268,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
         public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            CloseCalls++;
             _closeStatus = closeStatus;
             _closeStatusDescription = statusDescription;
             _state = WebSocketState.Closed;
