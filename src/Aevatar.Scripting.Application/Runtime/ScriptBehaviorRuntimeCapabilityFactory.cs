@@ -20,6 +20,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
+    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
 
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
@@ -30,7 +31,8 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
-        IScriptCatalogCommandPort catalogCommandPort)
+        IScriptCatalogCommandPort catalogCommandPort,
+        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -41,6 +43,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
+        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
     }
 
     public IScriptBehaviorRuntimeCapabilities Create(
@@ -69,6 +72,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             _definitionCommandPort,
             _runtimeProvisioningPort,
             _runtimeCommandPort,
-            _catalogCommandPort);
+            _catalogCommandPort,
+            _authorityProjectionPrimingPort);
     }
 }

@@ -174,10 +174,6 @@ public sealed class WorkflowRunGAgent
             request.InlineWorkflowYamls,
             request.RunId);
 
-    [EventHandler]
-    public Task HandleQueryWorkflowActorBindingRequested(QueryWorkflowActorBindingRequestedEvent request) =>
-        RespondWorkflowActorBindingAsync(request);
-
     public override Task<string> GetDescriptionAsync()
     {
         var status = State.Compiled ? (State.Status?.Trim() ?? "bound") : "invalid";
@@ -560,30 +556,6 @@ public sealed class WorkflowRunGAgent
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
         return next;
-    }
-
-    private Task RespondWorkflowActorBindingAsync(
-        QueryWorkflowActorBindingRequestedEvent request,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.RequestId) || string.IsNullOrWhiteSpace(request.ReplyStreamId))
-            return Task.CompletedTask;
-
-        var response = new WorkflowActorBindingRespondedEvent
-        {
-            RequestId = request.RequestId,
-            ActorId = Id,
-            ActorKind = "run",
-            DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            RunId = State.RunId ?? string.Empty,
-            WorkflowName = State.WorkflowName ?? string.Empty,
-            WorkflowYaml = State.WorkflowYaml ?? string.Empty,
-        };
-        foreach (var (key, value) in State.InlineWorkflowYamls)
-            response.InlineWorkflowYamls[key] = value;
-
-        return EventPublisher.SendToAsync(request.ReplyStreamId, response, ct, sourceEnvelope: null);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

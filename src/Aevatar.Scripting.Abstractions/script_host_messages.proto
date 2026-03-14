@@ -129,11 +129,6 @@ message ScriptBehaviorState {
   string state_descriptor_full_name = 16;
   string read_model_descriptor_full_name = 17;
   ScriptRuntimeSemanticsSpec runtime_semantics = 18;
-  string pending_definition_actor_id = 19;
-  string pending_revision = 20;
-  string pending_binding_request_id = 21;
-  repeated RunScriptRequestedEvent pending_run_requests = 23;
-  string binding_failure_reason = 24;
 }
 
 message ScriptCatalogEntryState {
@@ -226,6 +221,22 @@ message ScriptDefinitionUpsertedEvent {
   ScriptRuntimeSemanticsSpec runtime_semantics = 19;
 }
 
+message ScriptDefinitionBindingSpec {
+  string script_id = 1;
+  string revision = 2;
+  string source_text = 3;
+  string source_hash = 4;
+  ScriptPackageSpec script_package = 5;
+  string state_type_url = 6;
+  string read_model_type_url = 7;
+  string read_model_schema_version = 8;
+  string read_model_schema_hash = 9;
+  bytes protocol_descriptor_set = 10;
+  string state_descriptor_full_name = 11;
+  string read_model_descriptor_full_name = 12;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 13;
+}
+
 message ScriptReadModelSchemaDeclaredEvent {
   string script_id = 1;
   string script_revision = 2;
@@ -259,12 +270,6 @@ message RunScriptRequestedEvent {
   string correlation_id = 7;
 }
 
-message ProvisionScriptBehaviorRequestedEvent {
-  string definition_actor_id = 1;
-  string requested_revision = 2;
-  string request_id = 3;
-}
-
 message BindScriptBehaviorRequestedEvent {
   string definition_actor_id = 1;
   string script_id = 2;
@@ -282,12 +287,6 @@ message BindScriptBehaviorRequestedEvent {
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
 }
 
-message ScriptBehaviorBindingRequestedEvent {
-  string definition_actor_id = 1;
-  string requested_revision = 2;
-  string request_id = 3;
-}
-
 message ScriptBehaviorBoundEvent {
   string definition_actor_id = 1;
   string script_id = 2;
@@ -303,42 +302,6 @@ message ScriptBehaviorBoundEvent {
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
-}
-
-message ScriptBehaviorBindingFailedEvent {
-  string request_id = 1;
-  string failure_reason = 2;
-}
-
-message ScriptBehaviorRunQueuedEvent {
-  RunScriptRequestedEvent run_request = 1;
-}
-
-message ScriptBehaviorBindingTimeoutFiredEvent {
-  string request_id = 1;
-}
-
-message QueryScriptBehaviorBindingRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-}
-
-message ScriptBehaviorBindingRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  string definition_actor_id = 3;
-  string script_id = 4;
-  string revision = 5;
-  string source_hash = 6;
-  string state_type_url = 7;
-  string read_model_type_url = 8;
-  string read_model_schema_version = 9;
-  string read_model_schema_hash = 10;
-  string failure_reason = 11;
-  string state_descriptor_full_name = 12;
-  string read_model_descriptor_full_name = 13;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 14;
-  bool pending = 15;
 }
 
 message ScriptDomainFactCommitted {
@@ -408,52 +371,6 @@ message RollbackScriptRevisionRequestedEvent {
   string expected_current_revision = 5;
 }
 
-message QueryScriptDefinitionSnapshotRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-  string requested_revision = 3;
-  string reply_actor_id = 4;
-}
-
-message ScriptDefinitionSnapshotRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  string script_id = 3;
-  string revision = 4;
-  string source_text = 5;
-  string read_model_schema_version = 6;
-  string read_model_schema_hash = 7;
-  string failure_reason = 8;
-  string source_hash = 9;
-  string state_type_url = 10;
-  string read_model_type_url = 11;
-  ScriptPackageSpec script_package = 12;
-  bytes protocol_descriptor_set = 13;
-  string state_descriptor_full_name = 14;
-  string read_model_descriptor_full_name = 15;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 16;
-}
-
-message QueryScriptCatalogEntryRequestedEvent {
-  string request_id = 1;
-  string reply_stream_id = 2;
-  string script_id = 3;
-  string reply_actor_id = 4;
-}
-
-message ScriptCatalogEntryRespondedEvent {
-  string request_id = 1;
-  bool found = 2;
-  string script_id = 3;
-  string active_revision = 4;
-  string active_definition_actor_id = 5;
-  string active_source_hash = 6;
-  string previous_revision = 7;
-  repeated string revision_history = 8;
-  string last_proposal_id = 9;
-  string failure_reason = 10;
-}
-
 message ScriptEvolutionSessionStartedEvent {
   string proposal_id = 1;
   string script_id = 2;
@@ -472,6 +389,7 @@ message ScriptEvolutionSessionCompletedEvent {
   string definition_actor_id = 5;
   string catalog_actor_id = 6;
   repeated string diagnostics = 7;
+  ScriptDefinitionBindingSpec definition_snapshot = 8;
 }
 
 message ScriptEvolutionProposedEvent {

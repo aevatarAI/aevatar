@@ -261,10 +261,10 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             return;
         }
 
-        string definitionActorId;
+        ScriptDefinitionUpsertResult definitionUpsert;
         try
         {
-            definitionActorId = await _definitionCommandPort.UpsertDefinitionAsync(
+            definitionUpsert = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
                 proposal.ScriptId ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
                 proposal.CandidateSource ?? string.Empty,
@@ -285,6 +285,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 ct);
             return;
         }
+
+        var definitionActorId = definitionUpsert.ActorId;
 
         try
         {
@@ -316,6 +318,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 DefinitionActorId = definitionActorId,
                 CatalogActorId = baselineResolution.CatalogActorId,
                 Diagnostics = { validation.Diagnostics },
+                DefinitionSnapshot = definitionUpsert.Snapshot.ToBindingSpec(),
             });
         }
         catch (Exception ex)

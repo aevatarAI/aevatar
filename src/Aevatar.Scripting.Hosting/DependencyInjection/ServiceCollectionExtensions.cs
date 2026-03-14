@@ -86,15 +86,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<RuntimeScriptProvisioningService>();
         services.TryAddSingleton<RuntimeScriptCommandService>();
         services.TryAddSingleton<RuntimeScriptCatalogCommandService>();
-        services.TryAddSingleton<RuntimeScriptActorQueryClient>();
-        services.TryAddSingleton<RuntimeScriptCatalogQueryService>();
-        services.TryAddSingleton<IScriptDefinitionSnapshotPort, RuntimeScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptEvolutionProposalPort>(sp => sp.GetRequiredService<RuntimeScriptEvolutionInteractionService>());
         services.TryAddSingleton<IScriptDefinitionCommandPort>(sp => sp.GetRequiredService<RuntimeScriptDefinitionCommandService>());
         services.TryAddSingleton<IScriptRuntimeProvisioningPort>(sp => sp.GetRequiredService<RuntimeScriptProvisioningService>());
         services.TryAddSingleton<IScriptRuntimeCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCommandService>());
         services.TryAddSingleton<IScriptCatalogCommandPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogCommandService>());
-        services.TryAddSingleton<IScriptCatalogQueryPort>(sp => sp.GetRequiredService<RuntimeScriptCatalogQueryService>());
         services.AddProjectionReadModelRuntime();
         services.AddScriptingProjectionComponents();
         services.AddScriptingProjectionReadModelProviders(configuration);

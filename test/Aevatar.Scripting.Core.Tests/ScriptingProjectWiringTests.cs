@@ -32,6 +32,8 @@ public sealed class ScriptingProjectWiringTests
         provider.GetRequiredService<IScriptNativeGraphMaterializer>().Should().NotBeNull();
         provider.GetRequiredService<IScriptExecutionProjectionPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryPort>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptDefinitionSnapshotPort>().Should().NotBeNull();
+        provider.GetRequiredService<IScriptCatalogQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
     }

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf;
@@ -26,6 +27,9 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
+    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
+    private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
+        new(StringComparer.Ordinal);
     private readonly string _runId;
     private readonly string _correlationId;
 
@@ -45,7 +49,8 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
-        IScriptCatalogCommandPort catalogCommandPort)
+        IScriptCatalogCommandPort catalogCommandPort,
+        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
     {
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
@@ -63,6 +68,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
+        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
@@ -95,6 +101,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         var agentType = System.Type.GetType(agentTypeAssemblyQualifiedName, throwOnError: true)
             ?? throw new InvalidOperationException($"Agent type `{agentTypeAssemblyQualifiedName}` could not be resolved.");
         var actor = await _runtime.CreateAsync(agentType, actorId, ct);
+        await PrimeAuthorityProjectionIfNeededAsync(agentType, actor.Id, ct);
         return actor.Id;
     }
 
@@ -116,7 +123,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct) =>
-        _proposalPort.ProposeAsync(proposal, ct);
+        ProposeAndRememberAsync(proposal, ct);
 
     public Task<string> UpsertScriptDefinitionAsync(
         string scriptId,
@@ -125,7 +132,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string sourceHash,
         string? definitionActorId,
         CancellationToken ct) =>
-        _definitionCommandPort.UpsertDefinitionAsync(scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, ct);
+        UpsertAndRememberAsync(scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, ct);
 
     public async Task<string> SpawnScriptRuntimeAsync(
         string definitionActorId,
@@ -137,7 +144,8 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionActorId,
             scriptRevision,
             runtimeActorId,
-            ct);
+            ct,
+            ResolveDefinitionSnapshot(definitionActorId, scriptRevision));
         await EnsureProjectedRuntimeAsync(resolvedRuntimeActorId, ct);
         return resolvedRuntimeActorId;
     }
@@ -201,5 +209,81 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         CancellationToken ct)
     {
         _ = await _executionProjectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
+    }
+
+    private async Task<ScriptPromotionDecision> ProposeAndRememberAsync(
+        ScriptEvolutionProposal proposal,
+        CancellationToken ct)
+    {
+        var decision = await _proposalPort.ProposeAsync(proposal, ct);
+        if (decision.Accepted && decision.DefinitionSnapshot != null)
+        {
+            RememberDefinitionSnapshot(
+                decision.DefinitionActorId,
+                decision.CandidateRevision,
+                decision.DefinitionSnapshot.ToSnapshot());
+        }
+
+        return decision;
+    }
+
+    private async Task<string> UpsertAndRememberAsync(
+        string scriptId,
+        string scriptRevision,
+        string sourceText,
+        string sourceHash,
+        string? definitionActorId,
+        CancellationToken ct)
+    {
+        var result = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
+            scriptId,
+            scriptRevision,
+            sourceText,
+            sourceHash,
+            definitionActorId,
+            ct);
+        RememberDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
+        return result.ActorId;
+    }
+
+    private void RememberDefinitionSnapshot(
+        string definitionActorId,
+        string scriptRevision,
+        ScriptDefinitionSnapshot? snapshot)
+    {
+        if (snapshot == null || string.IsNullOrWhiteSpace(definitionActorId))
+            return;
+
+        _definitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, scriptRevision)] = snapshot;
+    }
+
+    private ScriptDefinitionSnapshot? ResolveDefinitionSnapshot(
+        string definitionActorId,
+        string scriptRevision)
+    {
+        _definitionSnapshots.TryGetValue(
+            BuildDefinitionSnapshotKey(definitionActorId, scriptRevision),
+            out var snapshot);
+        return snapshot;
+    }
+
+    private static string BuildDefinitionSnapshotKey(
+        string definitionActorId,
+        string scriptRevision) =>
+        string.Concat(
+            definitionActorId ?? string.Empty,
+            "::",
+            string.IsNullOrWhiteSpace(scriptRevision) ? "latest" : scriptRevision);
+
+    private async Task PrimeAuthorityProjectionIfNeededAsync(
+        System.Type agentType,
+        string actorId,
+        CancellationToken ct)
+    {
+        if (agentType.IsAssignableTo(typeof(ScriptDefinitionGAgent)) ||
+            agentType.IsAssignableTo(typeof(ScriptCatalogGAgent)))
+        {
+            await _authorityProjectionPrimingPort.PrimeAsync(actorId, ct);
+        }
     }
 }

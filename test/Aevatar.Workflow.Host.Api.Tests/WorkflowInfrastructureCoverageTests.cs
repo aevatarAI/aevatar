@@ -39,9 +39,6 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ServiceType == typeof(IWorkflowExecutionReportArtifactSink) &&
             x.ImplementationType == typeof(FileSystemWorkflowExecutionReportArtifactSink));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowActorBindingReader) &&
-            x.ImplementationType == typeof(RuntimeWorkflowActorBindingReader));
-        services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
         services.Should().Contain(x =>
@@ -85,6 +82,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowActorBindingReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));

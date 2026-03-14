@@ -14,6 +14,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Projection.ReadPorts;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -184,25 +185,31 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*source text is empty*");
+            .WithMessage("*script_package is empty*definition-1*");
     }
 
     [Fact]
     public async Task DefinitionSnapshotPort_ShouldThrow_WhenScriptPackageIsEmpty()
     {
-        var port = new RuntimeScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
+        var port = new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
         {
             _ = definitionActorId;
             _ = requestedRevision;
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ScriptDefinitionSnapshotRespondedEvent
-            {
-                Found = true,
-                ScriptId = "script-1",
-                Revision = "rev-1",
-                SourceText = string.Empty,
-                ScriptPackage = new ScriptPackageSpec(),
-            });
+            return Task.FromResult<ScriptDefinitionSnapshot?>(new ScriptDefinitionSnapshot(
+                "script-1",
+                "rev-1",
+                string.Empty,
+                string.Empty,
+                new ScriptPackageSpec(),
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                ByteString.Empty,
+                string.Empty,
+                string.Empty,
+                new ScriptRuntimeSemanticsSpec()));
         });
 
         var act = () => port.GetRequiredAsync("definition-1", "rev-1", CancellationToken.None);
@@ -228,7 +235,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var act = () => port.GetRequiredAsync("definition-1", "rev-requested", CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*rev-requested*rev-actual*");
+            .WithMessage("*snapshot not found*definition-1*rev-requested*");
     }
 
     [Fact]
@@ -636,10 +643,10 @@ public class RuntimeScriptInfrastructurePortsTests
         projectionPort.ReleaseCount.Should().Be(0);
     }
 
-    private static RuntimeScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
+    private static ProjectionScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
         TestEventStore eventStore)
     {
-        return new RuntimeScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
+        return new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
@@ -647,17 +654,15 @@ public class RuntimeScriptInfrastructurePortsTests
         });
     }
 
-    private static RuntimeScriptCatalogQueryService CreateCatalogQueryService(
+    private static ProjectionScriptCatalogQueryPort CreateCatalogQueryService(
         TestEventStore eventStore)
     {
-        return new RuntimeScriptCatalogQueryService(
-            (catalogActorId, scriptId, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult(
-                    eventStore.BuildCatalogEntryResponse(catalogActorId, scriptId));
-            },
-            new StaticAddressResolver());
+        return new ProjectionScriptCatalogQueryPort((catalogActorId, scriptId, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                eventStore.BuildCatalogEntryResponse(catalogActorId, scriptId));
+        });
     }
 
     private static TestActorRuntime CreateEvolutionRuntime(
@@ -736,7 +741,20 @@ public class RuntimeScriptInfrastructurePortsTests
             CreateDispatchService(
                 runtime,
                 new ProvisionScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
-                new ProvisionScriptRuntimeCommandEnvelopeFactory()));
+                new ProvisionScriptRuntimeCommandEnvelopeFactory()),
+            new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptDefinitionSnapshot?>(new ScriptDefinitionSnapshot(
+                    "script-" + definitionActorId,
+                    string.IsNullOrWhiteSpace(requestedRevision) ? "latest" : requestedRevision,
+                    ScriptSources.UppercaseBehavior,
+                    ScriptSources.UppercaseBehaviorHash,
+                    ScriptSources.UppercaseStateTypeUrl,
+                    ScriptSources.UppercaseReadModelTypeUrl,
+                    "1",
+                    "schema-hash"));
+            }));
     }
 
     private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
@@ -762,7 +780,10 @@ public class RuntimeScriptInfrastructurePortsTests
                 new RollbackScriptCatalogRevisionCommandTargetResolver(
                     new RuntimeScriptActorAccessor(runtime),
                     new StaticAddressResolver()),
-                new RollbackScriptCatalogRevisionCommandEnvelopeFactory()));
+                new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
+            new StaticAddressResolver(),
+            new RuntimeScriptActorAccessor(runtime),
+            new NoOpAuthorityProjectionPrimingPort());
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
@@ -868,6 +889,16 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
+    private sealed class NoOpAuthorityProjectionPrimingPort : IScriptAuthorityProjectionPrimingPort
+    {
+        public Task PrimeAsync(string actorId, CancellationToken ct)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class TestEventStore
     {
         private readonly Dictionary<string, List<IMessage>> _streams = new(StringComparer.Ordinal);
@@ -885,18 +916,12 @@ public class RuntimeScriptInfrastructurePortsTests
             stream.AddRange(events);
         }
 
-        public ScriptDefinitionSnapshotRespondedEvent BuildDefinitionSnapshotResponse(
+        public ScriptDefinitionSnapshot? BuildDefinitionSnapshotResponse(
             string definitionActorId,
             string requestedRevision)
         {
             if (!_streams.TryGetValue(definitionActorId, out var stream))
-            {
-                return new ScriptDefinitionSnapshotRespondedEvent
-                {
-                    Found = false,
-                    FailureReason = $"Script definition snapshot not found for actor `{definitionActorId}`.",
-                };
-            }
+                return null;
 
             var state = new DefinitionSnapshotState();
             foreach (var evt in stream)
@@ -928,48 +953,29 @@ public class RuntimeScriptInfrastructurePortsTests
             }
 
             if (string.IsNullOrWhiteSpace(state.Revision))
-            {
-                return new ScriptDefinitionSnapshotRespondedEvent
-                {
-                    Found = false,
-                    FailureReason = $"Script definition snapshot not found for actor `{definitionActorId}`.",
-                };
-            }
+                return null;
 
             if (!string.IsNullOrWhiteSpace(requestedRevision) &&
                 !string.Equals(requestedRevision, state.Revision, StringComparison.Ordinal))
-            {
-                return new ScriptDefinitionSnapshotRespondedEvent
-                {
-                    Found = false,
-                    FailureReason =
-                        $"Requested revision `{requestedRevision}` does not match active revision `{state.Revision}`.",
-                };
-            }
+                return null;
 
-            return new ScriptDefinitionSnapshotRespondedEvent
-            {
-                Found = !string.IsNullOrWhiteSpace(state.SourceText),
-                ScriptId = state.ScriptId,
-                Revision = state.Revision,
-                SourceText = state.SourceText,
-                SourceHash = state.SourceHash,
-                ReadModelSchemaVersion = state.ReadModelSchemaVersion,
-                ReadModelSchemaHash = state.ReadModelSchemaHash,
-                StateTypeUrl = state.StateTypeUrl,
-                ReadModelTypeUrl = state.ReadModelTypeUrl,
-                ScriptPackage = state.ScriptPackage.Clone(),
-                ProtocolDescriptorSet = state.ProtocolDescriptorSet,
-                StateDescriptorFullName = state.StateDescriptorFullName,
-                ReadModelDescriptorFullName = state.ReadModelDescriptorFullName,
-                RuntimeSemantics = state.RuntimeSemantics.Clone(),
-                FailureReason = string.IsNullOrWhiteSpace(state.SourceText)
-                    ? "Script source text is empty."
-                    : string.Empty,
-            };
+            return new ScriptDefinitionSnapshot(
+                state.ScriptId,
+                state.Revision,
+                state.SourceText,
+                state.SourceHash,
+                state.ScriptPackage.Clone(),
+                state.StateTypeUrl,
+                state.ReadModelTypeUrl,
+                state.ReadModelSchemaVersion,
+                state.ReadModelSchemaHash,
+                state.ProtocolDescriptorSet,
+                state.StateDescriptorFullName,
+                state.ReadModelDescriptorFullName,
+                state.RuntimeSemantics.Clone());
         }
 
-        public ScriptCatalogEntryRespondedEvent BuildCatalogEntryResponse(
+        public ScriptCatalogEntrySnapshot? BuildCatalogEntryResponse(
             string? catalogActorId,
             string scriptId)
         {
@@ -977,23 +983,10 @@ public class RuntimeScriptInfrastructurePortsTests
                 ? "script-catalog"
                 : catalogActorId;
             if (string.IsNullOrWhiteSpace(scriptId))
-            {
-                return new ScriptCatalogEntryRespondedEvent
-                {
-                    Found = false,
-                    FailureReason = "ScriptId is required.",
-                };
-            }
+                return null;
 
             if (!_streams.TryGetValue(resolvedCatalogActorId, out var stream))
-            {
-                return new ScriptCatalogEntryRespondedEvent
-                {
-                    Found = false,
-                    ScriptId = scriptId,
-                    FailureReason = $"Script `{scriptId}` not found in catalog.",
-                };
-            }
+                return null;
 
             var entries = new Dictionary<string, CatalogEntryState>(StringComparer.Ordinal);
             foreach (var evt in stream)
@@ -1010,27 +1003,16 @@ public class RuntimeScriptInfrastructurePortsTests
             }
 
             if (!entries.TryGetValue(scriptId, out var entry))
-            {
-                return new ScriptCatalogEntryRespondedEvent
-                {
-                    Found = false,
-                    ScriptId = scriptId,
-                    FailureReason = $"Script `{scriptId}` not found in catalog.",
-                };
-            }
+                return null;
 
-            var response = new ScriptCatalogEntryRespondedEvent
-            {
-                Found = true,
-                ScriptId = entry.ScriptId,
-                ActiveRevision = entry.ActiveRevision,
-                ActiveDefinitionActorId = entry.ActiveDefinitionActorId,
-                ActiveSourceHash = entry.ActiveSourceHash,
-                PreviousRevision = entry.PreviousRevision,
-                LastProposalId = entry.LastProposalId,
-            };
-            response.RevisionHistory.Add(entry.RevisionHistory);
-            return response;
+            return new ScriptCatalogEntrySnapshot(
+                entry.ScriptId,
+                entry.ActiveRevision,
+                entry.ActiveDefinitionActorId,
+                entry.ActiveSourceHash,
+                entry.PreviousRevision,
+                entry.RevisionHistory.ToArray(),
+                entry.LastProposalId);
         }
 
         private static void ApplyPromoted(

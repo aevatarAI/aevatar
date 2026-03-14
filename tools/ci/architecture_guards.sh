@@ -829,6 +829,9 @@ check_orchestration_class_guard \
   190 \
   10
 
+echo "Running CQRS/EventSourcing boundary guard..."
+bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
+
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh
 

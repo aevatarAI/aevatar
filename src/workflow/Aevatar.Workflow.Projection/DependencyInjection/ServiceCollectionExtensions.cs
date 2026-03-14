@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -41,10 +42,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
         services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport, string>, WorkflowProjectionDurableOutboxCompensator>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
+        services.TryAddSingleton<IProjectionSessionEventCodec<EventEnvelope>, WorkflowBindingSessionEventCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<EventEnvelope>, ProjectionSessionEventHub<EventEnvelope>>();
+        services.AddEventSinkProjectionRuntimeCore<
+            WorkflowBindingProjectionContext,
+            IReadOnlyList<string>,
+            WorkflowBindingRuntimeLease,
+            EventEnvelope>();
         services.AddEventSinkProjectionRuntimeCore<
             WorkflowExecutionProjectionContext,
             IReadOnlyList<WorkflowExecutionTopologyEdge>,
@@ -62,9 +71,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<IProjectionPortActivationService<WorkflowExecutionRuntimeLease>, WorkflowProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, WorkflowProjectionReleaseService>();
+        services.TryAddSingleton<IProjectionPortActivationService<WorkflowBindingRuntimeLease>, WorkflowBindingProjectionActivationService>();
+        services.TryAddSingleton<IProjectionPortReleaseService<WorkflowBindingRuntimeLease>, WorkflowBindingProjectionReleaseService>();
         services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
+        services.TryAddSingleton<WorkflowBindingProjectionPortService>();
         services.TryAddSingleton<WorkflowExecutionProjectionPortService>();
+        services.TryAddSingleton<IWorkflowActorBindingReader, ProjectionWorkflowActorBindingReader>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPortService>());
         services.TryAddSingleton<WorkflowExecutionProjectionQueryService>();
@@ -72,6 +85,9 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionQueryService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowProjectionDispatchCompensationReplayHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>,
+            WorkflowActorBindingProjector>());
         return services;
     }
 

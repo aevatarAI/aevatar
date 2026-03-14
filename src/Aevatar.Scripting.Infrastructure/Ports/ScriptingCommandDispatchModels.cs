@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
@@ -89,7 +90,8 @@ public sealed record RunScriptRuntimeCommand(
 public sealed record ProvisionScriptRuntimeCommand(
     string DefinitionActorId,
     string ScriptRevision,
-    string? RuntimeActorId) : ICommandContextSeed
+    string? RuntimeActorId,
+    ScriptDefinitionSnapshot DefinitionSnapshot) : ICommandContextSeed
 {
     public string? CommandId => ScriptingCommandIds.Build(
         "script-runtime-provision",

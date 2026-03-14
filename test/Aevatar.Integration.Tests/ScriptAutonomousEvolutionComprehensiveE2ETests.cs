@@ -158,11 +158,13 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         var catalogEntryA = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "worker-a-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-a-2");
         var catalogEntryB = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "worker-b-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-b-2");
         catalogEntryA.Should().NotBeNull();
         catalogEntryB.Should().NotBeNull();
         catalogEntryA!.ActiveRevision.Should().Be("rev-a-3");
@@ -270,7 +272,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "self-evolving-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-self-3");
         catalogEntry.Should().NotBeNull();
         catalogEntry!.ActiveRevision.Should().Be("rev-self-3");
         catalogEntry.RevisionHistory.Should().Contain(["rev-self-2", "rev-self-3"]);
@@ -335,7 +338,8 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
         var catalogEntry = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "manual-catalog-script",
-            CancellationToken.None);
+            CancellationToken.None,
+            expectedRevision: "rev-manual-1");
         catalogEntry.Should().NotBeNull();
         catalogEntry!.ActiveRevision.Should().Be("rev-manual-1");
         catalogEntry.PreviousRevision.Should().Be("rev-manual-2");

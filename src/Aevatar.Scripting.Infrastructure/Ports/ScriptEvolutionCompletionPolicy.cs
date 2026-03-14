@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
@@ -26,7 +27,8 @@ public sealed class ScriptEvolutionCompletionPolicy
             CatalogActorId: evt.CatalogActorId ?? string.Empty,
             ValidationReport: new ScriptEvolutionValidationReport(
                 evt.Accepted,
-                evt.Diagnostics.ToArray()));
+                evt.Diagnostics.ToArray()),
+            DefinitionSnapshot: evt.DefinitionSnapshot?.Clone());
         return true;
     }
 }

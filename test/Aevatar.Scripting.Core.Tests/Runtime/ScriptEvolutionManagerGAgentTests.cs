@@ -3,11 +3,40 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core;
 using FluentAssertions;
+using Google.Protobuf;
+using System.Reflection;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public class ScriptEvolutionManagerGAgentTests
 {
+    [Theory]
+    [InlineData("proposed")]
+    [InlineData("build")]
+    [InlineData("validated")]
+    [InlineData("rejected")]
+    [InlineData("promoted")]
+    [InlineData("rollbackRequested")]
+    [InlineData("rolledBack")]
+    public async Task HandlerMethods_ShouldRejectNullEvents(string handler)
+    {
+        var agent = CreateAgent();
+
+        Func<Task> act = handler switch
+        {
+            "proposed" => () => agent.HandleScriptEvolutionProposed(null!),
+            "build" => () => agent.HandleScriptEvolutionBuildRequested(null!),
+            "validated" => () => agent.HandleScriptEvolutionValidated(null!),
+            "rejected" => () => agent.HandleScriptEvolutionRejected(null!),
+            "promoted" => () => agent.HandleScriptEvolutionPromoted(null!),
+            "rollbackRequested" => () => agent.HandleScriptEvolutionRollbackRequested(null!),
+            "rolledBack" => () => agent.HandleScriptEvolutionRolledBack(null!),
+            _ => throw new InvalidOperationException("Unexpected handler."),
+        };
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
     [Fact]
     public async Task ProposedEvent_ShouldCreateProposalAndLatestIndex()
     {
@@ -74,6 +103,27 @@ public class ScriptEvolutionManagerGAgentTests
     }
 
     [Fact]
+    public async Task ProposedEvent_ShouldNotUpdateLatestIndex_WhenProposalIdOrScriptIdIsMissing()
+    {
+        var agent = CreateAgent();
+
+        await agent.HandleScriptEvolutionProposed(new ScriptEvolutionProposedEvent
+        {
+            ProposalId = string.Empty,
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+        });
+        await agent.HandleScriptEvolutionProposed(new ScriptEvolutionProposedEvent
+        {
+            ProposalId = "proposal-2",
+            ScriptId = string.Empty,
+            CandidateRevision = "rev-3",
+        });
+
+        agent.State.LatestProposalByScript.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ValidatedEvent_ShouldMarkPolicyAllowed_WhenValidationSucceeds()
     {
         var agent = CreateAgent();
@@ -92,6 +142,28 @@ public class ScriptEvolutionManagerGAgentTests
         proposal.PolicyAllowed.Should().BeTrue();
         proposal.ValidationSucceeded.Should().BeTrue();
         proposal.ValidationDiagnostics.Should().ContainSingle(x => x == "compile-ok");
+    }
+
+    [Fact]
+    public async Task ValidatedEvent_ShouldCreateProposal_WhenMirrorArrivesBeforeProposal()
+    {
+        var agent = CreateAgent();
+
+        await agent.HandleScriptEvolutionValidated(new ScriptEvolutionValidatedEvent
+        {
+            ProposalId = "proposal-valid",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            IsValid = false,
+            Diagnostics = { "compile-failed" },
+        });
+
+        var proposal = agent.State.Proposals["proposal-valid"];
+        proposal.ProposalId.Should().Be("proposal-valid");
+        proposal.ScriptId.Should().Be("script-1");
+        proposal.Status.Should().Be(ScriptEvolutionStatuses.ValidationFailed);
+        proposal.ValidationSucceeded.Should().BeFalse();
+        proposal.PolicyAllowed.Should().BeTrue();
     }
 
     [Fact]
@@ -166,6 +238,25 @@ public class ScriptEvolutionManagerGAgentTests
     }
 
     [Fact]
+    public async Task PromotedEvent_ShouldCreateProposal_WhenMirrorArrivesBeforeProposal()
+    {
+        var agent = CreateAgent();
+
+        await agent.HandleScriptEvolutionPromoted(new ScriptEvolutionPromotedEvent
+        {
+            ProposalId = "proposal-promoted",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            DefinitionActorId = "definition-2",
+        });
+
+        var proposal = agent.State.Proposals["proposal-promoted"];
+        proposal.Status.Should().Be(ScriptEvolutionStatuses.Promoted);
+        proposal.PromotedDefinitionActorId.Should().Be("definition-2");
+        proposal.PromotedRevision.Should().Be("rev-2");
+    }
+
+    [Fact]
     public async Task RollbackEvents_ShouldTrackTargetRevision_AndClearFailure()
     {
         var agent = CreateAgent();
@@ -207,6 +298,92 @@ public class ScriptEvolutionManagerGAgentTests
         proposal.FailureReason.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RollbackRequested_ShouldRetainExistingPromotedRevision_WhenTargetRevisionIsMissing()
+    {
+        var agent = CreateAgent();
+
+        await agent.HandleScriptEvolutionPromoted(new ScriptEvolutionPromotedEvent
+        {
+            ProposalId = "proposal-rollback",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            DefinitionActorId = "definition-2",
+        });
+        await agent.HandleScriptEvolutionRollbackRequested(new ScriptEvolutionRollbackRequestedEvent
+        {
+            ProposalId = "proposal-rollback",
+            ScriptId = "script-1",
+            TargetRevision = string.Empty,
+            Reason = "manual-rollback",
+        });
+
+        var proposal = agent.State.Proposals["proposal-rollback"];
+        proposal.Status.Should().Be(ScriptEvolutionStatuses.RollbackRequested);
+        proposal.PromotedRevision.Should().Be("rev-2");
+        proposal.FailureReason.Should().Be("manual-rollback");
+    }
+
+    [Fact]
+    public async Task ProposedEvent_ShouldResetFailureAndPromotionState_WhenProposalIsReused()
+    {
+        var agent = CreateAgent();
+
+        await agent.HandleScriptEvolutionPromoted(new ScriptEvolutionPromotedEvent
+        {
+            ProposalId = "proposal-1",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            DefinitionActorId = "definition-2",
+        });
+        await agent.HandleScriptEvolutionRejected(new ScriptEvolutionRejectedEvent
+        {
+            ProposalId = "proposal-1",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            FailureReason = "failed",
+            Status = ScriptEvolutionStatuses.PromotionFailed,
+        });
+        await agent.HandleScriptEvolutionProposed(new ScriptEvolutionProposedEvent
+        {
+            ProposalId = "proposal-1",
+            ScriptId = "script-1",
+            BaseRevision = "rev-1",
+            CandidateRevision = "rev-3",
+            CandidateSourceHash = "hash-v3",
+            Reason = "retry",
+        });
+
+        var proposal = agent.State.Proposals["proposal-1"];
+        proposal.Status.Should().Be(ScriptEvolutionStatuses.Proposed);
+        proposal.CandidateRevision.Should().Be("rev-3");
+        proposal.FailureReason.Should().BeEmpty();
+        proposal.PromotedDefinitionActorId.Should().BeEmpty();
+        proposal.PromotedRevision.Should().BeEmpty();
+        proposal.ValidationDiagnostics.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TransitionState_ShouldReturnCurrent_WhenEventIsUnsupported()
+    {
+        var agent = CreateAgent();
+        var state = new ScriptEvolutionManagerState
+        {
+            LastAppliedEventVersion = 3,
+            LastEventId = "proposal-1:promoted",
+        };
+
+        var next = InvokeTransition(agent, state, new StartScriptEvolutionSessionRequestedEvent
+        {
+            ProposalId = "proposal-1",
+            ScriptId = "script-1",
+            CandidateRevision = "rev-2",
+            CandidateSource = "source-v2",
+        });
+
+        next.Should().BeEquivalentTo(state);
+    }
+
     private static ScriptEvolutionManagerGAgent CreateAgent()
     {
         return new ScriptEvolutionManagerGAgent
@@ -214,5 +391,16 @@ public class ScriptEvolutionManagerGAgentTests
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptEvolutionManagerState>(
                 new InMemoryEventStore()),
         };
+    }
+
+    private static ScriptEvolutionManagerState InvokeTransition(
+        ScriptEvolutionManagerGAgent agent,
+        ScriptEvolutionManagerState current,
+        IMessage evt)
+    {
+        var method = typeof(ScriptEvolutionManagerGAgent)
+            .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        return (ScriptEvolutionManagerState)method!.Invoke(agent, [current, evt])!;
     }
 }

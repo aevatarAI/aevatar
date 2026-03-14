@@ -53,6 +53,21 @@ public sealed partial record ScriptDefinitionSnapshot
 
 public interface IScriptDefinitionSnapshotPort
 {
+    async Task<ScriptDefinitionSnapshot?> TryGetAsync(
+        string definitionActorId,
+        string requestedRevision,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await GetRequiredAsync(definitionActorId, requestedRevision, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     Task<ScriptDefinitionSnapshot> GetRequiredAsync(
         string definitionActorId,
         string requestedRevision,

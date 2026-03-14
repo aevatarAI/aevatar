@@ -1,111 +1,77 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
-    private static readonly TimeSpan BindingQueryTimeout = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan BindingReadyTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan BindingRetryDelay = TimeSpan.FromMilliseconds(50);
-    private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly RuntimeScriptActorQueryClient? _queryClient;
-    private readonly IAgentContextAccessor? _agentContextAccessor;
+    private static readonly TimeSpan ProjectionObservationTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ProjectionObservationPollInterval = TimeSpan.FromMilliseconds(20);
 
-    public RuntimeScriptProvisioningService(
-        ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
-    {
-        _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-    }
+    private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
+    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
 
     public RuntimeScriptProvisioningService(
         ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        RuntimeScriptActorQueryClient queryClient,
-        IAgentContextAccessor agentContextAccessor)
+        IScriptDefinitionSnapshotPort definitionSnapshotPort)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _queryClient = queryClient ?? throw new ArgumentNullException(nameof(queryClient));
-        _agentContextAccessor = agentContextAccessor ?? throw new ArgumentNullException(nameof(agentContextAccessor));
+        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
     }
 
     public async Task<string> EnsureRuntimeAsync(
         string definitionActorId,
         string scriptRevision,
         string? runtimeActorId,
-        CancellationToken ct)
+        CancellationToken ct,
+        ScriptDefinitionSnapshot? definitionSnapshot = null)
     {
+        var resolvedDefinitionSnapshot = definitionSnapshot
+            ?? await WaitForSnapshotAsync(
+                definitionActorId,
+                scriptRevision,
+                ct);
         var result = await _dispatchService.DispatchAsync(
             new ProvisionScriptRuntimeCommand(
                 definitionActorId ?? string.Empty,
                 scriptRevision ?? string.Empty,
-                runtimeActorId),
+                runtimeActorId,
+                resolvedDefinitionSnapshot),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");
 
         var receipt = result.Receipt
             ?? throw new InvalidOperationException("Script runtime provisioning did not produce a receipt.");
-        var resolvedRuntimeActorId = receipt.ActorId;
-        if (_queryClient == null)
-            return resolvedRuntimeActorId;
-
-        await WaitUntilBoundAsync(resolvedRuntimeActorId, ct);
-        return resolvedRuntimeActorId;
+        return receipt.ActorId;
     }
 
-    private async Task WaitUntilBoundAsync(
-        string runtimeActorId,
+    private async Task<ScriptDefinitionSnapshot> WaitForSnapshotAsync(
+        string definitionActorId,
+        string scriptRevision,
         CancellationToken ct)
     {
-        using var readyTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        readyTimeoutCts.CancelAfter(BindingReadyTimeout);
-        var waitCt = readyTimeoutCts.Token;
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ProjectionObservationTimeout);
 
-        while (true)
+        try
         {
-            ScriptBehaviorBindingRespondedEvent response;
-            try
+            while (true)
             {
-                response = await _queryClient!.QueryActorAsync<ScriptBehaviorBindingRespondedEvent>(
-                    runtimeActorId,
-                    ScriptActorQueryRouteConventions.BindingReplyStreamPrefix,
-                    BindingQueryTimeout,
-                    (requestId, replyStreamId) => ScriptActorQueryEnvelopeFactory.CreateBehaviorBindingQuery(
-                        runtimeActorId,
-                        requestId,
-                        replyStreamId),
-                    static (reply, requestId) => string.Equals(reply.RequestId, requestId, StringComparison.Ordinal),
-                    ScriptActorQueryRouteConventions.BuildBindingTimeoutMessage,
-                    waitCt);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                throw new TimeoutException(
-                    $"Timed out waiting for script runtime `{runtimeActorId}` to finish binding.");
-            }
+                var snapshot = await _definitionSnapshotPort.TryGetAsync(
+                    definitionActorId,
+                    scriptRevision,
+                    timeoutCts.Token);
+                if (snapshot != null)
+                    return snapshot;
 
-            if (response.Found)
-                return;
-
-            if (!response.Pending)
-            {
-                throw new InvalidOperationException(
-                    string.IsNullOrWhiteSpace(response.FailureReason)
-                        ? $"Script runtime `{runtimeActorId}` is not bound."
-                        : response.FailureReason);
+                await Task.Delay(ProjectionObservationPollInterval, timeoutCts.Token);
             }
-
-            try
-            {
-                await Task.Delay(BindingRetryDelay, waitCt);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                throw new TimeoutException(
-                    $"Timed out waiting for script runtime `{runtimeActorId}` to finish binding.");
-            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Timed out waiting for script definition snapshot observation. actor_id={definitionActorId}, revision={scriptRevision}");
         }
     }
 }

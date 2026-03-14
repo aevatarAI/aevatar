@@ -60,6 +60,16 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         if (enableElasticsearchDocument)
         {
+            services.AddElasticsearchDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptDefinitionSnapshotDocument>(),
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptCatalogEntryDocument>(),
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ScriptReadModelDocument, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptReadModelDocument>(),
@@ -96,6 +106,14 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
+        services.AddInMemoryDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            listSortSelector: static readModel => readModel.UpdatedAt);
+        services.AddInMemoryDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
+            keySelector: static readModel => readModel.Id,
+            keyFormatter: static key => key,
+            listSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,

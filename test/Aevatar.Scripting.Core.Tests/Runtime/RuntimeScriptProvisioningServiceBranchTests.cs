@@ -1,23 +1,51 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Context;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Infrastructure.Ports;
 using FluentAssertions;
-using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 public sealed class RuntimeScriptProvisioningServiceBranchTests
 {
     [Fact]
+    public void Constructor_ShouldThrow_ForNullDependencies()
+    {
+        Action nullDispatch = () => _ = new RuntimeScriptProvisioningService(null!, CreateDefinitionSnapshotPort());
+        Action nullSnapshotPort = () => _ = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(_ => Task.FromResult(
+                CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
+                    new ScriptingCommandAcceptedReceipt("runtime-1", "command-1", "corr-1")))),
+            null!);
+
+        nullDispatch.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("dispatchService");
+        nullSnapshotPort.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("definitionSnapshotPort");
+    }
+
+    [Fact]
+    public async Task EnsureRuntimeAsync_ShouldThrow_WhenDefinitionSnapshotIsMissing()
+    {
+        var service = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(_ => throw new InvalidOperationException("dispatch should not run")),
+            new StaticDefinitionSnapshotPort((_, _, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("missing snapshot");
+            }));
+
+        var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("Timed out waiting for script definition snapshot observation.*");
+    }
+
+    [Fact]
     public async Task EnsureRuntimeAsync_ShouldThrow_WhenDispatchFailsWithTypedError()
     {
         var service = new RuntimeScriptProvisioningService(
             new StaticDispatchService(_ => Task.FromResult(
                 CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Failure(
-                    ScriptingCommandStartError.InvalidArgument("definitionActorId", "definition id is required")))));
+                    ScriptingCommandStartError.InvalidArgument("definitionActorId", "definition id is required")))),
+            CreateDefinitionSnapshotPort());
 
         var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
 
@@ -34,7 +62,8 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
                 Succeeded = false,
                 Error = null!,
                 Receipt = null,
-            })));
+            })),
+            CreateDefinitionSnapshotPort());
 
         var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
 
@@ -51,7 +80,8 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
                 Succeeded = true,
                 Error = null!,
                 Receipt = null,
-            })));
+            })),
+            CreateDefinitionSnapshotPort());
 
         var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
 
@@ -60,48 +90,135 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
     }
 
     [Fact]
-    public async Task EnsureRuntimeAsync_ShouldThrow_WhenBindingQueryReturnsNotPending()
+    public async Task EnsureRuntimeAsync_ShouldReturnReceiptActorId_WhenDispatchSucceeds()
     {
-        var service = CreateService(
-            _ => Task.FromResult(CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
-                new ScriptingCommandAcceptedReceipt("runtime-1", "command-1", "corr-1"))),
-            new StaticQueryClient(_ => Task.FromResult<IMessage>(new ScriptBehaviorBindingRespondedEvent
+        ProvisionScriptRuntimeCommand? capturedCommand = null;
+        var service = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(command =>
             {
-                RequestId = "request-1",
-                Found = false,
-                Pending = false,
-                FailureReason = string.Empty,
-            })));
+                capturedCommand = command;
+                return Task.FromResult(CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
+                    new ScriptingCommandAcceptedReceipt("runtime-1", "command-1", "corr-1")));
+            }),
+            CreateDefinitionSnapshotPort());
 
-        var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
+        var actorId = await service.EnsureRuntimeAsync("definition-1", "rev-1", "runtime-1", CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Script runtime `runtime-1` is not bound.");
+        actorId.Should().Be("runtime-1");
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.DefinitionActorId.Should().Be("definition-1");
+        capturedCommand.ScriptRevision.Should().Be("rev-1");
+        capturedCommand.RuntimeActorId.Should().Be("runtime-1");
+        capturedCommand.DefinitionSnapshot.ScriptId.Should().Be("script-1");
+        capturedCommand.DefinitionSnapshot.Revision.Should().Be("rev-1");
+        capturedCommand.DefinitionSnapshot.SourceHash.Should().Be("hash-1");
     }
 
     [Fact]
-    public async Task EnsureRuntimeAsync_ShouldThrowTimeout_WhenBindingQueryCancelsWithoutCallerCancellation()
+    public async Task EnsureRuntimeAsync_ShouldUseProvidedDefinitionSnapshot_WhenSupplied()
     {
-        var service = CreateService(
-            _ => Task.FromResult(CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
-                new ScriptingCommandAcceptedReceipt("runtime-timeout", "command-1", "corr-1"))),
-            new StaticQueryClient(_ => throw new OperationCanceledException("query canceled")));
+        ProvisionScriptRuntimeCommand? capturedCommand = null;
+        var providedSnapshot = new ScriptDefinitionSnapshot(
+            "script-provided",
+            "rev-provided",
+            "public sealed class ProvidedBehavior {}",
+            "hash-provided",
+            "type.googleapis.com/example.State",
+            "type.googleapis.com/example.ReadModel",
+            "7",
+            "schema-hash-provided");
+        var service = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(command =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
+                    new ScriptingCommandAcceptedReceipt("runtime-provided", "command-1", "corr-1")));
+            }),
+            new StaticDefinitionSnapshotPort((_, _, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("snapshot port should not run");
+            }));
 
-        var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
+        var actorId = await service.EnsureRuntimeAsync(
+            "definition-1",
+            "rev-provided",
+            "runtime-provided",
+            CancellationToken.None,
+            providedSnapshot);
 
-        await act.Should().ThrowAsync<TimeoutException>()
-            .WithMessage("Timed out waiting for script runtime `runtime-timeout` to finish binding.");
+        actorId.Should().Be("runtime-provided");
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.DefinitionSnapshot.Should().BeEquivalentTo(providedSnapshot);
     }
 
-    private static RuntimeScriptProvisioningService CreateService(
-        Func<ProvisionScriptRuntimeCommand, Task<CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>> dispatch,
-        StaticQueryClient queryClient)
+    [Fact]
+    public async Task EnsureRuntimeAsync_ShouldRetryUntilSnapshotBecomesAvailable()
     {
-        return new RuntimeScriptProvisioningService(
-            new StaticDispatchService(dispatch),
-            new RuntimeScriptActorQueryClient(new NullStreamProvider(), queryClient, new NullDispatchPort()),
-            new NullAgentContextAccessor());
+        var attempts = 0;
+        var service = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(command =>
+            {
+                command.DefinitionSnapshot.Revision.Should().Be("rev-1");
+                return Task.FromResult(CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
+                    new ScriptingCommandAcceptedReceipt("runtime-1", "command-1", "corr-1")));
+            }),
+            new StaticDefinitionSnapshotPort((_, _, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                attempts++;
+                return Task.FromResult(attempts < 3
+                    ? null!
+                    : new ScriptDefinitionSnapshot(
+                        "script-1",
+                        "rev-1",
+                        "public sealed class Behavior {}",
+                        "hash-1",
+                        "type.googleapis.com/example.State",
+                        "type.googleapis.com/example.ReadModel",
+                        "2",
+                        "schema-hash-1"));
+            }));
+
+        var actorId = await service.EnsureRuntimeAsync("definition-1", "rev-1", null, CancellationToken.None);
+
+        actorId.Should().Be("runtime-1");
+        attempts.Should().Be(3);
     }
+
+    [Fact]
+    public async Task EnsureRuntimeAsync_ShouldPropagateCallerCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var service = new RuntimeScriptProvisioningService(
+            new StaticDispatchService(_ => throw new InvalidOperationException("dispatch should not run")),
+            new StaticDefinitionSnapshotPort((_, _, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptDefinitionSnapshot>(null!);
+            }));
+
+        var act = () => service.EnsureRuntimeAsync("definition-1", "rev-1", null, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private static StaticDefinitionSnapshotPort CreateDefinitionSnapshotPort() =>
+        new((definitionActorId, requestedRevision, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            definitionActorId.Should().Be("definition-1");
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                "script-1",
+                string.IsNullOrWhiteSpace(requestedRevision) ? "rev-latest" : requestedRevision,
+                "public sealed class Behavior {}",
+                "hash-1",
+                "type.googleapis.com/example.State",
+                "type.googleapis.com/example.ReadModel",
+                "2",
+                "schema-hash-1"));
+        });
 
     private sealed class StaticDispatchService(
         Func<ProvisionScriptRuntimeCommand, Task<CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>> dispatch)
@@ -116,76 +233,13 @@ public sealed class RuntimeScriptProvisioningServiceBranchTests
         }
     }
 
-    private sealed class StaticQueryClient(
-        Func<string, Task<IMessage>> query) : IStreamRequestReplyClient
+    private sealed class StaticDefinitionSnapshotPort(
+        Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshot>> getAsync) : IScriptDefinitionSnapshotPort
     {
-        public Task<TResponse> QueryAsync<TResponse>(
-            IStreamProvider streams,
-            string replyStreamPrefix,
-            TimeSpan timeout,
-            Func<string, string, Task> dispatchAsync,
-            Func<TResponse, string, bool> isMatch,
-            Func<string, string> timeoutMessageFactory,
-            CancellationToken ct = default)
-            where TResponse : IMessage, new() =>
-            throw new NotSupportedException();
-
-        public Task<TResponse> QueryActorAsync<TResponse>(
-            IStreamProvider streams,
-            IActor actor,
-            string replyStreamPrefix,
-            TimeSpan timeout,
-            Func<string, string, EventEnvelope> envelopeFactory,
-            Func<TResponse, string, bool> isMatch,
-            Func<string, string> timeoutMessageFactory,
-            CancellationToken ct = default)
-            where TResponse : IMessage, new() =>
-            throw new NotSupportedException();
-
-        public async Task<TResponse> QueryActorAsync<TResponse>(
-            IStreamProvider streams,
-            string actorId,
-            IActorDispatchPort dispatchPort,
-            string replyStreamPrefix,
-            TimeSpan timeout,
-            Func<string, string, EventEnvelope> envelopeFactory,
-            Func<TResponse, string, bool> isMatch,
-            Func<string, string> timeoutMessageFactory,
-            CancellationToken ct = default)
-            where TResponse : IMessage, new()
-        {
-            _ = streams;
-            _ = dispatchPort;
-            _ = replyStreamPrefix;
-            _ = timeout;
-            _ = isMatch;
-            _ = timeoutMessageFactory;
-            ct.ThrowIfCancellationRequested();
-            var envelope = envelopeFactory("request-1", "reply-stream");
-            envelope.Should().NotBeNull();
-            actorId.Should().NotBeNullOrWhiteSpace();
-            return (TResponse)await query(actorId);
-        }
-    }
-
-    private sealed class NullStreamProvider : IStreamProvider
-    {
-        public IStream GetStream(string actorId) => throw new NotSupportedException($"No stream for `{actorId}`.");
-    }
-
-    private sealed class NullDispatchPort : IActorDispatchPort
-    {
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = actorId;
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            throw new NotSupportedException();
-        }
-    }
-
-    private sealed class NullAgentContextAccessor : IAgentContextAccessor
-    {
-        public IAgentContext? Context { get; set; }
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct) =>
+            getAsync(definitionActorId, requestedRevision, ct);
     }
 }

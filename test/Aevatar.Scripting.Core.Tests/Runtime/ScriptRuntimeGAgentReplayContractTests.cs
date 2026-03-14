@@ -69,27 +69,6 @@ public class ScriptBehaviorGAgentReplayContractTests
             .WithMessage("*bound to revision*rev-1*rev-2*");
     }
 
-    [Fact]
-    public async Task HandleEnvelopeAsync_ShouldRespondToBindingQuery()
-    {
-        var harness = CreateRuntimeHarness();
-        await BindAsync(harness.Agent, harness.SourceHash);
-
-        await harness.Agent.HandleEnvelopeAsync(BuildEnvelope(new QueryScriptBehaviorBindingRequestedEvent
-        {
-            RequestId = "request-1",
-            ReplyStreamId = "reply-stream",
-        }));
-
-        harness.Publisher.Sent.Should().ContainSingle();
-        var response = harness.Publisher.Sent[0].Should().BeOfType<ScriptBehaviorBindingRespondedEvent>().Subject;
-        response.RequestId.Should().Be("request-1");
-        response.Found.Should().BeTrue();
-        response.DefinitionActorId.Should().Be("definition-1");
-        response.Revision.Should().Be("rev-1");
-        response.SourceHash.Should().Be(harness.SourceHash);
-    }
-
     private static async Task BindAsync(ScriptBehaviorGAgent agent, string sourceHash)
     {
         await agent.HandleEnvelopeAsync(BuildEnvelope(new BindScriptBehaviorRequestedEvent

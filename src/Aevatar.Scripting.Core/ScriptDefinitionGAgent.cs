@@ -151,45 +151,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         }
     }
 
-    [EventHandler]
-    public async Task HandleQueryScriptDefinitionSnapshotRequested(QueryScriptDefinitionSnapshotRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.RequestId) ||
-            (string.IsNullOrWhiteSpace(evt.ReplyStreamId) && string.IsNullOrWhiteSpace(evt.ReplyActorId)))
-            return;
-
-        Logger.LogInformation(
-            "Script definition query received. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision} reply_stream_id={ReplyStreamId} reply_actor_id={ReplyActorId}",
-            Id,
-            evt.RequestId,
-            evt.RequestedRevision,
-            State.Revision,
-            evt.ReplyStreamId,
-            evt.ReplyActorId);
-
-        if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
-            !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
-        {
-            Logger.LogInformation(
-                "Script definition query rejected due to revision mismatch. actor_id={ActorId} request_id={RequestId} requested_revision={RequestedRevision} active_revision={ActiveRevision}",
-                Id,
-                evt.RequestId,
-                evt.RequestedRevision,
-                State.Revision);
-            await SendQueryResponseAsync(evt, BuildSnapshotResponse(evt));
-            return;
-        }
-
-        Logger.LogInformation(
-            "Script definition query responding. actor_id={ActorId} request_id={RequestId} found={Found} revision={Revision}",
-            Id,
-            evt.RequestId,
-            !string.IsNullOrWhiteSpace(State.SourceText),
-            State.Revision);
-        await SendQueryResponseAsync(evt, BuildSnapshotResponse(evt));
-    }
-
     protected override ScriptDefinitionState TransitionState(ScriptDefinitionState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -198,58 +159,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
             .On<ScriptReadModelSchemaValidatedEvent>(ApplySchemaValidated)
             .On<ScriptReadModelSchemaActivationFailedEvent>(ApplySchemaActivationFailed)
             .OrCurrent();
-
-    private Task SendQueryResponseAsync(
-        QueryScriptDefinitionSnapshotRequestedEvent request,
-        ScriptDefinitionSnapshotRespondedEvent response,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        if (!string.IsNullOrWhiteSpace(request.ReplyActorId))
-            return EventPublisher.SendToAsync(request.ReplyActorId, response, ct, sourceEnvelope: null);
-
-        return EventPublisher.SendToAsync(request.ReplyStreamId, response, ct, sourceEnvelope: null);
-    }
-
-    private ScriptDefinitionSnapshotRespondedEvent BuildSnapshotResponse(
-        QueryScriptDefinitionSnapshotRequestedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-
-        if (!string.IsNullOrWhiteSpace(evt.RequestedRevision) &&
-            !string.Equals(evt.RequestedRevision, State.Revision, StringComparison.Ordinal))
-        {
-            return new ScriptDefinitionSnapshotRespondedEvent
-            {
-                RequestId = evt.RequestId,
-                Found = false,
-                FailureReason = $"Requested revision `{evt.RequestedRevision}` does not match active revision `{State.Revision}`.",
-            };
-        }
-
-        return new ScriptDefinitionSnapshotRespondedEvent
-        {
-            RequestId = evt.RequestId,
-            Found = !string.IsNullOrWhiteSpace(State.SourceText),
-            ScriptId = State.ScriptId ?? string.Empty,
-            Revision = State.Revision ?? string.Empty,
-            SourceText = State.SourceText ?? string.Empty,
-            ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
-            ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
-            SourceHash = State.SourceHash ?? string.Empty,
-            StateTypeUrl = State.StateTypeUrl ?? string.Empty,
-            ReadModelTypeUrl = State.ReadModelTypeUrl ?? string.Empty,
-            ScriptPackage = State.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
-            ProtocolDescriptorSet = State.ProtocolDescriptorSet,
-            StateDescriptorFullName = State.StateDescriptorFullName ?? string.Empty,
-            ReadModelDescriptorFullName = State.ReadModelDescriptorFullName ?? string.Empty,
-            RuntimeSemantics = State.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
-            FailureReason = string.IsNullOrWhiteSpace(State.SourceText)
-                ? "Script source text is empty."
-                : string.Empty,
-        };
-    }
 
     private static async Task DisposeCompiledArtifactAsync(ScriptBehaviorArtifact? artifact)
     {

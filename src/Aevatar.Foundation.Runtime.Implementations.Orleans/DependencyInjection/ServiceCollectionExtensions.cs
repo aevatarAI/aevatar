@@ -64,7 +64,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
-        services.TryAddSingleton<IStreamRequestReplyClient, RuntimeStreamRequestReplyClient>();
         services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
         services.AddAevatarFoundationRuntimeOrleansStreaming();
