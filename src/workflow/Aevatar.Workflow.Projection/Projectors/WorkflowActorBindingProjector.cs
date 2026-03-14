@@ -8,12 +8,12 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowActorBindingProjector
     : IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowActorBindingDocument, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public WorkflowActorBindingProjector(
-        IProjectionWriteDispatcher<WorkflowActorBindingDocument, string> writeDispatcher,
+        IProjectionWriteDispatcher<WorkflowActorBindingDocument> writeDispatcher,
         IProjectionDocumentReader<WorkflowActorBindingDocument, string> documentReader,
         IProjectionClock clock)
     {

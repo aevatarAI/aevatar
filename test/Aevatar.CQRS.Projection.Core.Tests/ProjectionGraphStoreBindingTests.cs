@@ -10,7 +10,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_ShouldRemoveDisconnectedStaleEdgesForSameOwner()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {
@@ -70,7 +70,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_ShouldNotDeleteEdgesOwnedByAnotherReadModel()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {
@@ -139,7 +139,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_WhenReadModelIdIsEmpty_ShouldThrow()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         Func<Task> act = () => binding.UpsertAsync(new TestGraphReadModel
         {
@@ -160,7 +160,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_WhenOwnerGraphLarge_ShouldPageThroughOwnerCleanup()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         var largeNodes = Enumerable.Range(0, 1205)
             .Select(i => Node($"n-{i}"))
@@ -205,32 +205,32 @@ public class ProjectionGraphStoreBindingTests
     [Fact]
     public void AvailabilityReason_WhenGraphMaterializerMissing_ShouldExplainWhySkipped()
     {
-        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel, string>(new RecordingGraphStore());
+        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel>(new RecordingGraphStore());
 
-        binding.IsConfigured.Should().BeFalse();
-        binding.AvailabilityReason.Should().Contain("Graph materializer is not registered");
+        binding.IsEnabled.Should().BeFalse();
+        binding.DisabledReason.Should().Contain("Graph materializer is not registered");
     }
 
     [Fact]
     public void AvailabilityReason_WhenConfigured_ShouldReturnActiveAndStoreName()
     {
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(
             new RecordingGraphStore(),
             new TestGraphMaterializer());
 
-        binding.IsConfigured.Should().BeTrue();
-        binding.AvailabilityReason.Should().Be("Graph binding is active.");
-        binding.StoreName.Should().Be("Graph");
+        binding.IsEnabled.Should().BeTrue();
+        binding.DisabledReason.Should().Be("Graph binding is active.");
+        binding.SinkName.Should().Be("Graph");
     }
 
     [Fact]
     public async Task UpsertAsync_WhenGraphStoreMissing_ShouldNoOp()
     {
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(
             graphStore: null,
             materializer: new TestGraphMaterializer());
 
-        var act = () => binding.UpsertAsync(new TestGraphReadModel
+        Func<Task> act = () => binding.UpsertAsync(new TestGraphReadModel
         {
             Id = "owner-1",
             GraphScope = "scope-1",
@@ -239,14 +239,14 @@ public class ProjectionGraphStoreBindingTests
         });
 
         await act.Should().NotThrowAsync();
-        binding.StoreName.Should().Be("Graph(Unconfigured)");
+        binding.SinkName.Should().Be("Graph(Unconfigured)");
     }
 
     [Fact]
     public async Task UpsertAsync_WhenGraphMaterializerMissing_ShouldNoOp()
     {
         var store = new EmptyCleanupGraphStore();
-        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel, string>(store);
+        var binding = new ProjectionGraphStoreBinding<NonGraphReadModel>(store);
 
         await binding.UpsertAsync(new NonGraphReadModel
         {
@@ -263,7 +263,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_WhenGraphScopeIsEmpty_ShouldThrow()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         Func<Task> act = () => binding.UpsertAsync(new TestGraphReadModel
         {
@@ -281,7 +281,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_WithEmptyGraphCollections_ShouldCleanupManagedResources()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {
@@ -308,7 +308,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_ShouldSkipDeletingNodeWhenNodeStillHasNeighbors()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {
@@ -345,7 +345,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_ShouldNormalizeInvalidNodesAndEdges()
     {
         var store = new RecordingGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {
@@ -410,7 +410,7 @@ public class ProjectionGraphStoreBindingTests
     public async Task UpsertAsync_WhenCleanupStoreReturnsEmptyPages_ShouldBreakImmediately()
     {
         var store = new EmptyCleanupGraphStore();
-        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel, string>(store, new TestGraphMaterializer());
+        var binding = new ProjectionGraphStoreBinding<TestGraphReadModel>(store, new TestGraphMaterializer());
 
         await binding.UpsertAsync(new TestGraphReadModel
         {

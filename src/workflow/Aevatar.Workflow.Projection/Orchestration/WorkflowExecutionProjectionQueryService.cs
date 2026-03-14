@@ -33,6 +33,16 @@ public sealed class WorkflowExecutionProjectionQueryService
         CancellationToken ct = default) =>
         ListSnapshotsAsync(take, ct);
 
+    public async Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        if (!QueryEnabledCore || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        return await _queryReader.GetActorProjectionStateAsync(actorId, ct);
+    }
+
     public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

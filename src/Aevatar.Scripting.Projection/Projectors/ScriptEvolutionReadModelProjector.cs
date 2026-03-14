@@ -11,13 +11,13 @@ public sealed class ScriptEvolutionReadModelProjector
     : IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionDocumentReader<ScriptEvolutionReadModel, string> _documentReader;
-    private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel> _writeDispatcher;
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>>> _reducersByType;
 
     public ScriptEvolutionReadModelProjector(
         IProjectionDocumentReader<ScriptEvolutionReadModel, string> documentReader,
-        IProjectionWriteDispatcher<ScriptEvolutionReadModel, string> writeDispatcher,
+        IProjectionWriteDispatcher<ScriptEvolutionReadModel> writeDispatcher,
         IProjectionClock clock,
         IEnumerable<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>> reducers)
     {

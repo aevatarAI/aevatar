@@ -3,7 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -80,20 +80,12 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     {
         services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowExecutionReport>();
-            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowActorBindingDocument>();
-            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>>().Metadata,
             keySelector: static document => document.Id,
             keyFormatter: static key => key);
     }

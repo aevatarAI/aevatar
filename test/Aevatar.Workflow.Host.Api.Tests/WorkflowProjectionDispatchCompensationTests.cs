@@ -16,7 +16,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 {
     private static IServiceProvider CreateAgentServices(
         IEventStore? eventStore = null,
-        IEnumerable<IProjectionStoreBinding<WorkflowExecutionReport, string>>? bindings = null,
+        IEnumerable<IProjectionWriteSink<WorkflowExecutionReport>>? bindings = null,
         WorkflowExecutionProjectionOptions? options = null)
     {
         var services = new ServiceCollection();
@@ -306,10 +306,9 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 
         var outbox = new DirectOutbox(agent);
         var compensator = new WorkflowProjectionDurableOutboxCompensator(outbox);
-        var context = new ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport, string>
+        var context = new ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport>
         {
             Operation = "mutate",
-            Key = "root-1",
             ReadModel = CreateReadModel("root-1"),
             FailedStore = "Graph",
             SucceededStores = ["Document"],
@@ -388,7 +387,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             UpdatedAt = DateTimeOffset.UtcNow,
         };
 
-    private sealed class FlakyGraphBinding : IProjectionStoreBinding<WorkflowExecutionReport, string>
+    private sealed class FlakyGraphBinding : IProjectionWriteSink<WorkflowExecutionReport>
     {
         private int _remainingFailures;
         private readonly string _storeName;
@@ -399,7 +398,11 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             _storeName = storeName;
         }
 
-        public string StoreName => _storeName;
+        public string SinkName => _storeName;
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int AttemptCount { get; private set; }
 

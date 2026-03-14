@@ -12,12 +12,12 @@ public sealed class ScriptCatalogEntryProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionDocumentReader<ScriptCatalogEntryDocument, string> _documentReader;
-    private readonly IProjectionWriteDispatcher<ScriptCatalogEntryDocument, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptCatalogEntryDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptCatalogEntryProjector(
         IProjectionDocumentReader<ScriptCatalogEntryDocument, string> documentReader,
-        IProjectionWriteDispatcher<ScriptCatalogEntryDocument, string> writeDispatcher,
+        IProjectionWriteDispatcher<ScriptCatalogEntryDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));

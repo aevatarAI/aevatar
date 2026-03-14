@@ -23,6 +23,15 @@ public sealed partial class WorkflowActorSnapshot
     }
 }
 
+public sealed partial class WorkflowActorProjectionState
+{
+    public DateTimeOffset LastUpdatedAt
+    {
+        get => LastUpdatedAtUtc == null ? default : LastUpdatedAtUtc.ToDateTimeOffset();
+        set => LastUpdatedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+}
+
 public sealed partial class WorkflowActorTimelineItem
 {
     public DateTimeOffset Timestamp

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 internal sealed class WorkflowProjectionDurableOutboxCompensator
-    : IProjectionStoreDispatchCompensator<WorkflowExecutionReport, string>
+    : IProjectionStoreDispatchCompensator<WorkflowExecutionReport>
 {
     private readonly IProjectionDispatchCompensationOutbox _outbox;
     private readonly ILogger<WorkflowProjectionDurableOutboxCompensator> _logger;
@@ -21,7 +21,7 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
     }
 
     public async Task CompensateAsync(
-        ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport, string> context,
+        ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport> context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -40,7 +40,7 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
             SucceededStores = { context.SucceededStores },
             ReadModelType = context.ReadModelType,
             ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(context.ReadModel),
-            Key = context.Key ?? string.Empty,
+            Key = context.ReadModel.Id,
             EnqueuedAtUtc = Timestamp.FromDateTime(now),
             LastError = context.Exception.GetType().Name,
         };

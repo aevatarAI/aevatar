@@ -82,11 +82,11 @@ public class ScriptCapabilityHostExtensionsTests
         services.AddScriptCapability(configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IProjectionDocumentStore<ScriptReadModelDocument, string>>()
+        provider.GetRequiredService<IProjectionDocumentReader<ScriptReadModelDocument, string>>()
             .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptReadModelDocument, string>>();
-        provider.GetRequiredService<IProjectionDocumentStore<ScriptEvolutionReadModel, string>>()
+        provider.GetRequiredService<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>()
             .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptEvolutionReadModel, string>>();
-        provider.GetRequiredService<IProjectionDocumentStore<ScriptNativeDocumentReadModel, string>>()
+        provider.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should().BeOfType<ElasticsearchProjectionDocumentStore<ScriptNativeDocumentReadModel, string>>();
         provider.GetRequiredService<IProjectionGraphStore>()
             .Should().BeOfType<InMemoryProjectionGraphStore>();

@@ -87,13 +87,10 @@ public class StateMirrorProjectionTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<InMemoryProjectionReadModelStore>();
-        services.AddSingleton<IProjectionDocumentStore<ProjectionReadModel, string>>(sp =>
-            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
         services.AddSingleton<IProjectionDocumentReader<ProjectionReadModel, string>>(sp =>
             sp.GetRequiredService<InMemoryProjectionReadModelStore>());
-        services.AddSingleton<IProjectionWriteDispatcher<ProjectionReadModel, string>>(sp =>
+        services.AddSingleton<IProjectionWriteDispatcher<ProjectionReadModel>>(sp =>
             sp.GetRequiredService<InMemoryProjectionReadModelStore>());
-        services.AddProjectionReadModelRuntime();
         services.AddJsonStateMirrorReadModelProjector<SampleState, ProjectionReadModel>(options =>
         {
             options.RenamedFields[nameof(SampleState.ActorId)] = nameof(ProjectionReadModel.Id);
@@ -156,8 +153,8 @@ public class StateMirrorProjectionTests
     }
 
     private sealed class InMemoryProjectionReadModelStore
-        : IProjectionDocumentStore<ProjectionReadModel, string>,
-          IProjectionWriteDispatcher<ProjectionReadModel, string>
+        : IProjectionDocumentReader<ProjectionReadModel, string>,
+          IProjectionWriteDispatcher<ProjectionReadModel>
     {
         private readonly Dictionary<string, ProjectionReadModel> _items = new(StringComparer.Ordinal);
 

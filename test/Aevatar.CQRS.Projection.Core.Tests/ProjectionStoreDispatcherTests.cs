@@ -10,7 +10,7 @@ public class ProjectionStoreDispatcherTests
     {
         var documentBinding = new RecordingBinding("document");
         var graphBinding = new RecordingBinding("graph");
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [documentBinding, graphBinding]);
 
         var readModel = new TestReadModel
@@ -29,7 +29,7 @@ public class ProjectionStoreDispatcherTests
     public async Task UpsertAsync_WhenOnlyWriteBindingsAreRegistered_ShouldStillWrite()
     {
         var writeOnly = new RecordingBinding("write-only");
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [writeOnly]);
 
         await dispatcher.UpsertAsync(new TestReadModel
@@ -44,9 +44,9 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldThrow()
     {
-        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>(
             [unconfiguredDocumentBinding]);
 
         act.Should().Throw<InvalidOperationException>()
@@ -56,9 +56,9 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldIncludeAvailabilityReason()
     {
-        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>(
             [unconfiguredDocumentBinding]);
 
         act.Should().Throw<InvalidOperationException>()
@@ -68,10 +68,10 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public void ProjectionDocumentBinding_WhenStoreMissing_ShouldExposeAvailabilityReason()
     {
-        var binding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        binding.IsConfigured.Should().BeFalse();
-        binding.AvailabilityReason.Should().Contain("not registered");
+        binding.IsEnabled.Should().BeFalse();
+        binding.DisabledReason.Should().Contain("not registered");
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class ProjectionStoreDispatcherTests
     {
         var queryBinding = new RecordingBinding("document");
         var flakyGraphBinding = new FlakyBinding("graph", failCountBeforeSuccess: 1);
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [queryBinding, flakyGraphBinding],
             options: new ProjectionStoreDispatchOptions
             {
@@ -102,7 +102,7 @@ public class ProjectionStoreDispatcherTests
         var queryBinding = new RecordingBinding("document");
         var failingBinding = new FlakyBinding("graph", failCountBeforeSuccess: int.MaxValue);
         var compensator = new RecordingCompensator();
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [queryBinding, failingBinding],
             compensator: compensator,
             options: new ProjectionStoreDispatchOptions
@@ -131,14 +131,18 @@ public class ProjectionStoreDispatcherTests
         public string Value { get; set; } = "";
     }
 
-    private sealed class RecordingBinding : IProjectionStoreBinding<TestReadModel, string>
+    private sealed class RecordingBinding : IProjectionWriteSink<TestReadModel>
     {
         public RecordingBinding(string name)
         {
-            StoreName = name;
+            SinkName = name;
         }
 
-        public string StoreName { get; }
+        public string SinkName { get; }
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int UpsertCount { get; private set; }
 
@@ -153,19 +157,23 @@ public class ProjectionStoreDispatcherTests
         }
     }
 
-    private sealed class FlakyBinding : IProjectionStoreBinding<TestReadModel, string>
+    private sealed class FlakyBinding : IProjectionWriteSink<TestReadModel>
     {
         private readonly int _failCountBeforeSuccess;
         private int _remainingFailures;
 
         public FlakyBinding(string storeName, int failCountBeforeSuccess)
         {
-            StoreName = storeName;
+            SinkName = storeName;
             _failCountBeforeSuccess = failCountBeforeSuccess;
             _remainingFailures = failCountBeforeSuccess;
         }
 
-        public string StoreName { get; }
+        public string SinkName { get; }
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int AttemptCount { get; private set; }
 
@@ -179,7 +187,7 @@ public class ProjectionStoreDispatcherTests
             {
                 _remainingFailures--;
                 throw new InvalidOperationException(
-                    $"Binding '{StoreName}' failed. remainingFailures={_remainingFailures} failCountBeforeSuccess={_failCountBeforeSuccess}");
+                    $"Binding '{SinkName}' failed. remainingFailures={_remainingFailures} failCountBeforeSuccess={_failCountBeforeSuccess}");
             }
 
             UpsertCount++;
@@ -187,12 +195,12 @@ public class ProjectionStoreDispatcherTests
         }
     }
 
-    private sealed class RecordingCompensator : IProjectionStoreDispatchCompensator<TestReadModel, string>
+    private sealed class RecordingCompensator : IProjectionStoreDispatchCompensator<TestReadModel>
     {
-        public ProjectionStoreDispatchCompensationContext<TestReadModel, string>? LastContext { get; private set; }
+        public ProjectionStoreDispatchCompensationContext<TestReadModel>? LastContext { get; private set; }
 
         public Task CompensateAsync(
-            ProjectionStoreDispatchCompensationContext<TestReadModel, string> context,
+            ProjectionStoreDispatchCompensationContext<TestReadModel> context,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

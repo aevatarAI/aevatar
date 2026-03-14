@@ -166,6 +166,14 @@ public sealed class WorkflowExecutionProjectionQueryServiceCoverageTests
             return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>([]);
         }
 
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            TotalCalls++;
+            return Task.FromResult<WorkflowActorProjectionState?>(null);
+        }
+
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
         {
             _ = actorId;

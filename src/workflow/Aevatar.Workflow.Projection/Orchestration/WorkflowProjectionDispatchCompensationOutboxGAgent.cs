@@ -53,8 +53,8 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             .ToList();
 
         var bindings = Services
-            .GetServices<IProjectionStoreBinding<WorkflowExecutionReport, string>>()
-            .GroupBy(b => b.StoreName, StringComparer.OrdinalIgnoreCase)
+            .GetServices<IProjectionWriteSink<WorkflowExecutionReport>>()
+            .GroupBy(b => b.SinkName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in dueEntries)
@@ -127,7 +127,7 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
 
     private async Task ReplayEntryAsync(
         ProjectionDispatchCompensationOutboxEntry entry,
-        IReadOnlyDictionary<string, IProjectionStoreBinding<WorkflowExecutionReport, string>> bindings)
+        IReadOnlyDictionary<string, IProjectionWriteSink<WorkflowExecutionReport>> bindings)
     {
         if (!bindings.TryGetValue(entry.FailedStore, out var binding))
         {

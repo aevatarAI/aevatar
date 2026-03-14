@@ -17,7 +17,7 @@ public sealed class ScriptReadModelProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionDocumentReader<ScriptReadModelDocument, string> _documentReader;
-    private readonly IProjectionWriteDispatcher<ScriptReadModelDocument, string> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptReadModelDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
@@ -25,7 +25,7 @@ public sealed class ScriptReadModelProjector
 
     public ScriptReadModelProjector(
         IProjectionDocumentReader<ScriptReadModelDocument, string> documentReader,
-        IProjectionWriteDispatcher<ScriptReadModelDocument, string> writeDispatcher,
+        IProjectionWriteDispatcher<ScriptReadModelDocument> writeDispatcher,
         IProjectionClock clock,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,

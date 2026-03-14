@@ -4,8 +4,8 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 namespace Aevatar.Scripting.Core.Tests.Projection;
 
 internal sealed class InMemoryProjectionDocumentStore<TReadModel>
-    : IProjectionDocumentStore<TReadModel, string>,
-      IProjectionWriteDispatcher<TReadModel, string>
+    : IProjectionDocumentReader<TReadModel, string>,
+      IProjectionWriteDispatcher<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly Dictionary<string, TReadModel> _items = new(StringComparer.Ordinal);

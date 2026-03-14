@@ -11,7 +11,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
 {
     private readonly CaseProjectionOptions _options;
     private readonly IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> _lifecycle;
-    private readonly IProjectionDocumentStore<CaseProjectionReadModel, string> _store;
+    private readonly IProjectionDocumentReader<CaseProjectionReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
     private readonly ICaseProjectionContextFactory _contextFactory;
     private readonly ConcurrentDictionary<string, CaseProjectionContext> _contexts = new(StringComparer.Ordinal);
@@ -19,13 +19,13 @@ public sealed class CaseProjectionService : ICaseProjectionService
     public CaseProjectionService(
         CaseProjectionOptions options,
         IProjectionLifecycleService<CaseProjectionContext, IReadOnlyList<CaseTopologyEdge>> lifecycle,
-        IProjectionDocumentStore<CaseProjectionReadModel, string> store,
+        IProjectionDocumentReader<CaseProjectionReadModel, string> documentReader,
         IProjectionClock clock,
         ICaseProjectionContextFactory contextFactory)
     {
         _options = options;
         _lifecycle = lifecycle;
-        _store = store;
+        _documentReader = documentReader;
         _clock = clock;
         _contextFactory = contextFactory;
     }
@@ -89,7 +89,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
 
         _contexts.TryRemove(session.RunId, out _);
         await _lifecycle.CompleteAsync(session.Context, topology, ct);
-        return await _store.GetAsync(session.RunId, ct);
+        return await _documentReader.GetAsync(session.RunId, ct);
     }
 
     public async Task<IReadOnlyList<CaseProjectionReadModel>> ListRunsAsync(int take = 50, CancellationToken ct = default)
@@ -97,7 +97,7 @@ public sealed class CaseProjectionService : ICaseProjectionService
         if (!EnableRunQueryEndpoints)
             return [];
 
-        return await _store.ListAsync(take, ct);
+        return await _documentReader.ListAsync(take, ct);
     }
 
     public async Task<CaseProjectionReadModel?> GetRunAsync(string runId, CancellationToken ct = default)
@@ -105,6 +105,6 @@ public sealed class CaseProjectionService : ICaseProjectionService
         if (!EnableRunQueryEndpoints)
             return null;
 
-        return await _store.GetAsync(runId, ct);
+        return await _documentReader.GetAsync(runId, ct);
     }
 }

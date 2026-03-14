@@ -1,8 +1,7 @@
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
-public sealed class ProjectionDocumentStoreBinding<TReadModel, TKey>
-    : IProjectionStoreBinding<TReadModel, TKey>,
-      IProjectionStoreBindingAvailability
+public sealed class ProjectionDocumentStoreBinding<TReadModel>
+    : IProjectionWriteSink<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private readonly IProjectionDocumentWriter<TReadModel>? _writer;
@@ -12,13 +11,13 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel, TKey>
         _writer = writer;
     }
 
-    public bool IsConfigured => _writer is not null;
+    public bool IsEnabled => _writer is not null;
 
-    public string AvailabilityReason => IsConfigured
+    public string DisabledReason => IsEnabled
         ? "Document binding is active."
         : "Document projection store service is not registered.";
 
-    public string StoreName => IsConfigured ? "Document" : "Document(Unconfigured)";
+    public string SinkName => IsEnabled ? "Document" : "Document(Unconfigured)";
 
     public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {

@@ -13,7 +13,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Development");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionReport, string>, FailingDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -34,7 +34,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionReport, string>, FailingDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -56,7 +56,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("DOTNET_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, NoOpDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionReport, string>, NoOpDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, FailingGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -73,20 +73,8 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             .WithMessage("*graph startup probe failed*");
     }
 
-    private sealed class NoOpDocumentStore : IProjectionDocumentStore<WorkflowExecutionReport, string>
+    private sealed class NoOpDocumentStore : IProjectionDocumentReader<WorkflowExecutionReport, string>
     {
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
         public Task<WorkflowExecutionReport?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -100,20 +88,8 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
         }
     }
 
-    private sealed class FailingDocumentStore : IProjectionDocumentStore<WorkflowExecutionReport, string>
+    private sealed class FailingDocumentStore : IProjectionDocumentReader<WorkflowExecutionReport, string>
     {
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
         public Task<WorkflowExecutionReport?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

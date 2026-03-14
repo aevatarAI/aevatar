@@ -66,11 +66,13 @@ public class WorkflowExecutionProjectionServiceTests
         await store.WaitForTimelineStageAsync("root", "workflow.start", TimeSpan.FromSeconds(2));
 
         var snapshot = await service.GetActorSnapshotAsync("root");
+        var projectionState = await service.GetActorProjectionStateAsync("root");
         var timeline = await service.ListActorTimelineAsync("root", 50);
 
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("root");
-        snapshot.LastCommandId.Should().Be("cmd-1");
+        projectionState.Should().NotBeNull();
+        projectionState!.LastCommandId.Should().Be("cmd-1");
         timeline.Should().Contain(x => x.Stage == "workflow.start");
     }
 
@@ -543,12 +545,12 @@ public class WorkflowExecutionProjectionServiceTests
         store = new ObservableWorkflowExecutionDocumentStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
         };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
+        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
         var projector = new WorkflowExecutionReadModelProjector(
             storeDispatcher,
             store,
@@ -629,12 +631,12 @@ public class WorkflowExecutionProjectionServiceTests
         var store = CreateStore();
         var clock = new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionStoreBinding<WorkflowExecutionReport, string>[]
+        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport, string>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport, string>(relationStore, GraphMaterializer),
+            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
         };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport, string>(bindings);
+        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
@@ -819,6 +821,11 @@ public class WorkflowExecutionProjectionServiceTests
             CancellationToken ct = default)
             => _queryPort.ListActorSnapshotsAsync(take, ct);
 
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+            => _queryPort.GetActorProjectionStateAsync(actorId, ct);
+
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
             string actorId,
             int take = 200,
@@ -850,7 +857,8 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ObservableWorkflowExecutionDocumentStore
-        : IProjectionDocumentStore<WorkflowExecutionReport, string>
+        : IProjectionDocumentReader<WorkflowExecutionReport, string>,
+          IProjectionDocumentWriter<WorkflowExecutionReport>
     {
         private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = CreateStore();
         private readonly object _gate = new();

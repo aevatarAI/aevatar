@@ -84,7 +84,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
@@ -150,7 +149,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Running,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
@@ -226,7 +224,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
         entry.DispatchAcceptedAtUtc.Should().BeNull();
         entry.AttemptCount.Should().Be(1);
-        entry.LastError.Should().Contain("waiting for a workflow snapshot");
+        entry.LastError.Should().Contain("waiting for workflow projection state");
         entry.NextVisibleAtUtc.Should().NotBeNull();
         lifecycle.StopCalls.Should().BeEmpty();
         readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
@@ -244,8 +242,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             {
                 ActorId = "actor-1",
                 WorkflowName = "direct",
-                LastCommandId = "cmd-1",
                 CompletionStatus = WorkflowRunCompletionStatus.Unknown,
+            },
+            ProjectionState = new WorkflowActorProjectionState
+            {
+                ActorId = "actor-1",
+                LastCommandId = "cmd-1",
                 StateVersion = 0,
                 LastEventId = string.Empty,
                 LastUpdatedAt = DateTimeOffset.UtcNow,
@@ -282,8 +284,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             {
                 ActorId = "actor-1",
                 WorkflowName = "direct",
-                LastCommandId = "cmd-1",
                 CompletionStatus = WorkflowRunCompletionStatus.Running,
+            },
+            ProjectionState = new WorkflowActorProjectionState
+            {
+                ActorId = "actor-1",
+                LastCommandId = "cmd-1",
                 StateVersion = 1,
                 LastEventId = "evt-1",
                 LastUpdatedAt = DateTimeOffset.UtcNow,
@@ -319,7 +325,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new BlockingStopLifecycleService();
@@ -390,7 +395,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
@@ -460,7 +464,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var readModelUpdater = new RecordingReadModelUpdater();
@@ -507,14 +510,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             ActorId = "actor-1",
             WorkflowName = "direct",
             CompletionStatus = WorkflowRunCompletionStatus.Running,
-            LastUpdatedAt = DateTimeOffset.UtcNow,
         };
         queryPort.SnapshotsByActorId["actor-2"] = new WorkflowActorSnapshot
         {
             ActorId = "actor-2",
             WorkflowName = "direct",
             CompletionStatus = WorkflowRunCompletionStatus.Stopped,
-            LastUpdatedAt = DateTimeOffset.UtcNow,
         };
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(queryPort: queryPort, actorPort: actorPort));
@@ -559,7 +560,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Stopped,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var actorPort = new RecordingActorPort();
@@ -611,8 +611,10 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         public bool EnableActorQueryEndpoints => true;
 
         public WorkflowActorSnapshot? Snapshot { get; init; }
+        public WorkflowActorProjectionState? ProjectionState { get; init; }
         public Exception? Exception { get; init; }
         public Dictionary<string, WorkflowActorSnapshot?> SnapshotsByActorId { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, WorkflowActorProjectionState?> ProjectionStatesByActorId { get; } = new(StringComparer.Ordinal);
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {
@@ -633,6 +635,20 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             _ = take;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>(Snapshot == null ? [] : [Snapshot]);
+        }
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Exception != null)
+                return Task.FromException<WorkflowActorProjectionState?>(Exception);
+
+            if (ProjectionStatesByActorId.TryGetValue(actorId, out var projectionState))
+                return Task.FromResult(projectionState);
+
+            return Task.FromResult(ProjectionState);
         }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(

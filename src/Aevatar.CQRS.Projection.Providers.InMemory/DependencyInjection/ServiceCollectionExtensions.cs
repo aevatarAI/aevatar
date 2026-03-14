@@ -27,8 +27,6 @@ public static class InMemoryProjectionServiceCollectionExtensions
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
-        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
-            provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }

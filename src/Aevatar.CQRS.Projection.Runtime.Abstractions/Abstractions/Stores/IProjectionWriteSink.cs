@@ -1,9 +1,13 @@
 namespace Aevatar.CQRS.Projection.Runtime.Abstractions;
 
-public interface IProjectionStoreBinding<in TReadModel, in TKey>
+public interface IProjectionWriteSink<in TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
-    string StoreName { get; }
+    string SinkName { get; }
+
+    bool IsEnabled { get; }
+
+    string DisabledReason { get; }
 
     Task UpsertAsync(TReadModel readModel, CancellationToken ct = default);
 }
