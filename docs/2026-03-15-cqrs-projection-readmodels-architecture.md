@@ -51,33 +51,32 @@
 flowchart LR
     A["Command / Actor Turn"] --> B["PersistDomainEventAsync"]
     B --> C["EventStore Commit"]
-    C --> D["CommittedStateEventPublished"]
-    D --> E["Actor Self Stream"]
+    C --> D["Build ProjectionPayload from committed state"]
+    D --> E["EventEnvelope<ProjectionPayload>"]
     E --> F["ProjectionSubscriptionRegistry"]
-    F --> G["ProjectionEnvelopeNormalizer"]
-    G --> H["ProjectionDispatcher"]
-    H --> I["ProjectionCoordinator"]
-    I --> J["Projector Branch 1<br/>ReadModel Projector"]
-    I --> K["Projector Branch 2<br/>AGUI / Session Event Projector"]
-    J --> L["ProjectionStoreDispatcher"]
-    L --> M["Document Binding"]
-    L --> N["Graph Binding"]
-    M --> O["Document Reader / QueryPort"]
-    N --> P["Graph Reader / QueryPort"]
-    K --> Q["ProjectionSessionEventHub"]
-    Q --> R["Live Sink / SSE / WS"]
+    F --> G["ProjectionDispatcher"]
+    G --> H["ProjectionCoordinator"]
+    H --> I["Projector Branch 1<br/>ReadModel Projector"]
+    H --> J["Projector Branch 2<br/>AGUI / Session Event Projector"]
+    I --> K["ProjectionStoreDispatcher"]
+    K --> L["Document Binding"]
+    K --> M["Graph Binding"]
+    L --> N["Document Reader / QueryPort"]
+    M --> O["Graph Reader / QueryPort"]
+    J --> P["ProjectionSessionEventHub"]
+    P --> Q["Live Sink / SSE / WS"]
 ```
 
 这条链路的关键点有两个：
 
 1. CQRS read model 和 AGUI/live event 没有各自维护第二条订阅链路，它们是同一个 `ProjectionCoordinator` 下的不同 projector 分支。
-2. Projection 输入并不是“任意 envelope”，而是经过 `ProjectionEnvelopeNormalizer` 规范化之后的 envelope。
+2. Projection 输入只保留 `EventEnvelope`；是否属于投影消息，只由 `payload` 的强类型契约决定。
 
-## 4. committed event 如何进入 projection pipeline
+## 4. projection payload 如何进入 projection pipeline
 
 ### 4.1 committed fact 的发布
 
-写侧 actor 在 committed 之后，会把 committed state event 再包装成 `CommittedStateEventPublished` 发布到 observer publication：
+写侧 actor 在 committed 之后，会基于 committed state 计算当前态查询需要的 `ProjectionPayload`，并把它作为 `EventEnvelope.Payload` 发布到 projection 可观察流：
 
 - `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
 - `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorPublisher.cs:115-137`
@@ -86,27 +85,23 @@ flowchart LR
 这里的语义是：
 
 1. 先 `EventStore` commit。
-2. 再发布 `CommittedStateEventPublished`。
+2. 再发布 `EventEnvelope<ProjectionPayload>`。
 3. Projection 消费的是“已提交事实的可观察流”，不是未提交命令，也不是 query-time replay。
 
-### 4.2 Projection 输入的规范化
+### 4.2 Projection 输入契约
 
-`ProjectionEnvelopeNormalizer` 决定了哪些 envelope 会真正进入 projection 业务逻辑：
+当前目标架构下，Projection 输入契约只有一条：
 
-- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionEnvelopeNormalizer.cs:5-35`
-
-规则如下：
-
-1. `direct route` 直接丢弃，不参与 projection。
-2. `topology publication` 原样通过。
-3. `observer publication` 如果 payload 是 `CommittedStateEventPublished`，就解包为其中的 `StateEvent.EventData`，并把 timestamp 替换为 committed event 的 timestamp。
-4. 其他 observer publication 直接透传。
+1. transport 只使用 `EventEnvelope`
+2. 当前态 readmodel 只消费 `EventEnvelope<ProjectionPayload>`
+3. 业务消息 envelope 与投影 envelope 由 payload 契约区分，不再额外包一层投影专用 envelope
+4. projector 直接解包 typed payload，并按消费场景物化 readmodel
 
 因此，“committed event 如何进入 projection pipeline”的准确答案是：
 
 - 不是 query 端去读 `IEventStore`。
 - 不是 projector 自己回放历史事件。
-- 而是 actor commit 后由 framework 主动发布 `CommittedStateEventPublished`，再由 normalizer 解包进入统一 projection 主链。
+- 而是 actor commit 后基于 committed state 计算 `ProjectionPayload`，并以 `EventEnvelope` 进入统一 projection 主链。
 
 ## 5. Projection Core 的职责边界
 
@@ -536,8 +531,8 @@ DI 装配：
 
 1. `scopeId` 相同但 `sessionId` 不同，Workflow ownership 能挡住大部分多活
 2. `scopeId` 与 `sessionId` 都相同的重复 ensure，当前没有统一 active-lease registry 去挡
-3. Scripting authority priming 还存在“拿到 lease 后不释放”的调用路径
-   - `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs:16-20`
+3. Scripting authority activation 仍然依赖显式 activation 端口
+   - `src/Aevatar.Scripting.Projection/Orchestration/ProjectionScriptAuthorityReadModelActivationPort.cs`
 
 这不一定已经在现网触发，但从代码结构看，它是一个真实的并发风险面。
 
@@ -598,7 +593,7 @@ DI 装配：
 ### 主链路
 
 - `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
-- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionEnvelopeNormalizer.cs:5-35`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatcher.cs:6-16`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:30-125`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:13-48`
 - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs:64-150`

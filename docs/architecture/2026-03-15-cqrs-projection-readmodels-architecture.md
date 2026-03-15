@@ -57,7 +57,7 @@
   - `ProjectionLifecycleService.cs:24`
   - `ProjectionSubscriptionRegistry.cs:30`
   - `ProjectionCoordinator.cs:19`
-  - `ProjectionEnvelopeNormalizer.cs:7`
+  - `ProjectionDispatcher.cs:6`
 - Ownership / Lease
   - `ActorProjectionOwnershipCoordinator.cs:35`
   - `ProjectionOwnershipCoordinatorGAgent.cs:25`
@@ -80,7 +80,7 @@
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  A["Actor Runtime / Stream"] --> B["ProjectionEnvelopeNormalizer"]
+  A["Actor Runtime / Stream"] --> B["EventEnvelope<ProjectionPayload>"]
   B --> C["ProjectionSubscriptionRegistry"]
   C --> D["ProjectionDispatcher"]
   D --> E["ProjectionCoordinator"]
@@ -102,7 +102,7 @@ flowchart LR
 
 1. `ProjectionLifecycleService.StartAsync()` 先初始化 projector，再注册 actor stream 订阅。
 2. `ProjectionSubscriptionRegistry.RegisterAsync()` 按 `RootActorId` 建立订阅，把收到的 `EventEnvelope` 交给 `_dispatcher.DispatchAsync(...)`。
-3. `ProjectionEnvelopeNormalizer.Normalize(...)` 会过滤 direct route，并把 `CommittedStateEventPublished` 解包成真正的 committed payload。
+3. 当前态 readmodel 的标准输入是 `EventEnvelope<ProjectionPayload>`；projector 直接解包强类型 payload，不再依赖额外投影包络层。
 4. `ProjectionCoordinator.ProjectAsync(...)` 按 DI 注册顺序依次执行 projector。
 5. 业务 projector 通过 `IProjectionWriteDispatcher<TReadModel>` 把 read model fan-out 到 document/graph store。
 6. Query 侧只读 `IProjectionDocumentReader<...>` 和 `IProjectionGraphStore`，不直接读 actor state，也不直接读 event store。
@@ -139,6 +139,15 @@ flowchart LR
 
 1. 用 query/readmodel 去模拟 actor 间业务 reply
 2. 用业务 ACK/receipt 去暗示 readmodel 已经追平
+
+## 3.2 `EventEnvelope` 是唯一传输壳
+
+当前权威架构要求：
+
+1. 业务消息与投影消息都只使用 `EventEnvelope`
+2. 二者的差异由 `EventEnvelope.Payload` 的强类型契约表达
+3. 当前态 readmodel 的正常路径只消费 `EventEnvelope<ProjectionPayload>`
+4. 不再引入额外的投影专用包络层
 
 ## 4. 读一致性到底如何确定
 
@@ -288,7 +297,7 @@ sequenceDiagram
     C->>E: StartAsync(context)
     E->>F: RegisterAsync(rootActorId)
     C->>H: RefreshMetadataAsync()
-    F-->>G: WorkflowRunEventEnvelope / normalized envelope
+    F-->>G: WorkflowRunEventEnvelope / EventEnvelope<ProjectionPayload>
     G->>H: UpsertAsync(report)
 ```
 
@@ -713,7 +722,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionLifecycleService.cs:24`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:30`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:19`
-- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionEnvelopeNormalizer.cs:7`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatcher.cs:6`
 - `src/Aevatar.CQRS.Projection.Core/Streaming/ActorStreamSubscriptionHub.cs:25`
 - `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:26`
 

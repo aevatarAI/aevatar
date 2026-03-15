@@ -275,7 +275,7 @@ message WorkflowExecutionStoredDocument {
 ```csharp
 public interface IProjectionDocumentWriter<TDocument>
 {
-    Task UpsertAsync(TDocument document, ProjectionWriteCondition? condition = null, CancellationToken ct = default);
+    Task<ProjectionWriteResult> UpsertAsync(TDocument document, CancellationToken ct = default);
 }
 
 public interface IProjectionDocumentReader<TDocument, in TKey>
@@ -288,8 +288,8 @@ public interface IProjectionDocumentReader<TDocument, in TKey>
 规则：
 
 1. 删除 `MutateAsync(TKey, Action<TDocument>)`
-2. provider 如需 OCC，使用 `ProjectionWriteCondition`
-3. projector 内部自己 `load -> reduce -> upsert`
+2. provider 如需 OCC，统一基于 `IProjectionReadModel.SourceVersion/SourceEventId` 做条件覆盖
+3. 写入结果统一返回 `Applied / Stale / Duplicate / Conflict`
 
 ### 8.2 分发接口
 
@@ -302,7 +302,7 @@ public interface IProjectionDocumentReader<TDocument, in TKey>
 ```csharp
 public interface IProjectionWriteDispatcher<TDocument>
 {
-    Task UpsertAsync(TDocument document, ProjectionWriteCondition? condition = null, CancellationToken ct = default);
+    Task UpsertAsync(TDocument document, CancellationToken ct = default);
 }
 ```
 

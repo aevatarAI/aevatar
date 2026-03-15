@@ -6,7 +6,7 @@
 - 版本：`R2`
 - 日期：`2026-03-15`
 - 原则：`删除优于兼容`
-- 目标：把现有通用 event-reducer projection 框架，收敛成“以 actor 已提交状态为强事实源、以 readmodel 为唯一查询面、按需采用 state-mirror/readmodel-fact 物化的 projection 框架”
+- 目标：把现有通用 event-reducer projection 框架，收敛成“以 actor 已提交状态为强事实源、以 readmodel 为唯一查询面、统一通过 `EventEnvelope<ProjectionPayload>` 物化的 projection 框架”
 - 关联文档：
   - `docs/architecture/2026-03-15-cqrs-projection-readmodels-architecture.md`
   - `AGENTS.md`
@@ -23,7 +23,7 @@
 
 - `one authoritative actor state -> zero or many actor-scoped current-state readmodels`
 - 所有查询仍然只走 `readmodel`
-- 对有明确消费场景的当前态查询，可由 actor 的已提交 `state` 计算出 `projection-ready readmodel fact`，再物化为 readmodel
+- 对有明确消费场景的当前态查询，可由 actor 的已提交 `state` 计算出强类型 `ProjectionPayload`，再通过 `EventEnvelope` 物化为 readmodel
 - `readmodel` 根概念本身就只保留给 actor-scoped current-state replica；不符合者不再叫 readmodel
 - `projection` 只负责复制、校验、索引、分发，不再承担第二套业务计算
 - 跨 actor 聚合必须建模为新的 `aggregate actor`
@@ -41,7 +41,7 @@
 
 1. `actor` 的已提交业务状态
 2. 与该状态一一对应的 `committed version`
-3. 从该状态按需计算出来的强类型 `projection-ready readmodel fact`
+3. 从该状态按需计算出来、并通过 `EventEnvelope` 发布的强类型 `ProjectionPayload`
 
 不是权威事实源的东西：
 
@@ -80,6 +80,21 @@
 2. 查询链路继续只走 readmodel，不向 actor 协议偷取“强完成”语义
 3. 两条链路的 ACK、完成判定、时延预期、一致性承诺必须分开建模
 
+### 3.1.2 `EventEnvelope` 是唯一投影传输壳
+
+Projection 主链只保留一种 transport envelope：
+
+1. 业务消息与投影消息都统一使用 `EventEnvelope`
+2. 是否属于投影消息，只由 `EventEnvelope.Payload` 的强类型契约决定
+3. 当前态 readmodel 的标准输入是 `EventEnvelope<ProjectionPayload>`
+4. 不再引入额外的投影专用包络层
+
+其中：
+
+1. `ProjectionPayload` 表示 actor 在 committed 之后，基于权威状态计算出的投影输入
+2. `state mirror payload` 是 `ProjectionPayload` 的一种特例
+3. projector GAgent 解包 payload 后，按消费场景物化一个或多个 readmodel
+
 ### 3.2 一个 actor 可以有多个 readmodel
 
 这里要明确修正先前过度收紧的说法。
@@ -98,7 +113,7 @@
 但这些 readmodel 必须同时满足：
 
 1. 它们都只表达同一个 actor 当前态的不同查询形态
-2. 它们都来自同一个 actor 的 committed state，以及由此产生的 committed event 或 readmodel fact
+2. 它们都来自同一个 actor 的 committed state，以及由此产生的 `EventEnvelope<ProjectionPayload>`
 3. 它们都带同一个 `SourceVersion`
 4. 它们不能各自再推导出第二套业务状态机
 
@@ -112,8 +127,8 @@
 如果某个 actor 没有稳定查询消费场景，则：
 
 1. 不必为它新增 readmodel
-2. 不必为它单独定义 `state mirror fact`
-3. 仍然保留 `actor -> committed event -> downstream actor/readmodel` 的主链即可
+2. 不必为它单独定义 `state mirror payload`
+3. 仍然保留 `actor -> EventEnvelope<business payload or projection payload> -> downstream actor/readmodel` 的主链即可
 
 这条规则还意味着：
 
@@ -132,9 +147,9 @@
 
 这些语义如果是稳定业务事实，必须转成新的 `aggregate actor`：
 
-- 它自己消费上游 committed event 或 projection-ready readmodel fact
+- 它自己消费上游业务事实或 projection payload
 - 它自己维护权威状态
-- 它自己按需发布 readmodel fact
+- 它自己按需发布 `EventEnvelope<ProjectionPayload>`
 - 它自己拥有 readmodel
 
 ### 3.4 正常路径与修复路径分离
@@ -164,7 +179,7 @@
 flowchart TB
   C["Command"] --> A["Actor Turn"]
   A --> ES["Commit Event Store + Actor State"]
-  ES --> SF["Emit Committed Event / ReadModel Fact"]
+  ES --> SF["Emit EventEnvelope<ProjectionPayload>"]
   SF --> PP["Projection Pipeline"]
 
   PP --> D1["Primary Query ReadModel"]
@@ -177,7 +192,7 @@ flowchart TB
 
   U["Upstream Actor Facts"] --> AA["Aggregate Actor"]
   AA --> AES["Commit Aggregate State"]
-  AES --> ASF["Emit Aggregate Event / ReadModel Fact"]
+  AES --> ASF["Emit EventEnvelope<ProjectionPayload>"]
   ASF --> PP
 ```
 
@@ -189,7 +204,7 @@ flowchart TD
   N["Need a new query model"] --> A{"Single actor current state?"}
   A -->|Yes| B{"All query fields derivable from one actor committed state?"}
   A -->|No| G["Create Aggregate Actor"]
-  B -->|Yes| C["Emit ReadModel Fact"]
+  B -->|Yes| C["Emit ProjectionPayload"]
   B -->|No| D["Move missing semantics into Actor"]
   D --> C
   C --> E["Projection writes one or many actor-scoped readmodels"]
@@ -210,7 +225,7 @@ sequenceDiagram
 
   C->>A: "Dispatch command"
   A->>ES: "Commit actor state at version N"
-  A->>P: "Publish committed event / readmodel fact"
+  A->>P: "Publish EventEnvelope<ProjectionPayload>"
   P->>D: "Upsert readmodel if source_version is newer"
   P->>D: "Upsert search/list/graph replicas with same source_version"
   Q->>D: "Read actor-scoped readmodels"
@@ -218,10 +233,10 @@ sequenceDiagram
 
 ## 5. 核心抽象
 
-### 5.1 ReadModel Fact / State Mirror Fact
+### 5.1 Projection Payload / State Mirror Payload
 
-`ReadModel Fact` 是 actor 基于 committed state 计算出来、发布给 projection 的强类型读模型输入契约。  
-其中 `state mirror fact` 只是“当前态 readmodel 可直接由 state 推导”时的一种特例，不是每个 actor 的必选项，更不是查询对象本身。
+`ProjectionPayload` 是 actor 基于 committed state 计算出来、作为 `EventEnvelope.Payload` 发布给 projection 的强类型输入契约。  
+其中 `state mirror payload` 只是“当前态 readmodel 可直接由 state 推导”时的一种特例，不是每个 actor 的必选项，更不是查询对象本身。
 
 最低必须包含：
 
@@ -229,7 +244,7 @@ sequenceDiagram
 2. `SourceVersion`
 3. `OccurredAtUtc`
 4. `SchemaVersion`
-5. `ReadModelPayload`
+5. `StateMirror` 或其他强类型 `ProjectionPayload`
 
 建议同时包含：
 
@@ -243,7 +258,7 @@ sequenceDiagram
 actor-scoped readmodel 必须满足：
 
 1. 只服务单个 actor 当前态查询
-2. 能被单个 committed event 或 readmodel fact 确定性推进
+2. 能被单个 `ProjectionPayload` 确定性推进
 3. 持久化时保存 `ActorId + SourceVersion`
 4. 不依赖历史事件重算
 
@@ -321,9 +336,9 @@ query 侧禁止：
 2. 先启动 projection 再返回
 3. 先回 actor 拉 state 再组装
 
-### 6.4 Snapshot 契约边界
+### 6.4 State Mirror 契约边界
 
-`Snapshot Fact` 必须面向查询语义建模，不得原样转储 actor 内部结构。
+`state mirror payload` 必须面向查询语义建模，不得原样转储 actor 内部结构。
 
 允许：
 
@@ -355,7 +370,7 @@ query 侧禁止：
 
 需要新增或收敛的抽象：
 
-1. `Snapshot Fact` 的统一强类型基模
+1. `ProjectionPayload / state mirror payload` 的统一强类型基模
 2. 收紧后的 `IProjectionReadModel`
 3. 条件写接口：
    - 按 `SourceVersion` 单调覆盖
@@ -374,13 +389,13 @@ query 侧禁止：
 
 运行时需要收敛成两件事：
 
-1. 解包 committed event 或 `readmodel fact`
+1. 解包 `EventEnvelope<ProjectionPayload>`
 2. 把同一份投影输入分发给多个独立的 actor-scoped readmodel projector
 
 必须实现：
 
 1. 每个 readmodel 独立按 `SourceVersion` 条件覆盖
-2. 同一 committed event / readmodel fact 可驱动多个 projector 并行或顺序执行，但不再通过 `sink role` 表达主次
+2. 同一 `EventEnvelope<ProjectionPayload>` 可驱动多个 projector 并行或顺序执行，但不再通过 `sink role` 表达主次
 3. 某个辅助 readmodel 写失败，只标记该 readmodel 降级，不回滚其他已成功 readmodel
 4. `Primary Query ReadModel` 是 query/application 层的显式依赖，不由 runtime sink 抽象隐式决定
 
@@ -446,7 +461,7 @@ graph/index provider 的要求是：
 需要新增：
 
 1. `scripting` state-mirror proto
-2. readmodel-fact projector
+2. projection-payload projector
 3. 基于 `SourceVersion` 的覆盖写
 
 需要删除：
@@ -485,7 +500,7 @@ graph/index provider 的要求是：
 
 1. 引入 readmodel 条件写结果模型
 2. provider 实现 `SourceVersion` 条件覆盖
-3. projection 分发改为“同一 committed event / readmodel fact -> 多个独立 readmodel projector”
+3. projection 分发改为“同一 `EventEnvelope<ProjectionPayload>` -> 多个独立 readmodel projector”
 
 完成标准：
 
@@ -493,7 +508,7 @@ graph/index provider 的要求是：
 
 ### Phase 2：Workflow 当前态迁移
 
-1. 写侧发布 workflow readmodel fact
+1. 写侧发布 workflow `EventEnvelope<ProjectionPayload>`
 2. 新建 workflow 主查询 readmodel 与 projector
 3. 查询入口全部切到新的 workflow readmodel
 4. 旧 mixed report model 退化为 artifact/history
@@ -504,9 +519,9 @@ graph/index provider 的要求是：
 
 ### Phase 3：Scripting 当前态迁移
 
-1. 写侧发布 scripting readmodel fact
+1. 写侧发布 scripting `EventEnvelope<ProjectionPayload>`
 2. 语义 readmodel 改为直接覆盖
-3. native document / graph 改为 readmodel-fact 驱动
+3. native document / graph 改为 projection-payload 驱动
 4. 删除 projection 侧 `ReduceReadModel` 当前态路径
 
 完成标准：

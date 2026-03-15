@@ -4,7 +4,7 @@
 
 - 状态：`Proposed`
 - 版本：`R1`
-- 目标：把现有 `event-driven current-state projection` 重构为“以 readmodel 为唯一查询面、按需采用 actor-state-derived readmodel fact/state mirror fact 物化”的清晰链路
+- 目标：把现有 `event-driven current-state projection` 重构为“以 readmodel 为唯一查询面、统一通过 `EventEnvelope<ProjectionPayload>` 物化”的清晰链路
 - 关联文档：
   - `docs/architecture/2026-03-15-cqrs-projection-readmodels-architecture.md`
   - `docs/architecture/2026-03-15-state-mirror-readmodel-refactor-implementation-blueprint.md`
@@ -36,7 +36,7 @@
 2. `Materialized View`
    - readmodel 是物化视图，不是业务状态机。
 3. `Publisher / Subscriber`
-   - actor 发布 committed event，或按需发布基于 committed state 计算出的 readmodel fact，projection 订阅并物化。
+   - actor 发布 `EventEnvelope<ProjectionPayload>`，projection 订阅并物化。
 4. `Ports and Adapters`
    - query/application 依赖 query port，不依赖具体 store。
    - projection 依赖 writer/dispatcher 抽象，不依赖具体 provider。
@@ -47,7 +47,7 @@
 7. `Aggregate Root`
    - 跨 actor 聚合语义回到新的 aggregate actor，而不是丢给 read side。
 8. `Anti-Corruption Layer`
-   - `state mirror fact` 只是 readmodel fact 的一种特例，不是 actor 内部 state dump。
+   - `state mirror payload` 只是 `ProjectionPayload` 的一种特例，不是 actor 内部 state dump。
 
 ### 3.2 OO 设计约束
 
@@ -67,7 +67,7 @@
    - runtime 依赖 write sink / writer
    - provider 作为基础设施适配器
 4. `OCP`
-   - 新增 actor-scoped readmodel 应只需新增 readmodel fact mapper、metadata provider、materializer
+   - 新增 actor-scoped readmodel 应只需新增 projection payload mapper、metadata provider、materializer
    - 不再要求增加 reducer 链和回放逻辑
 5. `语义命名优先`
    - `StateVersion` 若表达的是源端已提交版本，必须重命名为 `SourceVersion`
@@ -77,7 +77,7 @@
    - 必须能指出具体 query/API/UI/search/graph 入口
    - 没有稳定消费方的 readmodel 直接判定为无效设计
 7. `Query Surface Integrity`
-   - 查询对象始终是 readmodel，不是 state mirror fact
+   - 查询对象始终是 readmodel，不是 state mirror payload
    - `state mirror` 只允许作为 projection 输入模式存在
 8. `Protocol / Query Separation`
    - `actor -> envelope -> actor` 是业务协议对象，不是 query reader 的职责
@@ -127,7 +127,7 @@
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs`
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs`
 - `src/Aevatar.Scripting.Projection/Orchestration/ScriptExecutionProjectionContext.cs`
-- `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs`
+- `src/Aevatar.Scripting.Projection/Orchestration/ProjectionScriptAuthorityReadModelActivationPort.cs`
 - `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 
 当前问题：
@@ -147,7 +147,7 @@
 flowchart TB
   C["Command"] --> A["Actor"]
   A --> S["Committed Actor State"]
-  S --> F["Committed Event / ReadModel Fact"]
+  S --> F["EventEnvelope<ProjectionPayload>"]
   F --> P["Projection Runtime"]
 
   P --> D1["Primary Query ReadModel"]
@@ -160,7 +160,7 @@ flowchart TB
 
   U["Other Actor Facts"] --> G["Aggregate Actor"]
   G --> GS["Committed Aggregate State"]
-  GS --> GF["Aggregate Event / ReadModel Fact"]
+  GS --> GF["EventEnvelope<ProjectionPayload>"]
   GF --> P
 ```
 
@@ -178,7 +178,7 @@ sequenceDiagram
 
   C->>A: "Dispatch command"
   A->>A: "Commit authoritative state, source_version=N"
-  A->>P: "Publish committed event / readmodel fact"
+  A->>P: "Publish EventEnvelope<ProjectionPayload>"
   P->>D: "Dispatch to primary readmodel projector"
   P->>X: "Dispatch to auxiliary projectors"
   D-->>P: "Applied / Stale / Duplicate / Conflict"
@@ -196,10 +196,10 @@ sequenceDiagram
 2. `Artifact / Export / Log` 独立契约
    - 不再占用 readmodel 根接口
    - 不进入当前态 projection 主链
-3. `ProjectionWriteCondition`
-   - 表示条件写策略
-4. `ProjectionWriteResult`
+3. `ProjectionWriteResult`
    - 表示 provider 写入结果
+4. `ProjectionWriteResultEvaluator`
+   - 负责按 `SourceVersion / SourceEventId` 评估 `Applied / Duplicate / Stale / Conflict`
 5. `ReadModelProjector`
    - 一个 projector 只负责一个 readmodel 物化目标
 
@@ -208,12 +208,12 @@ sequenceDiagram
 1. `Actor`
    - 负责业务状态推进
    - 负责提交 committed event / committed state
-2. `ReadModel Fact Factory`
-   - 在存在消费场景时，负责把 actor state 转成 projection-ready readmodel fact
+2. `Projection Fact Factory`
+   - 在存在消费场景时，负责把 actor state 转成 `ProjectionPayload`
 3. `Projector`
-   - 负责把 committed event 或 readmodel fact 映射成一个或多个 readmodel
+   - 负责把 `ProjectionPayload` 映射成一个或多个 readmodel
 4. `Dispatcher`
-   - 负责把同一 committed event 或 readmodel fact 送到多个独立 projector
+   - 负责把同一 `EventEnvelope<ProjectionPayload>` 送到多个独立 projector
 5. `Provider`
    - 负责原子条件写
 6. `Query Reader`
@@ -226,14 +226,12 @@ sequenceDiagram
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
 | `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionReadModel.cs` | 仅提供 `Id` | 过于宽松，允许旧语义回流 | `修改` | 根接口直接收紧为 actor-scoped current-state contract |
-| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentWriter.cs` | 裸 `UpsertAsync` | 无法表达条件写 | `修改` | 返回 `ProjectionWriteResult`，接收 `ProjectionWriteCondition` |
+| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentWriter.cs` | 裸 `UpsertAsync` | 无法表达稳定写入结果 | `修改` | 返回 `ProjectionWriteResult`，从 readmodel 自身源戳判断写入结果 |
 | `src/Aevatar.CQRS.Projection.Stores.Abstractions/README.md` | 抽象层说明 | 未体现 state-mirror write 语义 | `修改` | 说明 actor-scoped readmodel 与条件写契约 |
 | `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Artifacts/IProjectionArtifact.cs` | 不存在 | 历史/导出对象缺少独立归类 | `新增` | 承接退出 readmodel 主链的 artifact/export/log 对象 |
-| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteCondition.cs` | 不存在 | 缺少值对象 | `新增` | 表达 `ReplaceIfNewer / ReplaceIfExact` |
-| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteConditionKind.cs` | 不存在 | 缺少策略枚举 | `新增` | 条件写策略枚举 |
 | `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteResult.cs` | 不存在 | 缺少稳定结果模型 | `新增` | provider 写入结果对象 |
 | `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteResultKind.cs` | 不存在 | 缺少结果枚举 | `新增` | `Applied / Stale / Duplicate / Conflict` |
-| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteConditionEvaluator.cs` | 不存在 | provider 条件判断易重复 | `新增` | 提供共享判断逻辑 |
+| `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteResultEvaluator.cs` | 不存在 | provider 判断逻辑易重复 | `新增` | 提供共享判断逻辑 |
 
 设计说明：
 
@@ -247,7 +245,7 @@ sequenceDiagram
 | --- | --- | --- | --- | --- |
 | `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionWriteDispatcher.cs` | 裸 fan-out 写接口 | 无法反馈稳定结果 | `修改` | 返回 `ProjectionWriteResult` |
 | `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionWriteSink.cs` | 统一 sink 接口 | 只需要表达单个物化目标的写入结果 | `修改` | 去掉 `Role`，只保留条件写与结果返回 |
-| `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Projectors/IReadModelProjectionDispatcher.cs` | 不存在 | 缺少 committed event / readmodel fact 到多个 projector 的分发抽象 | `新增` | 显式表达“同一事实 -> 多 projector” |
+| `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Projectors/IReadModelProjectionDispatcher.cs` | 不存在 | 缺少 `EventEnvelope<ProjectionPayload>` 到多个 projector 的分发抽象 | `新增` | 显式表达“同一事实 -> 多 projector” |
 
 设计说明：
 
@@ -267,7 +265,7 @@ sequenceDiagram
 设计说明：
 
 - `ProjectionStoreDispatcher` 只处理“单个 readmodel 往其目标 store 写入”。
-- 多 readmodel 分发应上移到 committed event / readmodel fact 的 projector-orchestrator 层，而不是藏在单个 sink 接口里。
+- 多 readmodel 分发应上移到 `EventEnvelope<ProjectionPayload>` 的 projector-orchestrator 层，而不是藏在单个 sink 接口里。
 
 ### 7.4 Providers
 
@@ -304,11 +302,11 @@ sequenceDiagram
 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs` | 读取 projection 后拼 completion event | 依赖 mixed query model | `修改` | 使用新的 readmodel query DTO；不再依赖旧 report 语义 |
 | `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs` | 从 projection 判断 durable completion | 当前依赖旧 readmodel 来源 | `修改` | 改为依赖新的 `WorkflowActorReadModelDocument` 对应查询 |
 | `src/workflow/Aevatar.Workflow.Application/Queries/WorkflowExecutionQueryApplicationService.cs` | workflow query façade | 当前 façade 下挂 mixed query reader | `修改` | 组合新的 readmodel query / graph query / catalog query |
-| `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowActorStateMirrorFactFactory.cs` | 不存在 | 缺少写侧 readmodel-fact 工厂 | `新增` | 从 actor 已提交 state 生成 `WorkflowActorStateMirrorPayload` |
+| `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowActorStateMirrorFactFactory.cs` | 不存在 | 缺少写侧 projection-fact 工厂 | `新增` | 从 actor 已提交 state 生成 `WorkflowActorStateMirrorPayload` |
 
 设计说明：
 
-- 为避免 application service 继续依赖 projection 内部 report 结构，写侧需要一个显式的 `ReadModel Fact Factory`。
+- 为避免 application service 继续依赖 projection 内部 report 结构，写侧需要一个显式的 `Projection Fact Factory`。
 - 这是典型的 `Factory + Anti-Corruption Layer`。
 
 ### 7.7 Workflow Projection
@@ -323,8 +321,8 @@ sequenceDiagram
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowActorReadModelDocument.Partial.cs` | 不存在 | 缺少当前态主文档 | `新增` | workflow actor 当前态主查询文档 |
 | `src/workflow/Aevatar.Workflow.Projection/workflow_actor_readmodel_document.proto` | 不存在 | 缺少主查询文档 proto | `新增` | 定义 `WorkflowActorReadModelDocument` |
 | `src/workflow/Aevatar.Workflow.Projection/Metadata/WorkflowActorReadModelDocumentMetadataProvider.cs` | 不存在 | 缺少主查询文档元数据提供者 | `新增` | 提供 index/scope/field metadata |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorReadModelProjector.cs` | 不存在 | 缺少 workflow 当前态 readmodel projector | `新增` | 直接消费 workflow readmodel fact 并覆盖 document |
-| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowActorReadModelDocumentMapper.cs` | 不存在 | 需要窄 mapper | `新增` | workflow readmodel fact <-> document <-> query DTO 转换 |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorReadModelProjector.cs` | 不存在 | 缺少 workflow 当前态 readmodel projector | `新增` | 直接消费 workflow `ProjectionPayload` 并覆盖 document |
+| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowActorReadModelDocumentMapper.cs` | 不存在 | 需要窄 mapper | `新增` | workflow `ProjectionPayload` <-> document <-> query DTO 转换 |
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionGraphMaterializer.cs` | 从 report 生成 graph | graph 建立在 mixed report 上 | `修改` | 从 `WorkflowActorReadModelDocument` 或专用 graph section 生成 graph mirror |
 
 设计说明：
@@ -351,9 +349,9 @@ sequenceDiagram
 
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
-| `src/Aevatar.Scripting.Application/Runtime/ScriptBehaviorDispatcher.cs` | 执行行为并生成 domain facts | 没有直接输出 projection-ready readmodel fact | `修改` | 返回 `ScriptDispatchResult`，其中包含 domain facts 与 readmodel fact |
-| `src/Aevatar.Scripting.Application/Runtime/ScriptDispatchResult.cs` | 不存在 | 缺少聚合返回对象 | `新增` | 封装 `CommittedFacts + ReadModelFact` |
-| `src/Aevatar.Scripting.Application/Runtime/ScriptReadModelStateMirrorFactFactory.cs` | 不存在 | 缺少 readmodel-fact factory | `新增` | 从 actor 当前 state 或 typed readmodel 生成 state mirror/readmodel fact |
+| `src/Aevatar.Scripting.Application/Runtime/ScriptBehaviorDispatcher.cs` | 执行行为并生成 domain facts | 没有直接输出 `ProjectionPayload` | `修改` | 返回 `ScriptDispatchResult`，其中包含 domain facts 与 projection payload |
+| `src/Aevatar.Scripting.Application/Runtime/ScriptDispatchResult.cs` | 不存在 | 缺少聚合返回对象 | `新增` | 封装 `CommittedFacts + ProjectionPayload` |
+| `src/Aevatar.Scripting.Application/Runtime/ScriptReadModelStateMirrorFactFactory.cs` | 不存在 | 缺少 projection-fact factory | `新增` | 从 actor 当前 state 或 typed readmodel 生成 state mirror/projection payload |
 | `src/Aevatar.Scripting.Application/Queries/ScriptReadModelQueryApplicationService.cs` | 查询 façade | 可保留 | `保留并调整` | 继续作为 façade，但底层读取新的 readmodel document |
 
 设计说明：
@@ -366,10 +364,10 @@ sequenceDiagram
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
 | `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | 在 projection 侧调用 `ReduceReadModel` | 读侧重复执行业务逻辑 | `删除或彻底重写` | 改为 `ScriptCurrentStateReadModelProjector`，直接落主查询文档 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | 依赖 `CurrentSemanticReadModelDocument` | 依赖中间上下文事实态 | `修改` | 直接消费 scripting readmodel fact，物化 native document |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | 依赖 `CurrentSemanticReadModelDocument` | 同上 | `修改` | 直接消费 scripting readmodel fact，物化 graph mirror |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | 依赖 `CurrentSemanticReadModelDocument` | 依赖中间上下文事实态 | `修改` | 直接消费 scripting `ProjectionPayload`，物化 native document |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | 依赖 `CurrentSemanticReadModelDocument` | 同上 | `修改` | 直接消费 scripting `ProjectionPayload`，物化 graph mirror |
 | `src/Aevatar.Scripting.Projection/Orchestration/ScriptExecutionProjectionContext.cs` | 保存 `CurrentSemanticReadModelDocument` | 中间层持有事实态 | `修改` | 删除该字段，保持纯上下文/租约信息 |
-| `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs` | query-time priming 入口 | 违反 read path 约束 | `删除` | 彻底移除 priming read port |
+| `src/Aevatar.Scripting.Projection/Orchestration/ProjectionScriptAuthorityReadModelActivationPort.cs` | authority readmodel activation | 不应再暴露 priming 语义 | `保留并重命名` | 保留在 orchestration 层，显式表达 activation 语义 |
 | `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs` | 读 semantic document 并执行 declared query | 可保留 | `修改` | 继续从新的 readmodel document 读取，不依赖旧 reducer 路径 |
 | `src/Aevatar.Scripting.Projection/ReadModels/ScriptProjectionReadModels.Partial.cs` | 文档 partial + converter | 命名与接口不统一 | `修改` | 让 current-state 文档实现收紧后的 `IProjectionReadModel` |
 | `src/Aevatar.Scripting.Projection/Projectors/ScriptCurrentStateReadModelProjector.cs` | 不存在 | 缺少 direct current-state projector | `新增` | 从 `ScriptReadModelStateMirrorCommitted` 直接写 `ScriptReadModelDocument` |
@@ -385,16 +383,16 @@ sequenceDiagram
 
 | 文件 | 当前职责 | 变更动作 |
 | --- | --- | --- |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs` | binding actor readmodel | 改为 readmodel-fact 驱动 |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs` | binding actor readmodel | 改为 projection-payload 驱动 |
 | `src/workflow/Aevatar.Workflow.Projection/workflow_actor_binding_document.proto` | binding document | 命名改为 `source_version/source_event_id` |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptCatalogEntryProjector.cs` | catalog actor readmodel | 改为 readmodel-fact 驱动 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptDefinitionStateMirrorProjector.cs` | definition actor readmodel | 改为 readmodel-fact 驱动 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptEvolutionReadModelProjector.cs` | evolution actor readmodel | 改为 readmodel-fact 驱动 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptCatalogEntryProjector.cs` | catalog actor readmodel | 改为 projection-payload 驱动 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptDefinitionStateMirrorProjector.cs` | definition actor readmodel | 改为 projection-payload 驱动 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptEvolutionReadModelProjector.cs` | evolution actor readmodel | 改为 projection-payload 驱动 |
 | `src/Aevatar.Scripting.Projection/Reducers/ScriptEvolution*.cs` | evolution reducer 链 | 当前态路径删掉，若保留仅限 artifact/history |
 
 原则：
 
-- 只要是 actor-scoped current-state document，最终都要收敛到统一的 readmodel 投影输入；其中 state mirror fact 只是当前态直推的一种实现。
+- 只要是 actor-scoped current-state document，最终都要收敛到统一的 `ProjectionPayload` 输入；其中 state mirror payload 只是当前态直推的一种实现。
 
 ## 8. 测试与门禁变更
 
@@ -408,12 +406,12 @@ sequenceDiagram
 | `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReadModelProjectorTests.cs` | `删除或重写` | 改为 `WorkflowActorReadModelProjectorTests` |
 | `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportSnapshotMapperTests.cs` | `删除或重写` | 改为 `WorkflowActorReadModelDocumentMapperTests` |
 | `test/Aevatar.Workflow.Application.Tests/WorkflowRunDurableCompletionResolverCoverageTests.cs` | `修改` | 覆盖新的 readmodel DTO |
-| `test/Aevatar.Workflow.Application.Tests/WorkflowRunStateMirrorEmitterTests.cs` | `修改` | 验证复用抽取后的 readmodel-fact contract |
+| `test/Aevatar.Workflow.Application.Tests/WorkflowRunStateMirrorEmitterTests.cs` | `修改` | 验证复用抽取后的 projection-payload contract |
 | `test/Aevatar.Scripting.Core.Tests/Projection/ScriptReadModelProjectorTests.cs` | `删除或重写` | 改为 direct current-state readmodel projector 测试 |
-| `test/Aevatar.Scripting.Core.Tests/Projection/ScriptNativeDocumentProjectorTests.cs` | `修改` | 验证直接消费 scripting readmodel fact |
+| `test/Aevatar.Scripting.Core.Tests/Projection/ScriptNativeDocumentProjectorTests.cs` | `修改` | 验证直接消费 scripting `ProjectionPayload` |
 | `test/Aevatar.Scripting.Core.Tests/Projection/ScriptNativeGraphProjectorTests.cs` | `修改` | 同上 |
 | `test/Aevatar.Scripting.Core.Tests/Projection/ScriptReadModelQueryReaderTests.cs` | `修改` | 验证 declared query 从新 readmodel document 读取 |
-| `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptBehaviorDispatcherTests.cs` | `修改` | 覆盖 `ScriptDispatchResult` 和 readmodel fact 生成 |
+| `test/Aevatar.Scripting.Core.Tests/Runtime/ScriptBehaviorDispatcherTests.cs` | `修改` | 覆盖 `ScriptDispatchResult` 和 projection payload 生成 |
 
 ### 8.2 门禁文件
 
@@ -456,7 +454,7 @@ sequenceDiagram
 
 ### Phase 2：Workflow 当前态主路径
 
-1. 抽出 workflow readmodel-fact proto
+1. 抽出 workflow projection-payload proto
 2. 新建 `WorkflowActorReadModelDocument`
 3. 新建 readmodel projector / mapper / query reader
 4. 切换 `WorkflowRunDurableCompletionResolver` 与 query service
@@ -507,7 +505,7 @@ sequenceDiagram
 新的前提应当是：
 
 1. actor 拥有唯一业务真相
-2. readmodel fact 是该真相投影到查询面的输入契约
+2. `ProjectionPayload` 是该真相投影到查询面的输入契约
 3. projection 只复制真相
 4. readmodel 可以一对多，但都只复制同一 actor 当前态
 5. 聚合语义必须回到 actor
