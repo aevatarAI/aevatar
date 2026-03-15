@@ -32,7 +32,7 @@ public sealed class ScriptDefinitionRuntimeContractTests
         const string runtimeActorId = "contract-runtime";
         const string revision = "rev-1";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "contract-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
@@ -40,7 +40,7 @@ public sealed class ScriptDefinitionRuntimeContractTests
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
         await commandPort.RunRuntimeAsync(
             runtimeActorId,
             "run-1",
@@ -67,7 +67,7 @@ public sealed class ScriptDefinitionRuntimeContractTests
         persisted.Should().Contain(x => x.EventData.Is(ScriptDomainFactCommitted.Descriptor));
 
         await runtime.DestroyAsync(runtimeActorId, CancellationToken.None);
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
 
         var replayedActor = await runtime.GetAsync(runtimeActorId);
         replayedActor.Should().NotBeNull();

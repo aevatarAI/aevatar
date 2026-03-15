@@ -15,6 +15,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
     private readonly IActorRuntime _runtime;
     private readonly IScriptExecutionProjectionPort _executionProjectionPort;
     private readonly IScriptReadModelQueryPort _readModelQueryPort;
+    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
@@ -27,6 +28,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         IActorRuntime runtime,
         IScriptExecutionProjectionPort executionProjectionPort,
         IScriptReadModelQueryPort readModelQueryPort,
+        IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
@@ -38,6 +40,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
         _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
+        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
@@ -68,6 +71,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             _runtime,
             _executionProjectionPort,
             _readModelQueryPort,
+            _definitionSnapshotPort,
             _proposalPort,
             _definitionCommandPort,
             _runtimeProvisioningPort,

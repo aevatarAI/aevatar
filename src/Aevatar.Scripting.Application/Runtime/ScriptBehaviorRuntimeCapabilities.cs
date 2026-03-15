@@ -22,6 +22,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IActorRuntime _runtime;
     private readonly IScriptExecutionProjectionPort _executionProjectionPort;
     private readonly IScriptReadModelQueryPort _readModelQueryPort;
+    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
@@ -45,6 +46,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IActorRuntime runtime,
         IScriptExecutionProjectionPort executionProjectionPort,
         IScriptReadModelQueryPort readModelQueryPort,
+        IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
@@ -63,6 +65,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
         _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
+        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
@@ -140,12 +143,13 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string? runtimeActorId,
         CancellationToken ct)
     {
+        var definitionSnapshot = await ResolveDefinitionSnapshotAsync(definitionActorId, scriptRevision, ct);
         var resolvedRuntimeActorId = await _runtimeProvisioningPort.EnsureRuntimeAsync(
             definitionActorId,
             scriptRevision,
             runtimeActorId,
-            ct,
-            ResolveDefinitionSnapshot(definitionActorId, scriptRevision));
+            definitionSnapshot,
+            ct);
         await EnsureProjectedRuntimeAsync(resolvedRuntimeActorId, ct);
         return resolvedRuntimeActorId;
     }
@@ -274,6 +278,20 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionActorId ?? string.Empty,
             "::",
             string.IsNullOrWhiteSpace(scriptRevision) ? "latest" : scriptRevision);
+
+    private async Task<ScriptDefinitionSnapshot> ResolveDefinitionSnapshotAsync(
+        string definitionActorId,
+        string scriptRevision,
+        CancellationToken ct)
+    {
+        var snapshot = ResolveDefinitionSnapshot(definitionActorId, scriptRevision);
+        if (snapshot != null)
+            return snapshot;
+
+        snapshot = await _definitionSnapshotPort.GetRequiredAsync(definitionActorId, scriptRevision, ct);
+        RememberDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
+        return snapshot;
+    }
 
     private async Task PrimeAuthorityProjectionIfNeededAsync(
         System.Type agentType,

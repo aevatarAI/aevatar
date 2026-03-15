@@ -24,7 +24,7 @@ namespace Aevatar.Scripting.Core.Tests.Runtime;
 public class RuntimeScriptInfrastructurePortsTests
 {
     [Fact]
-    public async Task SpawnRuntimeAsync_ShouldCreateActorWithLatestRevision_WhenRevisionIsEmpty()
+    public async Task SpawnRuntimeAsync_ShouldCreateActorWithSnapshotRevision_WhenRevisionIsEmpty()
     {
         var runtime = new TestActorRuntime();
         var service = CreateRuntimeProvisioningService(runtime);
@@ -33,9 +33,10 @@ public class RuntimeScriptInfrastructurePortsTests
             definitionActorId: "definition-1",
             scriptRevision: string.Empty,
             runtimeActorId: null,
+            definitionSnapshot: CreateDefinitionSnapshot("rev-latest"),
             ct: CancellationToken.None);
 
-        actorId.Should().StartWith("script-runtime:definition-1:latest:");
+        actorId.Should().StartWith("script-runtime:definition-1:rev-latest:");
         runtime.CreateRequests.Should().ContainSingle(x => x == actorId);
     }
 
@@ -49,6 +50,7 @@ public class RuntimeScriptInfrastructurePortsTests
             definitionActorId: "definition-1",
             scriptRevision: "rev-1",
             runtimeActorId: "runtime-existing",
+            definitionSnapshot: CreateDefinitionSnapshot("rev-1"),
             ct: CancellationToken.None);
 
         actorId.Should().Be("runtime-existing");
@@ -769,21 +771,19 @@ public class RuntimeScriptInfrastructurePortsTests
             CreateDispatchService(
                 runtime,
                 new ProvisionScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
-                new ProvisionScriptRuntimeCommandEnvelopeFactory()),
-            new ProjectionScriptDefinitionSnapshotPort((definitionActorId, requestedRevision, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult<ScriptDefinitionSnapshot?>(new ScriptDefinitionSnapshot(
-                    "script-" + definitionActorId,
-                    string.IsNullOrWhiteSpace(requestedRevision) ? "latest" : requestedRevision,
-                    ScriptSources.UppercaseBehavior,
-                    ScriptSources.UppercaseBehaviorHash,
-                    ScriptSources.UppercaseStateTypeUrl,
-                    ScriptSources.UppercaseReadModelTypeUrl,
-                    "1",
-                    "schema-hash"));
-            }));
+                new ProvisionScriptRuntimeCommandEnvelopeFactory()));
     }
+
+    private static ScriptDefinitionSnapshot CreateDefinitionSnapshot(string revision) =>
+        new(
+            "script-definition-1",
+            revision,
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            ScriptSources.UppercaseStateTypeUrl,
+            ScriptSources.UppercaseReadModelTypeUrl,
+            "1",
+            "schema-hash");
 
     private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
     {

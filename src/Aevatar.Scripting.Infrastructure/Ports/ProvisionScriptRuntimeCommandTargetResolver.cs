@@ -43,7 +43,7 @@ public sealed class ProvisionScriptRuntimeCommandTargetResolver
             return command.RuntimeActorId;
 
         var revisionScope = string.IsNullOrWhiteSpace(command.ScriptRevision)
-            ? "latest"
+            ? command.DefinitionSnapshot.Revision
             : command.ScriptRevision;
         return $"script-runtime:{command.DefinitionActorId}:{revisionScope}:{Guid.NewGuid():N}";
     }

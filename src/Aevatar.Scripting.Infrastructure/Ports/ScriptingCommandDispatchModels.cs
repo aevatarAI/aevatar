@@ -93,12 +93,17 @@ public sealed record ProvisionScriptRuntimeCommand(
     string? RuntimeActorId,
     ScriptDefinitionSnapshot DefinitionSnapshot) : ICommandContextSeed
 {
+    private string RevisionScope =>
+        string.IsNullOrWhiteSpace(ScriptRevision)
+            ? DefinitionSnapshot.Revision
+            : ScriptRevision;
+
     public string? CommandId => ScriptingCommandIds.Build(
         "script-runtime-provision",
         string.IsNullOrWhiteSpace(RuntimeActorId) ? DefinitionActorId : RuntimeActorId,
-        string.IsNullOrWhiteSpace(ScriptRevision) ? "latest" : ScriptRevision);
+        string.IsNullOrWhiteSpace(RevisionScope) ? "latest" : RevisionScope);
 
-    public string? CorrelationId => string.IsNullOrWhiteSpace(ScriptRevision) ? "latest" : ScriptRevision;
+    public string? CorrelationId => string.IsNullOrWhiteSpace(RevisionScope) ? "latest" : RevisionScope;
 
     public IReadOnlyDictionary<string, string>? Headers => null;
 }

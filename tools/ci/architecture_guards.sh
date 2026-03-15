@@ -861,6 +861,9 @@ bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
 
+echo "Running scripting runtime snapshot guard..."
+bash tools/ci/scripting_runtime_snapshot_guard.sh
+
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh
 

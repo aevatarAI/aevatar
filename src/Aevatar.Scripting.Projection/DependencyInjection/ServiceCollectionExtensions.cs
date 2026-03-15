@@ -94,8 +94,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPortService>());
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
-        services.TryAddSingleton<IScriptReadModelQueryReader, ScriptReadModelQueryReader>();
-        services.TryAddSingleton<IScriptReadModelQueryPort, ScriptReadModelQueryService>();
+        services.TryAddSingleton<ScriptReadModelQueryReader>();
+        services.TryAddSingleton<IScriptReadModelQueryPort>(sp =>
+            sp.GetRequiredService<ScriptReadModelQueryReader>());
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
         services.TryAddSingleton<IScriptAuthorityReadModelActivationPort, ProjectionScriptAuthorityReadModelActivationPort>();

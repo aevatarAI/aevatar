@@ -12,7 +12,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Projection.Queries;
 
-public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryReader
+public sealed class ScriptReadModelQueryReader : IScriptReadModelQueryPort
 {
     private readonly IProjectionDocumentReader<ScriptReadModelDocument, string> _documentReader;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;

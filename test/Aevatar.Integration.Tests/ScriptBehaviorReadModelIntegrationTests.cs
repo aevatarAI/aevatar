@@ -34,19 +34,20 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         const string revision = "rev-1";
         const string runId = "run-1";
 
-        var resolvedDefinitionActorId = await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "integration-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
             sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
-        resolvedDefinitionActorId.Should().Be(definitionActorId);
+        definition.ActorId.Should().Be(definitionActorId);
 
         var resolvedRuntimeActorId = await provisioningPort.EnsureRuntimeAsync(
             definitionActorId,
             revision,
             runtimeActorId,
+            definition.Snapshot,
             CancellationToken.None);
         resolvedRuntimeActorId.Should().Be(runtimeActorId);
 

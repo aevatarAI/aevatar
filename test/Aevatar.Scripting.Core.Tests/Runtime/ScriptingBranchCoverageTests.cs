@@ -443,6 +443,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactoryTests
             new RecordingActorRuntime(),
             new RecordingExecutionProjectionPort(),
             new RecordingReadModelQueryPort(),
+            new RecordingDefinitionSnapshotPort(),
             new RecordingProposalPort(),
             new RecordingDefinitionCommandPort(),
             new RecordingRuntimeProvisioningPort(),
@@ -474,16 +475,17 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactoryTests
     {
         var cases = new (string Name, Func<ScriptBehaviorRuntimeCapabilityFactory> Create)[]
         {
-            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilityFactory(null!, new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtime", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), null!, new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("executionProjectionPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), null!, new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("readModelQueryPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
-            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!, new RecordingAuthorityReadModelActivationPort())),
-            ("authorityReadModelActivationPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), null!)),
+            ("aiCapability", () => new ScriptBehaviorRuntimeCapabilityFactory(null!, new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("runtime", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), null!, new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("executionProjectionPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), null!, new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("readModelQueryPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), null!, new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("definitionSnapshotPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), null!, new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("proposalPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), null!, new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("definitionCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), null!, new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("runtimeProvisioningPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), null!, new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("runtimeCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), null!, new RecordingCatalogCommandPort(), new RecordingAuthorityReadModelActivationPort())),
+            ("catalogCommandPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), null!, new RecordingAuthorityReadModelActivationPort())),
+            ("authorityReadModelActivationPort", () => new ScriptBehaviorRuntimeCapabilityFactory(new RecordingAICapability(), new RecordingActorRuntime(), new RecordingExecutionProjectionPort(), new RecordingReadModelQueryPort(), new RecordingDefinitionSnapshotPort(), new RecordingProposalPort(), new RecordingDefinitionCommandPort(), new RecordingRuntimeProvisioningPort(), new RecordingRuntimeCommandPort(), new RecordingCatalogCommandPort(), null!)),
         };
 
         foreach (var testCase in cases)
@@ -1088,6 +1090,26 @@ internal sealed class RecordingReadModelQueryPort : IScriptReadModelQueryPort
     }
 }
 
+internal sealed class RecordingDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+{
+    public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+        string definitionActorId,
+        string requestedRevision,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(new ScriptDefinitionSnapshot(
+            "script-" + definitionActorId,
+            requestedRevision,
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            ScriptSources.UppercaseStateTypeUrl,
+            ScriptSources.UppercaseReadModelTypeUrl,
+            "1",
+            "schema-hash"));
+    }
+}
+
 internal sealed class RecordingProposalPort : IScriptEvolutionProposalPort
 {
     public Task<ScriptPromotionDecision> ProposeAsync(ScriptEvolutionProposal proposal, CancellationToken ct)
@@ -1128,8 +1150,8 @@ internal sealed class RecordingRuntimeProvisioningPort : IScriptRuntimeProvision
         string definitionActorId,
         string scriptRevision,
         string? runtimeActorId,
-        CancellationToken ct,
-        ScriptDefinitionSnapshot? definitionSnapshot = null)
+        ScriptDefinitionSnapshot definitionSnapshot,
+        CancellationToken ct)
     {
         _ = definitionActorId;
         _ = scriptRevision;

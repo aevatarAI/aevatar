@@ -31,14 +31,14 @@ public sealed class TextNormalizationProtocolContractTests
         const string definitionActorId = "text-normalization-definition";
         const string runtimeActorId = "text-normalization-runtime";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "text-normalization",
             scriptRevision: "rev-1",
             sourceText: TextNormalizationProtocolSampleActors.Source,
             sourceHash: TextNormalizationProtocolSampleActors.SourceHash,
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, "rev-1", runtimeActorId, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, "rev-1", runtimeActorId, definition.Snapshot, CancellationToken.None);
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<Aevatar.Foundation.Abstractions.EventEnvelope>(capacity: 32);

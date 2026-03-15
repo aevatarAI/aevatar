@@ -33,7 +33,7 @@ public class ClaimReplayTests
         const string runtimeActorId2 = "claim-recompile-runtime-2";
 
         var persistedDefinitionSource = BuildPersistedSource("definition-source-v1");
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "claim-recompile-script",
             revision,
             persistedDefinitionSource,
@@ -41,7 +41,7 @@ public class ClaimReplayTests
             definitionActorId,
             CancellationToken.None);
 
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId1, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId1, definition.Snapshot, CancellationToken.None);
         var first = await ClaimIntegrationTestKit.RunClaimAsync(
             provider,
             definitionActorId,
@@ -62,7 +62,7 @@ public class ClaimReplayTests
         var externalUpdatedSourceButNotPersisted = BuildPersistedSource("definition-source-v2");
         externalUpdatedSourceButNotPersisted.Should().Contain("definition-source-v2");
 
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId2, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId2, definition.Snapshot, CancellationToken.None);
         var second = await ClaimIntegrationTestKit.RunClaimAsync(
             provider,
             definitionActorId,
