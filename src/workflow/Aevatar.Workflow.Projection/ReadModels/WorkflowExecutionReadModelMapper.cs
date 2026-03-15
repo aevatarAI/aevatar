@@ -25,39 +25,6 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionReport source)
-    {
-        return new WorkflowActorSnapshot
-        {
-            ActorId = source.RootActorId,
-            WorkflowName = source.WorkflowName,
-            LastCommandId = source.CommandId,
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
-            StateVersion = source.StateVersion,
-            LastEventId = source.LastEventId,
-            LastUpdatedAt = source.UpdatedAt,
-            LastSuccess = source.Success,
-            LastOutput = source.FinalOutput,
-            LastError = source.FinalError,
-            TotalSteps = source.Summary.TotalSteps,
-            RequestedSteps = source.Summary.RequestedSteps,
-            CompletedSteps = source.Summary.CompletedSteps,
-            RoleReplyCount = source.Summary.RoleReplyCount,
-        };
-    }
-
-    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionReport source)
-    {
-        return new WorkflowActorProjectionState
-        {
-            ActorId = source.RootActorId,
-            LastCommandId = source.CommandId,
-            StateVersion = source.StateVersion,
-            LastEventId = source.LastEventId,
-            LastUpdatedAt = source.UpdatedAt,
-        };
-    }
-
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
@@ -124,20 +91,6 @@ public sealed class WorkflowExecutionReadModelMapper
         subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
         return subgraph;
     }
-
-    private static WorkflowRunCompletionStatus MapCompletionStatus(
-        WorkflowExecutionCompletionStatus status) =>
-        status switch
-        {
-            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
-            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
-            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
-            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
-            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
-            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
-            _ => WorkflowRunCompletionStatus.Unknown,
-        };
 
     private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
     {

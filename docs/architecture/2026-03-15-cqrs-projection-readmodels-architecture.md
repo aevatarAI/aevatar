@@ -21,7 +21,7 @@
 - `actor1 -> envelope A -> actor2 -> envelope B -> actor1` 是业务消息语义，属于 actor 间协议协商。
 - `actor3 -> query -> actor2 readmodel` 是查询语义，属于对 actor2 已提交事实的读取。
 - 业务消息语义要求的是“某个 actor turn 是否提交、某个协议阶段是否推进、某个回复事件是否到达”。
-- 查询语义要求的是“某个 source version 是否已经物化进 readmodel 并可见”。
+- 查询语义要求的是“某个 `StateVersion` 是否已经物化进 readmodel 并可见”。
 - 两条链路的一致性要求不同，完成判定也不同；不得拿 readmodel 可见性代替 actor 协议完成，也不得拿业务 ACK 代替 readmodel 新鲜度。
 
 当前最需要正视的并发/一致性风险有 5 个：

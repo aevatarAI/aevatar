@@ -27,7 +27,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
+    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
         new(StringComparer.Ordinal);
     private readonly string _runId;
@@ -50,7 +50,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
     {
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
@@ -68,7 +68,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
@@ -283,7 +283,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         if (agentType.IsAssignableTo(typeof(ScriptDefinitionGAgent)) ||
             agentType.IsAssignableTo(typeof(ScriptCatalogGAgent)))
         {
-            await _authorityProjectionPrimingPort.PrimeAsync(actorId, ct);
+            await _authorityReadModelActivationPort.ActivateAsync(actorId, ct);
         }
     }
 }

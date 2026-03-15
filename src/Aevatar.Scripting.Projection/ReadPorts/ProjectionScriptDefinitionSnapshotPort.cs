@@ -1,6 +1,5 @@
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 using Google.Protobuf;
 
@@ -12,10 +11,8 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
     private readonly Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshot?>>? _queryAsync;
 
     public ProjectionScriptDefinitionSnapshotPort(
-        ScriptAuthorityProjectionPortService projectionPort,
         IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string> documentReader)
     {
-        _ = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 

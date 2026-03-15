@@ -783,7 +783,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(runtime),
-            new NoOpAuthorityProjectionPrimingPort());
+            new NoOpAuthorityReadModelActivationPort());
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
@@ -889,9 +889,9 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
-    private sealed class NoOpAuthorityProjectionPrimingPort : IScriptAuthorityProjectionPrimingPort
+    private sealed class NoOpAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
     {
-        public Task PrimeAsync(string actorId, CancellationToken ct)
+        public Task ActivateAsync(string actorId, CancellationToken ct)
         {
             _ = actorId;
             ct.ThrowIfCancellationRequested();

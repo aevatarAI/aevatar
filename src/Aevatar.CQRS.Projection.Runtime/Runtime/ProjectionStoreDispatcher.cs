@@ -45,9 +45,7 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
                 skipped.Reason);
         }
 
-        _bindings = configuredBindings
-            .OrderBy(ResolveBindingOrder)
-            .ToArray();
+        _bindings = configuredBindings.ToArray();
         if (_bindings.Count == 0)
         {
             var skipSummary = skippedBindings.Count == 0
@@ -138,15 +136,6 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
             $"Projection binding write failed for store '{binding.SinkName}' after {maxAttempts} attempt(s).",
             lastException);
     }
-
-    private static int ResolveBindingOrder(IProjectionWriteSink<TReadModel> binding) =>
-        binding switch
-        {
-            ProjectionDocumentStoreBinding<TReadModel> => 0,
-            ProjectionGraphStoreBinding<TReadModel> => 10,
-            _ => 100,
-        };
-
     private Task CompensateAsync(
         string operation,
         TReadModel readModel,

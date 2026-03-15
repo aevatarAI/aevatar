@@ -69,7 +69,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptReadModelQueryPort, ScriptReadModelQueryService>();
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
-        services.TryAddSingleton<IScriptAuthorityProjectionPrimingPort, ProjectionScriptAuthorityProjectionPrimingPort>();
+        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort, ProjectionScriptAuthorityReadModelActivationPort>();
         services.TryAddSingleton<IScriptReadModelMaterializationCompiler, ScriptReadModelMaterializationCompiler>();
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();

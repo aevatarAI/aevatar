@@ -140,12 +140,46 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests[0].PathAndQuery.Should().NotContain("/_doc/");
         handler.CapturedRequests[1].Method.Should().Be("GET");
         handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_doc/actor-1");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_create/actor-1");
         handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"number_of_shards\":1");
         handler.CapturedRequests[0].Body.Should().Contain("\"projection-core-tests-alias\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenExistingDocumentPresent_ShouldUseOptimisticConcurrencyTokens()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"Id":"actor-1","ActorId":"actor-1","StateVersion":1,"LastEventId":"evt-1","UpdatedAt":"2026-03-16T00:00:00Z","Value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        await store.UpsertAsync(new StoreReadModel
+        {
+            Id = "actor-1",
+            StateVersion = 2,
+            LastEventId = "evt-2",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z"),
+            Value = "v2",
+        });
+
+        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_doc/actor-1");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
     }
 
     [Fact]
@@ -191,10 +225,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests.Should().HaveCount(6);
         handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha");
         handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
-        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_create/actor-1");
         handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
         handler.CapturedRequests[4].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
-        handler.CapturedRequests[5].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+        handler.CapturedRequests[5].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_create/actor-2");
     }
 
     [Fact]

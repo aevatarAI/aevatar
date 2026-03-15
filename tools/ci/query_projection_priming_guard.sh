@@ -7,11 +7,12 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 hits="$(
-  rg -n "IScriptAuthorityProjectionPrimingPort|IProjectionPortActivationService<|IProjectionPortReleaseService<|EnsureActorProjectionAsync|AttachLiveSinkAsync|ReleaseActorProjectionAsync|PrimeAsync" \
+  rg -n "IScriptAuthorityReadModelActivationPort|IScriptAuthorityProjectionPrimingPort|IProjectionPortActivationService<|IProjectionPortReleaseService<|EnsureActorProjectionAsync|AttachLiveSinkAsync|ReleaseActorProjectionAsync|ActivateAsync|PrimeAsync" \
     src \
     -g '**/*Query*.cs' \
     -g '**/*ReadPort*.cs' \
     -g '!**/*PrimingPort*.cs' \
+    -g '!**/*ActivationPort*.cs' \
     -g '!**/bin/**' \
     -g '!**/obj/**' \
     || true

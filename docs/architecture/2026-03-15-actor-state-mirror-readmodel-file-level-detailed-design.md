@@ -70,7 +70,7 @@
    - 新增 actor-scoped readmodel 应只需新增 projection payload mapper、metadata provider、materializer
    - 不再要求增加 reducer 链和回放逻辑
 5. `语义命名优先`
-   - `StateVersion` 直接表达源端已提交版本，不再额外引入 `SourceVersion`
+   - `StateVersion` 直接表达权威已提交版本，不再额外引入另一套版本字段
    - `LastEventId` 直接表达最后一次已物化事实标识，不再额外引入 `SourceEventId`
 6. `Explicit Consumption`
    - 同一 actor 可以有多个 readmodel，但每个 readmodel 都必须绑定明确消费场景

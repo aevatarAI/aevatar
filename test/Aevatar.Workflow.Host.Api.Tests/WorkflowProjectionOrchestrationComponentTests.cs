@@ -720,32 +720,28 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var mapper = new WorkflowExecutionReadModelMapper();
         var now = DateTimeOffset.UtcNow;
-        var report = new WorkflowExecutionReport
+        var currentState = new WorkflowExecutionCurrentStateDocument
         {
+            Id = "actor-map",
             RootActorId = "actor-map",
             WorkflowName = "wf-map",
             CommandId = "cmd-map",
+            Status = "completed",
+            StateVersion = 3,
             LastEventId = "evt-map",
             UpdatedAt = now,
             Success = true,
             FinalOutput = "ok",
             FinalError = "",
-            Summary = new WorkflowExecutionSummary
-            {
-                TotalSteps = 3,
-                RequestedSteps = 3,
-                CompletedSteps = 3,
-                RoleReplyCount = 2,
-            },
         };
-        var snapshot = mapper.ToActorSnapshot(report);
-        var projectionState = mapper.ToActorProjectionState(report);
+        var snapshot = mapper.ToActorSnapshot(currentState);
+        var projectionState = mapper.ToActorProjectionState(currentState);
         snapshot.ActorId.Should().Be("actor-map");
         snapshot.WorkflowName.Should().Be("wf-map");
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("ok");
-        snapshot.TotalSteps.Should().Be(3);
-        snapshot.RoleReplyCount.Should().Be(2);
+        snapshot.TotalSteps.Should().Be(0);
+        snapshot.RoleReplyCount.Should().Be(0);
         projectionState.ActorId.Should().Be("actor-map");
         projectionState.LastCommandId.Should().Be("cmd-map");
         projectionState.LastEventId.Should().Be("evt-map");

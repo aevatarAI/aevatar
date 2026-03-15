@@ -272,7 +272,7 @@ actor-scoped readmodel 必须满足：
    - query/application 显式依赖它
 2. `Auxiliary ReadModels`
    - search/list/card/graph 等派生查询形态
-   - 仍由同一个 actor 的 committed state 与 source version 驱动
+   - 仍由同一个 actor 的 committed state 与 `StateVersion` 驱动
    - 不能拥有超出 actor 当前态的新业务事实
 
 ### 5.4 Aggregate Actor
@@ -308,7 +308,7 @@ actor-scoped readmodel 必须满足：
 
 所有 state-mirror readmodel 的正常写入语义统一为：
 
-`monotonic overwrite by source version`
+`monotonic overwrite by state version`
 
 规则如下：
 
@@ -382,7 +382,7 @@ query 侧禁止：
 1. 以“事件 reducer”表达当前态生成的默认路径
 2. 宽松的“只有 Id 就算 readmodel”根接口语义
 3. 允许 query/read path 触发 projection 生命周期的抽象
-4. 本地 projection counter 冒充 source version 的模型
+4. 本地 projection counter 冒充 `StateVersion` 的模型
 4. 本地 projection counter 冒充 state version 的模型
 5. 用 `sink role` 偷偷表达主次顺序的 runtime 设计
 
@@ -480,7 +480,7 @@ graph/index provider 的要求是：
 2. 新增或更新 guard，禁止：
    - query-time priming
    - current-state projector 读取旧 readmodel 做 reducer
-   - 本地 `StateVersion++` 冒充 source version
+   - 本地 `StateVersion++` 冒充权威 `StateVersion`
 3. 为 `Applied / Stale / Duplicate / Conflict` 增加 provider tests
 4. 为 `workflow / scripting` 增加 state-mirror 路径集成测试
 

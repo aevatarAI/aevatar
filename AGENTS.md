@@ -66,7 +66,7 @@
 - 单一权威拥有者：每个稳定业务事实都必须有唯一 `actor` 作为权威拥有者；`committed event store + actor state` 是唯一真相，`read model` 只是查询副本，禁止反向定义业务事实。
 - 查询始终走 readmodel：对外查询默认只能读取 readmodel；不得把 actor 内部状态、state mirror payload 或 event replay 暴露成查询主路径。
 - `EventEnvelope` 是唯一投影传输壳：业务消息与投影消息都只使用 `EventEnvelope`；二者区别只能由强类型 `payload` 契约表达，禁止再引入第二层投影包络。
-- 业务协议一致性与查询一致性分层处理：actor 间业务消息链路只对“消息已接收、事件已提交、协议已推进到某一步”负责；query/readmodel 链路只对“某个 source version 已物化可见”负责，禁止把 readmodel 可见性当成 actor 间业务协商完成，也禁止把业务 ACK 冒充成 query 新鲜度保证。
+- 业务协议一致性与查询一致性分层处理：actor 间业务消息链路只对“消息已接收、事件已提交、协议已推进到某一步”负责；query/readmodel 链路只对“某个 `StateVersion` 已物化可见”负责，禁止把 readmodel 可见性当成 actor 间业务协商完成，也禁止把业务 ACK 冒充成 query 新鲜度保证。
 - 一权威状态可物化多个 readmodel：默认模型是 `one authoritative actor state -> many actor-scoped current-state readmodels`；不同 readmodel 只表达同一 actor 当前态的不同查询形态，不得各自重新计算第二套业务状态机。
 - 不是每个 actor 都必须产出 readmodel：只有存在稳定消费场景时，才为该 actor 增加 readmodel；没有消费场景的 actor，不必新增 readmodel，也不必额外发布 projection payload。
 - 新增 readmodel 必须先声明消费场景：同一 actor 可以对应多个 readmodel，但每个 readmodel 都必须有明确的消费方、查询入口、返回 DTO 或 UI/搜索/图查询场景；没有稳定消费场景的 readmodel 不得新增。

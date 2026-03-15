@@ -20,7 +20,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
+    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
 
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
@@ -32,7 +32,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -43,7 +43,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
     }
 
     public IScriptBehaviorRuntimeCapabilities Create(
@@ -73,6 +73,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             _runtimeProvisioningPort,
             _runtimeCommandPort,
             _catalogCommandPort,
-            _authorityProjectionPrimingPort);
+            _authorityReadModelActivationPort);
     }
 }
