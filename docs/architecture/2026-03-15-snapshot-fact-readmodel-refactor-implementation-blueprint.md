@@ -1,662 +1,543 @@
-# Snapshot Fact 驱动的 Projection / ReadModel 重构实施蓝图（2026-03-15）
+# Actor-State Snapshot ReadModel 重构实施蓝图（2026-03-15）
 
 ## 1. 文档元信息
 
 - 状态：`Proposed`
-- 版本：`R1`
+- 版本：`R2`
 - 日期：`2026-03-15`
-- 适用范围：
-  - `src/Aevatar.Foundation.Abstractions`
-  - `src/Aevatar.CQRS.Projection.Core`
-  - `src/Aevatar.CQRS.Projection.Core.Abstractions`
-  - `src/Aevatar.CQRS.Projection.Runtime`
-  - `src/Aevatar.CQRS.Projection.Runtime.Abstractions`
-  - `src/Aevatar.CQRS.Projection.Stores.Abstractions`
-  - `src/Aevatar.CQRS.Projection.Providers.InMemory`
-  - `src/Aevatar.CQRS.Projection.Providers.Elasticsearch`
-  - `src/Aevatar.CQRS.Projection.StateMirror`
-  - `src/workflow/Aevatar.Workflow.Abstractions`
-  - `src/workflow/Aevatar.Workflow.Projection`
-  - `src/Aevatar.Scripting.Abstractions`
-  - `src/Aevatar.Scripting.Projection`
+- 原则：`删除优于兼容`
+- 目标：把现有通用 event-reducer projection 框架，收敛成“以 actor 已提交状态为强事实源的 snapshot replication 框架”
 - 关联文档：
   - `docs/architecture/2026-03-15-cqrs-projection-readmodels-architecture.md`
-  - `docs/architecture/2026-03-15-readmodel-best-practice-refactor-blueprint.md`
-  - `docs/architecture/2026-03-15-readmodel-system-refactor-detailed-design.md`
+  - `AGENTS.md`
 
-## 2. 文档定位
+## 2. 执行摘要
 
-本文不是现状说明，而是给出本轮重构的最终实施方向：
+本轮重构后的目标架构不是：
 
-1. 最强一致性只留在 `actor + committed event store`。
-2. `readmodel` 默认不承诺强一致，不走 query-time replay，不走 query-time materialization。
-3. 对“单 actor、只关心当前态”的读模型，采用 `Snapshot Fact -> 直接覆盖 readmodel` 的正常路径。
-4. 对“历史、审计、timeline、analytics、multi-source aggregate”这类视图，继续采用 `Domain Fact / Domain Event -> 增量 projection`。
-5. `rebuild / replay` 只保留为后台修复和迁移工具，禁止成为线上读路径的一部分。
+- `one actor -> one readmodel`
+- `readmodel` 自己再按 event 计算一份当前态
+- 用通用 `history/aggregate projection` 长期承载业务语义
+
+本轮重构后的目标架构是：
+
+- `one authoritative actor state -> many actor-scoped current-state readmodels`
+- 所有 readmodel 只允许从 actor 的已提交 `state / snapshot fact` 物化
+- `readmodel` 根概念本身就只保留给 actor-scoped current-state replica；不符合者不再叫 readmodel
+- `projection` 只负责复制、校验、索引、分发，不再承担第二套业务计算
+- 跨 actor 聚合必须建模为新的 `aggregate actor`
+- `history / audit / analytics / report` 不再作为默认 readmodel；要么降级为 artifact/export，要么由专门 actor 拥有
 
 一句话结论：
 
-`Actor may emit projection-ready snapshot facts, but may not own read-model materialization.`
+`Actor owns truth. Projection only replicates truth. Aggregation must be actorized.`
 
-## 3. 最终架构决策
+## 3. 设计决策
 
-### 3.1 一致性边界
+### 3.1 权威事实源
 
-本轮重构后，系统明确采用以下边界：
+系统唯一权威事实源是：
 
-1. `actor state` 和 `event store committed version` 是唯一权威事实源。
-2. `readmodel` 是 committed fact 的异步物化副本，不承诺和写侧实时同步。
-3. 查询默认读 `readmodel`，不回 actor 拉当前 state，不回 event store 重放。
-4. 需要更强业务保证时，通过事件化协议、completion event 或 actor-owned contract 获取，而不是把 readmodel 强行做成强一致。
+1. `actor` 的已提交业务状态
+2. 与该状态一一对应的 `committed version`
+3. 从该状态发布出来的强类型 `snapshot fact`
 
-### 3.2 三种 projection 输入模式
+不是权威事实源的东西：
 
-系统只允许三种输入模式，必须显式选一种，不允许混用语义：
+1. `readmodel`
+2. `projection reducer`
+3. `query-time materialization`
+4. 中间层临时缓存
+5. `graph/document/index` store 内的派生副本
 
-| 模式 | 权威输入 | 正常写法 | 是否允许跳过中间版本 | 典型用途 |
-| --- | --- | --- | --- | --- |
-| `Snapshot Fact` | 某个 actor 的完整查询快照事实 | 直接覆盖 snapshot document | 允许，只要新快照来自更高源版本 | actor-scoped 当前态 |
-| `Domain Fact / Domain Event` | 业务增量事实 | 增量 reducer / materializer | 不允许，缺口必须修复 | timeline / 审计 / analytics |
-| `StateMirror` | 已有强类型 state 对象 | 结构镜像辅助 | 仅用于简单镜像 | 开发期或极简单视图 |
+### 3.2 一个 actor 可以有多个 readmodel
 
-### 3.3 禁止事项
+这里要明确修正先前过度收紧的说法。
 
-本轮重构后，以下做法应视为错误实现：
+正确约束不是 `one actor -> one readmodel`，而是：
 
-1. 查询路径触发 `EnsureActorProjectionAsync()` 或任何变体的 query-time priming。
-2. 用 `readmodel` 本地 `StateVersion++` 冒充写侧权威版本。
-3. 把 `raw actor whole state` 原样广播给所有下游，而不经过面向读侧的强类型快照契约。
-4. 让 `readmodel` 依赖 replay 才能得到正确结果。
-5. 让快照型 readmodel 携带只能通过事件历史累积得到的字段。
-6. 让 actor 直接负责 document store / graph store / query provider 物化。
+- `one authoritative actor state -> many actor-scoped readmodels`
 
-## 4. 为什么必须改
+允许存在多份 readmodel，例如：
 
-当前实现已经暴露出三类根本性问题。
+1. `snapshot document`
+2. `search index document`
+3. `graph mirror`
+4. `list/card summary document`
 
-### 4.1 快照型 readmodel 仍然在做事件规约
+但这些 readmodel 必须同时满足：
 
-`workflow` 当前通过 reducer 链从 envelope 增量规约 `WorkflowExecutionReport`，再整体 upsert：
+1. 它们都只表达同一个 actor 当前态的不同查询形态
+2. 它们都来自同一个 `snapshot fact`
+3. 它们都带同一个 `SourceVersion`
+4. 它们不能各自再推导出第二套业务状态机
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/*`
+这条规则还意味着：
 
-其中 `StateVersion` 还是本地计数：
+1. 不再保留“宽松 readmodel 基类”给历史/报表对象挂靠
+2. 凡是不满足 actor-scoped current-state 约束的对象，都不再算 readmodel
+3. 这类对象要么改成 `artifact/export/log`，要么回到 `aggregate actor`
 
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs`
+### 3.3 聚合必须 actor 化
 
-这意味着：
+以下语义不再允许继续落在“通用 readmodel projection”里：
 
-1. 当前态快照和事件历史耦合在一个 document 里。
-2. `state_version` 不是 event store 权威版本。
-3. projector 必须先读当前文档再做 reducer，复杂度和并发面都偏大。
+1. 跨 actor 汇总
+2. 跨 actor 关联
+3. 跨 actor 统计
+4. 跨 actor 业务编排结果
 
-### 4.2 当前 writer 没有版本条件
+这些语义如果是稳定业务事实，必须转成新的 `aggregate actor`：
 
-当前抽象和 provider 都只有裸 `UpsertAsync`：
+- 它自己消费上游事件或快照
+- 它自己维护权威状态
+- 它自己发布快照
+- 它自己拥有 readmodel
 
-- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentWriter.cs`
-- `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionWriteDispatcher.cs`
-- `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs`
-- `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs`
+### 3.4 正常路径与修复路径分离
 
-结果是：
+正常线上路径禁止：
 
-1. 无法表达“只接受更高源版本”的快照覆盖语义。
-2. 无法显式拒绝旧写覆盖。
-3. 无法把 `duplicate / stale / conflict / applied` 区分成稳定运行结果。
+1. query-time replay
+2. query-time priming
+3. query-time “先刷新 readmodel 再返回”
+4. 读侧临时回 event store 重建状态
 
-### 4.3 系统里仍然保留 query-time priming 残留
+允许 replay / rebuild 的场景只有：
 
-例如脚本 authority projection 仍有显式 priming 端口：
+1. 后台修复
+2. schema 迁移
+3. 灾难恢复
+4. 数据补洞
 
-- `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs`
+这类能力属于 `repair pipeline`，不属于 query path。
 
-这类能力只能保留在“启动订阅 / binder / activation”路径，不能继续出现在读侧默认模型里。
+## 4. 目标架构图
 
-## 5. 目标架构
-
-### 5.1 总体结构图
+### 4.1 主体结构
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
   C["Command"] --> A["Actor Turn"]
-  A --> E["Commit Event Store"]
-  E --> P["CommittedStateEventPublished"]
-  P --> N["ProjectionEnvelopeNormalizer"]
+  A --> ES["Commit Event Store + Actor State"]
+  ES --> SF["Emit Typed Snapshot Fact"]
+  SF --> PP["Projection Pipeline"]
 
-  N --> SF["Snapshot Fact Projector"]
-  N --> DF["Domain Fact Projector"]
+  PP --> D1["Canonical Snapshot Document"]
+  PP --> D2["Search / List / Card Documents"]
+  PP --> D3["Actor-Scoped Graph Mirror"]
 
-  SF --> SD["Snapshot Document Writer"]
-  DF --> HD["History / Aggregate Document Writer"]
-  SF --> GM["Graph Materializer"]
-  DF --> GM
+  Q1["Query APIs"] --> D1
+  Q2["Search / UI Query"] --> D2
+  Q3["Graph Query"] --> D3
 
-  SD --> DS["Document Store"]
-  HD --> DS
-  GM --> GS["Graph Store"]
-
-  Q["Query Port"] --> DS
-  Q --> GS
+  U["Upstream Actor Facts"] --> AA["Aggregate Actor"]
+  AA --> AES["Commit Aggregate State"]
+  AES --> ASF["Emit Aggregate Snapshot Fact"]
+  ASF --> PP
 ```
 
-### 5.2 选择路径图
+### 4.2 边界判定图
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TD
-  S["Need a new read model"] --> A{"Only cares about current state of one actor?"}
-  A -->|Yes| B{"Every queried field can be derived from one snapshot?"}
-  A -->|No| E["Use Domain Fact / Event Projection"]
-  B -->|Yes| C["Use Snapshot Fact Projection"]
-  B -->|No| D["Split model: Snapshot Document + History Projection"]
-  E --> F["Maintain continuity / checkpoints"]
-  C --> G["Direct overwrite by source version"]
-  D --> G
+  N["Need a new query model"] --> A{"Single actor current state?"}
+  A -->|Yes| B{"All fields derivable from one committed snapshot?"}
+  A -->|No| G["Create Aggregate Actor"]
+  B -->|Yes| C["Emit Snapshot Fact"]
+  B -->|No| D["Move missing semantics into Actor"]
+  D --> C
+  C --> E["Projection writes one or many actor-scoped readmodels"]
+  G --> H["Aggregate actor owns its own state, events and readmodels"]
 ```
 
-### 5.3 Snapshot 路径时序图
+### 4.3 时序图
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false, "actorMargin": 20, "messageMargin": 8, "diagramMarginX": 10, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-  participant C as "Command Caller"
+  participant C as "Caller"
   participant A as "Actor"
   participant ES as "Event Store"
   participant P as "Projection"
-  participant D as "Document Store"
+  participant D as "ReadModel Stores"
   participant Q as "Query"
 
   C->>A: "Dispatch command"
-  A->>ES: "Commit typed snapshot fact at version N"
-  ES-->>A: "Committed version N"
-  A->>P: "Publish CommittedStateEventPublished"
-  P->>P: "Normalize + unpack snapshot fact"
-  P->>D: "Upsert if incoming source_version is newer"
-  Q->>D: "Read current snapshot"
+  A->>ES: "Commit actor state at version N"
+  A->>P: "Publish SnapshotFact(version=N)"
+  P->>D: "Upsert snapshot document if source_version is newer"
+  P->>D: "Upsert search/list/graph replicas with same source_version"
+  Q->>D: "Read actor-scoped materialized views"
 ```
 
-## 6. 快照型 readmodel 的契约
+## 5. 核心抽象
 
-### 6.1 Snapshot Fact 的最低要求
+### 5.1 Snapshot Fact
 
-快照型 readmodel 不允许只靠“当前事件类型 + 当前文档”猜下一态。它必须由 actor 直接输出一个对查询足够的快照事实。
+`Snapshot Fact` 是 actor 发布给 projection 的强类型查询快照，不是原始内部 state dump。
 
-推荐约束如下：
+最低必须包含：
 
-```proto
-message ProjectionSourceStamp {
-  string actor_id = 1;
-  int64 source_version = 2;
-  string source_event_id = 3;
-  google.protobuf.Timestamp occurred_at_utc = 4;
-}
-```
+1. `ActorId`
+2. `SourceVersion`
+3. `OccurredAtUtc`
+4. `SchemaVersion`
+5. `SnapshotPayload`
 
-每个 `Snapshot Fact` 至少要包含：
+建议同时包含：
 
-1. `actor_id`
-2. `source_version`
-3. `source_event_id`
-4. `occurred_at_utc`
-5. `snapshot payload`
+1. `SourceEventId`
+2. `CommandId`
+3. `CorrelationId`
+4. `Revision / DefinitionId`
 
-### 6.2 Snapshot Fact 不是 raw actor state dump
+### 5.2 Actor-Scoped ReadModel
 
-这里的 `snapshot payload` 必须是“面向读侧的稳定强类型契约”，不是任意内部 state dump。
+actor-scoped readmodel 必须满足：
 
-允许：
+1. 只服务单个 actor 当前态查询
+2. 能被单个 `snapshot fact` 直接覆盖
+3. 持久化时保存 `ActorId + SourceVersion`
+4. 不依赖历史事件重算
 
-1. 字段名、层次结构按查询语义组织。
-2. 去掉运行时临时字段。
-3. 去掉仅 actor 内部使用的控制状态。
-4. 对外部可见语义做强类型建模。
+### 5.3 Canonical 与 Derived
 
-不允许：
+同一个 actor 可以有多份 readmodel，但要区分：
 
-1. 直接广播 actor 私有运行态。
-2. 依赖开放 `map<string,string>` bag 承载稳定查询语义。
-3. 用 `Any` 或 JSON dump 把内部 state 原样扩散到 projection 内核。
+1. `Canonical Snapshot Document`
+   - 当前态主文档
+   - 最完整、最稳定
+   - query 的默认来源
+2. `Derived ReadModels`
+   - search/list/card/graph 等派生查询形态
+   - 仍由同一个 snapshot fact 生成
+   - 不能拥有超出 actor 当前态的新业务事实
 
-### 6.3 快照型 readmodel 的覆盖条件
+### 5.4 Aggregate Actor
 
-单 actor 当前态文档应采用以下规则：
+当需要跨 actor 语义时，必须显式新建 `aggregate actor`，而不是把逻辑塞到 projection 里。
 
-1. `incoming.source_version < stored.source_version`
+`aggregate actor` 需要自己承担：
+
+1. 事实归属
+2. 顺序语义
+3. 状态推进
+4. 快照发布
+5. 读模型物化
+
+## 6. 强制契约
+
+### 6.1 版本契约
+
+每个 actor-scoped readmodel 必须保存：
+
+1. `ActorId`
+2. `SourceVersion`
+3. `OccurredAtUtc`
+4. 可选 `SourceEventId`
+
+其中：
+
+- `SourceVersion` 必须等于该 actor 权威状态对应的 committed version
+- 禁止使用本地 `projection counter`
+- 禁止使用本地 `StateVersion++`
+
+### 6.2 写入语义
+
+所有 snapshot readmodel 的正常写入语义统一为：
+
+`monotonic overwrite by source version`
+
+规则如下：
+
+1. `incoming.version < stored.version`
    - 结果：`stale`
-   - 行为：丢弃，不覆盖
-2. `incoming.source_version == stored.source_version && incoming.source_event_id == stored.source_event_id`
-   - 结果：`duplicate`
-   - 行为：幂等成功，不重复写
-3. `incoming.source_version == stored.source_version && incoming.source_event_id != stored.source_event_id`
-   - 结果：`conflict`
-   - 行为：报警并拒绝
-4. `incoming.source_version > stored.source_version`
+   - 行为：拒绝覆盖
+2. `incoming.version == stored.version`
+   - 若关键身份相同：`duplicate`
+   - 若关键身份不同：`conflict`
+3. `incoming.version > stored.version`
    - 结果：`applied`
    - 行为：直接覆盖
 
-关键点：
+### 6.3 Query 契约
 
-1. 快照型文档允许跳过中间版本，只要新快照本身是完整当前态。
-2. 允许跳过，不等于静默吞错；必须记录 `skipped_versions` 指标和日志。
-3. 只有“当前态快照”可用这条规则；历史型 projection 不允许这么做。
+query 侧只允许：
 
-### 6.4 快照型 readmodel 的设计红线
+1. 直接读已物化 readmodel
+2. 返回该 readmodel 的 `SourceVersion`
+3. 如有需要，显式暴露“最后物化时间”
 
-如果一个文档准备走 snapshot 覆盖模式，那么它的每个字段都必须满足：
+query 侧禁止：
 
-`该字段能只由当前 snapshot fact 决定`
+1. 先读 event store 再临时算结果
+2. 先启动 projection 再返回
+3. 先回 actor 拉 state 再组装
 
-因此：
+### 6.4 Snapshot 契约边界
 
-1. 如果某字段只能靠历史累积得到，它就不应该放在快照型文档里。
-2. `timeline / append-only history / audit trail / analytics counters` 默认不属于快照型文档。
-3. 这类字段必须拆成单独的历史投影或专用统计投影。
+`Snapshot Fact` 必须面向查询语义建模，不得原样转储 actor 内部结构。
 
-## 7. Domain Fact 投影仍然保留的边界
+允许：
 
-以下模型必须继续消费 `Domain Fact / Domain Event`：
+1. 按查询语义重命名字段
+2. 删除内部运行态
+3. 删除临时控制字段
+4. 保留当前态所需的稳定业务字段
 
-1. `timeline`
-2. `audit trail`
-3. `analytics / statistics`
-4. `multi-source aggregate`
-5. 任何“不能由当前态完整决定”的 graph
+禁止：
 
-这类模型的规则和 snapshot 模型相反：
+1. 透出 actor 私有控制状态
+2. 用 bag/JSON/`Any` 承载核心查询语义
+3. 把执行期临时对象下沉到 readmodel 契约
 
-1. 不允许跳版本。
-2. 缺口必须进入修复队列或后台重建。
-3. 文档上保存的不是单一 `source_version`，而是 `checkpoint / per-source watermark`。
+## 7. 不再保留的旧设计
 
-## 8. 目标接口调整
+本轮重构后，以下设计视为待删除对象：
 
-### 8.1 `IProjectionDocumentWriter<TDocument>`
+1. 读侧通过 reducer 从 domain event 重新拼出当前态
+2. `workflow` 当前态与 timeline/report 混在同一个 readmodel 文档
+3. `scripting` 在 projection 侧调用 `ReduceReadModel(...)`
+4. query path 中任何 projection priming / activation / attach live sink
+5. 把 `history / aggregate / analytics` 当成默认 readmodel 形态
+6. 依赖 projector 读取“当前 readmodel 文档 + 当前事件”才能算出下一态
 
-当前接口只有：
+## 8. 分层改造任务
 
-```csharp
-Task UpsertAsync(TDocument readModel, CancellationToken ct = default);
-```
+### 8.1 Abstractions
 
-目标改成：
+需要新增或收敛的抽象：
 
-```csharp
-public interface IProjectionDocumentWriter<in TDocument>
-{
-    Task<ProjectionWriteResult> UpsertAsync(
-        TDocument document,
-        ProjectionWriteCondition? condition = null,
-        CancellationToken ct = default);
-}
-```
+1. `Snapshot Fact` 的统一强类型基模
+2. 收紧后的 `IProjectionReadModel`
+3. 条件写接口：
+   - 按 `SourceVersion` 单调覆盖
+   - 返回 `Applied / Stale / Duplicate / Conflict`
+4. `Canonical` 与 `Derived` 写入角色区分
 
-其中 `ProjectionWriteResult` 至少区分：
+需要删除或弱化的抽象：
 
-1. `Applied`
-2. `Duplicate`
-3. `Stale`
-4. `Conflict`
+1. 以“事件 reducer”表达当前态生成的默认路径
+2. 宽松的“只有 Id 就算 readmodel”根接口语义
+3. 允许 query/read path 触发 projection 生命周期的抽象
+4. 本地 projection counter 冒充 source version 的模型
 
-`ProjectionWriteCondition` 至少支持：
+### 8.2 Projection Runtime
 
-1. `ReplaceIfNewerSourceVersion`
-2. `ReplaceIfExactSourceVersion`
+运行时需要收敛成两件事：
 
-### 8.2 `IProjectionWriteDispatcher<TDocument>`
+1. 解包 `snapshot fact`
+2. 把同一份快照复制到多个 actor-scoped readmodel store
 
-运行时 dispatcher 也必须透传相同语义，而不是只返回裸成功/失败：
+必须实现：
 
-```csharp
-public interface IProjectionWriteDispatcher<in TDocument>
-{
-    Task<ProjectionWriteDispatchResult> UpsertAsync(
-        TDocument document,
-        ProjectionWriteCondition? condition = null,
-        CancellationToken ct = default);
-}
-```
+1. `canonical document` 先写
+2. `derived readmodel` 后写
+3. `canonical` 写失败时，不继续推进派生写入
+4. `derived` 写失败只标记降级，不回滚 `canonical`
 
-### 8.3 Provider 行为
+不再承担：
 
-本轮重构后 provider 语义必须对齐：
+1. 当前态业务规约
+2. 历史补算
+3. 读侧动态推导
 
-1. `InMemory`
-   - 在锁内读取当前版本并执行条件判断
-   - 结果必须与生产 provider 一致
-2. `Elasticsearch`
-   - 不再只做裸 `PUT _doc/{id}`
-   - 必须支持版本条件写入或等价的 OCC 语义
-3. graph provider
-   - 如果 graph 来自 snapshot 文档，至少带上同一个 `source_version`
-   - 允许和 document 非原子，但必须可观测偏斜
+### 8.3 Providers
 
-## 9. 模块级改造方案
+所有 document provider 必须支持：
 
-### 9.1 Foundation / Projection Core
+1. 基于 `SourceVersion` 的条件 upsert
+2. 幂等 duplicate 判定
+3. stale/conflict 的稳定结果类型
+4. 持久化 `SourceVersion`
 
-#### 9.1.1 保持统一 observation 主链
+graph/index provider 的要求是：
 
-本轮不新造第二套 read pipeline，继续复用：
+1. 仍保存相同 `SourceVersion`
+2. 明确自己是 `derived`
+3. 失败时可重试或后台补偿
 
-- `CommittedStateEventPublished`
-- `ProjectionEnvelopeNormalizer`
-- `ProjectionLifecycleService`
-- `ProjectionCoordinator`
+### 8.4 Workflow
 
-`GAgentBase` 当前已经在 commit 成功后发布 committed state event：
+`workflow` 的当前态路径必须改成：
 
-- `src/Aevatar.Foundation.Core/GAgentBase.TState.cs`
+1. 写侧 actor 直接发布 `WorkflowActorSnapshotCommitted`
+2. projection 直接写 `WorkflowActorSnapshotDocument`
+3. `card/list/graph` 由同一份 snapshot fact 派生
 
-这条主链保留不动，变化只在“payload 里承载什么事实”。
+需要新增：
 
-#### 9.1.2 新增写条件与结果类型
+1. `workflow` snapshot proto
+2. `WorkflowActorSnapshotDocument`
+3. `WorkflowActorSnapshotProjector`
+4. `WorkflowActorSnapshotDocumentMapper`
+5. 基于 `SourceVersion` 的 writer 逻辑
 
-新增文件建议：
+需要迁移的查询入口：
 
-1. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteCondition.cs`
-2. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteResult.cs`
-3. `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/ProjectionWriteDispatchResult.cs`
+1. `GetActorSnapshotAsync(...)`
+2. `GetActorProjectionStateAsync(...)`
+3. `WorkflowRunDurableCompletionResolver`
+4. `WorkflowRunFinalizeEmitter`
+5. `WorkflowRunDetachedCleanupOutboxGAgent`
 
-更新文件建议：
+需要删除或降级：
 
-1. `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentWriter.cs`
-2. `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionWriteDispatcher.cs`
-3. `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs`
-4. `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreBinding.cs`
+1. `WorkflowExecutionReadModelProjector` 的当前态职责
+2. `WorkflowExecutionProjectionMutations.cs` 中本地 `StateVersion++`
+3. 当前态与 timeline/report 混写模式
 
-#### 9.1.3 加架构守卫
+### 8.5 Scripting
 
-新增/更新守卫建议：
+`scripting` 的当前态路径必须改成：
 
-1. 禁止 query/service/read-port 路径直接调用 `EnsureActorProjectionAsync()`。
-2. 禁止单 actor snapshot 文档用 `StateVersion++` 本地递增。
-3. 禁止 snapshot projector 在正常路径读取 event store 或 replay feed。
+1. 写侧直接发布 `ScriptReadModelSnapshotCommitted`
+2. projection 直接写 `ScriptReadModelDocument`
+3. native document / native graph 都只消费 snapshot fact
 
-### 9.2 Workflow
+需要新增：
 
-#### 9.2.1 目标形态
+1. `scripting` snapshot proto
+2. snapshot projector
+3. 基于 `SourceVersion` 的覆盖写
 
-`workflow` 需要先把“当前态快照”和“历史视图”拆开。
+需要删除：
 
-目标分层：
+1. projection 侧 `ReduceReadModel(...)` 当前态路径
+2. `ScriptExecutionProjectionContext.CurrentSemanticReadModelDocument`
+3. native projector 对 `CurrentSemanticReadModelDocument` 的依赖
+4. projection 读路径中的 priming 残留
 
-1. `WorkflowActorSnapshotDocument`
-   - actor 当前态
-   - durable completion 判断
-   - 直接来源于 snapshot fact
-2. `WorkflowExecutionTimelineDocument` 或等价历史投影
-   - timeline / audit / append-only history
-   - 继续来源于 domain fact
-3. `WorkflowGraph`
-   - 如果图只表达当前结构关系，则从 snapshot document 派生
-   - 如果图表达历史过程，则从历史投影派生
+### 8.6 Docs / Guards / Tests
 
-#### 9.2.2 为什么不能继续把所有内容塞进 `WorkflowExecutionReport`
+需要同步完成：
 
-当前 `WorkflowExecutionReport` 同时承载：
+1. `AGENTS.md` 与架构文档一致
+2. 新增或更新 guard，禁止：
+   - query-time priming
+   - current-state projector 读取旧 readmodel 做 reducer
+   - 本地 `StateVersion++` 冒充 source version
+3. 为 `Applied / Stale / Duplicate / Conflict` 增加 provider tests
+4. 为 `workflow / scripting` 增加 snapshot-fact 路径集成测试
 
-1. snapshot
-2. timeline
-3. graph source
-4. projection stamp
+## 9. 迁移步骤
 
-这正是它难以切换到 snapshot 覆盖模式的原因。只要 `timeline_entries` 仍在主 document 里，projector 就必须增量累积，不能直接覆盖。
+### Phase 0：收紧规则
 
-#### 9.2.3 Workflow 的迁移步骤
+1. 更新 `AGENTS.md`
+2. 更新架构文档
+3. 增加 query-time priming guard
+4. 增加 snapshot current-state guard
 
-第一阶段建议不直接改全量报告，而是先新增快照文档：
+完成标准：
 
-1. 在 `src/workflow/Aevatar.Workflow.Abstractions` 新增 committed snapshot fact 契约
-   - 建议文件：`workflow_projection_snapshot_messages.proto`
-   - 示例消息：`WorkflowActorSnapshotCommitted`
-2. 在 workflow actor turn 内，在 state 已经应用且 commit 版本已知的同一语义点，生成 typed snapshot fact
-3. 在 `src/workflow/Aevatar.Workflow.Projection` 新增 `WorkflowActorSnapshotProjector`
-4. `GetActorSnapshotAsync()` 与 durable completion 优先切到新 snapshot document
-5. 原 `WorkflowExecutionReadModelProjector` 暂时只保留 timeline / report artifact / debug 兼容用途
-6. 待 query 全部切走后，删除 `WorkflowExecutionProjectionMutations.RecordProjectedEvent(report)` 这种本地版本计数逻辑
+- 新代码不能继续走旧方向
 
-#### 9.2.4 Workflow 建议字段
+### Phase 1：打基础设施底座
 
-优先复用现有查询契约语义：
+1. 引入 readmodel 条件写结果模型
+2. provider 实现 `SourceVersion` 条件覆盖
+3. dispatcher 支持 `canonical -> derived` 顺序
 
-- `WorkflowActorSnapshot`
-- `WorkflowActorProjectionState`
+完成标准：
 
-不建议让 actor 直接依赖 `WorkflowExecutionReport` 作为 snapshot 契约，因为它已经混入过多历史和展示字段。
+- snapshot readmodel 写入具备稳定结果语义
 
-同时明确：
+### Phase 2：Workflow 当前态迁移
 
-1. `WorkflowExecutionStateUpsertedEvent` 的 `Any state` 过于泛化，不应直接作为 committed snapshot fact。
-2. `workflow_run_events.proto` 里的 `WorkflowActorSnapshotPayload` 和 `WorkflowProjectionStateSnapshotPayload` 更接近 query/live payload，不应反向变成 core actor 的正式依赖。
-3. 如果要复用字段语义，应在 `Aevatar.Workflow.Abstractions` 里定义新的中立 snapshot fact，而不是让 `Workflow.Core` 直接依赖 projection/query 模型。
+1. 写侧发布 workflow snapshot fact
+2. 新建 snapshot document 与 projector
+3. 查询入口全部切到新 snapshot document
+4. 旧 mixed report model 退化为 artifact/history
 
-### 9.3 Scripting
+完成标准：
 
-#### 9.3.1 现状与目标
+- workflow 当前态查询不再依赖 reducer 链
 
-`scripting` 当前已经比 workflow 更接近正确方向：
+### Phase 3：Scripting 当前态迁移
 
-1. `ScriptReadModelDocument.StateVersion = fact.StateVersion`
-2. native document / graph 会校验 semantic readmodel 的 `StateVersion`
+1. 写侧发布 scripting snapshot fact
+2. 语义 readmodel 改为直接覆盖
+3. native document / graph 改为 snapshot 驱动
+4. 删除 projection 侧 `ReduceReadModel` 当前态路径
 
-但它仍然是：
+完成标准：
 
-1. 先消费 `ScriptDomainFactCommitted`
-2. 再执行 behavior `ReduceReadModel(...)`
-3. 然后写 `ScriptReadModelDocument`
+- scripting 当前态查询不再依赖旧 readmodel 增量规约
 
-对“当前脚本 readmodel snapshot”来说，这仍然属于读侧计算。
+### Phase 4：删除旧框架残余
 
-#### 9.3.2 目标调整
+1. 删除默认 history/aggregate current-state projection 思路
+2. 删除通用 current-state reducer 路径
+3. 清理过时 readmodel / projector / mapper / proto
+4. 清理不再需要的兼容分支
 
-新增 committed snapshot fact 契约：
+完成标准：
 
-1. 建议文件：`src/Aevatar.Scripting.Abstractions/script_projection_snapshot_messages.proto`
-2. 示例消息：`ScriptReadModelSnapshotCommitted`
-3. 内容：
-   - `actor_id`
-   - `script_id`
-   - `definition_actor_id`
-   - `revision`
-   - `read_model_type_url`
-   - `read_model_payload`
-   - `source_version`
-   - `source_event_id`
-   - `occurred_at`
+- projection 框架语义收敛为 snapshot replication framework
 
-迁移后：
+## 10. 门禁要求
 
-1. `ScriptReadModelProjector` 不再 `ReduceReadModel(...)`
-2. projector 只做：
-   - unpack snapshot fact
-   - 版本条件写入 `ScriptReadModelDocument`
-3. `ScriptNativeDocumentProjector` 与 `ScriptNativeGraphProjector`
-   - 从 snapshot document 或同一 snapshot fact 派生
-   - 继续按 `source_version` 对账
-4. `ScriptDomainFactCommitted` 继续保留给 history / audit / aggregate / 语义检查类投影，不与 snapshot fact 混为一种消息
+必须新增或强化以下门禁：
 
-#### 9.3.3 删除 query-time priming
+1. 禁止 query/read path 触发 priming / activation / ensure projection
+2. 禁止 current-state projector 依赖“读旧文档 + 当前事件”规约当前态
+3. 禁止本地 `StateVersion++` 出现在 current-state readmodel 路径
+4. 禁止新增通用 `history/aggregate view` 作为默认 readmodel
+5. 要求 actor-scoped readmodel 持久化 `SourceVersion`
 
-以下能力必须收缩到 activation/binder 边界，不再让 query 依赖它：
+## 11. 验收标准
 
-- `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs`
+当且仅当下面条件全部满足，本轮重构才算完成：
 
-### 9.4 StateMirror
+1. `workflow` 当前态查询全部由 snapshot fact 驱动
+2. `scripting` 当前态查询全部由 snapshot fact 驱动
+3. query path 中不存在 replay / priming / refresh 逻辑
+4. provider 层支持 `Applied / Stale / Duplicate / Conflict`
+5. 当前态 readmodel 的版本全部来自权威 actor committed version
+6. 旧 event-reducer current-state 路径已删除
+7. 新 guard 已进入 CI
+8. `dotnet build aevatar.slnx --nologo`
+9. `dotnet test aevatar.slnx --nologo`
+10. `bash tools/ci/architecture_guards.sh`
 
-`StateMirror` 只保留为辅助工具，不再作为核心 readmodel 方案。
+## 12. 风险与取舍
 
-明确规则：
+### 12.1 主要收益
 
-1. 仅用于“结构镜像型、无业务语义”的简单场景
-2. 不得作为 query-time 兜底
-3. 不得把 JSON 反射镜像继续扩大为核心 runtime 依赖
-4. 若 actor 需要生成 snapshot fact，应优先使用 typed mapper，而不是在 actor 内直接依赖 `JsonStateMirrorProjection`
+1. 权威事实源唯一
+2. readmodel 语义明显变简单
+3. 当前态查询不再依赖第二套业务规约
+4. projection 并发面显著收窄
+5. `workflow` 与 `scripting` 会收敛到同一条架构主干
 
-## 10. 分阶段实施计划
+### 12.2 明确代价
 
-### Phase 0：定约束，不改业务语义
+1. actor 需要更早产出查询语义快照
+2. 某些原本依赖 reducer 的字段要回收到 actor 内计算
+3. 历史/报表/分析需求必须重新归位
+4. 旧实现可以直接删，不再维持兼容
 
-目标：
+### 12.3 风险控制
 
-1. 加写条件接口
-2. 加写结果类型
-3. 加守卫
-4. 文档和 ADR 固化
+1. 先迁当前态主查询，再删旧路径
+2. `canonical` 先落地，再补 `derived`
+3. 所有 derived store 统一带 `SourceVersion`
+4. 以门禁约束防止旧设计回流
 
-交付：
+## 13. 最终落点
 
-1. `ProjectionWriteCondition`
-2. `ProjectionWriteResult`
-3. provider 统一行为测试
-4. query-time priming 守卫
+重构完成后的框架定义应该非常简单：
 
-### Phase 1：Workflow 当前态快照切出
+1. actor 拥有业务真相
+2. actor 发布强类型当前态快照
+3. projection 把同一份快照复制成多个 actor-scoped readmodels
+4. 聚合语义通过 aggregate actor 获得
+5. replay 只属于修复，不属于查询
 
-目标：
+这不是对旧 CQRS projection 细节的局部修补，而是把框架主语义改回：
 
-1. 新增 workflow snapshot fact
-2. 新增 `WorkflowActorSnapshotDocument`
-3. 新增 `WorkflowActorSnapshotProjector`
-4. durable completion 和 `GetActorSnapshotAsync()` 切换到新文档
-
-交付：
-
-1. workflow 快照查询不再依赖 `WorkflowExecutionReport`
-2. workflow 当前态版本与 event store version 一致
-3. 本地 `StateVersion++` 不再参与 completion 判断
-
-### Phase 2：Workflow 历史视图与当前态彻底拆开
-
-目标：
-
-1. timeline / report artifact / debug 独立成历史投影
-2. graph 明确为“当前结构图”或“历史过程图”
-3. 删除 `WorkflowExecutionReport` 的混合职责
-
-交付：
-
-1. `WorkflowExecutionReadModelProjector` 缩减或删除
-2. reducer 链只保留历史视图
-3. graph materializer 的输入边界清晰
-
-### Phase 3：Scripting 语义 readmodel 切到 snapshot fact
-
-目标：
-
-1. 新增 `ScriptReadModelSnapshotCommitted`
-2. semantic readmodel 直接覆盖写入
-3. native document / graph 派生到同一 `source_version`
-
-交付：
-
-1. `ScriptReadModelProjector` 去除 `ReduceReadModel(...)`
-2. scripting 查询只依赖 persisted snapshot
-3. scripting priming 从默认查询模型中移除
-
-### Phase 4：补齐 store 级 OCC 和观测
-
-目标：
-
-1. `InMemory` 与 `Elasticsearch` 行为一致
-2. 暴露 `applied / duplicate / stale / conflict`
-3. graph/document 偏斜可观测
-
-交付：
-
-1. provider 测试矩阵
-2. stale/duplicate 指标
-3. skipped-version 指标
-
-### Phase 5：清理旧模型与一次性 backfill 工具
-
-目标：
-
-1. 删除临时双写
-2. 删除旧 reducer / 旧 mixed document
-3. 保留后台 rebuild 工具用于迁移和灾难恢复
-
-交付：
-
-1. 新快照模型成为唯一正常路径
-2. replay 工具只留在后台运维能力
-
-## 11. 测试与验证
-
-### 11.1 单元测试
-
-必须新增：
-
-1. writer 条件写测试
-   - newer
-   - stale
-   - duplicate
-   - conflict
-2. workflow snapshot projector 测试
-   - 高版本覆盖旧版本
-   - 跳版本仍保持当前态正确
-3. scripting snapshot projector 测试
-   - semantic/native 文档版本对齐
-
-### 11.2 集成测试
-
-必须覆盖：
-
-1. actor commit `version=N` 后 readmodel 可见 `source_version=N`
-2. 旧快照延迟到达不会覆盖新快照
-3. duplicate event 不会重复写
-4. query path 不触发 priming / replay
-
-### 11.3 CI 与门禁
-
-涉及本蓝图实施时，提交前至少执行：
-
-1. `dotnet build aevatar.slnx --nologo`
-2. `dotnet test aevatar.slnx --nologo`
-3. `bash tools/ci/architecture_guards.sh`
-4. `bash tools/ci/projection_route_mapping_guard.sh`
-5. 涉及 workflow binding / projection lifecycle 时：`bash tools/ci/workflow_binding_boundary_guard.sh`
-
-## 12. 迁移与切换策略
-
-### 12.1 迁移原则
-
-1. 允许短期双写，但双写只能作为迁移窗口内的验证手段。
-2. 查询切换后，应立即删除旧路径，不保留空兼容层。
-3. backfill 可以使用离线 replay，但只能用于迁移和修复，不得回流到线上 query。
-
-### 12.2 推荐切换顺序
-
-1. 先切换 workflow 当前态快照
-2. 再拆 workflow 历史视图
-3. 再切换 scripting 语义 readmodel
-4. 最后收尾 graph 和 priming
-
-原因：
-
-1. workflow 当前最混乱，也最需要先把“当前态”和“历史视图”拆开
-2. scripting 已经保留权威 `state_version`，迁移难度低于 workflow
-
-## 13. 验收标准
-
-本轮重构完成后，应满足以下验收条件：
-
-1. 单 actor 当前态 readmodel 的 `source_version` 与 event store committed version 一致。
-2. 快照型 projector 正常路径不再读取当前 persisted document 参与 reducer。
-3. query path 不再触发 priming / replay / refresh。
-4. workflow durable completion 基于新的 snapshot document，而不是混合报告的本地计数版本。
-5. scripting semantic readmodel 不再在 projection 侧重新执行 readmodel reduce。
-6. `duplicate / stale / conflict / applied` 在 provider 和 runtime 层可观测。
-7. 历史型 readmodel 与快照型 readmodel 的边界在代码和文档中都清晰可见。
-
-## 14. 本文对仓库的直接约束
-
-从本文开始，仓库内对 readmodel 的默认判断改为：
-
-1. 如果它是 `actor-scoped current snapshot`，优先设计为 `Snapshot Fact -> Direct Overwrite Document`。
-2. 如果它需要历史或聚合语义，优先设计为 `Domain Fact -> Incremental Projection`。
-3. 如果一个 readmodel 既要当前态又要完整历史，默认拆成两个模型，不再把两种语义揉在一个 document。
-4. `replay` 是 repair 能力，不是 readmodel 的日常工作模式。
-5. `state small` 不是广播原始 state 的充分理由；只有“稳定、可公开、强类型、对查询足够”的快照契约才允许进入 projection 主链。
+`authoritative actor state + snapshot replication + actorized aggregation`

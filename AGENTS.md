@@ -61,15 +61,19 @@
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
 
-## 权威状态 / 派生视图抽象（强制）
-- 权威状态机与派生副本分离：`actor + committed event store` 是唯一权威事实源；`read model / materialized view / cache / search document / graph` 都只是派生副本，禁止反向定义业务真相。
-- 当前态视图与历史视图分型：只回答“单个 actor 当前是什么”的查询，默认建模为 `snapshot view`；回答 `timeline / audit / analytics / multi-source aggregate` 的查询，默认建模为 `history view`；禁止默认把两种语义揉进同一个 document。
-- 正常路径与修复路径分离：正常 query path 和正常 projection path 都不得依赖 `event replay / rebuild / backfill`；`replay` 只属于后台修复、迁移、灾难恢复，不属于线上读路径。
-- 计算前移，物化后移：凡是可以由权威 actor 直接确定的当前态查询语义，应优先由 actor 产出强类型 `snapshot fact`；projection 只负责校验、路由和物化，不负责在读侧重新推导一遍当前态。
-- actor 产出快照不等于 actor 拥有 read model：actor 可以发布 `projection-ready snapshot fact`，但不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；读侧落盘、索引和派生视图仍属于 projection/runtime/provider 边界。
-- 版本语义必须前推到派生副本：单源 `snapshot view` 的版本必须来自权威源版本，且与 committed version 或其等价 watermark 对齐；禁止使用本地 `projection counter` 冒充权威版本；多源视图必须显式保存 `per-source watermark / checkpoint`。
-- 覆盖写与增量写各守边界：`snapshot view` 采用“基于源版本的单调覆盖”；`history view` 采用“基于连续事实的增量规约”；禁止要求同一个模型既承担完整当前态覆盖，又承担不可丢失的历史累积。
-- 查询诚实性优先于伪强一致：read model 可以最终一致，但必须诚实暴露自己的来源版本、刷新戳或 checkpoint；禁止在 `accepted ACK`、弱读结果或局部物化结果上暗示“已经强一致”。
+## 权威状态 / 快照复制抽象（强制）
+- 单一权威拥有者：每个稳定业务事实都必须有唯一 `actor` 作为权威拥有者；`committed event store + actor state` 是唯一真相，`read model` 只是快照副本，禁止反向定义业务事实。
+- 一权威状态可物化多个 readmodel：默认模型是 `one authoritative actor state -> many actor-scoped current-state readmodels`；不同 readmodel 只表达同一 actor 当前态的不同查询形态，不得各自重新计算第二套业务状态机。
+- readmodel 根契约必须收紧：`readmodel` 在仓库内默认就表示 `actor-scoped current-state replica`；不符合这条约束的对象不得继续挂在通用 readmodel/projection 主链下，必须改名并降级为 `artifact/export/log`，或由新的 `aggregate actor` 拥有。
+- 聚合必须 actor 化：跨 actor 聚合、汇总、关联、编排结果若具有稳定业务语义，必须建模为新的 `aggregate actor`；禁止把这类语义长期放在通用 `history/aggregate view` 或 query-time 拼装层中。
+- projection 退化为快照复制：Projection Pipeline 的默认职责是把 actor 产出的强类型 `snapshot fact` 复制到多个 document/index/search/graph store；禁止把 projection 作为第二套通用业务计算框架。
+- 正常路径禁止 replay：正常 query path 和正常 projection path 都不得依赖 `event replay / rebuild / backfill`；`replay` 只属于后台修复、迁移、灾难恢复，不属于线上读路径。
+- actor 负责语义，projection 负责物化：凡是可以由 actor 直接确定的当前态查询语义，必须前移到 actor 内产出强类型快照；projection 只负责校验、覆盖写入、索引和分发，不负责在读侧重新推导当前态。
+- actor 不直接拥有存储实现：actor 可以发布 `projection-ready snapshot fact`，但不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；这些仍属于 projection/runtime/provider 边界。
+- 版本必须跟权威源对齐：每个 actor-scoped readmodel 的版本必须来自同一个权威 actor 的 committed version 或其等价水位；禁止使用本地 `projection counter`、本地 `StateVersion++` 或其他派生计数冒充权威版本。
+- 覆盖复制优先：默认 readmodel 写入语义是“基于权威源版本的单调覆盖”；旧快照不得覆盖新快照，重复快照必须幂等，冲突版本必须显式报错。
+- 不默认保留通用历史视图：`timeline / audit / report / analytics` 不是默认 readmodel 形态；如确有业务价值，要么降级为 artifact/export，要么由专门 actor 拥有，不得继续伪装成主查询模型。
+- 查询诚实性优先于伪强一致：readmodel 可以最终一致，但必须诚实暴露自己的权威源版本或刷新戳；禁止在 `accepted ACK`、弱读结果或局部物化结果上暗示“已经强一致”。
 - 不得 query-time priming：查询前若需要先“确保投影存在/刷新 read model”，该动作必须在显式 activation、lease、binder 或后台物化流程中完成；禁止在 query 方法内同步补投影。
 - 快照契约必须面向查询语义：`snapshot fact` 必须是面向读侧的稳定强类型契约，而不是 actor 内部 state 的原样 dump；内部运行态、临时控制字段、仅执行期可见信息不得默认扩散到 projection 主链。
 
@@ -117,6 +121,7 @@
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
+- `bash tools/ci/query_projection_priming_guard.sh`：校验 query/read 路径不触发 projection priming 或生命周期操作。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
 - `bash tools/ci/playground_asset_drift_guard.sh`：校验 CLI playground 与 Demo Web 静态资源漂移。
 - `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
@@ -140,6 +145,7 @@
 - 若确属跨进程/跨节点最终一致性探测且无法改为确定性同步（如 `TaskCompletionSource`/`Channel`），必须将测试文件路径显式加入 `tools/ci/test_polling_allowlist.txt`，并在变更说明里写明原因。
 - 涉及测试新增/修改时，提交前必须执行：`bash tools/ci/test_stability_guards.sh`。
 - 涉及 workflow actor binding、definition identity、resume/signal 路径的变更时，提交前必须执行：`bash tools/ci/workflow_binding_boundary_guard.sh`。
+- 涉及 query/read port、projection priming、projection lifecycle 与 query 边界的变更时，提交前必须执行：`bash tools/ci/query_projection_priming_guard.sh`。
 - CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范
