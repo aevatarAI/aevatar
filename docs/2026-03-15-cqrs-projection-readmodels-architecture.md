@@ -1,872 +1,629 @@
-# CQRS Projection ReadModels Architecture
-
-## Purpose
-
-This document explains how the `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels` contracts work, how they are assembled by the projection runtime, how concrete providers persist them, and how business modules such as Workflow, Scripting, StateMirror, and the Case demo consume the same contracts.
-
-The focus is the working architecture around these types:
-
-- `IProjectionReadModel`
-- `IProjectionReadModelCloneable<TReadModel>`
-- `IProjectionDocumentStore<TReadModel, TKey>`
-- `IProjectionDocumentMetadataProvider<TReadModel>`
-- `DocumentIndexMetadata`
-- `IDynamicDocumentIndexedReadModel`
-- `IGraphReadModel`
-
-Related graph contracts from the same abstraction package are included because `IGraphReadModel` depends on them and the runtime treats document and graph persistence as parallel write targets.
-
-## Scope
-
-Primary code scope:
-
-- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels`
-- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Graphs`
-- `src/Aevatar.CQRS.Projection.Runtime.Abstractions`
-- `src/Aevatar.CQRS.Projection.Runtime`
-- `src/Aevatar.CQRS.Projection.Providers.InMemory`
-- `src/Aevatar.CQRS.Projection.Providers.Elasticsearch`
-
-Business-side examples:
-
-- `src/workflow/Aevatar.Workflow.Projection`
-- `src/Aevatar.Scripting.Projection`
-- `src/Aevatar.CQRS.Projection.StateMirror`
-- `demos/Aevatar.Demos.CaseProjection`
-
-## Design Summary
-
-The architecture splits responsibilities into four layers:
-
-1. `Stores.Abstractions`
-   Defines the minimum contracts for read-model identity, document persistence, graph persistence, and index metadata.
-2. `Projection.Core`
-   Delivers event envelopes to projector implementations and manages projection session lifecycle.
-3. `Projection.Runtime`
-   Bridges projectors to stores by fan-out dispatching one read model into one or more store bindings.
-4. Business projection modules
-   Define concrete read models, reducers, projectors, metadata providers, query readers, and API adapters.
-
-The key design choice is:
-
-- projectors know business semantics
-- runtime knows dispatch semantics
-- stores know persistence semantics
-
-No layer is supposed to own all three.
-
-## Layered Architecture
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart TB
-  A["Business Projection Modules<br/>Workflow / Scripting / Demo / StateMirror"] --> B["Projection Core<br/>Lifecycle / Coordinator / Dispatcher / Subscription"]
-  B --> C["Projection Runtime<br/>StoreDispatcher / DocumentBinding / GraphBinding"]
-  C --> D["ReadModel Contracts<br/>IProjectionReadModel / IGraphReadModel / IDynamicDocumentIndexedReadModel"]
-  C --> E["Document Store Providers<br/>InMemory / Elasticsearch"]
-  C --> F["Graph Store Providers<br/>InMemory Graph Store"]
-  E --> D
-  F --> D
-```
-
-## ReadModels Abstraction Layer
-
-### 1. `IProjectionReadModel`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionReadModel.cs`
-
-Responsibilities:
-
-- defines the minimum identity contract for any persisted read model
-- requires only `string Id`
-- does not impose timestamps, versions, or payload shape
-
-Implication:
-
-- business modules are free to define minimal models
-- metadata fields such as `StateVersion` or `UpdatedAt` are conventions, not framework-enforced requirements
-
-### 2. `IProjectionReadModelCloneable<TReadModel>`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionReadModelCloneable.cs`
-
-Responsibilities:
-
-- lets providers clone read models without relying on generic JSON round-tripping
-- is mainly used by the in-memory document store for defensive copying
-
-Practical effect:
-
-- if a read model implements this interface, `InMemoryProjectionDocumentStore` will use `DeepClone()`
-- otherwise the provider falls back to `System.Text.Json` serialize/deserialize cloning
-
-### 3. `IProjectionDocumentStore<TReadModel, TKey>`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentStore.cs`
-
-Responsibilities:
-
-- persists document-shaped read models
-- supports four operations:
-  - `UpsertAsync`
-  - `MutateAsync`
-  - `GetAsync`
-  - `ListAsync`
-
-Semantics:
-
-- `UpsertAsync` writes a full read-model snapshot
-- `MutateAsync` applies an in-place mutation identified by key
-- `GetAsync` and `ListAsync` are query-side capabilities
-
-Important boundary:
-
-- the abstraction does not define concurrency policy
-- concrete providers decide how mutation safety is implemented
-
-### 4. `IProjectionDocumentMetadataProvider<TReadModel>`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IProjectionDocumentMetadataProvider.cs`
-
-Responsibilities:
-
-- supplies index metadata for a read-model type
-- returns `DocumentIndexMetadata`
-
-This is store-side metadata, not business payload.
-
-### 5. `DocumentIndexMetadata`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/DocumentIndexMetadata.cs`
-
-Fields:
-
-- `IndexName`
-- `Mappings`
-- `Settings`
-- `Aliases`
-
-Meaning:
-
-- tells a document provider how to initialize or address storage
-- is consumed by the runtime/provider path, not by business reducers
-
-### 6. `IDynamicDocumentIndexedReadModel`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IDynamicDocumentIndexedReadModel.cs`
-
-Responsibilities:
-
-- lets one read-model type choose index scope dynamically per instance
-- exposes:
-  - `DocumentIndexScope`
-  - `DocumentMetadata`
-
-This is used by Elasticsearch dynamic indexing to derive the actual target index from the read-model instance.
-
-### 7. `IGraphReadModel`
-
-File: `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/IGraphReadModel.cs`
-
-Responsibilities:
-
-- marks a read model as graph-materializable
-- exposes:
-  - `GraphScope`
-  - `GraphNodes`
-  - `GraphEdges`
-
-Effect:
-
-- the runtime can write the same logical read model into a graph store in parallel with document persistence
-
-## Graph Contracts That Work With `IGraphReadModel`
-
-Files under `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Graphs`
-
-Core types:
-
-- `ProjectionGraphNode`
-- `ProjectionGraphEdge`
-- `ProjectionGraphQuery`
-- `ProjectionGraphSubgraph`
-- `ProjectionGraphDirection`
-- `IProjectionGraphStore`
-
-These types define:
-
-- graph write operations
-- owner-based cleanup support
-- neighbor query support
-- subgraph query support
-
-`IGraphReadModel` is therefore not a separate persistence model family. It is an adapter contract that lets one read model produce graph nodes and edges.
-
-## Upstream Projection Core
-
-The read-model contracts do not receive events directly. Upstream orchestration comes from `Aevatar.CQRS.Projection.Core`.
-
-Main contracts:
-
-- `IProjectionProjector<TContext, TTopology>`
-- `IProjectionEventReducer<TReadModel, TContext>`
-- `IProjectionLifecycleService<TContext, TCompletion>`
-
-Main implementations:
-
-- `ProjectionLifecycleService<TContext, TCompletion>`
-- `ProjectionCoordinator<TContext, TTopology>`
-- `ProjectionDispatcher<TContext, TTopology>`
-- `ProjectionSessionEventHub<TEvent>`
-
-Role split:
-
-- `ProjectionLifecycleService` starts, stops, and completes a projection session
-- `ProjectionDispatcher` forwards one envelope to the coordinator
-- `ProjectionCoordinator` runs all registered projectors in registration order
-- business projector decides how to mutate or create read models
-
-## End-to-End Write Path
+# 2026-03-15 CQRS Projection / ReadModel 一致性与并发分析
+
+## 1. 结论先行
+
+当前仓库里的 CQRS 读侧，不是“命令提交后立刻强一致可读”的模型，而是：
+
+- `per actor ordered`
+- `projection async materialized`
+- `single read model eventually consistent`
+- `multi-store non-atomic`
+
+更具体地说：
+
+1. 写侧的权威事实是 committed domain event，不是 read model。
+2. 读侧的一致性建立在“committed fact 已进入 projection pipeline 并被对应 projector 成功写入目标 store”这个前提上。
+3. `accepted receipt` 只代表命令已被接受投递，不代表 read model 已可见。
+4. Workflow 已经把 `dispatch accepted`、`projection observed`、`terminal completion` 三个阶段拆开了；真正的 durable completion 依赖 query port 读取 read model，而不是依赖同步 ACK。
+5. 文档存储与图存储并行写入，但不是单事务；`snapshot/timeline` 和 `graph` 之间天然可能出现读偏斜。
+6. 当前实现对“投影失败后如何补偿”只覆盖了 store fan-out 失败的一部分场景，没有覆盖 projector/reducer 级失败后的自动重放。
+
+如果直接回答“读的一致性如何确定”：
+
+- 读一致性的判断标准不是“命令返回了”，而是 read model 自身是否已经携带足够的投影证据，例如 `LastCommandId / StateVersion / LastEventId / UpdatedAt / CompletionStatus`。
+- 不同查询的保证强度取决于它读取的是哪个 read model、背后是哪种 provider，以及是否跨 document/graph 两类 store。
+
+## 2. 分析范围
+
+本文基于当前仓库代码，不讨论历史方案。核心范围如下：
+
+- Projection Core
+  - `src/Aevatar.CQRS.Projection.Core`
+  - `src/Aevatar.CQRS.Projection.Core.Abstractions`
+- Projection Runtime / Store
+  - `src/Aevatar.CQRS.Projection.Runtime`
+  - `src/Aevatar.CQRS.Projection.Runtime.Abstractions`
+  - `src/Aevatar.CQRS.Projection.Stores.Abstractions`
+  - `src/Aevatar.CQRS.Projection.Providers.InMemory`
+  - `src/Aevatar.CQRS.Projection.Providers.Elasticsearch`
+  - `src/Aevatar.CQRS.Projection.Providers.Neo4j`
+- 业务投影
+  - `src/workflow/Aevatar.Workflow.Projection`
+  - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter`
+  - `src/Aevatar.Scripting.Projection`
+  - `src/Aevatar.CQRS.Projection.StateMirror`
+  - `src/Aevatar.AI.Projection`
+
+## 3. 统一投影主链路
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  A["EventEnvelope"] --> B["ProjectionLifecycleService"]
-  B --> C["ProjectionDispatcher"]
-  C --> D["ProjectionCoordinator"]
-  D --> E["Business Projector"]
-  E --> F["IProjectionStoreDispatcher<TReadModel, TKey>"]
-  F --> G["Document Binding"]
-  F --> H["Graph Binding"]
-  G --> I["IProjectionDocumentStore"]
-  H --> J["IProjectionGraphStore"]
+    A["Command / Actor Turn"] --> B["PersistDomainEventAsync"]
+    B --> C["EventStore Commit"]
+    C --> D["CommittedStateEventPublished"]
+    D --> E["Actor Self Stream"]
+    E --> F["ProjectionSubscriptionRegistry"]
+    F --> G["ProjectionEnvelopeNormalizer"]
+    G --> H["ProjectionDispatcher"]
+    H --> I["ProjectionCoordinator"]
+    I --> J["Projector Branch 1<br/>ReadModel Projector"]
+    I --> K["Projector Branch 2<br/>AGUI / Session Event Projector"]
+    J --> L["ProjectionStoreDispatcher"]
+    L --> M["Document Binding"]
+    L --> N["Graph Binding"]
+    M --> O["Document Reader / QueryPort"]
+    N --> P["Graph Reader / QueryPort"]
+    K --> Q["ProjectionSessionEventHub"]
+    Q --> R["Live Sink / SSE / WS"]
 ```
 
-Detailed behavior:
+这条链路的关键点有两个：
 
-1. a stream or actor subscription produces an `EventEnvelope`
-2. `ProjectionLifecycleService` routes the envelope to the dispatcher
-3. `ProjectionDispatcher` delegates to `ProjectionCoordinator`
-4. `ProjectionCoordinator` executes each registered projector
-5. the business projector transforms context + event into a concrete read model
-6. `IProjectionStoreDispatcher` fans the write out to all active bindings
-7. bindings forward the write to concrete providers
+1. CQRS read model 和 AGUI/live event 没有各自维护第二条订阅链路，它们是同一个 `ProjectionCoordinator` 下的不同 projector 分支。
+2. Projection 输入并不是“任意 envelope”，而是经过 `ProjectionEnvelopeNormalizer` 规范化之后的 envelope。
 
-## Runtime Layer
+## 4. committed event 如何进入 projection pipeline
 
-### `IProjectionStoreDispatcher<TReadModel, TKey>`
+### 4.1 committed fact 的发布
 
-File: `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionStoreDispatcher.cs`
+写侧 actor 在 committed 之后，会把 committed state event 再包装成 `CommittedStateEventPublished` 发布到 observer publication：
 
-Responsibilities:
+- `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
+- `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorPublisher.cs:115-137`
+- `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansGrainEventPublisher.cs:111-133`
 
-- presents one unified store API to business projectors
-- hides how many concrete store bindings exist behind it
+这里的语义是：
 
-Supported operations:
+1. 先 `EventStore` commit。
+2. 再发布 `CommittedStateEventPublished`。
+3. Projection 消费的是“已提交事实的可观察流”，不是未提交命令，也不是 query-time replay。
 
-- `UpsertAsync`
-- `MutateAsync`
-- `GetAsync`
-- `ListAsync`
+### 4.2 Projection 输入的规范化
 
-### `IProjectionStoreBinding<TReadModel, TKey>`
+`ProjectionEnvelopeNormalizer` 决定了哪些 envelope 会真正进入 projection 业务逻辑：
 
-File: `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionStoreBinding.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionEnvelopeNormalizer.cs:5-35`
 
-Responsibilities:
+规则如下：
 
-- represents one write target
-- defines:
-  - `StoreName`
-  - `UpsertAsync`
+1. `direct route` 直接丢弃，不参与 projection。
+2. `topology publication` 原样通过。
+3. `observer publication` 如果 payload 是 `CommittedStateEventPublished`，就解包为其中的 `StateEvent.EventData`，并把 timestamp 替换为 committed event 的 timestamp。
+4. 其他 observer publication 直接透传。
 
-### `IProjectionQueryableStoreBinding<TReadModel, TKey>`
+因此，“committed event 如何进入 projection pipeline”的准确答案是：
 
-File: `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionQueryableStoreBinding.cs`
+- 不是 query 端去读 `IEventStore`。
+- 不是 projector 自己回放历史事件。
+- 而是 actor commit 后由 framework 主动发布 `CommittedStateEventPublished`，再由 normalizer 解包进入统一 projection 主链。
 
-Responsibilities:
+## 5. Projection Core 的职责边界
 
-- extends a write binding with query capability
-- adds:
-  - `MutateAsync`
-  - `GetAsync`
-  - `ListAsync`
+### 5.1 Lifecycle / Subscription / Dispatch / Coordinator
 
-Important invariant:
+核心链路：
 
-- runtime allows at most one queryable binding per read-model type
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionLifecycleService.cs:24-40`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:30-125`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatcher.cs:6-16`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:13-48`
 
-### `IProjectionStoreBindingAvailability`
+职责分解：
 
-File: `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionStoreBindingAvailability.cs`
+1. `ProjectionLifecycleService`
+   - 负责 `Start -> Register -> Dispatch -> Stop / Complete`
+2. `ProjectionSubscriptionRegistry`
+   - 负责按 `RootActorId` 订阅 actor stream
+   - 持有 context 内部的 `StreamSubscriptionLease`
+3. `ProjectionDispatcher`
+   - 单纯把 envelope 转给 coordinator
+4. `ProjectionCoordinator`
+   - 按注册顺序依次调用所有 projector
+   - 单个 projector 失败不会阻断其他 projector，当轮调用结束后聚合为 `ProjectionDispatchAggregateException`
 
-Responsibilities:
+### 5.2 reducer 与 projector 的分工
 
-- exposes whether a binding is active
-- lets runtime log why a binding was skipped
+抽象定义：
 
-### `IProjectionStoreDispatchCompensator<TReadModel, TKey>`
+- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionEventReducer.cs:1-15`
+- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs:1-13`
 
-Files:
+分工如下：
 
-- `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/IProjectionStoreDispatchCompensator.cs`
-- `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores/ProjectionStoreDispatchCompensationContext.cs`
-- `src/Aevatar.CQRS.Projection.Runtime/Runtime/LoggingProjectionStoreDispatchCompensator.cs`
+1. `Reducer`
+   - 只负责“某一类事件是否会修改某个 read model”
+   - 不负责订阅、不负责 store fan-out、不负责 session/live sink
+2. `Projector`
+   - 负责 envelope 级 orchestration
+   - 可以读取旧 read model、执行 reducer、写回 read model、或者把事件映射到 session stream
 
-Responsibilities:
+Workflow 的 reducer 路由是精确 `TypeUrl` 匹配：
 
-- runs when multi-store dispatch partially succeeds and then fails
-- receives failed store, succeeded stores, operation, read model, and exception
+- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionEventReducerBase.cs:10-39`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:31-37`
+- `tools/ci/projection_route_mapping_guard.sh`
 
-Default behavior:
+这保证了投影路由不是字符串包含判断，而是 protobuf `TypeUrl` 的精确键路由。
 
-- logs the compensation event
-- business modules can replace it with durable replay or outbox-based compensation
+## 6. Runtime / Store 的职责边界
 
-### `ProjectionStoreDispatcher<TReadModel, TKey>`
+### 6.1 Store fan-out runtime
 
-File: `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs`
+Runtime 只做“一次 read model upsert，分发到多个 store binding”：
 
-Behavior:
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs:6-167`
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreBinding.cs:3-28`
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphStoreBinding.cs:3-301`
 
-1. filters bindings by `IProjectionStoreBindingAvailability`
-2. fails fast if zero bindings remain
-3. enforces max one queryable binding
-4. writes `UpsertAsync` to all active bindings
-5. executes `MutateAsync` against the query binding first
-6. reads the updated snapshot back from the query binding
-7. upserts that updated snapshot into write-only bindings
-8. retries writes per binding according to `ProjectionStoreDispatchOptions.MaxWriteAttempts`
-9. triggers compensator on partial failure
+边界非常清楚：
 
-This means `MutateAsync` is intentionally asymmetric:
+1. `Projector`
+   - 决定“写什么 read model”
+2. `ProjectionStoreDispatcher`
+   - 决定“把同一个 read model 发给哪些 sink”
+3. `DocumentStoreBinding`
+   - 只是把 read model 传给 `IProjectionDocumentWriter<T>`
+4. `GraphStoreBinding`
+   - 先把 read model materialize 成 `nodes/edges`
+   - 再调用 `IProjectionGraphStore`
 
-- one store is authoritative for in-place mutation and readback
-- all other stores are projection copies of that authoritative result
+### 6.2 文档存储与图存储不是单事务
 
-## Runtime Bindings
+`ProjectionStoreDispatcher.UpsertAsync` 是顺序执行多个 binding：
 
-### Document Binding
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs:64-90`
 
-File: `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentStoreBinding.cs`
+这意味着：
 
-Behavior:
+1. `Document` 成功，`Graph` 失败，系统会进入部分成功状态。
+2. 当前只对“binding 写失败”提供 compensator/outbox。
+3. 不存在跨 document + graph 的原子事务边界。
 
-- wraps `IProjectionDocumentStore<TReadModel, TKey>`
-- is both write-capable and query-capable
-- reports inactive when no document store service is registered
+Workflow 对这类部分成功有 durable compensation：
 
-Meaning:
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDurableOutboxCompensator.cs:23-56`
 
-- this is usually the single queryable binding in the system
+但它只补“store dispatch fan-out 失败”，不补 reducer/projector 级逻辑失败。
 
-### Graph Binding
+## 7. Query side 如何读 read model
 
-File: `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionGraphStoreBinding.cs`
+### 7.1 Workflow QueryPort
 
-Behavior:
+Workflow 查询链路：
 
-- activates only when:
-  - an `IProjectionGraphStore` exists
-  - `TReadModel` implements `IGraphReadModel`
-- normalizes graph scope, node IDs, edge IDs, and properties
-- adds managed properties:
-  - `projectionManaged = true`
-  - `projectionOwnerId = <read-model-type>:<read-model-id>`
-- upserts nodes and edges
-- lists existing managed graph artifacts by owner
-- deletes stale edges
-- deletes stale nodes only when they have no neighbors
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionQueryService.cs:8-148`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:6-165`
 
-This binding turns graph persistence into a lifecycle-managed projection sink rather than a pure append sink.
+读取规则：
 
-## Metadata Resolution Path
+1. `snapshot / projection state / timeline` 来自 document store
+2. `graph edges / subgraph` 来自 graph store
+3. `graph enriched snapshot` 是“先读 snapshot，再读 subgraph”的组合，不是原子读
 
-`ProjectionDocumentMetadataResolver`
+因此 Workflow 的一致性不是单一等级，而是：
 
-File: `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionDocumentMetadataResolver.cs`
+- 文档查询：单 document 快照一致
+- 图查询：单 graph store 一致
+- 文档 + 图组合查询：可能跨 store 读偏斜
 
-Behavior:
+### 7.2 Scripting QueryPort
 
-- resolves `IProjectionDocumentMetadataProvider<TReadModel>` from DI
-- returns the `DocumentIndexMetadata` associated with the read-model type
+Scripting 查询链路：
 
-This resolver is what connects business-specific metadata providers to store implementations.
+- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryService.cs:6-29`
+- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs:15-192`
 
-## DI Assembly of Runtime
+特点：
 
-File: `src/Aevatar.CQRS.Projection.Runtime/DependencyInjection/ServiceCollectionExtensions.cs`
+1. `GetSnapshotAsync / ListSnapshotsAsync` 直接读 projection document
+2. `ExecuteDeclaredQueryAsync` 也是先读 projection snapshot，再在内存中执行 behavior query
+3. 它不读取 `IEventStore`，也不在 query 路径里补跑 materialization
 
-`AddProjectionReadModelRuntime()` registers:
+这符合仓库规则里的“禁止 query-time replay / query-time materialization”。
 
-- `ProjectionStoreDispatchOptions`
-- `IProjectionStoreDispatchCompensator<,>`
-- `IProjectionStoreDispatcher<,>`
-- `IProjectionQueryableStoreBinding<,>` as document binding
-- `IProjectionStoreBinding<,>` for document binding
-- `IProjectionStoreBinding<,>` for graph binding
-- `IProjectionDocumentMetadataResolver`
+### 7.3 Workflow binding 也是 projection read model
 
-This is the standard assembly point that business modules reuse.
+Workflow actor binding 不是 runtime query/reply，而是 projection document：
 
-## InMemory Provider
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs:32-77`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/ProjectionWorkflowActorBindingReader.cs:40-103`
 
-### Document Store
+这里唯一仍然访问 runtime 的地方，是 `ExistsAsync` 和 `IAgentTypeVerifier` 用来判断 actor 是否存在、是什么 kind；真正的 binding facts 仍来自 read model document，而不是 actor 内部状态侧读。
 
-File: `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs`
+### 7.4 边界守卫
 
-Behavior:
+CI 明确禁止 query 路径读 `IEventStore` 或 inline 写回 read model：
 
-- stores read models in a process-local dictionary
-- key is resolved via injected `keySelector`
-- `UpsertAsync` stores a cloned snapshot
-- `MutateAsync` mutates the in-memory object under lock
-- `GetAsync` and `ListAsync` return clones
-- cloning prefers `IProjectionReadModelCloneable<TReadModel>`
-- otherwise uses JSON round-trip cloning
+- `tools/ci/cqrs_eventsourcing_boundary_guard.sh`
 
-Why clone:
+这意味着“Query -> ReadModel”的规则不仅是文档约定，而是有自动化门禁。
 
-- prevents callers from mutating the provider's internal state accidentally
+## 8. 一致性语义如何定义
 
-### Graph Store
+### 8.1 一致性等级
 
-File: `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionGraphStore.cs`
+| 阶段 | 真实含义 | 当前代码中的依据 |
+|---|---|---|
+| `accepted` | 命令已经进入 dispatch 主链 | CQRS command dispatch / interaction service |
+| `live observed` | 当前交互会话已经看到了 terminal live event | `WorkflowRunCompletionPolicy` |
+| `durable completion` | 读侧 snapshot 已能推断 terminal completion | `WorkflowRunDurableCompletionResolver` |
+| `projection evidence visible` | read model 已至少投影过某些 runtime facts | `StateVersion / LastEventId / LastCommandId` |
+| `cross-store converged` | document 与 graph 都完成写入且无补偿积压 | 当前没有统一原子契约，只能分别判断 |
 
-Behavior:
+对应代码：
 
-- stores nodes and edges in memory keyed by `scope:id`
-- supports owner-based listing for graph binding cleanup
-- supports neighbor queries and bounded BFS-like subgraph expansion
-- returns clones of graph records
+- `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCompletionPolicy.cs:6-29`
+- `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs:19-53`
+- `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunFinalizeEmitter.cs:29-52`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs:7-38`
 
-Use case:
+### 8.2 Workflow 用什么字段判断“读已经追上写”
 
-- default development and tests
-- simple graph read path for workflow graph queries
+Workflow 的 read model 里，最关键的证据字段是：
 
-## Elasticsearch Provider
+- `CommandId`
+- `StateVersion`
+- `LastEventId`
+- `UpdatedAt`
+- `CompletionStatus`
 
-File: `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs`
+来源：
 
-### Responsibilities
+- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:7-17`
+- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:53-71`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs:33-156`
 
-- persists document read models into Elasticsearch
-- auto-creates index from `DocumentIndexMetadata`
-- supports optimistic concurrency for `MutateAsync`
-- optionally supports dynamic index selection per read model
+其中：
 
-### How index metadata is used
+1. `RecordProjectedEvent` 只在本次 reducer 确实 mutated 时才增加 `StateVersion`、刷新 `LastEventId`
+2. `RefreshDerivedFields` 更新时间和聚合统计
+3. QueryReader 再把这些字段映射为对外的 `WorkflowActorSnapshot / WorkflowActorProjectionState`
 
-Files:
+### 8.3 dispatch accepted 与 projection accepted 的分离
 
-- `ElasticsearchProjectionDocumentStore.cs`
-- `ElasticsearchProjectionDocumentStore.Indexing.cs`
-- `ElasticsearchProjectionDocumentStoreMetadataSupport.cs`
-- `ElasticsearchProjectionDocumentStorePayloadSupport.cs`
+Workflow detached cleanup 不是拿同步 ACK 判断“已经投影成功”，而是显式读取 projection state：
 
-Flow:
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunDetachedCleanupOutboxGAgent.cs:479-518`
 
-1. constructor receives a `DocumentIndexMetadata`
-2. metadata is normalized
-3. index name is built from `IndexPrefix + IndexName`
-4. if auto-create is enabled, provider PUTs the index using:
-   - `Mappings`
-   - `Settings`
-   - `Aliases`
+它的判断逻辑是：
 
-### Mutation model
+1. `projectionState != null`
+2. `StateVersion > 0` 或 `LastEventId` 非空
+3. `LastCommandId` 为空或等于当前 `CommandId`
 
-`MutateAsync`:
+这说明仓库当前对“读已经看到写”的定义，是靠 read model 证据字段，而不是靠命令返回时间。
 
-1. reads current document with `_seq_no` and `_primary_term`
-2. applies caller mutation
-3. writes back with OCC query parameters
-4. retries on conflict until configured retry limit
+## 9. 并发控制模型
 
-### Dynamic indexing
+### 9.1 actor stream 顺序
 
-If `TReadModel` implements `IDynamicDocumentIndexedReadModel`:
+`ActorStreamSubscriptionHub` 按 actorId 建立 stream 订阅：
 
-- write target index is resolved from `DocumentIndexScope` or `DocumentMetadata.IndexName`
-- provider can persist to different indices per instance
-- `GetAsync`, `ListAsync`, and `MutateAsync` are blocked because one static query index no longer exists
+- `src/Aevatar.CQRS.Projection.Core/Streaming/ActorStreamSubscriptionHub.cs:25-53`
 
-This makes dynamic indexing a write-oriented partitioning feature, not a normal queryable document-store mode.
+Projection 在单个 subscription 回调里顺序处理 envelope。只要底层 actor stream 对同一 actor 保持顺序，那么单 projection session 内看到的 envelope 顺序就是 actor 输出顺序。
 
-## ReadModels Business Patterns
+### 9.2 Workflow 的 ownership / lease / heartbeat
 
-The repository currently uses the read-model abstractions in four main ways.
+Workflow 是当前仓库里对投影并发控制最完整的实现：
 
-### Pattern A: Workflow Execution Read Model
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionOwnershipCoordinator.cs:35-111`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionOwnershipCoordinatorGAgent.cs:25-99`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40-117`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionReleaseService.cs:26-72`
 
-Main files:
+语义如下：
 
-- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs`
-- `src/workflow/Aevatar.Workflow.Projection/workflow_projection_transport.proto`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/*.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
-
-How it works:
-
-1. `WorkflowExecutionReadModelProjector.InitializeAsync()` creates a `WorkflowExecutionReport`
-2. reducers such as `StartWorkflowEventReducer`, `StepRequestEventReducer`, and `StepCompletedEventReducer` mutate the report
-3. the projector uses `IProjectionStoreDispatcher<WorkflowExecutionReport, string>`
-4. document binding persists the full report
-5. graph binding derives graph nodes and edges from the same report because it implements `IGraphReadModel`
-6. `WorkflowProjectionQueryReader` reads the document store and graph store and maps them into query DTOs
-
-`WorkflowExecutionReport` is therefore:
-
-- a document read model
-- a graph read model
-- the source for query snapshots
-
-Workflow DI assembly:
-
-- `AddWorkflowExecutionProjectionCQRS()` registers `AddProjectionReadModelRuntime()`
-- registers metadata providers for `WorkflowExecutionReport` and `WorkflowActorBindingDocument`
-- registers the business projector, reducers, query reader, and projection port services
-
-### Pattern B: Workflow Actor Binding Read Model
-
-Main files:
-
-- `src/workflow/Aevatar.Workflow.Projection/workflow_actor_binding_document.proto`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs`
-
-How it works:
-
-- the projector listens for bind events
-- it mutates one `WorkflowActorBindingDocument`
-- the document is persisted through the same dispatcher/runtime path
-- no graph binding is involved because it does not implement `IGraphReadModel`
-
-This is the simplest "document-only business read model" inside workflow projection.
-
-### Pattern C: Scripting Semantic, Authority, and Native Read Models
-
-Main files:
-
-- `src/Aevatar.Scripting.Projection/script_projection_read_models.proto`
-- `src/Aevatar.Scripting.Projection/ReadModels/ScriptProjectionReadModels.Partial.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptDefinitionSnapshotProjector.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptCatalogEntryProjector.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs`
-- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
-
-Scripting uses multiple read-model flavors:
-
-- `ScriptReadModelDocument`
-  - semantic read-model payload as `Any`
-- `ScriptDefinitionSnapshotDocument`
-  - definition authority snapshot
-- `ScriptCatalogEntryDocument`
-  - catalog state
-- `ScriptEvolutionReadModel`
-  - proposal/evolution status
-- `ScriptNativeDocumentReadModel`
-  - dynamically indexed flattened document form
-- `ScriptNativeGraphReadModel`
-  - graph form for relations
-
-How the semantic path works:
-
-1. `ScriptReadModelProjector` receives a committed fact
-2. it resolves the script artifact
-3. it unpacks the existing semantic read model
-4. behavior reduces the semantic read model
-5. projector persists `ScriptReadModelDocument`
-
-How the native document path works:
-
-1. `ScriptNativeDocumentProjector` consumes the semantic document plus materialization plan
-2. `ScriptNativeDocumentMaterializer` extracts selected fields
-3. result is persisted as `ScriptNativeDocumentReadModel`
-4. if dynamic indexing is enabled, Elasticsearch picks index per instance
-
-How the native graph path works:
-
-1. `ScriptNativeGraphProjector` consumes the semantic document plus graph materialization plan
-2. `ScriptNativeGraphMaterializer` builds owner node, target nodes, and relation edges
-3. graph binding writes the resulting `ScriptNativeGraphReadModel` into graph storage
-
-How query works:
-
-1. `ScriptReadModelQueryReader` reads `ScriptReadModelDocument` from the document store
-2. it wraps payload and projection stamps into `ScriptReadModelSnapshot`
-3. it can execute declared script queries against the semantic payload
-
-Scripting DI assembly:
-
-- registers multiple metadata providers
-- registers document-style and graph-style projectors side by side
-- reuses the same runtime contracts as workflow
-
-### Pattern D: StateMirror Generic Projection
-
-Main files:
-
-- `src/Aevatar.CQRS.Projection.StateMirror/Services/JsonStateMirrorProjection.cs`
-- `src/Aevatar.CQRS.Projection.StateMirror/Services/StateMirrorReadModelProjector.cs`
-
-How it works:
-
-1. one state object is mirrored into a read model by JSON field projection
-2. `StateMirrorReadModelProjector` calls the mirror projection
-3. resulting read model is persisted with `IProjectionStoreDispatcher`
-
-This pattern is useful when:
-
-- no domain-specific reducer set is needed
-- the read model is mostly a shaped mirror of state
-
-### Pattern E: Case Projection Demo
-
-Main files:
-
-- `demos/Aevatar.Demos.CaseProjection.Abstractions/ReadModels/CaseProjectionReadModel.cs`
-- `demos/Aevatar.Demos.CaseProjection/Projectors/CaseReadModelProjector.cs`
-- `demos/Aevatar.Demos.CaseProjection/Stores/InMemoryCaseReadModelStore.cs`
-
-How it works:
-
-1. `CaseReadModelProjector` creates and mutates `CaseProjectionReadModel`
-2. reducers update comments, owner, status, and timeline
-3. read model is stored in an in-memory document store
-4. no projection runtime fan-out is used here; the demo wires directly to one document store
-
-This demo shows the minimal read-model pattern:
-
-- one business projector
-- one document store
-- no graph sink
-- no dynamic indexing
-
-## Workflow End-to-End Example
+1. `scopeId = actorId`
+2. `sessionId = commandId`
+3. 激活前先 `AcquireAsync(scopeId, sessionId)`
+4. runtime lease 后台定期 heartbeat，按 TTL 续租
+5. release 时停止 heartbeat、停止订阅、标记 read model stopped、释放 ownership
 
 ```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart LR
-  A["WorkflowRun Envelope Stream"] --> B["ProjectionLifecycleService"]
-  B --> C["ProjectionCoordinator"]
-  C --> D["WorkflowExecutionReadModelProjector"]
-  D --> E["WorkflowExecutionReport"]
-  E --> F["ProjectionStoreDispatcher"]
-  F --> G["ProjectionDocumentStoreBinding"]
-  F --> H["ProjectionGraphStoreBinding"]
-  G --> I["Document Store"]
-  H --> J["Graph Store"]
-  I --> K["WorkflowProjectionQueryReader"]
-  J --> K
-  K --> L["Workflow Query API / Query Port"]
-```
-
-What this demonstrates:
-
-- one business read model can drive two persistence targets
-- query can combine document snapshot and graph subgraph
-- runtime does not know workflow semantics, only store semantics
-
-## Scripting End-to-End Example
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart TB
-  A["Committed Script Fact"] --> B["ScriptReadModelProjector"]
-  B --> C["ScriptReadModelDocument<br/>Semantic Payload"]
-  C --> D["ScriptNativeDocumentProjector"]
-  C --> E["ScriptNativeGraphProjector"]
-  D --> F["ScriptNativeDocumentReadModel"]
-  E --> G["ScriptNativeGraphReadModel"]
-  F --> H["Document Store"]
-  G --> I["Graph Store"]
-  C --> J["ScriptReadModelQueryReader"]
-  J --> K["ScriptReadModelSnapshot / Declared Query"]
-```
-
-What this demonstrates:
-
-- one semantic document can be the source of multiple downstream read-model forms
-- native document and native graph are materialized derivatives, not separate primary facts
-
-## Mutation Sequence
-
-`MutateAsync` is the most important runtime behavior to understand.
-
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+%%{init: {"maxTextSize": 100000, "sequence": {"actorMargin": 15, "messageMargin": 8, "diagramMarginX": 10, "diagramMarginY": 10}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
-  participant A as "Business Projector"
-  participant B as "ProjectionStoreDispatcher"
-  participant C as "Queryable Document Binding"
-  participant D as "Write-Only Binding"
-  participant E as "Compensator"
-
-  A->>B: "MutateAsync(key, mutate)"
-  B->>C: "MutateAsync(key, mutate)"
-  C-->>B: "Mutation persisted"
-  B->>C: "GetAsync(key)"
-  C-->>B: "Updated read model"
-  B->>D: "UpsertAsync(updated)"
-  alt "Write-only binding fails"
-    B->>E: "CompensateAsync(context)"
-    E-->>B: "Compensation finished"
-  end
+    participant C as "Command Binder"
+    participant A as "Projection Activation"
+    participant O as "Ownership Coordinator Actor"
+    participant L as "Workflow Runtime Lease"
+    participant S as "Actor Stream Subscription"
+    C->>A: "EnsureActorProjectionAsync(actorId, commandId)"
+    A->>O: "Acquire(scopeId=actorId, sessionId=commandId)"
+    A->>S: "Start subscription"
+    A->>L: "Create runtime lease"
+    L->>O: "Heartbeat Acquire(...)"
+    C-->>A: "interaction running"
+    C->>A: "Release / detached cleanup"
+    A->>L: "Stop listener + stop heartbeat"
+    A->>O: "Release(scopeId, sessionId)"
 ```
 
-Key consequence:
+这套机制能避免“不同 command session 同时写同一个 workflow actor read model”的大部分情况，但它不是全局万能锁，下面的风险章节会讲它的边界。
 
-- mutation authority always belongs to the single queryable binding
-- all other bindings are replicas of the query-binding result
+### 9.3 session live sink 并发
 
-## How Metadata Providers Enter Real Business Flows
+live sink 的 attach/detach 由 `ProjectionRuntimeLeaseBase` 内部维护：
 
-Typical pattern:
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionRuntimeLeaseBase.cs:18-60`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionSessionSubscriptionManager.cs:20-54`
+- `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:26-113`
 
-1. business module defines read-model type
-2. business module defines `IProjectionDocumentMetadataProvider<TReadModel>`
-3. module registers provider in DI
-4. document store provider receives resolved `DocumentIndexMetadata`
-5. provider creates or selects storage artifacts accordingly
+作用：
 
-Workflow example:
+1. 解决一个 projection session 对多个 live sink 的 attach/detach 生命周期
+2. 不让上层通过 `actorId -> context` 全局字典反查会话
+3. 会话标识始终走显式 `ScopeId / SessionId`
 
-- `WorkflowExecutionReportDocumentMetadataProvider`
-- `WorkflowActorBindingDocumentMetadataProvider`
+### 9.4 store 层并发
 
-Scripting example:
+#### InMemory provider
 
-- `ScriptDefinitionSnapshotDocumentMetadataProvider`
-- `ScriptCatalogEntryDocumentMetadataProvider`
-- `ScriptReadModelDocumentMetadataProvider`
-- `ScriptEvolutionReadModelMetadataProvider`
-- `ScriptNativeDocumentReadModelMetadataProvider`
+- `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs:16-133`
+- `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionGraphStore.cs:8-260`
 
-## Business Invariants Implied By This Architecture
+特点：
 
-### Invariant 1: Identity is framework-level, everything else is business-defined
+1. 进程内 `lock`
+2. 单次写入后本进程立即可见
+3. 没有跨进程一致性语义
+4. 没有 optimistic concurrency version check
 
-Because `IProjectionReadModel` only requires `Id`, the framework cannot force:
+#### Elasticsearch document provider
 
-- timestamps
-- versions
-- immutable payload structure
-- query DTO separation
+- `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs:183-221`
 
-This is flexible, but it also means each module must be deliberate about what belongs in the persisted read model.
+特点：
 
-### Invariant 2: Query requires exactly one authoritative document binding
+1. 直接 `PUT index/_doc/{id}`
+2. 没有版本前置条件
+3. 没有 `refresh=wait_for`
 
-`ProjectionStoreDispatcher` allows many write targets, but only one queryable binding.
+这意味着：
 
-This means:
+1. store 语义是 last-writer-wins
+2. 即便 `UpsertAsync` 返回成功，马上 query 也不一定立刻可见
+3. 如果出现重复 projector 或并发 projector，会由最后一次写覆盖前一次写
 
-- document storage is treated as the authoritative query source
-- graph storage is queryable only through dedicated graph readers, not through dispatcher generic `Get/List`
+#### Neo4j graph provider
 
-### Invariant 3: Graph persistence is derived, not independent
+- `src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionGraphStore.Infrastructure.cs:60-95`
 
-If a read model implements `IGraphReadModel`:
+特点：
 
-- graph nodes and edges are derived from that read model instance
-- graph cleanup is managed by owner markers
-- stale graph artifacts are removed during upsert
+1. 单次写通过 Neo4j write session 提交
+2. 对 graph 自身来说，提交后查询通常可见
+3. 但它和 document provider 没有共同事务
 
-### Invariant 4: Dynamic index routing trades away generic queryability
+## 10. 系统内几条实际的 projection / read model 分支
 
-If a read model implements `IDynamicDocumentIndexedReadModel` and uses Elasticsearch:
+### 10.1 Workflow：read model 分支 + AGUI/live 分支共享同一输入
 
-- writes can be partitioned per read-model instance
-- generic `Get/List/Mutate` against one static index are no longer valid
+DI 装配：
 
-## Practical Reading Guide
+- `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs:32-99`
+- `src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs:20-25`
 
-If you need to understand a concrete business projection quickly, read in this order:
+共享主链的两个代表 projector：
 
-1. read-model type and proto
-2. metadata provider
-3. projector
-4. reducers or materializer
-5. query reader
-6. DI registration
+- ReadModel projector
+  - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:11-128`
+- Live event projector
+  - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`
 
-For workflow:
+这正是仓库要求的“统一投影链路，一对多分发”。
 
-- `WorkflowExecutionReadModel.Partial.cs`
-- `workflow_projection_transport.proto`
-- `WorkflowExecutionReportDocumentMetadataProvider.cs`
-- `WorkflowExecutionReadModelProjector.cs`
-- `Reducers/*.cs`
-- `WorkflowProjectionQueryReader.cs`
-- `DependencyInjection/ServiceCollectionExtensions.cs`
+### 10.2 Scripting：语义 read model + native document + native graph
 
-For scripting:
+DI 装配：
 
-- `script_projection_read_models.proto`
-- `ScriptProjectionReadModels.Partial.cs`
-- `Metadata/*.cs`
-- `ScriptReadModelProjector.cs`
-- `ScriptNativeDocumentMaterializer.cs`
-- `ScriptNativeGraphMaterializer.cs`
-- `ScriptReadModelQueryReader.cs`
-- `DependencyInjection/ServiceCollectionExtensions.cs`
+- `src/Aevatar.Scripting.Projection/DependencyInjection/ServiceCollectionExtensions.cs:28-128`
 
-## Current Strengths
+三个关键 projector：
 
-- abstraction boundary between business projectors and storage providers is clear
-- runtime fan-out allows one read model to feed document and graph sinks simultaneously
-- graph binding includes lifecycle cleanup rather than append-only drift
-- metadata provider mechanism keeps index initialization out of business projectors
-- in-memory and Elasticsearch providers share the same document-store contract
+- 语义 read model
+  - `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs:16-158`
+- native document
+  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs:16-121`
+- native graph
+  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs:16-121`
 
-## Current Tradeoffs
+这里还有一个很重要的并发保护：
 
-- the framework does not distinguish business facts from projection bookkeeping inside read-model payloads
-- generic `MutateAsync` depends on one authoritative queryable store, which is simple but asymmetric
-- dynamic document indexing is powerful for writes but intentionally weak for generic reads
-- graph read/write shape is broad and property-bag oriented, so business modules must self-discipline their schema
+- `ScriptNativeDocumentProjector` 和 `ScriptNativeGraphProjector` 都要求 `context.CurrentSemanticReadModelDocument.StateVersion == fact.StateVersion`
+- 对应代码：
+  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs:90-109`
+  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs:90-109`
 
-## File Map
+也就是说，native materialization 不是独立从事件重算，而是严格依附于同一轮语义 read model 归约结果。
 
-Core abstraction files:
+### 10.3 StateMirror：结构镜像型 read model
 
-- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels`
-- `src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/Graphs`
+- `src/Aevatar.CQRS.Projection.StateMirror/Services/StateMirrorReadModelProjector.cs:7-48`
 
-Runtime files:
+它的边界很窄：
 
-- `src/Aevatar.CQRS.Projection.Runtime.Abstractions/Abstractions/Stores`
-- `src/Aevatar.CQRS.Projection.Runtime/Runtime`
+1. 输入是 state，不是 envelope stream
+2. 输出仍然走 `IProjectionWriteDispatcher<TReadModel>`
+3. 它适合结构镜像，不适合复杂业务语义
 
-Providers:
+### 10.4 AI Projection：通用 reducer 层
 
-- `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores`
-- `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores`
+- `src/Aevatar.AI.Projection/Reducers/ProjectionEventApplierReducerBase.cs:9-43`
 
-Business examples:
+它本身不持有 query 语义，只提供可复用 reducer/applier，供业务 read model projector 组合。
 
-- `src/workflow/Aevatar.Workflow.Projection`
-- `src/Aevatar.Scripting.Projection`
-- `src/Aevatar.CQRS.Projection.StateMirror`
-- `demos/Aevatar.Demos.CaseProjection`
+## 11. 当前一致性与并发风险
 
-## Short Conclusion
+这一节是最重要的。
 
-`ReadModels` in this repository are not only DTOs and not only storage documents. They are the central handoff object between business projection logic and persistence runtime.
+### 11.1 风险一：projector 失败会被记录，但不会自动阻断后续投影
 
-The full path is:
+证据：
 
-- event stream
-- projection core
-- business projector
-- runtime dispatcher
-- document and graph bindings
-- concrete store providers
-- query readers and API adapters
+- `ProjectionCoordinator` 聚合 projector failure
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:19-41`
+- `ProjectionSubscriptionRegistry` 捕获异常后仅 report/log，不重抛
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:101-125`
 
-Understanding these seven steps is enough to reason about almost every projection module in the repository.
+结果：
+
+1. 某个 envelope 投影失败后，subscription 继续跑后续 envelope
+2. 读模型可能永久漏掉一个中间事件
+3. 当前没有统一的 durable replay / rebuild 机制来自动修正这种 gap
+
+这是当前 projection 一致性最硬的缺口。
+
+### 11.2 风险二：Workflow 默认 deduplicator 是 passthrough
+
+证据：
+
+- Workflow projector 依赖 `IEventDeduplicator`
+  - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:55-60`
+- 默认 DI 注册的是 `PassthroughEventDeduplicator`
+  - `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs:41`
+  - `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs:148-155`
+- 测试也明确验证了这个默认行为
+  - `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionProjectionRegistrationTests.cs:88-99`
+
+结果：
+
+1. 如果底层 stream 出现重复投递，workflow reducer 会再次执行
+2. `RecordProjectedEvent` 只能防止同一个 `LastEventId` 再次增加 `StateVersion`
+3. 但 reducer 内部对 timeline、step、summary 的追加/覆盖不一定天然幂等
+
+因此，Workflow 当前默认配置对 duplicate delivery 的防御是不充分的。
+
+### 11.3 风险三：store 层没有 optimistic concurrency check
+
+证据：
+
+- InMemory 直接覆盖 key
+  - `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs:48-50`
+- Elasticsearch 直接 `PUT _doc/{id}`
+  - `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs:199-206`
+
+结果：
+
+1. 如果同一 read model 出现并发 writer，最终语义是 last-writer-wins
+2. 保护并发正确性的主要责任被上移到 ownership/session/orchestration
+3. 一旦上层出现重复 projection session，store 自身不会帮你挡住
+
+### 11.4 风险四：相同 session 的重复 `Ensure` 目前没有统一去重
+
+这个结论是基于代码推断：
+
+- `ProjectionActivationServiceBase.EnsureAsync` 每次都会新建 context、启动 lifecycle
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionActivationServiceBase.cs:19-67`
+- `ProjectionSubscriptionRegistry` 只检查“当前 context 是否已注册”，不检查全局同 actor/session 是否已注册
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:34-47`
+- Workflow ownership 只禁止“不同 session 抢同一 scope”，对“相同 session 重复 acquire”视为续租
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionOwnershipCoordinatorGAgent.cs:52-57`
+
+推论：
+
+1. `scopeId` 相同但 `sessionId` 不同，Workflow ownership 能挡住大部分多活
+2. `scopeId` 与 `sessionId` 都相同的重复 ensure，当前没有统一 active-lease registry 去挡
+3. Scripting authority priming 还存在“拿到 lease 后不释放”的调用路径
+   - `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptAuthorityProjectionPrimingPort.cs:16-20`
+
+这不一定已经在现网触发，但从代码结构看，它是一个真实的并发风险面。
+
+### 11.5 风险五：document 与 graph 可能长时间不一致
+
+证据：
+
+- store fan-out 顺序写，不是单事务
+  - `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs:69-87`
+- Workflow graph 查询和 document 查询是两个独立读取
+  - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:22-143`
+
+结果：
+
+1. `snapshot/timeline` 可能已经更新，而 `graph` 仍旧滞后
+2. `GetActorGraphEnrichedSnapshotAsync` 读到的是“某个时刻的文档 + 另一个时刻的图”
+3. 如果 graph 补偿积压，偏斜会持续，不只是瞬时
+
+## 12. 回到用户问题
+
+### 12.1 “读的一致性如何确定？”
+
+可以按下面的层次判断：
+
+1. 如果你只关心“命令是否被系统接受”
+   - 看 accepted receipt
+   - 这不代表 read model 可见
+2. 如果你关心“某个 run 是否已经有 durable completion”
+   - 看 workflow snapshot 的 `CompletionStatus`
+   - Workflow 已经把这条路径封装到 `WorkflowRunDurableCompletionResolver`
+3. 如果你关心“projection 是否至少追上了某条 command 的事实”
+   - 看 `LastCommandId / StateVersion / LastEventId / UpdatedAt`
+4. 如果你关心“文档和图是否都追平”
+   - 当前没有统一单点判断，只能分别校验 document 与 graph
+
+### 12.2 “read model 的并发问题有哪些？”
+
+当前最需要警惕的是：
+
+1. 重复投影会导致幂等性问题，尤其是 Workflow 默认 deduplicator 只是 passthrough。
+2. 同一 actor/session 的重复 `Ensure` 缺少统一 active session 去重。
+3. store 层没有 CAS，所有并发冲突最后都会退化成 last-writer-wins。
+4. projector 失败后系统继续前进，可能把 read model 永久留在缺事件状态。
+5. document / graph 分离写入导致跨 store 读偏斜。
+
+## 13. 建议的后续治理方向
+
+如果后续要继续强化这套架构，优先级建议如下：
+
+1. 给 Workflow projection 切换到真实的 `IEventDeduplicator`，至少按 `(actorId, envelopeId)` 做 durable 或 distributed dedup。
+2. 把 projector/reducer 失败纳入 durable retry / dead-letter / rebuild 机制，而不是只打日志继续跑。
+3. 为 projection activation 增加 runtime-neutral 的 active lease registry，至少保证相同 `(scopeId, sessionId)` 不会重复启动订阅。
+4. 如果某些 API 需要 stronger read-after-write，就不要继续依赖 Elasticsearch 默认 refresh 周期；需要显式定义 refresh 策略或 completion gate。
+5. 如果某些查询要求“snapshot + graph 原子一致”，需要在 read side 建模一个统一物化版本，而不是运行时拼接两次查询。
+
+## 14. 关键代码索引
+
+### 主链路
+
+- `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionEnvelopeNormalizer.cs:5-35`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:30-125`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:13-48`
+- `src/Aevatar.CQRS.Projection.Runtime/Runtime/ProjectionStoreDispatcher.cs:64-150`
+
+### Workflow
+
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:11-128`
+- `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40-117`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:22-143`
+- `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs:19-53`
+
+### Scripting
+
+- `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs:56-139`
+- `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs:51-109`
+- `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs:51-109`
+- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs:34-192`
+- `src/Aevatar.Scripting.Projection/ReadPorts/ProjectionScriptEvolutionDecisionReadPort.cs:19-104`
+
+### Provider / Guard
+
+- `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs:39-133`
+- `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs:183-221`
+- `src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionGraphStore.Infrastructure.cs:60-95`
+- `tools/ci/cqrs_eventsourcing_boundary_guard.sh`
+- `tools/ci/projection_route_mapping_guard.sh`

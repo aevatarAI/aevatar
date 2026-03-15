@@ -61,6 +61,18 @@
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
 
+## 权威状态 / 派生视图抽象（强制）
+- 权威状态机与派生副本分离：`actor + committed event store` 是唯一权威事实源；`read model / materialized view / cache / search document / graph` 都只是派生副本，禁止反向定义业务真相。
+- 当前态视图与历史视图分型：只回答“单个 actor 当前是什么”的查询，默认建模为 `snapshot view`；回答 `timeline / audit / analytics / multi-source aggregate` 的查询，默认建模为 `history view`；禁止默认把两种语义揉进同一个 document。
+- 正常路径与修复路径分离：正常 query path 和正常 projection path 都不得依赖 `event replay / rebuild / backfill`；`replay` 只属于后台修复、迁移、灾难恢复，不属于线上读路径。
+- 计算前移，物化后移：凡是可以由权威 actor 直接确定的当前态查询语义，应优先由 actor 产出强类型 `snapshot fact`；projection 只负责校验、路由和物化，不负责在读侧重新推导一遍当前态。
+- actor 产出快照不等于 actor 拥有 read model：actor 可以发布 `projection-ready snapshot fact`，但不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；读侧落盘、索引和派生视图仍属于 projection/runtime/provider 边界。
+- 版本语义必须前推到派生副本：单源 `snapshot view` 的版本必须来自权威源版本，且与 committed version 或其等价 watermark 对齐；禁止使用本地 `projection counter` 冒充权威版本；多源视图必须显式保存 `per-source watermark / checkpoint`。
+- 覆盖写与增量写各守边界：`snapshot view` 采用“基于源版本的单调覆盖”；`history view` 采用“基于连续事实的增量规约”；禁止要求同一个模型既承担完整当前态覆盖，又承担不可丢失的历史累积。
+- 查询诚实性优先于伪强一致：read model 可以最终一致，但必须诚实暴露自己的来源版本、刷新戳或 checkpoint；禁止在 `accepted ACK`、弱读结果或局部物化结果上暗示“已经强一致”。
+- 不得 query-time priming：查询前若需要先“确保投影存在/刷新 read model”，该动作必须在显式 activation、lease、binder 或后台物化流程中完成；禁止在 query 方法内同步补投影。
+- 快照契约必须面向查询语义：`snapshot fact` 必须是面向读侧的稳定强类型契约，而不是 actor 内部 state 的原样 dump；内部运行态、临时控制字段、仅执行期可见信息不得默认扩散到 projection 主链。
+
 ## Actor 生命周期判定（强制）
 - 默认优先 `run/session/task-scoped actor`：凡是一次执行、一次会话、一次临时编排即可完成职责的能力，默认建模为短生命周期 actor；静态 `GAgent`、workflow、scripting 只要协议一致，都可作为这类 actor 的实现来源。
 - 长期 actor 只保留给事实拥有者：只有 `definition/catalog/manager/index/checkpoint` 这类需要长期持有权威状态、串行推进事实的对象，才允许设计为长期 actor。
