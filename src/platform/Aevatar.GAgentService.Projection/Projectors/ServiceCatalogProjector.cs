@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.Internal;
 using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
@@ -35,17 +36,23 @@ public sealed class ServiceCatalogProjector
 
     public async ValueTask ProjectAsync(ServiceCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
         ArgumentNullException.ThrowIfNull(envelope);
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
         if (payload.Is(ServiceDefinitionCreatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDefinitionCreatedEvent>();
-            await UpsertDefinitionAsync(evt.Spec.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Spec.Identity);
                 readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
@@ -58,7 +65,7 @@ public sealed class ServiceCatalogProjector
         if (payload.Is(ServiceDefinitionUpdatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDefinitionUpdatedEvent>();
-            await UpsertDefinitionAsync(evt.Spec.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Spec.Identity);
                 readModel.DisplayName = evt.Spec.DisplayName ?? string.Empty;
@@ -71,7 +78,7 @@ public sealed class ServiceCatalogProjector
         if (payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
         {
             var evt = payload.Unpack<DefaultServingRevisionChangedEvent>();
-            await UpsertDefinitionAsync(evt.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Identity);
                 readModel.DefaultServingRevisionId = evt.RevisionId ?? string.Empty;
@@ -82,7 +89,7 @@ public sealed class ServiceCatalogProjector
         if (payload.Is(ServiceDeploymentActivatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentActivatedEvent>();
-            await UpsertDefinitionAsync(evt.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Identity);
                 readModel.ActiveServingRevisionId = evt.RevisionId ?? string.Empty;
@@ -96,7 +103,7 @@ public sealed class ServiceCatalogProjector
         if (payload.Is(ServiceDeploymentDeactivatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentDeactivatedEvent>();
-            await UpsertDefinitionAsync(evt.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Identity);
                 readModel.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
@@ -107,7 +114,7 @@ public sealed class ServiceCatalogProjector
         if (payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentHealthChangedEvent>();
-            await UpsertDefinitionAsync(evt.Identity, readModel =>
+            await UpsertDefinitionAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, readModel =>
             {
                 ApplyIdentity(readModel, evt.Identity);
                 readModel.DeploymentStatus = evt.Status.ToString();
@@ -127,7 +134,11 @@ public sealed class ServiceCatalogProjector
     }
 
     private async Task UpsertDefinitionAsync(
+        string actorId,
         ServiceIdentity identity,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
         Action<ServiceCatalogReadModel> mutate,
         CancellationToken ct)
     {
@@ -138,18 +149,30 @@ public sealed class ServiceCatalogProjector
             existing = new ServiceCatalogReadModel
             {
                 Id = serviceKey,
-                UpdatedAt = _clock.UtcNow,
             };
             ApplyIdentity(existing, identity);
             mutate(existing);
-            existing.UpdatedAt = _clock.UtcNow;
+            ApplyProjectionStamp(existing, actorId, eventId, stateVersion, observedAt);
             await _storeDispatcher.UpsertAsync(existing, ct);
             return;
         }
 
         mutate(existing);
-        existing.UpdatedAt = _clock.UtcNow;
+        ApplyProjectionStamp(existing, actorId, eventId, stateVersion, observedAt);
         await _storeDispatcher.UpsertAsync(existing, ct);
+    }
+
+    private static void ApplyProjectionStamp(
+        ServiceCatalogReadModel readModel,
+        string actorId,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt)
+    {
+        readModel.ActorId = actorId;
+        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.LastEventId = eventId;
+        readModel.UpdatedAt = observedAt;
     }
 
     private static void ApplyIdentity(ServiceCatalogReadModel readModel, ServiceIdentity identity)

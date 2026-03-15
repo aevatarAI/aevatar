@@ -8,6 +8,12 @@ public sealed class ServiceTrafficViewReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public long Generation { get; set; }
 
     public string ActiveRolloutId { get; set; } = string.Empty;
@@ -21,6 +27,9 @@ public sealed class ServiceTrafficViewReadModel
         return new ServiceTrafficViewReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             Generation = Generation,
             ActiveRolloutId = ActiveRolloutId,
             UpdatedAt = UpdatedAt,

@@ -183,4 +183,68 @@ public sealed class ServiceServingProjectionInfrastructureTests
             x.ServiceType == typeof(IServiceTrafficViewProjectionPort) &&
             x.ImplementationFactory != null);
     }
+
+    [Fact]
+    public void ServiceProjectionPortServices_ShouldValidateConstructorArguments()
+    {
+        Action nullCatalog = () => new ServiceProjectionPortServices(
+            null!,
+            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        Action nullDeployment = () => new ServiceProjectionPortServices(
+            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            null!,
+            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        Action nullRevision = () => new ServiceProjectionPortServices(
+            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            null!,
+            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        Action nullServing = () => new ServiceProjectionPortServices(
+            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            null!,
+            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        Action nullRollout = () => new ServiceProjectionPortServices(
+            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
+            null!,
+            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        Action nullTraffic = () => new ServiceProjectionPortServices(
+            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
+            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
+            null!);
+
+        nullCatalog.Should().Throw<ArgumentNullException>();
+        nullDeployment.Should().Throw<ArgumentNullException>();
+        nullRevision.Should().Throw<ArgumentNullException>();
+        nullServing.Should().Throw<ArgumentNullException>();
+        nullRollout.Should().Throw<ArgumentNullException>();
+        nullTraffic.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ServiceProjectionActivationService_ShouldValidateDescriptor()
+    {
+        Action act = () => new ServiceProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
+            null!,
+            new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>());
+
+        act.Should().Throw<ArgumentNullException>();
+    }
 }

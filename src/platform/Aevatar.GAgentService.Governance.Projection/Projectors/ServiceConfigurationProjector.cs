@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
+using Aevatar.GAgentService.Governance.Projection.Internal;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Governance.Projection.Projectors;
@@ -36,23 +37,29 @@ public sealed class ServiceConfigurationProjector
 
     public async ValueTask ProjectAsync(ServiceConfigurationProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!ServiceGovernanceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
         if (payload.Is(LegacyServiceConfigurationImportedEvent.Descriptor))
         {
             var evt = payload.Unpack<LegacyServiceConfigurationImportedEvent>();
-            await ReplaceAsync(evt.State, ct);
+            await ReplaceAsync(context.RootActorId, evt.State, eventId, stateVersion, observedAt, ct);
             return;
         }
 
         if (payload.Is(ServiceBindingCreatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceBindingCreatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var binding = GetOrAddBinding(readModel, evt.Spec.BindingId);
                 ApplyBinding(binding, evt.Spec, retired: false);
@@ -63,7 +70,7 @@ public sealed class ServiceConfigurationProjector
         if (payload.Is(ServiceBindingUpdatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceBindingUpdatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var binding = GetOrAddBinding(readModel, evt.Spec.BindingId);
                 ApplyBinding(binding, evt.Spec, retired: false);
@@ -74,7 +81,7 @@ public sealed class ServiceConfigurationProjector
         if (payload.Is(ServiceBindingRetiredEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceBindingRetiredEvent>();
-            await UpsertAsync(evt.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var binding = GetOrAddBinding(readModel, evt.BindingId);
                 binding.Retired = true;
@@ -85,21 +92,21 @@ public sealed class ServiceConfigurationProjector
         if (payload.Is(ServiceEndpointCatalogCreatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceEndpointCatalogCreatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel => ApplyEndpointCatalog(readModel, evt.Spec));
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel => ApplyEndpointCatalog(readModel, evt.Spec));
             return;
         }
 
         if (payload.Is(ServiceEndpointCatalogUpdatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceEndpointCatalogUpdatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel => ApplyEndpointCatalog(readModel, evt.Spec));
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel => ApplyEndpointCatalog(readModel, evt.Spec));
             return;
         }
 
         if (payload.Is(ServicePolicyCreatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServicePolicyCreatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var policy = GetOrAddPolicy(readModel, evt.Spec.PolicyId);
                 ApplyPolicy(policy, evt.Spec, retired: false);
@@ -110,7 +117,7 @@ public sealed class ServiceConfigurationProjector
         if (payload.Is(ServicePolicyUpdatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServicePolicyUpdatedEvent>();
-            await UpsertAsync(evt.Spec.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Spec.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var policy = GetOrAddPolicy(readModel, evt.Spec.PolicyId);
                 ApplyPolicy(policy, evt.Spec, retired: false);
@@ -121,7 +128,7 @@ public sealed class ServiceConfigurationProjector
         if (payload.Is(ServicePolicyRetiredEvent.Descriptor))
         {
             var evt = payload.Unpack<ServicePolicyRetiredEvent>();
-            await UpsertAsync(evt.Identity, ct, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 var policy = GetOrAddPolicy(readModel, evt.PolicyId);
                 policy.Retired = true;
@@ -140,21 +147,34 @@ public sealed class ServiceConfigurationProjector
         return ValueTask.CompletedTask;
     }
 
-    private async Task UpsertAsync(ServiceIdentity identity, CancellationToken ct, Action<ServiceConfigurationReadModel> mutate)
+    private async Task UpsertAsync(
+        string actorId,
+        ServiceIdentity identity,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
+        CancellationToken ct,
+        Action<ServiceConfigurationReadModel> mutate)
     {
         var serviceKey = ServiceKeys.Build(identity);
         var readModel = await _documentReader.GetAsync(serviceKey, ct)
             ?? new ServiceConfigurationReadModel
             {
                 Id = serviceKey,
-            };
+        };
         readModel.Identity = ToReadModel(identity);
         mutate(readModel);
-        readModel.UpdatedAt = _clock.UtcNow;
+        ApplyProjectionStamp(readModel, actorId, eventId, stateVersion, observedAt);
         await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 
-    private async Task ReplaceAsync(ServiceConfigurationState? state, CancellationToken ct)
+    private async Task ReplaceAsync(
+        string actorId,
+        ServiceConfigurationState? state,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
+        CancellationToken ct)
     {
         if (state?.Identity == null || string.IsNullOrWhiteSpace(state.Identity.ServiceId))
             return;
@@ -163,7 +183,6 @@ public sealed class ServiceConfigurationProjector
         {
             Id = ServiceKeys.Build(state.Identity),
             Identity = ToReadModel(state.Identity),
-            UpdatedAt = _clock.UtcNow,
             Bindings = state.Bindings
                 .OrderBy(x => x.Key, StringComparer.Ordinal)
                 .Select(x =>
@@ -200,7 +219,21 @@ public sealed class ServiceConfigurationProjector
                 .ToList(),
         };
 
+        ApplyProjectionStamp(readModel, actorId, eventId, stateVersion, observedAt);
         await _storeDispatcher.UpsertAsync(readModel, ct);
+    }
+
+    private static void ApplyProjectionStamp(
+        ServiceConfigurationReadModel readModel,
+        string actorId,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt)
+    {
+        readModel.ActorId = actorId;
+        readModel.StateVersion = ServiceGovernanceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.LastEventId = eventId;
+        readModel.UpdatedAt = observedAt;
     }
 
     private static ServiceBindingReadModel GetOrAddBinding(ServiceConfigurationReadModel readModel, string bindingId)

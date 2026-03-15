@@ -29,7 +29,7 @@ public sealed class ServiceLifecycleQueryApplicationService : IServiceLifecycleQ
         string @namespace,
         int take = 200,
         CancellationToken ct = default) =>
-        _catalogQueryReader.ListAsync(tenantId, appId, @namespace, take, ct);
+        _catalogQueryReader.QueryByScopeAsync(tenantId, appId, @namespace, take, ct);
 
     public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
         ServiceIdentity identity,

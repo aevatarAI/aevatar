@@ -56,4 +56,41 @@ public sealed class ServiceRevisionCatalogQueryReaderTests
 
         snapshot.Should().BeNull();
     }
+
+    [Fact]
+    public void Constructor_ShouldValidateDocumentStore()
+    {
+        Action act = () => new ServiceRevisionCatalogQueryReader(null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldNormalizeEmptyEndpointFields()
+    {
+        var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceRevisionCatalogReadModel
+        {
+            Id = "tenant:app:default:svc",
+            Revisions =
+            {
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = "r-empty",
+                    Endpoints =
+                    {
+                        new ServiceCatalogEndpointReadModel(),
+                    },
+                },
+            },
+        });
+        var reader = new ServiceRevisionCatalogQueryReader(store);
+
+        var snapshot = await reader.GetAsync(GAgentServiceTestKit.CreateIdentity());
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Revisions.Should().ContainSingle();
+        snapshot.Revisions[0].Endpoints.Should().ContainSingle();
+        snapshot.Revisions[0].Endpoints[0].EndpointId.Should().BeEmpty();
+    }
 }

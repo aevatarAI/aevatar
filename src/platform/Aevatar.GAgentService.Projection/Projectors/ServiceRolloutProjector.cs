@@ -35,12 +35,18 @@ public sealed class ServiceRolloutProjector
 
     public async ValueTask ProjectAsync(ServiceRolloutProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
         if (payload.Is(ServiceRolloutStartedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutStartedEvent>();
@@ -57,7 +63,10 @@ public sealed class ServiceRolloutProjector
             readModel.CurrentStageIndex = -1;
             readModel.FailureReason = string.Empty;
             readModel.StartedAt = startedAt;
-            readModel.UpdatedAt = startedAt;
+            readModel.ActorId = context.RootActorId;
+            readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+            readModel.LastEventId = eventId;
+            readModel.UpdatedAt = observedAt;
             readModel.BaselineTargets = evt.BaselineTargets.Select(ServiceProjectionMapping.ToServingTargetReadModel).ToList();
             readModel.Stages = (evt.Plan?.Stages ?? [])
                 .Select((stage, index) => new ServiceRolloutStageReadModel
@@ -74,7 +83,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutStageAdvancedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutStageAdvancedEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.CurrentStageIndex = evt.StageIndex;
@@ -98,7 +107,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutPausedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutPausedEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.Status = ServiceRolloutStatus.Paused.ToString();
@@ -110,7 +119,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutResumedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutResumedEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.Status = ServiceRolloutStatus.InProgress.ToString();
@@ -122,7 +131,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutCompletedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutCompletedEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.Status = ServiceRolloutStatus.Completed.ToString();
@@ -134,7 +143,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutRolledBackEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutRolledBackEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.Status = ServiceRolloutStatus.RolledBack.ToString();
@@ -147,7 +156,7 @@ public sealed class ServiceRolloutProjector
         if (payload.Is(ServiceRolloutFailedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRolloutFailedEvent>();
-            await MutateAsync(evt.Identity, ct, readModel =>
+            await MutateAsync(context.RootActorId, evt.Identity, eventId, stateVersion, observedAt, ct, readModel =>
             {
                 readModel.RolloutId = evt.RolloutId ?? readModel.RolloutId;
                 readModel.Status = ServiceRolloutStatus.Failed.ToString();
@@ -168,7 +177,14 @@ public sealed class ServiceRolloutProjector
         return ValueTask.CompletedTask;
     }
 
-    private async Task MutateAsync(ServiceIdentity? identity, CancellationToken ct, Action<ServiceRolloutReadModel> mutate)
+    private async Task MutateAsync(
+        string actorId,
+        ServiceIdentity? identity,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
+        CancellationToken ct,
+        Action<ServiceRolloutReadModel> mutate)
     {
         var serviceKey = ServiceProjectionMapping.ServiceKey(identity);
         if (string.IsNullOrWhiteSpace(serviceKey))
@@ -177,6 +193,10 @@ public sealed class ServiceRolloutProjector
         var readModel = await _documentReader.GetAsync(serviceKey, ct)
             ?? new ServiceRolloutReadModel { Id = serviceKey, UpdatedAt = _clock.UtcNow };
         mutate(readModel);
+        readModel.ActorId = actorId;
+        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.LastEventId = eventId;
+        readModel.UpdatedAt = observedAt;
         await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 }

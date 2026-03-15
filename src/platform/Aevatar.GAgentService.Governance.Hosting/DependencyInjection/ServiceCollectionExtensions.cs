@@ -77,7 +77,7 @@ public static class ServiceCollectionExtensions
             services.AddInMemoryDocumentProjectionStore<ServiceConfigurationReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
         }
 
         return services;

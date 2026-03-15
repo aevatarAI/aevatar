@@ -8,6 +8,12 @@ public sealed class ServiceRevisionCatalogReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public DateTimeOffset UpdatedAt { get; set; }
 
     public List<ServiceRevisionEntryReadModel> Revisions { get; set; } = [];
@@ -17,6 +23,9 @@ public sealed class ServiceRevisionCatalogReadModel
         return new ServiceRevisionCatalogReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             UpdatedAt = UpdatedAt,
             Revisions = Revisions
                 .Select(x => x.DeepClone())

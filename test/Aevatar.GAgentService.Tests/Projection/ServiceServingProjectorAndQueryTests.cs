@@ -261,6 +261,86 @@ public sealed class ServiceServingProjectorAndQueryTests
     }
 
     [Fact]
+    public async Task RolloutProjector_ShouldCreateReadModelAndStamp_WhenCommittedStageAdvanceArrivesFirst()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-03-15T09:00:00+00:00");
+        var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
+        var projector = new ServiceRolloutProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceRolloutProjectionContext
+        {
+            ProjectionId = "service-rollout:tenant:app:default:svc",
+            RootActorId = "tenant:app:default:svc",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceRolloutStageAdvancedEvent
+                {
+                    Identity = identity.Clone(),
+                    RolloutId = "rollout-committed",
+                    StageIndex = 2,
+                    StageId = "stage-2",
+                    Targets =
+                    {
+                        CreateTarget("dep-2", "rev-2", "actor-2", 100, "run"),
+                    },
+                    OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
+                },
+                eventId: "evt-rollout-stage",
+                stateVersion: 17,
+                observedAt: observedAt));
+
+        var readModel = await store.GetAsync("tenant:app:default:svc");
+        readModel.Should().NotBeNull();
+        readModel!.RolloutId.Should().Be("rollout-committed");
+        readModel.CurrentStageIndex.Should().Be(2);
+        readModel.Stages.Should().ContainSingle(x => x.StageIndex == 2 && x.StageId == "stage-2");
+        readModel.ActorId.Should().Be("tenant:app:default:svc");
+        readModel.StateVersion.Should().Be(17);
+        readModel.LastEventId.Should().Be("evt-rollout-stage");
+        readModel.UpdatedAt.Should().Be(observedAt);
+    }
+
+    [Fact]
+    public async Task RolloutProjector_ShouldIgnoreEvents_WhenIdentityIsMissing()
+    {
+        var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
+        var projector = new ServiceRolloutProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var context = new ServiceRolloutProjectionContext
+        {
+            ProjectionId = "service-rollout:tenant:app:default:svc",
+            RootActorId = "tenant:app:default:svc",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildEnvelope(new ServiceRolloutFailedEvent
+            {
+                RolloutId = "rollout-no-identity",
+                FailureReason = "boom",
+            }));
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "outer-missing-data",
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-missing-data",
+                        Version = 1,
+                    },
+                }),
+            });
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TrafficViewProjectorAndQueryReader_ShouldGroupEndpointsAndSortTargets()
     {
         var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id);
@@ -325,6 +405,28 @@ public sealed class ServiceServingProjectorAndQueryTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
+        };
+
+    private static EventEnvelope BuildCommittedEnvelope<T>(
+        T evt,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt)
+        where T : IMessage =>
+        new()
+        {
+            Id = $"outer-{eventId}",
+            Timestamp = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = stateVersion,
+                    Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+                    EventData = Any.Pack(evt),
+                },
+            }),
         };
 
     private static EventEnvelope CreateEnvelopeWithoutPayload() =>

@@ -24,7 +24,7 @@ public sealed class ServiceGovernanceLegacyMigrationHostedService : IHostedServi
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var services = await _catalogQueryReader.ListAllAsync(ct: cancellationToken);
+        var services = await _catalogQueryReader.QueryAllAsync(ct: cancellationToken);
         foreach (var service in services)
         {
             var identity = new ServiceIdentity

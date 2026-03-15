@@ -36,4 +36,21 @@ public sealed class ServiceKeysTests
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("serviceId is required.");
     }
+
+    [Fact]
+    public void Build_ShouldRejectBlankTenantId()
+    {
+        var act = () => ServiceKeys.Build(" ", "app", "ns", "svc");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("tenantId is required.");
+    }
+
+    [Fact]
+    public void Build_ShouldFormatExplicitSegments()
+    {
+        var key = ServiceKeys.Build("tenant", "app", "default", "svc");
+
+        key.Should().Be("tenant:app:default:svc");
+    }
 }

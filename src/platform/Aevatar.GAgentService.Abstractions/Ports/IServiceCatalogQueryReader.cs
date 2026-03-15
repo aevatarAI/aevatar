@@ -8,11 +8,11 @@ public interface IServiceCatalogQueryReader
         ServiceIdentity identity,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(
+    Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(
         int take = 1000,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+    Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
         string tenantId,
         string appId,
         string @namespace,

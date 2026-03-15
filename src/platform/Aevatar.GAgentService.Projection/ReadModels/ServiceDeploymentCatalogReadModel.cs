@@ -8,6 +8,12 @@ public sealed class ServiceDeploymentCatalogReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public DateTimeOffset UpdatedAt { get; set; }
 
     public List<ServiceDeploymentReadModel> Deployments { get; set; } = [];
@@ -17,6 +23,9 @@ public sealed class ServiceDeploymentCatalogReadModel
         return new ServiceDeploymentCatalogReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             UpdatedAt = UpdatedAt,
             Deployments = Deployments.Select(x => x.DeepClone()).ToList(),
         };

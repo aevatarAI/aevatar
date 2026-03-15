@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
 using Aevatar.GAgentService.Governance.Infrastructure.Migration;
 using Aevatar.GAgentService.Governance.Core.GAgents;
+using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -199,6 +200,35 @@ public sealed class GovernanceInfrastructureTests
         await provisioner.EnsureConfigurationTargetAsync(identity);
 
         runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DefaultServiceGovernanceCommandTargetProvisioner_ShouldValidateInputs()
+    {
+        var runtime = new RecordingActorRuntime();
+        var importer = new RecordingLegacyImporter();
+        Action nullImporter = () => new DefaultServiceGovernanceCommandTargetProvisioner(runtime, null!);
+        var provisioner = new DefaultServiceGovernanceCommandTargetProvisioner(runtime, importer);
+        var act = () => provisioner.EnsureConfigurationTargetAsync(null!);
+
+        nullImporter.Should().Throw<ArgumentNullException>();
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task ActorTargetProvisionerBase_ShouldValidateActorId_AndRejectMissingActorAfterExistenceCheck()
+    {
+        var runtime = new RecordingActorRuntime();
+        var provisioner = new TestProvisioner(runtime);
+        var blank = () => provisioner.EnsureAsync<TestStaticServiceAgent>(" ");
+
+        await blank.Should().ThrowAsync<ArgumentException>();
+
+        runtime.MarkExistingWithoutActor("actor-missing");
+        var missing = () => provisioner.EnsureAsync<TestStaticServiceAgent>("actor-missing");
+
+        await missing.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*was not found after existence check*");
     }
 
     [Fact]
@@ -519,12 +549,18 @@ public sealed class GovernanceInfrastructureTests
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _existingWithoutActor = new(StringComparer.Ordinal);
 
         public List<(System.Type actorType, string actorId)> CreateCalls { get; } = [];
 
         public void MarkExisting(string actorId)
         {
             _actors[actorId] = new RecordingActor(actorId);
+        }
+
+        public void MarkExistingWithoutActor(string actorId)
+        {
+            _existingWithoutActor.Add(actorId);
         }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
@@ -550,7 +586,7 @@ public sealed class GovernanceInfrastructureTests
             Task.FromResult(_actors.TryGetValue(id, out var actor) ? actor : null);
 
         public Task<bool> ExistsAsync(string id) =>
-            Task.FromResult(_actors.ContainsKey(id));
+            Task.FromResult(_actors.ContainsKey(id) || _existingWithoutActor.Contains(id));
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -566,6 +602,18 @@ public sealed class GovernanceInfrastructureTests
             Requests.Add(identity.Clone());
             return Task.FromResult(false);
         }
+    }
+
+    private sealed class TestProvisioner : ActorTargetProvisionerBase
+    {
+        public TestProvisioner(IActorRuntime runtime)
+            : base(runtime)
+        {
+        }
+
+        public Task<string> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            EnsureActorAsync<TAgent>(actorId, ct);
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort

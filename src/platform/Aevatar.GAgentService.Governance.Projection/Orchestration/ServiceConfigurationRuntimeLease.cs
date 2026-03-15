@@ -10,9 +10,9 @@ public sealed class ServiceConfigurationRuntimeLease
       IProjectionPortSessionLease
 {
     public ServiceConfigurationRuntimeLease(ServiceConfigurationProjectionContext context)
-        : base(context.RootActorId)
+        : base(GetRootActorId(context))
     {
-        Context = context ?? throw new ArgumentNullException(nameof(context));
+        Context = context;
     }
 
     public ServiceConfigurationProjectionContext Context { get; }
@@ -20,4 +20,10 @@ public sealed class ServiceConfigurationRuntimeLease
     public string ScopeId => RootEntityId;
 
     public string SessionId => RootEntityId;
+
+    private static string GetRootActorId(ServiceConfigurationProjectionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.RootActorId;
+    }
 }

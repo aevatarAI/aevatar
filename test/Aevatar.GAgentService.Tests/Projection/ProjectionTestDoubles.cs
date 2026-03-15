@@ -30,9 +30,9 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         _keySelector = keySelector;
     }
 
-    public int LastListTake { get; private set; }
+    public int LastQueryTake { get; private set; }
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         var key = _keySelector(readModel);
         var existingIndex = _items.FindIndex(x => string.Equals(_keySelector(x), key, StringComparison.Ordinal));
@@ -41,16 +41,53 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         else
             _items.Add(readModel);
 
-        return Task.CompletedTask;
+        return Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
         Task.FromResult(_items.FirstOrDefault(x => string.Equals(_keySelector(x), key, StringComparison.Ordinal)));
 
-    public Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+    public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default)
     {
-        LastListTake = take;
+        ArgumentNullException.ThrowIfNull(query);
+        LastQueryTake = query.Take;
+        IEnumerable<TReadModel> items = _items;
+
+        foreach (var filter in query.Filters)
+        {
+            items = items.Where(item => MatchesFilter(item, filter));
+        }
+
+        var boundedTake = query.Take <= 0 ? 50 : query.Take;
+        return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+        {
+            Items = items.Take(boundedTake).ToList(),
+        });
+    }
+
+    public Task<IReadOnlyList<TReadModel>> ReadItemsAsync(int take = 50, CancellationToken ct = default)
+    {
+        LastQueryTake = take;
         return Task.FromResult<IReadOnlyList<TReadModel>>(_items.Take(take).ToList());
+    }
+
+    private static bool MatchesFilter(TReadModel item, ProjectionDocumentFilter filter)
+    {
+        var property = typeof(TReadModel).GetProperty(filter.FieldPath);
+        if (property == null)
+            return false;
+
+        var value = property.GetValue(item);
+        return filter.Operator switch
+        {
+            ProjectionDocumentFilterOperator.Eq => string.Equals(
+                value?.ToString() ?? string.Empty,
+                filter.Value.RawValue?.ToString() ?? string.Empty,
+                StringComparison.Ordinal),
+            _ => throw new NotSupportedException($"Filter operator '{filter.Operator}' is not supported by RecordingDocumentStore."),
+        };
     }
 }
 

@@ -10,6 +10,12 @@ public sealed class ServiceConfigurationReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public ServiceIdentityReadModel Identity { get; set; } = new();
 
     public DateTimeOffset UpdatedAt { get; set; }
@@ -25,6 +31,9 @@ public sealed class ServiceConfigurationReadModel
         return new ServiceConfigurationReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             Identity = Identity.DeepClone(),
             UpdatedAt = UpdatedAt,
             Bindings = Bindings.Select(x => x.DeepClone()).ToList(),

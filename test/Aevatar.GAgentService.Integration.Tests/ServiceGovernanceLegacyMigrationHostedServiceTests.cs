@@ -62,7 +62,7 @@ public sealed class ServiceGovernanceLegacyMigrationHostedServiceTests
             return Task.FromResult(_services.FirstOrDefault(x => string.Equals(x.ServiceKey, key, StringComparison.Ordinal)));
         }
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
             string tenantId,
             string appId,
             string @namespace,
@@ -79,7 +79,7 @@ public sealed class ServiceGovernanceLegacyMigrationHostedServiceTests
             return Task.FromResult(filtered);
         }
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default)
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default)
         {
             IReadOnlyList<ServiceCatalogSnapshot> filtered = _services.Take(take).ToList();
             return Task.FromResult(filtered);

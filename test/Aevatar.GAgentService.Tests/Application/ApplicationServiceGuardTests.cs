@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -215,6 +216,40 @@ public sealed class ApplicationServiceGuardTests
         nullEvaluator.Should().Throw<ArgumentNullException>();
     }
 
+    [Fact]
+    public void CommandEnvelopeFactories_ShouldValidateArguments_AndPopulateRoutes()
+    {
+        var serviceFactory = typeof(ServiceCommandApplicationService).Assembly
+            .GetType("Aevatar.GAgentService.Application.Internal.ServiceCommandEnvelopeFactory", throwOnError: true)!;
+        var governanceFactory = typeof(ServiceGovernanceCommandApplicationService).Assembly
+            .GetType("Aevatar.GAgentService.Governance.Application.Internal.ServiceCommandEnvelopeFactory", throwOnError: true)!;
+        var createMethod = serviceFactory.GetMethod("Create", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!;
+        var createGovernanceMethod = governanceFactory.GetMethod("Create", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!;
+        Action invalidServiceTarget = () => createMethod.Invoke(null, [" ", new StringValue { Value = "payload" }, "corr"]);
+        Action nullServicePayload = () => createMethod.Invoke(null, ["actor-1", null!, "corr"]);
+        Action invalidGovernanceTarget = () => createGovernanceMethod.Invoke(null, [" ", new StringValue { Value = "payload" }, "corr"]);
+        Action nullGovernancePayload = () => createGovernanceMethod.Invoke(null, ["actor-2", null!, "corr"]);
+
+        invalidServiceTarget.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<ArgumentException>();
+        nullServicePayload.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<ArgumentNullException>();
+        invalidGovernanceTarget.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<ArgumentException>();
+        nullGovernancePayload.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<ArgumentNullException>();
+
+        var serviceEnvelope = (EventEnvelope)createMethod.Invoke(null, ["actor-1", new StringValue { Value = "payload" }, null!])!;
+        var governanceEnvelope = (EventEnvelope)createGovernanceMethod.Invoke(null, ["actor-2", new StringValue { Value = "payload" }, null!])!;
+
+        serviceEnvelope.Route.GetTargetActorId().Should().Be("actor-1");
+        serviceEnvelope.Route.PublisherActorId.Should().Be("gagent-service.application");
+        serviceEnvelope.Propagation.CorrelationId.Should().BeEmpty();
+        governanceEnvelope.Route.GetTargetActorId().Should().Be("actor-2");
+        governanceEnvelope.Route.PublisherActorId.Should().Be("gagent-service.governance.application");
+        governanceEnvelope.Propagation.CorrelationId.Should().BeEmpty();
+    }
+
     private sealed class NoOpActorDispatchPort : IActorDispatchPort
     {
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
@@ -239,10 +274,10 @@ public sealed class ApplicationServiceGuardTests
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceCatalogSnapshot?>(null);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 

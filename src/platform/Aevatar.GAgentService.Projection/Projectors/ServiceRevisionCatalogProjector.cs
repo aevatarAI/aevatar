@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.Internal;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 
@@ -36,16 +37,22 @@ public sealed class ServiceRevisionCatalogProjector
 
     public async ValueTask ProjectAsync(ServiceRevisionCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
         if (payload.Is(ServiceRevisionCreatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRevisionCreatedEvent>();
-            await UpsertRevisionAsync(evt.Spec.Identity, evt.Spec.RevisionId, entry =>
+            await UpsertRevisionAsync(context.RootActorId, evt.Spec.Identity, evt.Spec.RevisionId, eventId, stateVersion, observedAt, entry =>
             {
                 entry.RevisionId = evt.Spec.RevisionId ?? string.Empty;
                 entry.ImplementationKind = evt.Spec.ImplementationKind.ToString();
@@ -58,7 +65,7 @@ public sealed class ServiceRevisionCatalogProjector
         if (payload.Is(ServiceRevisionPreparedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRevisionPreparedEvent>();
-            await UpsertRevisionAsync(evt.Identity, evt.RevisionId, entry =>
+            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
             {
                 entry.RevisionId = evt.RevisionId ?? string.Empty;
                 entry.ImplementationKind = evt.ImplementationKind.ToString();
@@ -74,7 +81,7 @@ public sealed class ServiceRevisionCatalogProjector
         if (payload.Is(ServiceRevisionPreparationFailedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRevisionPreparationFailedEvent>();
-            await UpsertRevisionAsync(evt.Identity, evt.RevisionId, entry =>
+            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
             {
                 entry.RevisionId = evt.RevisionId ?? string.Empty;
                 entry.Status = ServiceRevisionStatus.PreparationFailed.ToString();
@@ -86,7 +93,7 @@ public sealed class ServiceRevisionCatalogProjector
         if (payload.Is(ServiceRevisionPublishedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRevisionPublishedEvent>();
-            await UpsertRevisionAsync(evt.Identity, evt.RevisionId, entry =>
+            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
             {
                 entry.RevisionId = evt.RevisionId ?? string.Empty;
                 entry.Status = ServiceRevisionStatus.Published.ToString();
@@ -98,7 +105,7 @@ public sealed class ServiceRevisionCatalogProjector
         if (payload.Is(ServiceRevisionRetiredEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceRevisionRetiredEvent>();
-            await UpsertRevisionAsync(evt.Identity, evt.RevisionId, entry =>
+            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
             {
                 entry.RevisionId = evt.RevisionId ?? string.Empty;
                 entry.Status = ServiceRevisionStatus.Retired.ToString();
@@ -119,8 +126,12 @@ public sealed class ServiceRevisionCatalogProjector
     }
 
     private async Task UpsertRevisionAsync(
+        string actorId,
         ServiceIdentity identity,
         string revisionId,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
         Action<ServiceRevisionEntryReadModel> mutate,
         CancellationToken ct)
     {
@@ -131,12 +142,14 @@ public sealed class ServiceRevisionCatalogProjector
             existing = new ServiceRevisionCatalogReadModel
             {
                 Id = serviceKey,
-                UpdatedAt = _clock.UtcNow,
             };
             var entry = new ServiceRevisionEntryReadModel();
             mutate(entry);
             existing.Revisions.Add(entry);
-            existing.UpdatedAt = _clock.UtcNow;
+            existing.ActorId = actorId;
+            existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
+            existing.LastEventId = eventId;
+            existing.UpdatedAt = observedAt;
             await _storeDispatcher.UpsertAsync(existing, ct);
             return;
         }
@@ -153,7 +166,10 @@ public sealed class ServiceRevisionCatalogProjector
         }
 
         mutate(existingEntry);
-        existing.UpdatedAt = _clock.UtcNow;
+        existing.ActorId = actorId;
+        existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
+        existing.LastEventId = eventId;
+        existing.UpdatedAt = observedAt;
         await _storeDispatcher.UpsertAsync(existing, ct);
     }
 

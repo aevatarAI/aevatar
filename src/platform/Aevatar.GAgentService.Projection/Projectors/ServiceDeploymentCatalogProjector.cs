@@ -35,16 +35,22 @@ public sealed class ServiceDeploymentCatalogProjector
 
     public async ValueTask ProjectAsync(ServiceDeploymentCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
         if (payload.Is(ServiceDeploymentActivatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentActivatedEvent>();
-            await UpsertAsync(evt.Identity, evt.DeploymentId, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
             {
                 readModel.RevisionId = evt.RevisionId ?? string.Empty;
                 readModel.PrimaryActorId = evt.PrimaryActorId ?? string.Empty;
@@ -58,7 +64,7 @@ public sealed class ServiceDeploymentCatalogProjector
         if (payload.Is(ServiceDeploymentDeactivatedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentDeactivatedEvent>();
-            await UpsertAsync(evt.Identity, evt.DeploymentId, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
             {
                 readModel.RevisionId = evt.RevisionId ?? string.Empty;
                 readModel.Status = ServiceDeploymentStatus.Deactivated.ToString();
@@ -70,7 +76,7 @@ public sealed class ServiceDeploymentCatalogProjector
         if (payload.Is(ServiceDeploymentHealthChangedEvent.Descriptor))
         {
             var evt = payload.Unpack<ServiceDeploymentHealthChangedEvent>();
-            await UpsertAsync(evt.Identity, evt.DeploymentId, readModel =>
+            await UpsertAsync(context.RootActorId, evt.Identity, evt.DeploymentId, eventId, stateVersion, observedAt, readModel =>
             {
                 readModel.Status = evt.Status.ToString();
                 readModel.UpdatedAt = ServiceProjectionMapping.FromTimestamp(evt.OccurredAt, _clock.UtcNow);
@@ -90,8 +96,12 @@ public sealed class ServiceDeploymentCatalogProjector
     }
 
     private async Task UpsertAsync(
+        string actorId,
         ServiceIdentity? identity,
         string deploymentId,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt,
         Action<ServiceDeploymentReadModel> mutate,
         CancellationToken ct)
     {
@@ -117,7 +127,10 @@ public sealed class ServiceDeploymentCatalogProjector
         }
 
         mutate(deployment);
-        existing.UpdatedAt = deployment.UpdatedAt;
+        existing.ActorId = actorId;
+        existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
+        existing.LastEventId = eventId;
+        existing.UpdatedAt = observedAt;
         existing.Deployments = existing.Deployments
             .OrderByDescending(x => x.UpdatedAt)
             .ThenBy(x => x.DeploymentId, StringComparer.Ordinal)

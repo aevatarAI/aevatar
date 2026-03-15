@@ -362,6 +362,68 @@ public sealed class GovernanceApplicationServicesTests
             .WithMessage("configuration target failed");
     }
 
+    [Fact]
+    public async Task ServiceGovernanceQueryApplicationService_ShouldProjectBindingsEndpointsAndPoliciesFromConfiguration()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var configuration = CreateConfigurationSnapshot(
+            identity,
+            bindings:
+            [
+                new ServiceBindingSnapshot(
+                    "binding-a",
+                    "Binding A",
+                    ServiceBindingKind.Service,
+                    [],
+                    false,
+                    new BoundServiceReferenceSnapshot(GAgentServiceTestKit.CreateIdentity(serviceId: "dep"), "run"),
+                    null,
+                    null),
+            ],
+            endpoints:
+            [
+                new ServiceEndpointExposureSnapshot(
+                    "invoke",
+                    "Invoke",
+                    ServiceEndpointKind.Command,
+                    "type.googleapis.com/demo.Invoke",
+                    string.Empty,
+                    "invoke",
+                    ServiceEndpointExposureKind.Public,
+                    []),
+            ],
+            policies:
+            [
+                CreatePolicySnapshot("policy-a"),
+            ]);
+        var service = new ServiceGovernanceQueryApplicationService(new RecordingConfigurationQueryReader
+        {
+            GetResult = configuration,
+        });
+
+        var bindings = await service.GetBindingsAsync(identity);
+        var endpoints = await service.GetEndpointCatalogAsync(identity);
+        var policies = await service.GetPoliciesAsync(identity);
+
+        bindings.Should().NotBeNull();
+        bindings!.Bindings.Should().ContainSingle(x => x.BindingId == "binding-a");
+        endpoints.Should().NotBeNull();
+        endpoints!.Endpoints.Should().ContainSingle(x => x.EndpointId == "invoke");
+        policies.Should().NotBeNull();
+        policies!.Policies.Should().ContainSingle(x => x.PolicyId == "policy-a");
+    }
+
+    [Fact]
+    public async Task ServiceGovernanceQueryApplicationService_ShouldReturnNullSnapshots_WhenConfigurationMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var service = new ServiceGovernanceQueryApplicationService(new RecordingConfigurationQueryReader());
+
+        (await service.GetBindingsAsync(identity)).Should().BeNull();
+        (await service.GetEndpointCatalogAsync(identity)).Should().BeNull();
+        (await service.GetPoliciesAsync(identity)).Should().BeNull();
+    }
+
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(
         ServiceIdentity identity,
         IReadOnlyList<string>? policyIds = null) =>
@@ -475,10 +537,10 @@ public sealed class GovernanceApplicationServicesTests
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
             string tenantId,
             string appId,
             string @namespace,

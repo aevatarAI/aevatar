@@ -8,6 +8,12 @@ public sealed class ServiceCatalogReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public string TenantId { get; set; } = string.Empty;
 
     public string AppId { get; set; } = string.Empty;
@@ -39,6 +45,9 @@ public sealed class ServiceCatalogReadModel
         return new ServiceCatalogReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             TenantId = TenantId,
             AppId = AppId,
             Namespace = Namespace,
