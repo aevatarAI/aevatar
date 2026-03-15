@@ -637,8 +637,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPortService.cs; then
-  echo "WorkflowExecutionProjectionPortService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPort.cs; then
+  echo "WorkflowExecutionProjectionPort must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 

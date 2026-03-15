@@ -104,7 +104,7 @@ flowchart LR
 2. `StateEventApplierBase<TState, TEvent>`：`src/Aevatar.Foundation.Core/EventSourcing/StateEventApplierBase.cs`
 3. `ProjectionQueryPortServiceBase<...>`：`src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionQueryPortServiceBase.cs`
 4. workflow typed state adapter：`src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionContextAdapter.cs`
-5. workflow query facade 模式：`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionQueryService.cs`
+5. workflow query facade 模式：`src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 
 ## 4. 目标架构概览
 

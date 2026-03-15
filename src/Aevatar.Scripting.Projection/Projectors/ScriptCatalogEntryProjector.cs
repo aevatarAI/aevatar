@@ -42,37 +42,39 @@ public sealed class ScriptCatalogEntryProjector
                 out var stateEvent,
                 out var state) ||
             stateEvent?.EventData == null ||
-            state == null)
-        {
-            return;
-        }
-
-        var scriptId = ResolveScriptId(stateEvent.EventData);
-        if (string.IsNullOrWhiteSpace(scriptId) ||
-            !state.Entries.TryGetValue(scriptId, out var entry) ||
-            entry == null)
+            state == null ||
+            !IsCatalogMutation(stateEvent.EventData))
         {
             return;
         }
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
-        var document = new ScriptCatalogEntryDocument
+        foreach (var (entryKey, entryValue) in state.Entries)
         {
-            Id = BuildDocumentId(context.RootActorId, scriptId),
-            CatalogActorId = context.RootActorId,
-            ScriptId = string.IsNullOrWhiteSpace(entry.ScriptId) ? scriptId : entry.ScriptId,
-            ActiveRevision = entry.ActiveRevision ?? string.Empty,
-            ActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty,
-            ActiveSourceHash = entry.ActiveSourceHash ?? string.Empty,
-            PreviousRevision = entry.PreviousRevision ?? string.Empty,
-            LastProposalId = entry.LastProposalId ?? string.Empty,
-            StateVersion = stateEvent.Version,
-            LastEventId = stateEvent.EventId ?? string.Empty,
-            CreatedAt = updatedAt,
-            UpdatedAt = updatedAt,
-        };
-        document.RevisionHistory = entry.RevisionHistory.ToArray();
-        await _writeDispatcher.UpsertAsync(document, ct);
+            var entryScriptId = string.IsNullOrWhiteSpace(entryValue?.ScriptId)
+                ? entryKey
+                : entryValue.ScriptId;
+            if (string.IsNullOrWhiteSpace(entryScriptId) || entryValue == null)
+                continue;
+
+            var document = new ScriptCatalogEntryDocument
+            {
+                Id = BuildDocumentId(context.RootActorId, entryScriptId),
+                CatalogActorId = context.RootActorId,
+                ScriptId = entryScriptId,
+                ActiveRevision = entryValue.ActiveRevision ?? string.Empty,
+                ActiveDefinitionActorId = entryValue.ActiveDefinitionActorId ?? string.Empty,
+                ActiveSourceHash = entryValue.ActiveSourceHash ?? string.Empty,
+                PreviousRevision = entryValue.PreviousRevision ?? string.Empty,
+                LastProposalId = entryValue.LastProposalId ?? string.Empty,
+                StateVersion = stateEvent.Version,
+                LastEventId = stateEvent.EventId ?? string.Empty,
+                CreatedAt = updatedAt,
+                UpdatedAt = updatedAt,
+            };
+            document.RevisionHistory = entryValue.RevisionHistory.ToArray();
+            await _writeDispatcher.UpsertAsync(document, ct);
+        }
     }
 
     public ValueTask CompleteAsync(
@@ -89,16 +91,19 @@ public sealed class ScriptCatalogEntryProjector
     public static string BuildDocumentId(string catalogActorId, string scriptId) =>
         string.Concat(catalogActorId ?? string.Empty, ":", scriptId ?? string.Empty);
 
-    private static string? ResolveScriptId(Any eventData)
+    private static bool IsCatalogMutation(Any eventData)
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
         if (eventData.Is(ScriptCatalogRevisionPromotedEvent.Descriptor))
-            return eventData.Unpack<ScriptCatalogRevisionPromotedEvent>().ScriptId;
+            return true;
+
+        if (eventData.Is(ScriptCatalogRollbackRequestedEvent.Descriptor))
+            return true;
 
         if (eventData.Is(ScriptCatalogRolledBackEvent.Descriptor))
-            return eventData.Unpack<ScriptCatalogRolledBackEvent>().ScriptId;
+            return true;
 
-        return null;
+        return false;
     }
 }

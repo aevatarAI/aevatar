@@ -8,9 +8,9 @@ cd "${REPO_ROOT}"
 
 route_mapping_violations=""
 
-# Reducer base contracts: EventTypeUrl must come from protobuf Any.TypeUrl and compare with ordinal equality.
+# Reducer base contracts that still exist must derive EventTypeUrl from protobuf Any.TypeUrl
+# and compare with ordinal equality.
 route_mapping_base_files=(
-  "src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactReducerBase.cs"
   "src/Aevatar.AI.Projection/Reducers/ProjectionEventApplierReducerBase.cs"
   "demos/Aevatar.Demos.CaseProjection/Reducers/CaseProjectionEventReducerBase.cs"
 )
@@ -31,7 +31,6 @@ done
 
 # Concrete reducers must inherit approved reducer base classes and must not define manual EventTypeUrl.
 reducer_route_contracts=(
-  "src/workflow/Aevatar.Workflow.Projection/Reducers|WorkflowExecutionReportArtifactReducerBase<"
   "src/Aevatar.AI.Projection/Reducers|ProjectionEventApplierReducerBase<"
   "demos/Aevatar.Demos.CaseProjection/Reducers|CaseProjectionEventReducerBase<"
   "demos/Aevatar.Demos.CaseProjection.Extensions.Sla/Reducers|CaseProjectionEventReducerBase<"

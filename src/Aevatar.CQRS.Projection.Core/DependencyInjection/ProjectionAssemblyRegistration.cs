@@ -9,6 +9,24 @@ namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
 /// </summary>
 public static class ProjectionAssemblyRegistration
 {
+    public static void RegisterProjectorExtensionsFromAssembly(
+        IServiceCollection services,
+        Assembly assembly,
+        Type projectorMarkerAbstraction,
+        Type projectorGenericAbstraction)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(assembly);
+        ArgumentNullException.ThrowIfNull(projectorMarkerAbstraction);
+        ArgumentNullException.ThrowIfNull(projectorGenericAbstraction);
+
+        RegisterMarkerAndGenericAbstractions(
+            services,
+            assembly,
+            projectorMarkerAbstraction,
+            projectorGenericAbstraction);
+    }
+
     public static void RegisterProjectionExtensionsFromAssembly(
         IServiceCollection services,
         Assembly assembly,

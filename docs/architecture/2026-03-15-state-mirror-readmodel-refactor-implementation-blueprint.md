@@ -447,7 +447,7 @@ graph/index provider 的要求是：
 
 需要删除或降级：
 
-1. `WorkflowExecutionReportArtifactProjector` 的旧当前态职责
+1. 旧 `WorkflowExecutionReportArtifactProjector` 的当前态职责；现已前移为 `WorkflowRunInsightBridgeProjector -> WorkflowRunInsightGAgent -> WorkflowRunInsightReadModelProjector`
 2. `WorkflowExecutionReportArtifactMutations.cs` 中旧的本地版本推进逻辑
 3. 当前态与 timeline/report 混写模式
 

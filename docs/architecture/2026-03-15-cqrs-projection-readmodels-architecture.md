@@ -63,13 +63,13 @@
   - `ProjectionOwnershipCoordinatorGAgent.cs:25`
   - `WorkflowExecutionRuntimeLease.cs:133`
 - Workflow query/read model
-  - `WorkflowProjectionActivationService.cs:40`
+  - `ContextProjectionActivationService.cs`
   - `WorkflowExecutionReportArtifactProjector.cs:44`
   - `WorkflowProjectionQueryReader.cs:22`
   - `WorkflowRunDurableCompletionResolver.cs:19`
   - `WorkflowRunDetachedCleanupOutboxGAgent.cs:187`
 - Scripting query/read model
-  - `ScriptExecutionProjectionActivationService.cs:15`
+  - `ContextProjectionActivationService.cs`
   - `ScriptReadModelProjector.cs:56`
   - `ScriptNativeDocumentProjector.cs:51`
   - `ScriptNativeGraphProjector.cs:51`
@@ -215,9 +215,9 @@ flowchart LR
 
 #### 5.1.2 workflow 的活跃写会话有 actor 化 ownership 裁决
 
-`WorkflowProjectionActivationService.AcquireBeforeStartAsync(...)` 在启动前先调用 `IProjectionOwnershipCoordinator.AcquireAsync(...)`。
+`ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>` 通过注册时传入的 `acquireBeforeStart` 钩子，在启动前先调用 `IProjectionOwnershipCoordinator.AcquireAsync(...)`。
 
-对应代码：`WorkflowProjectionActivationService.cs:40-50`。
+对应代码：`ContextProjectionActivationService.cs` 与 `workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs`。
 
 `ActorProjectionOwnershipCoordinator` 会把 acquire/release 事件发给 `ProjectionOwnershipCoordinatorGAgent`；后者在单 actor 串行 turn 内做冲突检查与续租。
 
@@ -283,8 +283,8 @@ flowchart LR
 %%{init: {"maxTextSize": 100000, "sequence": {"actorMargin": 12, "messageMargin": 12, "diagramMarginX": 8, "diagramMarginY": 8}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     participant A as "WorkflowRunCommandTargetBinder"
-    participant B as "WorkflowExecutionProjectionPortService"
-    participant C as "WorkflowProjectionActivationService"
+    participant B as "WorkflowExecutionProjectionPort"
+    participant C as "ContextProjectionActivationService"
     participant D as "ProjectionOwnershipCoordinatorGAgent"
     participant E as "ProjectionLifecycleService"
     participant F as "Actor Stream"
@@ -296,7 +296,6 @@ sequenceDiagram
     C->>D: Acquire(scopeId=actorId, sessionId=commandId)
     C->>E: StartAsync(context)
     E->>F: RegisterAsync(rootActorId)
-    C->>H: RefreshMetadataAsync()
     F-->>G: WorkflowRunEventEnvelope / EventEnvelope<ProjectionPayload>
     G->>H: UpsertAsync(report)
 ```
@@ -306,13 +305,12 @@ sequenceDiagram
 1. acquire ownership
 2. 创建 `WorkflowExecutionProjectionContext`
 3. 启动 lifecycle，初始化 projector 并注册订阅
-4. 刷新 read model 元信息
-5. 创建 `WorkflowExecutionRuntimeLease`
+4. 创建 `WorkflowExecutionRuntimeLease`
 
 对应代码：
 
-- `WorkflowExecutionProjectionPortService.cs:28-39`
-- `WorkflowProjectionActivationService.cs:40-117`
+- `WorkflowExecutionProjectionPort.cs:28-39`
+- `ContextProjectionActivationService.cs`
 - `WorkflowExecutionRuntimeLease.cs:31-75`
 
 ### 6.2 Workflow 的 ownership 与 release
@@ -331,22 +329,19 @@ sequenceDiagram
 
 ### 6.3 Workflow read model 写入链
 
-`WorkflowExecutionReportArtifactProjector` 的写路径是：
+`WorkflowRunInsightBridgeProjector` 的当前写路径是：
 
-1. 归一化 envelope
-2. 按 `Payload.TypeUrl` 命中 reducer 集合
-3. 从 document store 读取当前 `WorkflowExecutionReport`
-4. reducer 原地变更 report
-5. `RecordProjectedEvent()` 更新 `StateVersion/LastEventId`
-6. `RefreshDerivedFields()` 刷新 summary/updatedAt
-7. `IProjectionWriteDispatcher<WorkflowExecutionReport>.UpsertAsync(report)`
+1. 从 `EventEnvelope<CommittedStateEventPublished>` 读取 committed workflow/AI observation
+2. 做 envelope 级去重
+3. 转成 `WorkflowRunInsightObservedEvent`
+4. 投递到 `WorkflowRunInsightGAgent`
+5. 由 `WorkflowRunInsightReadModelProjector` 再从 insight actor 的 committed state 物化 `WorkflowExecutionReport`
 
-对应代码：`WorkflowExecutionReportArtifactProjector.cs:44-77`。
+对应代码已切到：
 
-`WorkflowExecutionReportArtifactMutations.RecordProjectedEvent(...)` 是 workflow report artifact 状态推进的直接来源：
-
-- `StateVersion++`
-- `LastEventId = envelope.Id`
+- `WorkflowRunInsightBridgeProjector.cs`
+- `WorkflowRunInsightGAgent.cs`
+- `WorkflowRunInsightReadModelProjector.cs`
 
 对应代码：`WorkflowExecutionReportArtifactMutations.cs:7-17`。
 
@@ -582,9 +577,9 @@ flowchart LR
 
 ### 9.1 Workflow 去重开关名义存在，实际默认是透传
 
-`WorkflowExecutionReportArtifactProjector` 调用了 `_deduplicator.TryRecordAsync(...)`。
+`WorkflowRunInsightBridgeProjector` 调用了 `_deduplicator.TryRecordAsync(...)`。
 
-对应代码：`WorkflowExecutionReportArtifactProjector.cs:55-60`。
+对应代码：`WorkflowRunInsightBridgeProjector.cs`。
 
 但 workflow 默认注册的是：
 
@@ -613,7 +608,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
 而 workflow 的 `OnStartedAsync(...)` 会再次 `RefreshMetadataAsync(...)` 写 `WorkflowExecutionReport`。
 
-对应代码：`WorkflowProjectionActivationService.cs:70-78`。
+对应代码：`ContextProjectionActivationService.cs` 与 `WorkflowExecutionRuntimeLease.cs`。
 
 同时 `_lifecycle.StartAsync(context)` 在 workflow 场景下已经注册了 actor stream 订阅。
 
@@ -624,9 +619,9 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
 ### 9.3 Scripting execution projection 缺少 workflow 那样的 ownership 裁决
 
-`ScriptExecutionProjectionActivationService` 只创建 context，不做 acquire/release ownership。
+`ContextProjectionActivationService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>` 只创建 context，不做 acquire/release ownership。
 
-对应代码：`ScriptExecutionProjectionActivationService.cs:15-35`。
+对应代码：`ContextProjectionActivationService.cs` 与 `ServiceCollectionExtensions.cs` 中的注册 lambda。
 
 `ScriptExecutionRuntimeLease` 只是一个轻量 lease，`SessionId = RootActorId`，没有 heartbeat，也没有 ownership coordinator。
 
@@ -736,7 +731,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
 ### 12.3 Workflow
 
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:133`
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs:44`
 - `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs:7`
@@ -747,7 +742,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
 ### 12.4 Scripting
 
-- `src/Aevatar.Scripting.Projection/Orchestration/ScriptExecutionProjectionActivationService.cs:15`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/Aevatar.Scripting.Projection/Orchestration/ScriptExecutionRuntimeLease.cs:14`
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs:56`
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs:51`

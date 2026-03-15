@@ -24,7 +24,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
             RecordId = "record-1",
             Operation = "upsert",
             FailedStore = "Graph",
-            ReadModel = WorkflowExecutionReportArtifactPayloadMapper.Pack(new WorkflowExecutionReport
+            ReadModel = Any.Pack(new WorkflowExecutionReport
             {
                 Id = "record-1",
                 RootActorId = "record-1",

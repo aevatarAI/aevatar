@@ -607,14 +607,14 @@ flowchart LR
 |---|---|
 | `ProjectionCoordinator` | 接收 Actor envelope 流，协调投影生命周期 |
 | `ProjectionDispatcher` | 一对多分发，将事件分发到所有注册的 Projector |
-| `WorkflowExecutionReportArtifactProjector` | 将事件归约为 `WorkflowExecutionReport` artifact |
+| `WorkflowRunInsightBridgeProjector` | 将 run actor committed observation 桥接到 `WorkflowRunInsightGAgent` |
 | `WorkflowExecutionAGUIEventProjector` | 将事件转换为 AGUI 协议事件 |
 | `EventEnvelopeToAGUIEventMapper` | 事件映射器链，运行时 envelope → AGUI 事件 |
 | `IEventSink<WorkflowRunEvent>` | 实时事件通道，对接 SSE / WebSocket 端点 |
 
-读模型 Reducer 按事件类型精确路由（基于 `TypeUrl`）：
-- Workflow 核心 Reducer：`StartWorkflowEventReducer`、`StepRequestEventReducer`、`StepCompletedEventReducer`、`WorkflowSuspendedEventReducer`、`WorkflowCompletedEventReducer`
-- AI 扩展 Reducer（启用 `AddWorkflowAIProjectionExtensions()` 后）：`TextMessageStartProjectionReducer`、`TextMessageContentProjectionReducer`、`TextMessageEndProjectionReducer`、`ToolCallProjectionReducer`、`ToolResultProjectionReducer`
+当前 workflow insight/report 主链已经 actor 化：
+- `WorkflowRunInsightBridgeProjector` 负责把 committed workflow/AI events 投递给 `WorkflowRunInsightGAgent`
+- `WorkflowRunInsightReadModelProjector` 再从 insight actor 的 committed state 物化 `WorkflowExecutionReport`
 
 ---
 

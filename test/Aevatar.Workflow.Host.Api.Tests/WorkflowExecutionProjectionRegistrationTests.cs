@@ -13,7 +13,6 @@ using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Reducers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -78,9 +77,9 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowExecutionReportArtifactDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    public void WorkflowRunInsightReportDocumentMetadataProvider_ShouldExposeExpectedDefaults()
     {
-        var provider = new WorkflowExecutionReportArtifactDocumentMetadataProvider();
+        var provider = new WorkflowRunInsightReportDocumentMetadataProvider();
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-reports");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
@@ -114,26 +113,12 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionReportArtifactReducer_ShouldRegisterReducerAsEnumerableSingleton()
+    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterProjectorAsEnumerableSingleton()
     {
         var services = new ServiceCollection();
 
-        services.AddWorkflowExecutionReportArtifactReducer<TestWorkflowReducer>();
-        services.AddWorkflowExecutionReportArtifactReducer<TestWorkflowReducer>();
-
-        using var provider = services.BuildServiceProvider();
-        var reducers = provider.GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>().ToList();
-
-        reducers.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowReducer));
-    }
-
-    [Fact]
-    public void AddWorkflowExecutionReportArtifactProjector_ShouldRegisterProjectorAsEnumerableSingleton()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowExecutionReportArtifactProjector<TestWorkflowProjector>();
-        services.AddWorkflowExecutionReportArtifactProjector<TestWorkflowProjector>();
+        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
+        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
 
         using var provider = services.BuildServiceProvider();
         var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>().ToList();
@@ -142,17 +127,14 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionReportArtifactExtensionsFromAssembly_ShouldRegisterReducerAndProjectorFromAssembly()
+    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterWorkflowBridgeProjectorType()
     {
         var services = new ServiceCollection();
 
-        services.AddWorkflowExecutionReportArtifactExtensionsFromAssembly(typeof(WorkflowExecutionReportArtifactProjector).Assembly);
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>) &&
-            x.ImplementationType == typeof(StartWorkflowEventReducer));
+        services.AddWorkflowRunInsightBridgeProjector<WorkflowRunInsightBridgeProjector>();
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>) &&
-            x.ImplementationType == typeof(WorkflowExecutionReportArtifactProjector));
+            x.ImplementationType == typeof(WorkflowRunInsightBridgeProjector));
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
@@ -239,24 +221,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(true);
-    }
-
-    private sealed class TestWorkflowReducer : IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>
-    {
-        public string EventTypeUrl => "type://tests/workflow-reducer";
-
-        public bool Reduce(
-            WorkflowExecutionReport readModel,
-            WorkflowExecutionProjectionContext context,
-            EventEnvelope envelope,
-            DateTimeOffset now)
-        {
-            _ = readModel;
-            _ = context;
-            _ = envelope;
-            _ = now;
-            return true;
-        }
     }
 
     private sealed class TestWorkflowProjector

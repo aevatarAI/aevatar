@@ -456,7 +456,7 @@ graph 层拆成三段：
 
 #### 迁移规则
 
-1. `WorkflowExecutionReportArtifactProjector` 不再直接 mutate `WorkflowExecutionReport`
+1. `WorkflowRunInsightBridgeProjector` 不再直接 mutate `WorkflowExecutionReport`
 2. projector 改成：
    - `reader.GetAsync(id)`
    - reducer 产出新的 `WorkflowExecutionData`
@@ -583,7 +583,7 @@ graph 层拆成三段：
 重点文件：
 
 1. `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs`
-2. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs`
+2. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightBridgeProjector.cs`
 3. `src/workflow/Aevatar.Workflow.Projection/Reducers/*`
 4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 5. `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs`

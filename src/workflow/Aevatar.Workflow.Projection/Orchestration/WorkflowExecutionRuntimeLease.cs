@@ -12,7 +12,9 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowExecutionRuntimeLease
     : ProjectionRuntimeLeaseBase<IEventSink<WorkflowRunEventEnvelope>>,
       IWorkflowExecutionProjectionOwnershipLease,
-      IProjectionPortSessionLease
+      IProjectionPortSessionLease,
+      IProjectionContextRuntimeLease<WorkflowExecutionProjectionContext>,
+      IProjectionRuntimeLeaseStopHandler
 {
     private readonly CancellationTokenSource? _ownershipHeartbeatCts;
     private readonly Task? _ownershipHeartbeatTask;
@@ -22,7 +24,6 @@ public sealed class WorkflowExecutionRuntimeLease
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IProjectionOwnershipCoordinator? _ownershipCoordinator;
     private readonly IProjectionSessionEventHub<WorkflowProjectionControlEvent>? _projectionControlHub;
-    private readonly IWorkflowExecutionReportArtifactUpdater? _readModelUpdater;
     private readonly ILogger<WorkflowExecutionRuntimeLease> _logger;
     private int _ownershipHeartbeatStopped;
     private int _projectionReleaseListenerStopped;
@@ -34,7 +35,6 @@ public sealed class WorkflowExecutionRuntimeLease
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
-        IWorkflowExecutionReportArtifactUpdater? readModelUpdater = null,
         ILogger<WorkflowExecutionRuntimeLease>? logger = null)
         : base(context.RootActorId)
     {
@@ -42,7 +42,6 @@ public sealed class WorkflowExecutionRuntimeLease
         CommandId = context.CommandId;
         _ownershipCoordinator = ownershipCoordinator;
         _projectionControlHub = projectionControlHub;
-        _readModelUpdater = readModelUpdater;
         _logger = logger ?? NullLogger<WorkflowExecutionRuntimeLease>.Instance;
 
         if (ownershipCoordinator == null)
@@ -206,7 +205,7 @@ public sealed class WorkflowExecutionRuntimeLease
         try
         {
             await lifecycle.StopAsync(Context, CancellationToken.None).ConfigureAwait(false);
-            await FinalizeProjectionReleaseAsync().ConfigureAwait(false);
+            await OnProjectionStoppedAsync(CancellationToken.None).ConfigureAwait(false);
             await PublishReleaseCompletedAsync().ConfigureAwait(false);
             if (_projectionReleaseListenerCts != null &&
                 Interlocked.Exchange(ref _projectionReleaseListenerStopped, 1) == 0)
@@ -225,7 +224,7 @@ public sealed class WorkflowExecutionRuntimeLease
         }
     }
 
-    private async Task FinalizeProjectionReleaseAsync()
+    public async Task OnProjectionStoppedAsync(CancellationToken ct = default)
     {
         Exception? firstException = null;
 
@@ -238,23 +237,11 @@ public sealed class WorkflowExecutionRuntimeLease
             firstException ??= ex;
         }
 
-        if (_readModelUpdater != null)
-        {
-            try
-            {
-                await _readModelUpdater.MarkStoppedAsync(ActorId, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                firstException ??= ex;
-            }
-        }
-
         if (_ownershipCoordinator != null)
         {
             try
             {
-                await _ownershipCoordinator.ReleaseAsync(ActorId, CommandId, CancellationToken.None).ConfigureAwait(false);
+                await _ownershipCoordinator.ReleaseAsync(ActorId, CommandId, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

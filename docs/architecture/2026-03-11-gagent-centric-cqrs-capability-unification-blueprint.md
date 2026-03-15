@@ -353,7 +353,7 @@ Projection Core 已经是相对正确的主干。
 
 | 当前类族 | 问题 | 目标动作 |
 |---|---|---|
-| `WorkflowExecutionProjectionPortService` / `ScriptEvolutionProjectionPortService` | 共享相同基类但 capability alias 仍较重 | 抽 descriptor/factory 规范，减少 capability 包装层 |
+| `WorkflowExecutionProjectionPort` / `ScriptEvolutionProjectionPortService` | 共享相同基类但 capability alias 仍较重 | 抽 descriptor/factory 规范，减少 capability 包装层 |
 | `WorkflowRunEventSessionCodec` / `ScriptEvolutionSessionEventCodec` | 各 capability 自建 codec 约定 | 定义统一 session codec 命名和 wire 约束 |
 | `WorkflowExecutionProjectionContext` / `ScriptEvolutionSessionProjectionContext` | 结构相似但标准不统一 | 抽最小公共上下文模型，只保留能力差异字段 |
 

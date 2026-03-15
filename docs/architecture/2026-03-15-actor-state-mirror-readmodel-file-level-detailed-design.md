@@ -104,7 +104,7 @@
 
 关键文件：
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightBridgeProjector.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
@@ -113,7 +113,7 @@
 当前问题：
 
 1. `WorkflowExecutionReport` 同时承载当前态、timeline、summary、graph 输入
-2. `WorkflowExecutionReportArtifactProjector` 先读旧文档，再按 event reducer 推下一态
+2. 旧 `WorkflowExecutionReportArtifactProjector` 曾先读旧文档，再按 event reducer 推下一态；当前实现已经改成 `WorkflowRunInsightBridgeProjector -> WorkflowRunInsightGAgent -> WorkflowRunInsightReadModelProjector`
 3. `WorkflowExecutionReportArtifactMutations.RecordProjectedEvent(...)` 使用局部 artifact 版本推进
 4. `WorkflowExecutionReadModelMapper` 同时映射 state mirror、projection state、timeline、graph，职责过载
 5. query 侧把混合 report 当成当前态事实源
@@ -313,7 +313,7 @@ sequenceDiagram
 
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs` | 事件 reducer 驱动 report artifact 物化 | 当前态、timeline、summary 耦合 | `删除或降级` | 只保留为 history/report artifact 路径，退出当前态主路径 |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightBridgeProjector.cs` | run actor committed observation -> insight actor bridge | bridge 若继续回流 reducer/旧文档读取会重新污染 projection | `保留并收紧` | 只负责桥接到 `WorkflowRunInsightGAgent`，不再直接 mutate report |
 | `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs` | report artifact 局部变更 | 仅允许保留 artifact 自身辅助变更，不得回流当前态语义 | `删除或裁剪` | 删除当前态版本推进逻辑 |
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs` | mixed mapper | 职责过载 | `拆分` | 拆成 readmodel mapper / graph mapper / timeline mapper |
 | `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs` | readmodel/timeline/graph 一体读取 | 违反 SRP | `拆分` | `WorkflowActorReadModelQueryReader` + `WorkflowActorGraphQueryReader`，必要时保留 façade |
@@ -403,8 +403,8 @@ sequenceDiagram
 | `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionStoreDispatcherTests.cs` | `修改` | 覆盖单 readmodel 写入结果聚合、`stale`、`duplicate`、`conflict` |
 | `test/Aevatar.CQRS.Projection.Core.Tests/ElasticsearchProjectionDocumentStoreBehaviorTests.cs` | `修改` | 覆盖 ES 条件写 |
 | `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionGraphStoreBindingTests.cs` | `删除或迁移` | graph 应退出单 readmodel sink 模型，改测独立 graph projector |
-| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportArtifactProjectorTests.cs` | `删除或重写` | 改为 `WorkflowExecutionReportArtifactProjectorTests` |
-| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportArtifactPayloadMapperTests.cs` | `删除或重写` | 改为 `WorkflowExecutionReportArtifactPayloadMapperTests` |
+| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowRunInsightBridgeProjectorTests.cs` | `重写中` | 当前已改成 insight actor bridge + readmodel materialization 测试 |
+| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportArtifactPayloadMapperTests.cs` | `删除` | payload mapper 已删除，补偿链直接使用 `Any.Pack/Unpack` |
 | `test/Aevatar.Workflow.Application.Tests/WorkflowRunDurableCompletionResolverCoverageTests.cs` | `修改` | 覆盖新的 readmodel DTO |
 | `test/Aevatar.Workflow.Application.Tests/WorkflowRunStateMirrorEmitterTests.cs` | `修改` | 验证复用抽取后的 projection-payload contract |
 | `test/Aevatar.Scripting.Core.Tests/Projection/ScriptReadModelProjectorTests.cs` | `删除或重写` | 改为 direct current-state readmodel projector 测试 |

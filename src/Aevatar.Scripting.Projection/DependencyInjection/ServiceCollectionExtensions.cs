@@ -44,13 +44,29 @@ public static class ServiceCollectionExtensions
             IReadOnlyList<string>,
             ScriptAuthorityRuntimeLease,
             EventEnvelope>();
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptExecutionRuntimeLease>, ScriptExecutionProjectionActivationService>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptExecutionRuntimeLease>, ScriptExecutionProjectionReleaseService>();
+        services.TryAddSingleton<IProjectionPortActivationService<ScriptExecutionRuntimeLease>>(sp =>
+            new ContextProjectionActivationService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>(
+                sp.GetRequiredService<IProjectionLifecycleService<ScriptExecutionProjectionContext, IReadOnlyList<string>>>(),
+                (rootEntityId, _, _, _, _) => new ScriptExecutionProjectionContext
+                {
+                    ProjectionId = $"{rootEntityId}:read-model",
+                    RootActorId = rootEntityId,
+                },
+                context => new ScriptExecutionRuntimeLease(context)));
+        services.TryAddSingleton<IProjectionPortReleaseService<ScriptExecutionRuntimeLease>, ContextProjectionReleaseService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>>();
         services.TryAddSingleton<ScriptExecutionProjectionPortService>();
         services.TryAddSingleton<IScriptExecutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptExecutionProjectionPortService>());
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptAuthorityRuntimeLease>, ScriptAuthorityProjectionActivationService>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptAuthorityRuntimeLease>, ScriptAuthorityProjectionReleaseService>();
+        services.TryAddSingleton<IProjectionPortActivationService<ScriptAuthorityRuntimeLease>>(sp =>
+            new ContextProjectionActivationService<ScriptAuthorityRuntimeLease, ScriptAuthorityProjectionContext, IReadOnlyList<string>>(
+                sp.GetRequiredService<IProjectionLifecycleService<ScriptAuthorityProjectionContext, IReadOnlyList<string>>>(),
+                (rootEntityId, _, _, _, _) => new ScriptAuthorityProjectionContext
+                {
+                    ProjectionId = $"{rootEntityId}:authority",
+                    RootActorId = rootEntityId,
+                },
+                context => new ScriptAuthorityRuntimeLease(context)));
+        services.TryAddSingleton<IProjectionPortReleaseService<ScriptAuthorityRuntimeLease>, ContextProjectionReleaseService<ScriptAuthorityRuntimeLease, ScriptAuthorityProjectionContext, IReadOnlyList<string>>>();
         services.TryAddSingleton<ScriptAuthorityProjectionPortService>();
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
@@ -59,8 +75,21 @@ public static class ServiceCollectionExtensions
             IReadOnlyList<string>,
             ScriptEvolutionRuntimeLease,
             ScriptEvolutionSessionCompletedEvent>();
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionActivationService>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ScriptEvolutionProjectionReleaseService>();
+        services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>>(sp =>
+            new ContextProjectionActivationService<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>(
+                sp.GetRequiredService<IProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>(),
+                (rootEntityId, _, _, commandId, _) =>
+                {
+                    ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
+                    return new ScriptEvolutionSessionProjectionContext
+                    {
+                        ProjectionId = rootEntityId,
+                        RootActorId = rootEntityId,
+                        ProposalId = commandId,
+                    };
+                },
+                context => new ScriptEvolutionRuntimeLease(context)));
+        services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ContextProjectionReleaseService<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>();
         services.TryAddSingleton<ScriptEvolutionProjectionPortService>();
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPortService>());

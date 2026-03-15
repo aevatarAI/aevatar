@@ -70,7 +70,10 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
                 requestedEventType: "integration.requested",
                 ct: CancellationToken.None);
 
-            var committed = await WaitForCommittedFactAsync(sink, runId, CancellationToken.None);
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                runId,
+                CancellationToken.None);
             committed.ActorId.Should().Be(runtimeActorId);
             committed.DomainEventPayload.Should().NotBeNull();
             committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current.NormalizedText.Should().Be("HELLO");
@@ -101,24 +104,4 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         }
     }
 
-    private static async Task<ScriptDomainFactCommitted> WaitForCommittedFactAsync(
-        IEventSink<EventEnvelope> sink,
-        string runId,
-        CancellationToken ct)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
-
-        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
-        {
-            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
-                continue;
-
-            var fact = envelope.Payload.Unpack<ScriptDomainFactCommitted>();
-            if (string.Equals(fact.RunId, runId, StringComparison.Ordinal))
-                return fact;
-        }
-
-        throw new InvalidOperationException($"Timed out waiting for committed script fact. run_id={runId}");
-    }
 }

@@ -17,6 +17,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Ports;
+using Aevatar.Scripting.Projection.ReadPorts;
 using Aevatar.Scripting.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
@@ -510,7 +511,8 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
                 _ => throw new InvalidOperationException("rollback dispatch should not run")),
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(runtime),
-            activation);
+            activation,
+            CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"));
 
         await service.PromoteCatalogRevisionAsync(
             null,
@@ -544,7 +546,8 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
             rollbackDispatch,
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(runtime),
-            activation);
+            activation,
+            CreateCatalogQueryPort("script-1", "rev-1", string.Empty, string.Empty, "proposal-2"));
 
         await service.RollbackCatalogRevisionAsync(
             "catalog-custom",
@@ -572,7 +575,8 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
                 _ => throw new InvalidOperationException("rollback dispatch should not run")),
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(new RecordingActorRuntime()),
-            new RecordingAuthorityReadModelActivationPort());
+            new RecordingAuthorityReadModelActivationPort(),
+            CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"));
 
         var act = () => service.PromoteCatalogRevisionAsync(
             null,
@@ -603,7 +607,8 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
                 }),
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(new RecordingActorRuntime()),
-            new RecordingAuthorityReadModelActivationPort());
+            new RecordingAuthorityReadModelActivationPort(),
+            CreateCatalogQueryPort("script-1", "rev-1", string.Empty, string.Empty, "proposal-2"));
 
         var act = () => service.RollbackCatalogRevisionAsync(
             null,
@@ -623,11 +628,12 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
     {
         var cases = new (string Name, Func<RuntimeScriptCatalogCommandService> Create)[]
         {
-            ("promoteDispatchService", () => new RuntimeScriptCatalogCommandService(null!, new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort())),
-            ("rollbackDispatchService", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), null!, new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort())),
-            ("addressResolver", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), null!, new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort())),
-            ("actorAccessor", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), null!, new RecordingAuthorityReadModelActivationPort())),
-            ("authorityReadModelActivationPort", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), null!)),
+            ("promoteDispatchService", () => new RuntimeScriptCatalogCommandService(null!, new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort(), CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"))),
+            ("rollbackDispatchService", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), null!, new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort(), CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"))),
+            ("addressResolver", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), null!, new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort(), CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"))),
+            ("actorAccessor", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), null!, new RecordingAuthorityReadModelActivationPort(), CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"))),
+            ("authorityReadModelActivationPort", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), null!, CreateCatalogQueryPort("script-1", "rev-2", "definition-2", "hash-2", "proposal-1"))),
+            ("catalogQueryPort", () => new RuntimeScriptCatalogCommandService(new RecordingDispatchService<PromoteScriptCatalogRevisionCommand>(_ => defaultSuccess()), new RecordingDispatchService<RollbackScriptCatalogRevisionCommand>(_ => defaultSuccess()), new StaticAddressResolver(), new RuntimeScriptActorAccessor(new RecordingActorRuntime()), new RecordingAuthorityReadModelActivationPort(), null!)),
         };
 
         foreach (var testCase in cases)
@@ -639,6 +645,28 @@ public sealed class RuntimeScriptCatalogCommandServiceBranchTests
             CommandDispatchResult<ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>.Success(
                 new ScriptingCommandAcceptedReceipt("catalog-1", "command-1", "corr-1"));
     }
+
+    private static ProjectionScriptCatalogQueryPort CreateCatalogQueryPort(
+        string scriptId,
+        string activeRevision,
+        string definitionActorId,
+        string sourceHash,
+        string proposalId) =>
+        new((_, requestedScriptId, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<ScriptCatalogEntrySnapshot?>(
+                string.Equals(requestedScriptId, scriptId, StringComparison.Ordinal)
+                    ? new ScriptCatalogEntrySnapshot(
+                        scriptId,
+                        activeRevision,
+                        definitionActorId,
+                        sourceHash,
+                        string.Empty,
+                        string.IsNullOrWhiteSpace(activeRevision) ? [] : [activeRevision],
+                        proposalId)
+                    : null);
+        });
 }
 
 public sealed class RuntimeScriptDefinitionCommandServiceBranchTests

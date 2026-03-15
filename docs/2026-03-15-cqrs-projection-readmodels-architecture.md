@@ -197,7 +197,7 @@ Workflow 对这类部分成功有 durable compensation：
 
 Workflow 查询链路：
 
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionQueryService.cs:8-148`
+- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:6-165`
 
 读取规则：
@@ -315,9 +315,9 @@ Workflow 是当前仓库里对投影并发控制最完整的实现：
 
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionOwnershipCoordinator.cs:35-111`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionOwnershipCoordinatorGAgent.cs:25-99`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40-117`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionReleaseService.cs:26-72`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionReleaseService.cs`
 
 语义如下：
 
@@ -602,7 +602,7 @@ DI 装配：
 
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:11-128`
 - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40-117`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:22-143`
 - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs:19-53`

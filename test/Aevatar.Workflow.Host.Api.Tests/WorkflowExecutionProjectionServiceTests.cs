@@ -1,5 +1,3 @@
-using Aevatar.AI.Projection.Reducers;
-using Aevatar.AI.Projection.Appliers;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -25,7 +23,6 @@ using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Reducers;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -188,7 +185,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_ShouldNotOverwriteRunMetadata()
+    public async Task AttachLiveSinkAsync_ShouldNotCreateReportArtifactWithoutCommittedEvents()
     {
         var initialStartedAt = new DateTimeOffset(2026, 2, 19, 0, 0, 0, TimeSpan.Zero);
         var clock = new MutableProjectionClock(initialStartedAt);
@@ -206,26 +203,14 @@ public class WorkflowExecutionProjectionServiceTests
         lease.Should().NotBeNull();
 
         var beforeAttach = await store.GetAsync("root");
-        beforeAttach.Should().NotBeNull();
-        beforeAttach!.CommandId.Should().Be("cmd-1");
-        beforeAttach.WorkflowName.Should().Be("wf");
-        beforeAttach.Input.Should().Be("original-input");
-        beforeAttach.CreatedAt.Should().Be(initialStartedAt);
-        beforeAttach.UpdatedAt.Should().Be(initialStartedAt);
-        beforeAttach.StartedAt.Should().Be(initialStartedAt);
+        beforeAttach.Should().BeNull();
 
         clock.UtcNow = initialStartedAt.AddMinutes(10);
         var sink = new EventChannel<WorkflowRunEventEnvelope>();
         await service.AttachLiveSinkAsync(lease!, sink);
 
         var afterAttach = await store.GetAsync("root");
-        afterAttach.Should().NotBeNull();
-        afterAttach!.CommandId.Should().Be("cmd-1");
-        afterAttach.WorkflowName.Should().Be("wf");
-        afterAttach.Input.Should().Be("original-input");
-        afterAttach.CreatedAt.Should().Be(initialStartedAt);
-        afterAttach.UpdatedAt.Should().Be(initialStartedAt);
-        afterAttach.StartedAt.Should().Be(initialStartedAt);
+        afterAttach.Should().BeNull();
         await service.DetachLiveSinkAsync(lease!, sink);
         await sink.DisposeAsync();
     }
@@ -562,25 +547,9 @@ public class WorkflowExecutionProjectionServiceTests
         var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
         var currentStateDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionCurrentStateDocument>(
             [new ProjectionDocumentStoreBinding<WorkflowExecutionCurrentStateDocument>(currentStateStore)]);
-        var projector = new WorkflowExecutionReportArtifactProjector(
-            storeDispatcher,
-            store,
-            new TestEventDeduplicator(),
-            resolvedClock,
-            BuildReducers());
         var currentStateProjector = new WorkflowExecutionCurrentStateProjector(
             currentStateDispatcher,
             resolvedClock);
-        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
-            [currentStateProjector, projector]);
-        var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
-        var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>(
-            dispatcher,
-            subscriptionHub);
-        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
-            coordinator,
-            dispatcher,
-            runRegistry);
 
         // Use a dedicated local actor runtime for projection coordinator actors.
         var runtimeServices = new ServiceCollection();
@@ -599,44 +568,73 @@ public class WorkflowExecutionProjectionServiceTests
         var dispatchPort = new LocalActorDispatchPort(runtime);
         var runtimeTypeProbe = new RuntimeActorTypeProbe(runtime);
         var ownershipTypeVerifier = new DefaultAgentTypeVerifier(runtimeTypeProbe);
+        var insightActorPort = new ActorWorkflowRunInsightPort(runtime, dispatchPort, ownershipTypeVerifier);
         var ownershipCoordinator = new ActorProjectionOwnershipCoordinator(
             runtime,
             dispatchPort,
             ownershipTypeVerifier,
             runtimeProvider.GetRequiredService<IEventStore>());
+        var insightCoordinator = new ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>(
+            [new WorkflowRunInsightReadModelProjector(storeDispatcher)]);
+        var insightDispatcher = new ProjectionDispatcher<WorkflowRunInsightProjectionContext, bool>(insightCoordinator);
+        var insightRegistry = new ProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>(
+            insightDispatcher,
+            subscriptionHub);
+        var insightLifecycle = new ProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>(
+            insightCoordinator,
+            insightDispatcher,
+            insightRegistry);
+        var insightActivation = new ContextProjectionActivationService<WorkflowRunInsightRuntimeLease, WorkflowRunInsightProjectionContext, bool>(
+            insightLifecycle,
+            (rootEntityId, _, _, _, _) => new WorkflowRunInsightProjectionContext
+            {
+                ProjectionId = $"{rootEntityId}:insight",
+                RootActorId = WorkflowRunInsightGAgent.BuildActorId(rootEntityId),
+                RunActorId = rootEntityId,
+            },
+            context => new WorkflowRunInsightRuntimeLease(context));
+        var projector = new WorkflowRunInsightBridgeProjector(
+            insightActorPort,
+            insightActivation,
+            new TestEventDeduplicator(),
+            resolvedClock);
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            [currentStateProjector, projector]);
+        var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
+        var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>(
+            dispatcher,
+            subscriptionHub);
+        var lifecycle = new ProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            coordinator,
+            dispatcher,
+            runRegistry);
         runEventStreamHub = new ProjectionSessionEventHub<WorkflowRunEventEnvelope>(
             streams,
             new WorkflowRunEventSessionCodec());
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
-        var queryReader = new WorkflowProjectionQueryReader(
-            currentStateStore,
-            store,
-            mapper,
-            relationStore);
-        var readModelUpdater = new WorkflowExecutionReportArtifactUpdater(storeDispatcher, store, resolvedClock);
-        var activationService = new WorkflowProjectionActivationService(
+        var activationService = CreateActivationService(
             lifecycle,
             resolvedClock,
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            ownershipCoordinator,
-            readModelUpdater);
-        var releaseService = new WorkflowProjectionReleaseService(
-            lifecycle,
-            readModelUpdater,
             ownershipCoordinator);
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            lifecycle);
         var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(sinkFailurePolicy);
 
-        var projectionPort = new WorkflowExecutionProjectionPortService(
+        var projectionPort = new WorkflowExecutionProjectionPort(
             options,
             activationService,
             releaseService,
             sinkManager,
             liveSinkForwarder);
-        var queryPort = new WorkflowExecutionProjectionQueryService(
-            options,
-            queryReader);
+        var queryPort = new WorkflowProjectionQueryReader(
+            currentStateStore,
+            store,
+            mapper,
+            relationStore,
+            options);
         return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
@@ -658,22 +656,13 @@ public class WorkflowExecutionProjectionServiceTests
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowExecutionReportArtifactUpdater(storeDispatcher, store, clock);
-        var queryReader = new WorkflowProjectionQueryReader(
-            currentStateStore,
-            store,
-            mapper,
-            relationStore);
-        var activationService = new WorkflowProjectionActivationService(
+        var activationService = CreateActivationService(
             lifecycle,
             clock,
             new DefaultWorkflowExecutionProjectionContextFactory(),
-            ownershipCoordinator,
-            readModelUpdater);
-        var releaseService = new WorkflowProjectionReleaseService(
-            lifecycle,
-            readModelUpdater,
             ownershipCoordinator);
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            lifecycle);
         var liveSinkForwarder = new EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(sinkFailurePolicy);
 
         var options = new WorkflowExecutionProjectionOptions
@@ -681,36 +670,68 @@ public class WorkflowExecutionProjectionServiceTests
             Enabled = true,
             EnableActorQueryEndpoints = true,
         };
-        var projectionPort = new WorkflowExecutionProjectionPortService(
+        var projectionPort = new WorkflowExecutionProjectionPort(
             options,
             activationService,
             releaseService,
             sinkManager,
             liveSinkForwarder);
-        var queryPort = new WorkflowExecutionProjectionQueryService(
-            options,
-            queryReader);
+        var queryPort = new WorkflowProjectionQueryReader(
+            currentStateStore,
+            store,
+            mapper,
+            relationStore,
+            options);
         return new ProjectionPortsHarness(projectionPort, queryPort);
     }
 
-    private static IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>> BuildReducers() =>
-    [
-        new StartWorkflowEventReducer(),
-        new StepRequestEventReducer(),
-        new StepCompletedEventReducer(),
-        new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new AITextMessageStartProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
-        new TextMessageContentProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new AITextMessageContentProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
-        new TextMessageEndProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new AITextMessageEndProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
-        new ToolCallProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new AIToolCallProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
-        new ToolResultProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>(
-            [new AIToolResultProjectionApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext>()]),
-        new WorkflowSuspendedEventReducer(),
-        new WorkflowCompletedEventReducer(),
-    ];
+    private static ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> CreateActivationService(
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        IProjectionClock clock,
+        IWorkflowExecutionProjectionContextFactory contextFactory,
+        IProjectionOwnershipCoordinator ownershipCoordinator,
+        ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
+        IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null) =>
+        new(
+            lifecycle,
+            (rootEntityId, workflowName, input, commandId, _) => contextFactory.Create(
+                rootEntityId,
+                commandId,
+                rootEntityId,
+                workflowName,
+                input,
+                clock.UtcNow),
+            context => new WorkflowExecutionRuntimeLease(
+                context,
+                ownershipCoordinator,
+                ownershipOptions,
+                lifecycle,
+                projectionControlHub),
+            acquireBeforeStart: (rootEntityId, _, _, commandId, ct) =>
+                ownershipCoordinator.AcquireAsync(rootEntityId, commandId, ct),
+            onRuntimeLeaseCreated: async (_, _, _, runtimeLease, ct) =>
+            {
+                try
+                {
+                    await runtimeLease.WaitForProjectionReleaseListenerReadyAsync(ct);
+                }
+                catch
+                {
+                    await runtimeLease.StopProjectionReleaseListenerAsync();
+                    await runtimeLease.StopOwnershipHeartbeatAsync();
+                    throw;
+                }
+            },
+            cleanupOnStartFailure: async (rootEntityId, commandId) =>
+            {
+                try
+                {
+                    await ownershipCoordinator.ReleaseAsync(rootEntityId, commandId, CancellationToken.None);
+                }
+                catch
+                {
+                }
+            });
 
     private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
         keySelector: report => report.RootActorId,

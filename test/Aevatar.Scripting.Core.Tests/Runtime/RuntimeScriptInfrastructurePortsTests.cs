@@ -309,7 +309,21 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(runtime);
+        var service = CreateCatalogCommandService(
+            runtime,
+            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
+                    new ScriptCatalogEntrySnapshot(
+                        scriptId,
+                        "rev-2",
+                        "definition-2",
+                        "hash-2",
+                        "rev-1",
+                        ["rev-2"],
+                        "proposal-1"));
+            }));
 
         await service.PromoteCatalogRevisionAsync(
             catalogActorId: null,
@@ -340,7 +354,21 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(runtime);
+        var service = CreateCatalogCommandService(
+            runtime,
+            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
+                    new ScriptCatalogEntrySnapshot(
+                        scriptId,
+                        "rev-1",
+                        string.Empty,
+                        string.Empty,
+                        "rev-2",
+                        ["rev-1", "rev-2"],
+                        "proposal-rollback"));
+            }));
 
         await service.RollbackCatalogRevisionAsync(
             catalogActorId: "catalog-custom",
@@ -766,7 +794,9 @@ public class RuntimeScriptInfrastructurePortsTests
                 new RunScriptRuntimeCommandEnvelopeFactory()));
     }
 
-    private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(TestActorRuntime runtime)
+    private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(
+        TestActorRuntime runtime,
+        ProjectionScriptCatalogQueryPort catalogQueryPort)
     {
         return new RuntimeScriptCatalogCommandService(
             CreateDispatchService(
@@ -783,7 +813,8 @@ public class RuntimeScriptInfrastructurePortsTests
                 new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
             new StaticAddressResolver(),
             new RuntimeScriptActorAccessor(runtime),
-            new NoOpAuthorityReadModelActivationPort());
+            new NoOpAuthorityReadModelActivationPort(),
+            catalogQueryPort);
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
