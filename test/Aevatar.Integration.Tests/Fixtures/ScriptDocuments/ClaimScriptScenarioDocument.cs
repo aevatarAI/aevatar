@@ -77,7 +77,7 @@ public sealed class ClaimScriptScenarioDocument
                                 CompliancePassed = evt.Current.CompliancePassed,
                                 LastCommandId = evt.CommandId ?? string.Empty,
                             },
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
@@ -192,7 +192,7 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimAnalystReviewRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, reduce: static (_, evt, _) => evt.Current)
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
@@ -243,7 +243,7 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimFraudScoringRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, reduce: static (_, evt, _) => evt.Current)
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
@@ -294,7 +294,7 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimComplianceCheckRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, reduce: static (_, evt, _) => evt.Current)
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 
@@ -345,7 +345,7 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimManualReviewRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, reduce: static (_, evt, _) => evt.Current)
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 

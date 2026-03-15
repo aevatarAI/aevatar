@@ -1,16 +1,14 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Infrastructure.Compilation;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Projection;
@@ -18,7 +16,7 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptReadModelProjectorInitializationTests
 {
     [Fact]
-    public async Task InitializeAsync_ShouldSeedDocumentForProjectionRoot()
+    public async Task InitializeAsync_ShouldNotSeedDocument()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
@@ -31,10 +29,7 @@ public sealed class ScriptReadModelProjectorInitializationTests
         await projector.InitializeAsync(context, CancellationToken.None);
 
         var document = await dispatcher.GetAsync("runtime-1", CancellationToken.None);
-        document.Should().NotBeNull();
-        document!.Id.Should().Be("runtime-1");
-        document.ReadModelPayload.Should().BeNull();
-        document.StateVersion.Should().Be(0);
+        document.Should().BeNull();
     }
 
     [Fact]
@@ -48,75 +43,53 @@ public sealed class ScriptReadModelProjectorInitializationTests
             RootActorId = "runtime-2",
         };
 
-        await projector.InitializeAsync(context, CancellationToken.None);
         await projector.ProjectAsync(
             context,
             new EventEnvelope
             {
                 Id = "evt-non-committed",
-                Payload = Any.Pack(new RunScriptRequestedEvent
-                {
-                    RunId = "run-1",
-                    DefinitionActorId = "definition-1",
-                    ScriptRevision = "rev-1",
-                    RequestedEventType = "integration.requested",
-                    InputPayload = Any.Pack(new SimpleTextCommand
-                    {
-                        CommandId = "command-1",
-                        Value = "hello",
-                    }),
-                }),
-                Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Any.Pack(new Empty()),
+                Timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)),
             },
             CancellationToken.None);
 
         var document = await dispatcher.GetAsync("runtime-2", CancellationToken.None);
-        document.Should().NotBeNull();
-        document!.ReadModelPayload.Should().BeNull();
-        document.StateVersion.Should().Be(0);
+        document.Should().BeNull();
     }
 
     private static ScriptReadModelProjector CreateProjector(
-        InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher)
+        InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher) =>
+        new(
+            dispatcher,
+            new ThrowingDefinitionSnapshotPort(),
+            new ThrowingArtifactResolver(),
+            new ProtobufMessageCodec(),
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
+
+    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
-        return new ScriptReadModelProjector(
-            dispatcher,
-            dispatcher,
-            new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)),
-            new StaticDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec());
+        public DateTimeOffset UtcNow => now;
     }
 
-    private sealed class StaticDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    private sealed class ThrowingDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
         public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
             string definitionActorId,
             string requestedRevision,
             CancellationToken ct)
         {
+            _ = definitionActorId;
+            _ = requestedRevision;
             ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: ScriptSources.UppercaseBehavior,
-                SourceHash: ScriptSources.UppercaseBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: ScriptSources.UppercaseStateTypeUrl,
-                ReadModelTypeUrl: ScriptSources.UppercaseReadModelTypeUrl,
-                ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "schema-hash",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
-                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
+            throw new InvalidOperationException("Definition snapshot should not be requested in this test.");
         }
     }
 
-    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
+    private sealed class ThrowingArtifactResolver : IScriptBehaviorArtifactResolver
     {
-        public DateTimeOffset UtcNow => now;
+        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
+        {
+            throw new InvalidOperationException($"Artifact resolution should not be reached in this test. request={request}");
+        }
     }
 }

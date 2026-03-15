@@ -5,7 +5,8 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowBindingRuntimeLease
     : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
-      IProjectionPortSessionLease
+      IProjectionPortSessionLease,
+      IProjectionContextRuntimeLease<WorkflowBindingProjectionContext>
 {
     public WorkflowBindingRuntimeLease(WorkflowBindingProjectionContext context)
         : base(context.RootActorId)

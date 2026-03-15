@@ -4,28 +4,28 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
-    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionReport source)
+    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorSnapshot
         {
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
             LastCommandId = source.CommandId,
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
+            CompletionStatus = MapCompletionStatus(source.Status),
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
-            TotalSteps = source.Summary.TotalSteps,
-            RequestedSteps = source.Summary.RequestedSteps,
-            CompletedSteps = source.Summary.CompletedSteps,
-            RoleReplyCount = source.Summary.RoleReplyCount,
+            TotalSteps = 0,
+            RequestedSteps = 0,
+            CompletedSteps = 0,
+            RoleReplyCount = 0,
         };
     }
 
-    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionReport source)
+    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
         {
@@ -92,17 +92,17 @@ public sealed class WorkflowExecutionReadModelMapper
         return subgraph;
     }
 
-    private static WorkflowRunCompletionStatus MapCompletionStatus(
-        WorkflowExecutionCompletionStatus status) =>
-        status switch
+    private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
         {
-            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
-            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
-            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
-            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
-            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
-            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
+            "running" => WorkflowRunCompletionStatus.Running,
+            "completed" => WorkflowRunCompletionStatus.Completed,
+            "failed" => WorkflowRunCompletionStatus.Failed,
+            "stopped" => WorkflowRunCompletionStatus.Stopped,
+            "not_found" => WorkflowRunCompletionStatus.NotFound,
+            "disabled" => WorkflowRunCompletionStatus.Disabled,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
+    }
 }

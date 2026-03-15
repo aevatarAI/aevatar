@@ -273,7 +273,7 @@ public class RoslynScriptBehaviorCompilerTests
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
             }
 
@@ -380,7 +380,7 @@ public class RoslynScriptBehaviorCompilerTests
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new InvalidRuntimeState()
                                 : new InvalidRuntimeState { LastCommandId = evt.CommandId ?? string.Empty },
-                            reduce: static (_, evt, _) => evt.Current)
+                            project: static (_, evt, _) => evt.Current)
                         .OnQuery<InvalidRuntimeQueryRequested, InvalidRuntimeQueryResponded>(HandleQueryAsync);
                 }
 

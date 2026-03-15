@@ -138,7 +138,7 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             return;
         }
 
-        if (!WorkflowExecutionReportSnapshotMapper.TryUnpack(entry.ReadModel, out var readModel) || readModel == null)
+        if (!TryUnpackReadModel(entry.ReadModel, out var readModel) || readModel == null)
         {
             await ScheduleRetryAsync(
                 entry,
@@ -201,5 +201,23 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             nextVisible = DateTime.SpecifyKind(nextVisible, DateTimeKind.Utc);
 
         return utcNow >= nextVisible;
+    }
+
+    private static bool TryUnpackReadModel(Any? payload, out WorkflowExecutionReport? readModel)
+    {
+        readModel = null;
+        if (payload == null || !payload.Is(WorkflowExecutionReport.Descriptor))
+            return false;
+
+        try
+        {
+            readModel = payload.Unpack<WorkflowExecutionReport>();
+            return true;
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            readModel = null;
+            return false;
+        }
     }
 }

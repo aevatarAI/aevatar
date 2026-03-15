@@ -5,38 +5,41 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 
 public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisioningPort
 {
-    private static readonly TimeSpan ProjectionObservationTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan ProjectionObservationPollInterval = TimeSpan.FromMilliseconds(20);
-
     private readonly ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
-    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
 
     public RuntimeScriptProvisioningService(
-        ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
-        IScriptDefinitionSnapshotPort definitionSnapshotPort)
+        ICommandDispatchService<ProvisionScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
-        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
     }
 
     public async Task<string> EnsureRuntimeAsync(
         string definitionActorId,
         string scriptRevision,
         string? runtimeActorId,
-        CancellationToken ct,
-        ScriptDefinitionSnapshot? definitionSnapshot = null)
+        ScriptDefinitionSnapshot definitionSnapshot,
+        CancellationToken ct)
     {
-        var resolvedDefinitionSnapshot = definitionSnapshot
-            ?? await WaitForSnapshotAsync(
-                definitionActorId,
-                scriptRevision,
-                ct);
+        ct.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(definitionActorId);
+        ArgumentNullException.ThrowIfNull(definitionSnapshot);
+
+        if (!string.IsNullOrWhiteSpace(scriptRevision) &&
+            !string.Equals(scriptRevision, definitionSnapshot.Revision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script runtime provisioning requires a definition snapshot for revision `{scriptRevision}`, but received `{definitionSnapshot.Revision}`.");
+        }
+
+        var resolvedRevision = string.IsNullOrWhiteSpace(scriptRevision)
+            ? definitionSnapshot.Revision
+            : scriptRevision;
         var result = await _dispatchService.DispatchAsync(
             new ProvisionScriptRuntimeCommand(
-                definitionActorId ?? string.Empty,
-                scriptRevision ?? string.Empty,
+                definitionActorId,
+                resolvedRevision,
                 runtimeActorId,
-                resolvedDefinitionSnapshot),
+                definitionSnapshot),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");
@@ -44,34 +47,5 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
         var receipt = result.Receipt
             ?? throw new InvalidOperationException("Script runtime provisioning did not produce a receipt.");
         return receipt.ActorId;
-    }
-
-    private async Task<ScriptDefinitionSnapshot> WaitForSnapshotAsync(
-        string definitionActorId,
-        string scriptRevision,
-        CancellationToken ct)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ProjectionObservationTimeout);
-
-        try
-        {
-            while (true)
-            {
-                var snapshot = await _definitionSnapshotPort.TryGetAsync(
-                    definitionActorId,
-                    scriptRevision,
-                    timeoutCts.Token);
-                if (snapshot != null)
-                    return snapshot;
-
-                await Task.Delay(ProjectionObservationPollInterval, timeoutCts.Token);
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"Timed out waiting for script definition snapshot observation. actor_id={definitionActorId}, revision={scriptRevision}");
-        }
     }
 }

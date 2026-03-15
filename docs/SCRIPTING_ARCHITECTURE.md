@@ -40,10 +40,11 @@
 
 1. 脚本作者以 `ScriptBehavior<TState,TReadModel>` 编写强类型行为。
 2. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
-3. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并提交 `ScriptDomainFactCommitted`。
-4. 读侧由 `ScriptReadModelProjector` 基于 committed fact 构建 `ScriptReadModelDocument`。
-5. 查询通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 对外暴露。
-6. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
+3. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
+4. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
+5. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` 基于 committed observation 构建当前态 readmodel。
+6. 查询通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 对外暴露；projection 内不再保留额外的 `ScriptReadModelQueryService` 转发层。
+7. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
 
 当前 runtime semantics 也已经明确收紧：
 
@@ -68,16 +69,18 @@ flowchart LR
     DEF --> CMP["RoslynScriptBehaviorCompiler"]
     CMP --> ART["ScriptBehaviorArtifact"]
 
-    RUNAPI["Host / Runtime Provisioning"] --> PROV["RuntimeScriptProvisioningService"]
+    RUNAPI["Host / Runtime Provisioning"] --> PROV["RuntimeScriptProvisioningService<br/>explicit ScriptDefinitionSnapshot"]
     PROV --> ACT["ScriptBehaviorGAgent"]
     ACT --> DISP["ScriptBehaviorDispatcher"]
     DISP --> ART
     ART --> AUTHOR["ScriptBehavior<TState,TReadModel>"]
 
-    ACT --> FACT["ScriptDomainFactCommitted"]
-    FACT --> PROJ["ScriptReadModelProjector"]
-    FACT --> LIVE["ScriptExecutionSessionEventProjector"]
+    ACT --> FACT["CommittedStateEventPublished<br/>(state_event + state_root)"]
+    FACT --> PROJ["State-backed Projectors"]
+    PROJ --> DEFRM["ScriptDefinitionSnapshotDocument"]
+    PROJ --> CATRM["ScriptCatalogEntryDocument"]
     PROJ --> RM["ScriptReadModelDocument"]
+    FACT --> LIVE["ScriptExecutionSessionEventProjector"]
     LIVE --> HUB["ProjectionSessionEventHub<EventEnvelope>"]
 
     RM --> QRY["ScriptReadModelQueryReader"]
@@ -106,18 +109,19 @@ flowchart LR
 
 ### 5.2 写侧权威事实
 
-写侧权威事实是 `ScriptDomainFactCommitted`。
+写侧权威事实是 actor committed state 与 committed domain fact。
 
 这意味着：
 
-1. committed fact 不再携带 `state_payloads / read_model_payloads` 快照式 bag。
-2. projection 只消费 committed fact，不再依赖 write-side 复制读模型快照。
+1. `CommittedStateEventPublished` 现在携带 `state_event + state_root`，作为 scripting current-state readmodel 的统一观察输入。
+2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态。
+3. runtime provisioning 必须显式使用 write-side 已得出的 `ScriptDefinitionSnapshot`，而不是中间层再去读 definition readmodel。
 
 ### 5.3 读侧权威模型
 
 当前 persisted read model root 是 `ScriptReadModelDocument`。
 
-它仍是容器式 document root，但已经是正式、一等的 read-side 模型，不再是临时 `Dictionary<string, Any>` bag。
+它仍是容器式 document root，但已经是正式、一等的 actor-scoped current-state readmodel，不再是临时 `Dictionary<string, Any>` bag。
 
 ### 5.4 演化治理
 
@@ -138,6 +142,8 @@ flowchart LR
 4. `ScriptExecutionReadModel`
 5. `ScriptRunDomainEventCommitted.state_payloads`
 6. `ScriptRunDomainEventCommitted.read_model_payloads`
+7. `ScriptReadModelQueryService`
+8. `RuntimeScriptProvisioningService` 内部 definition snapshot polling fallback
 7. 直接用 projection store 直读替代正式 query facade 的做法
 
 ## 7. 模块分层映射

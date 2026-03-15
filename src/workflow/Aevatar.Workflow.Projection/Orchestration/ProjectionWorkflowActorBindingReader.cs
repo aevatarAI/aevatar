@@ -11,17 +11,14 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
     private readonly Func<string, Type, CancellationToken, Task<bool>> _isExpectedAsync;
 
     public ProjectionWorkflowActorBindingReader(
-        WorkflowBindingProjectionPortService projectionPort,
         IProjectionDocumentReader<WorkflowActorBindingDocument, string> documentStore,
         IActorRuntime runtime,
         IAgentTypeVerifier agentTypeVerifier)
     {
-        ArgumentNullException.ThrowIfNull(projectionPort);
         ArgumentNullException.ThrowIfNull(documentStore);
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(agentTypeVerifier);
 
-        _ = projectionPort;
         _getDocumentAsync = (actorId, ct) => documentStore.GetAsync(actorId, ct);
         _existsAsync = runtime.ExistsAsync;
         _isExpectedAsync = agentTypeVerifier.IsExpectedAsync;

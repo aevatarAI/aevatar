@@ -701,7 +701,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    reduce: static (_, evt, _) => evt.Current)
+                    project: static (_, evt, _) => evt.Current)
                 .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
@@ -745,7 +745,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    reduce: static (_, evt, _) => evt.Current)
+                    project: static (_, evt, _) => evt.Current)
                 .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
@@ -780,7 +780,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    reduce: static (_, evt, _) => evt.Current)
+                    project: static (_, evt, _) => evt.Current)
                 .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
         }
 
@@ -841,9 +841,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ReduceReadModel(IMessage? currentReadModel, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
         {
-            _ = currentReadModel;
+            _ = currentState;
             _ = domainEvent;
             _ = context;
             return null;
@@ -889,9 +889,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ReduceReadModel(IMessage? currentReadModel, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
         {
-            _ = currentReadModel;
+            _ = currentState;
             _ = domainEvent;
             _ = context;
             return null;

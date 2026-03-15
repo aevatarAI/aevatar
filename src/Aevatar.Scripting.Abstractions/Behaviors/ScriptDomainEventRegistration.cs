@@ -4,4 +4,4 @@ public sealed record ScriptDomainEventRegistration(
     string TypeUrl,
     Type MessageClrType,
     Func<IMessage?, IMessage, ScriptFactContext, IMessage?>? Apply,
-    Func<IMessage?, IMessage, ScriptFactContext, IMessage?>? Reduce);
+    Func<IMessage?, IMessage, ScriptFactContext, IMessage?>? Project);

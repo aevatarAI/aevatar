@@ -74,6 +74,8 @@ message ScriptEvolutionReadModel {
   repeated string diagnostics_entries = 12;
   string last_event_id = 13;
   google.protobuf.Timestamp updated_at_utc_value = 14;
+  int64 state_version = 15;
+  string actor_id = 16;
 }
 
 message ScriptNativeDocumentReadModel {

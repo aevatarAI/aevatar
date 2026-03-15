@@ -34,7 +34,7 @@ public sealed class ScriptGAgentEndToEndTests
         const string revision = "rev-1";
         const string runId = "run-1";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "e2e-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
@@ -46,6 +46,7 @@ public sealed class ScriptGAgentEndToEndTests
             definitionActorId,
             revision,
             runtimeActorId,
+            definition.Snapshot,
             CancellationToken.None);
 
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);

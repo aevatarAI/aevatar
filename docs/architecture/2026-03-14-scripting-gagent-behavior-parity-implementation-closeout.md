@@ -83,8 +83,8 @@ flowchart LR
 3. execution projection 改为正式 lifecycle port：
    - `IScriptExecutionProjectionPort`
    - `ScriptExecutionProjectionPortService`
-   - `ScriptExecutionProjectionActivationService`
-   - `ScriptExecutionProjectionReleaseService`
+   - `ContextProjectionActivationService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>`
+   - `ContextProjectionReleaseService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>`
 4. live sink 通过 `ScriptExecutionSessionEventProjector + ScriptExecutionSessionEventCodec` 接入统一 session event hub。
 
 ### 4.4 查询

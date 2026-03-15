@@ -7,7 +7,6 @@ using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Configuration;
-using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -264,15 +263,14 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
     private async Task FinalizeDetachedCleanupAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
-        await FinalizeDetachedCleanupAsync(entry, entry.CommandId);
+        await FinalizeDetachedCleanupAsync(entry, entry.CommandId, releaseOwnership: true);
     }
 
     private async Task FinalizeDetachedCleanupAsync(
         WorkflowRunDetachedCleanupOutboxEntry entry,
-        string ownershipSessionId)
+        string ownershipSessionId,
+        bool releaseOwnership)
     {
-        var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
-        var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
         var normalizedSessionId = string.IsNullOrWhiteSpace(ownershipSessionId)
             ? entry.CommandId
             : ownershipSessionId.Trim();
@@ -281,20 +279,24 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         try
         {
-            await readModelUpdater.MarkStoppedAsync(entry.ActorId, CancellationToken.None);
+            await MarkReportStoppedAsync(entry.ActorId, CancellationToken.None);
         }
         catch (Exception ex)
         {
             firstException ??= ex;
         }
 
-        try
+        if (releaseOwnership)
         {
-            await ownershipCoordinator.ReleaseAsync(entry.ActorId, normalizedSessionId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            firstException ??= ex;
+            var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
+            try
+            {
+                await ownershipCoordinator.ReleaseAsync(entry.ActorId, normalizedSessionId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
         }
 
         try
@@ -308,6 +310,18 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
 
         if (firstException != null)
             ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private async Task MarkReportStoppedAsync(
+        string actorId,
+        CancellationToken ct)
+    {
+        var insightPort = Services.GetRequiredService<IWorkflowRunInsightActorPort>();
+        await insightPort.MarkStoppedAsync(
+            actorId,
+            reason: "workflow_detached_cleanup",
+            stoppedAt: DateTimeOffset.UtcNow,
+            ct);
     }
 
     private async Task DestroyCreatedActorsAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
@@ -396,7 +410,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     private async Task CompleteReleasedEntryAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
         await RequestProjectionReleaseAsync(entry);
-        await DestroyCreatedActorsAsync(entry);
+        await FinalizeDetachedCleanupAsync(entry, entry.CommandId, releaseOwnership: false);
         await PersistDomainEventAsync(new WorkflowRunDetachedCleanupSucceededEvent
         {
             RecordId = entry.RecordId,

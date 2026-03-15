@@ -52,7 +52,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task ListAsync_WhenSortFieldNotConfigured_ShouldUseDeterministicDefaultSort()
+    public async Task QueryAsync_WhenSortFieldNotConfigured_ShouldUseDeterministicDefaultSort()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
@@ -63,11 +63,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             new ElasticsearchProjectionDocumentStoreOptions
             {
                 AutoCreateIndex = false,
-                ListSortField = "",
+                DefaultSortField = "",
             },
             handler);
 
-        _ = await store.ListAsync();
+        _ = await store.QueryAsync(new ProjectionDocumentQuery());
 
         var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
         searchRequest.PathAndQuery.Should().EndWith("/_search");
@@ -83,6 +83,9 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"result":"created"}"""));
@@ -132,9 +135,12 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             Value = "v1",
         });
 
-        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests.Should().HaveCount(3);
         handler.CapturedRequests[0].Method.Should().Be("PUT");
         handler.CapturedRequests[0].PathAndQuery.Should().NotContain("/_doc/");
+        handler.CapturedRequests[1].Method.Should().Be("GET");
+        handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_doc/actor-1");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_create/actor-1");
         handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
@@ -144,12 +150,47 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenExistingDocumentPresent_ShouldUseOptimisticConcurrencyTokens()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"Id":"actor-1","ActorId":"actor-1","StateVersion":1,"LastEventId":"evt-1","UpdatedAt":"2026-03-16T00:00:00Z","Value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        await store.UpsertAsync(new StoreReadModel
+        {
+            Id = "actor-1",
+            StateVersion = 2,
+            LastEventId = "evt-2",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z"),
+            Value = "v2",
+        });
+
+        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_doc/actor-1");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
 
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -181,11 +222,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             DocumentIndexScope = "dynamic-beta",
         });
 
-        handler.CapturedRequests.Should().HaveCount(4);
+        handler.CapturedRequests.Should().HaveCount(6);
         handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha");
         handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
-        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
-        handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_create/actor-1");
+        handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
+        handler.CapturedRequests[4].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+        handler.CapturedRequests[5].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_create/actor-2");
     }
 
     [Fact]
@@ -280,12 +323,28 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
+
         public string Value { get; set; } = "";
     }
 
     private sealed class DynamicStoreReadModel : IProjectionReadModel
     {
         public string Id { get; set; } = string.Empty;
+
+        public string ActorId => Id;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = string.Empty;
+
+        public DateTimeOffset UpdatedAt { get; set; }
 
         public string DocumentIndexScope { get; set; } = string.Empty;
     }

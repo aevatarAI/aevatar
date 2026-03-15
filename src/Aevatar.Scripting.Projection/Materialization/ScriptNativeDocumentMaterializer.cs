@@ -13,11 +13,14 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
         string definitionActorId,
         string revision,
         ScriptDomainFactCommitted fact,
+        string sourceEventId,
+        DateTimeOffset updatedAt,
         IMessage? semanticReadModel,
         ScriptReadModelMaterializationPlan plan)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(fact);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceEventId);
         ArgumentNullException.ThrowIfNull(plan);
 
         var fields = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -42,10 +45,8 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
             DocumentIndexScope = plan.DocumentIndexScope,
             Fields = fields,
             StateVersion = fact.StateVersion,
-            LastEventId = string.IsNullOrWhiteSpace(fact.EventType)
-                ? fact.DomainEventPayload?.TypeUrl ?? string.Empty
-                : fact.EventType,
-            UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs),
+            LastEventId = sourceEventId,
+            UpdatedAt = updatedAt,
         };
     }
 

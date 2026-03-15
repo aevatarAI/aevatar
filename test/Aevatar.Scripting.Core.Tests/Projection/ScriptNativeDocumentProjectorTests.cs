@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Runtime;
@@ -34,32 +35,36 @@ public sealed class ScriptNativeDocumentProjectorTests
         {
             ProjectionId = "runtime-1:native-document",
             RootActorId = "runtime-1",
-            CurrentSemanticReadModelDocument = new ScriptReadModelDocument
-            {
-                Id = "runtime-1",
-                ScriptId = "script-1",
-                DefinitionActorId = "definition-1",
-                Revision = "rev-1",
-                ReadModelTypeUrl = Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                ReadModelPayload = Any.Pack(BuildProfileReadModel()),
-                StateVersion = 7,
-            },
         };
+        var readModel = BuildProfileReadModel();
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ScriptDomainFactCommitted
-            {
-                ActorId = "runtime-1",
-                DefinitionActorId = "definition-1",
-                ScriptId = "script-1",
-                Revision = "rev-1",
-                RunId = "run-1",
-                EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
-                DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = BuildProfileReadModel() }),
-                StateVersion = 7,
-                OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
-            }),
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "runtime-1",
+                    DefinitionActorId = "definition-1",
+                    ScriptId = "script-1",
+                    Revision = "rev-1",
+                    RunId = "run-1",
+                    EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
+                    DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = readModel.Clone() }),
+                    StateVersion = 7,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+                },
+                ScriptCommittedEnvelopeFactory.CreateState(
+                    "definition-1",
+                    "script-1",
+                    "rev-1",
+                    new ScriptProfileState
+                    {
+                        CommandCount = 1,
+                        LastCommandId = readModel.LastCommandId,
+                        NormalizedText = readModel.NormalizedText,
+                    },
+                    7,
+                    Any.Pack(readModel).TypeUrl)),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -67,6 +72,8 @@ public sealed class ScriptNativeDocumentProjectorTests
         nativeDocument.Id.Should().Be("runtime-1");
         nativeDocument.SchemaId.Should().Be("script_profile");
         nativeDocument.DocumentIndexScope.Should().StartWith("script-native-script-profile-");
+        nativeDocument.StateVersion.Should().Be(7);
+        nativeDocument.LastEventId.Should().Be("evt-1");
         nativeDocument.Fields["actor_id"].Should().Be("actor-1");
         nativeDocument.Fields["policy_id"].Should().Be("policy-1");
         nativeDocument.Fields["tags"].Should().BeAssignableTo<IReadOnlyList<object?>>();
@@ -100,16 +107,12 @@ public sealed class ScriptNativeDocumentProjectorTests
         return readModel;
     }
 
-    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
-    {
-        return new EventEnvelope
-        {
-            Id = "evt-1",
-            Payload = Any.Pack(fact),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
-        };
-    }
+    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact, ScriptBehaviorState state) =>
+        ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
+            fact,
+            state,
+            "evt-1",
+            DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
 
     private sealed class StaticStructuredDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
@@ -141,11 +144,11 @@ public sealed class ScriptNativeDocumentProjectorTests
     {
         public ScriptNativeDocumentReadModel? LastUpsert { get; private set; }
 
-        public Task UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.DeepClone();
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 }

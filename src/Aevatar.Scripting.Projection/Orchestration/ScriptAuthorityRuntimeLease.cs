@@ -7,7 +7,8 @@ namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptAuthorityRuntimeLease
     : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
-      IProjectionPortSessionLease
+      IProjectionPortSessionLease,
+      IProjectionContextRuntimeLease<ScriptAuthorityProjectionContext>
 {
     public ScriptAuthorityRuntimeLease(ScriptAuthorityProjectionContext context)
         : base(context.RootActorId)

@@ -611,10 +611,15 @@ public sealed class ScriptReadModelQueryReaderTests
             return Task.FromResult(readModel);
         }
 
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<ScriptReadModelDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_items.Values.Take(take).ToArray());
+            return Task.FromResult(new ProjectionDocumentQueryResult<ScriptReadModelDocument>
+            {
+                Items = _items.Values.Take(query.Take <= 0 ? 50 : query.Take).ToArray(),
+            });
         }
 
         public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
@@ -643,7 +648,7 @@ public sealed class ScriptReadModelQueryReaderTests
                 builder
                     .OnEvent<ScriptProfileUpdated>(
                         apply: static (state, evt, _) => state,
-                        reduce: static (readModel, evt, _) => readModel ?? evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<ScriptProfileQueryRequested, {{resultTypeName}}>(HandleQueryAsync);
             }
 
@@ -726,7 +731,7 @@ public sealed class ScriptReadModelQueryReaderTests
             builder
                 .OnEvent<ScriptProfileUpdated>(
                     apply: static (state, evt, _) => state,
-                    reduce: static (readModel, evt, _) => readModel ?? evt.Current)
+                    project: static (_, evt, _) => evt.Current)
                 .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
         }
 
@@ -760,11 +765,11 @@ public sealed class ScriptReadModelQueryReaderTests
             ScriptFactContext context) =>
             inner.ApplyDomainEvent(currentState, domainEvent, context);
 
-        public IMessage? ReduceReadModel(
-            IMessage? currentReadModel,
+        public IMessage? ProjectReadModel(
+            IMessage? currentState,
             IMessage domainEvent,
             ScriptFactContext context) =>
-            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+            inner.ProjectReadModel(currentState, domainEvent, context);
 
         public Task<IMessage?> ExecuteQueryAsync(
             IMessage query,
@@ -796,11 +801,11 @@ public sealed class ScriptReadModelQueryReaderTests
             ScriptFactContext context) =>
             inner.ApplyDomainEvent(currentState, domainEvent, context);
 
-        public IMessage? ReduceReadModel(
-            IMessage? currentReadModel,
+        public IMessage? ProjectReadModel(
+            IMessage? currentState,
             IMessage domainEvent,
             ScriptFactContext context) =>
-            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+            inner.ProjectReadModel(currentState, domainEvent, context);
 
         public Task<IMessage?> ExecuteQueryAsync(
             IMessage query,
@@ -826,11 +831,11 @@ public sealed class ScriptReadModelQueryReaderTests
             ScriptFactContext context) =>
             inner.ApplyDomainEvent(currentState, domainEvent, context);
 
-        public IMessage? ReduceReadModel(
-            IMessage? currentReadModel,
+        public IMessage? ProjectReadModel(
+            IMessage? currentState,
             IMessage domainEvent,
             ScriptFactContext context) =>
-            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+            inner.ProjectReadModel(currentState, domainEvent, context);
 
         public Task<IMessage?> ExecuteQueryAsync(
             IMessage query,
@@ -862,11 +867,11 @@ public sealed class ScriptReadModelQueryReaderTests
             ScriptFactContext context) =>
             inner.ApplyDomainEvent(currentState, domainEvent, context);
 
-        public IMessage? ReduceReadModel(
-            IMessage? currentReadModel,
+        public IMessage? ProjectReadModel(
+            IMessage? currentState,
             IMessage domainEvent,
             ScriptFactContext context) =>
-            inner.ReduceReadModel(currentReadModel, domainEvent, context);
+            inner.ProjectReadModel(currentState, domainEvent, context);
 
         public Task<IMessage?> ExecuteQueryAsync(
             IMessage query,

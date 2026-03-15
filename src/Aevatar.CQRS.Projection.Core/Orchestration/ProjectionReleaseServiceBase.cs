@@ -28,6 +28,8 @@ public abstract class ProjectionReleaseServiceBase<TRuntimeLease, TContext, TTop
 
         var context = ResolveContext(runtimeLease);
         await _lifecycle.StopAsync(context, ct);
+        if (runtimeLease is IProjectionRuntimeLeaseStopHandler stopHandler)
+            await stopHandler.OnProjectionStoppedAsync(ct);
         await OnStoppedAsync(runtimeLease, context, ct);
     }
 

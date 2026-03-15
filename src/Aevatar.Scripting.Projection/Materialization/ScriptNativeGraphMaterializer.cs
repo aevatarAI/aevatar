@@ -17,11 +17,14 @@ public sealed class ScriptNativeGraphMaterializer
         string definitionActorId,
         string revision,
         ScriptDomainFactCommitted fact,
+        string sourceEventId,
+        DateTimeOffset updatedAt,
         IMessage? semanticReadModel,
         ScriptReadModelMaterializationPlan plan)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(fact);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceEventId);
         ArgumentNullException.ThrowIfNull(plan);
 
         var graphScope = BuildGraphScope(plan.SchemaId);
@@ -104,10 +107,8 @@ public sealed class ScriptNativeGraphMaterializer
             SchemaHash = plan.SchemaHash,
             GraphScope = graphScope,
             StateVersion = fact.StateVersion,
-            LastEventId = string.IsNullOrWhiteSpace(fact.EventType)
-                ? fact.DomainEventPayload?.TypeUrl ?? string.Empty
-                : fact.EventType,
-            UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs),
+            LastEventId = sourceEventId,
+            UpdatedAt = updatedAt,
         };
         readModel.GraphNodeEntries.Add(nodes.Values.Select(ScriptProjectionReadModelSupport.ToGraphNodeRecord));
         readModel.GraphEdgeEntries.Add(edges.Values.Select(ScriptProjectionReadModelSupport.ToGraphEdgeRecord));

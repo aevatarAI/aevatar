@@ -31,6 +31,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-pending",
+            ActorId = "session-pending",
             ProposalId = "proposal-pending",
             ScriptId = "script-1",
             BaseRevision = "rev-1",
@@ -56,6 +57,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-promoted",
+            ActorId = "session-promoted",
             ProposalId = "proposal-promoted",
             ScriptId = "script-1",
             BaseRevision = "rev-1",
@@ -87,6 +89,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-rejected",
+            ActorId = "session-rejected",
             ProposalId = "proposal-rejected",
             ScriptId = "script-1",
             BaseRevision = "rev-1",

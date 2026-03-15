@@ -49,8 +49,8 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
             : registration.Apply(currentState, domainEvent, context);
     }
 
-    public IMessage? ReduceReadModel(
-        IMessage? currentReadModel,
+    public IMessage? ProjectReadModel(
+        IMessage? currentState,
         IMessage domainEvent,
         ScriptFactContext context)
     {
@@ -58,9 +58,9 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
         ArgumentNullException.ThrowIfNull(context);
 
         var registration = ResolveDomainEventRegistration(domainEvent);
-        return registration.Reduce == null
-            ? currentReadModel
-            : registration.Reduce(currentReadModel, domainEvent, context);
+        return registration.Project == null
+            ? null
+            : registration.Project(currentState, domainEvent, context);
     }
 
     public async Task<IMessage?> ExecuteQueryAsync(
@@ -174,11 +174,11 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
 
         public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnEvent<TEvent>(
             Func<TBuilderState?, TEvent, ScriptFactContext, TBuilderState?>? apply = null,
-            Func<TBuilderReadModel?, TEvent, ScriptFactContext, TBuilderReadModel?>? reduce = null)
+            Func<TBuilderState?, TEvent, ScriptFactContext, TBuilderReadModel?>? project = null)
             where TEvent : class, IMessage<TEvent>, new()
         {
-            if (apply == null && reduce == null)
-                throw new InvalidOperationException("At least one of apply/reduce must be provided for a domain event registration.");
+            if (apply == null && project == null)
+                throw new InvalidOperationException("At least one of apply/project must be provided for a domain event registration.");
 
             var typeUrl = ScriptMessageTypes.GetTypeUrl<TEvent>();
             if (_domainEvents.ContainsKey(typeUrl))
@@ -193,10 +193,10 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
                         CastOptional<TBuilderState>(currentState),
                         CastRequired<TEvent>(domainEvent),
                         factContext),
-                reduce == null
+                project == null
                     ? null
-                    : (currentReadModel, domainEvent, factContext) => reduce(
-                        CastOptional<TBuilderReadModel>(currentReadModel),
+                    : (currentState, domainEvent, factContext) => project(
+                        CastOptional<TBuilderState>(currentState),
                         CastRequired<TEvent>(domainEvent),
                         factContext));
             return this;

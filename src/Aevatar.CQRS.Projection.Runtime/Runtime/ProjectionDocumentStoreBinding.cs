@@ -19,10 +19,10 @@ public sealed class ProjectionDocumentStoreBinding<TReadModel>
 
     public string SinkName => IsEnabled ? "Document" : "Document(Unconfigured)";
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         if (_writer is null)
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
 
         return _writer.UpsertAsync(readModel, ct);
     }
