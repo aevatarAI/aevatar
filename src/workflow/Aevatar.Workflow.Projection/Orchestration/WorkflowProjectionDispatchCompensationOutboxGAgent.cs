@@ -138,7 +138,7 @@ internal sealed class WorkflowProjectionDispatchCompensationOutboxGAgent
             return;
         }
 
-        if (!WorkflowExecutionReportSnapshotMapper.TryUnpack(entry.ReadModel, out var readModel) || readModel == null)
+        if (!WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(entry.ReadModel, out var readModel) || readModel == null)
         {
             await ScheduleRetryAsync(
                 entry,

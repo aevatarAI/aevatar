@@ -3,7 +3,7 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReducerBase<WorkflowCompletedEvent>
+public sealed class WorkflowCompletedEventReducer : WorkflowExecutionReportArtifactReducerBase<WorkflowCompletedEvent>
 {
     protected override bool Reduce(
         WorkflowExecutionReport report,
@@ -17,7 +17,7 @@ public sealed class WorkflowCompletedEventReducer : WorkflowExecutionEventReduce
         report.FinalError = evt.Error ?? "";
         report.EndedAt = now;
 
-        WorkflowExecutionProjectionMutations.AddTimeline(
+        WorkflowExecutionReportArtifactMutations.AddTimeline(
             report,
             now,
             "workflow.completed",

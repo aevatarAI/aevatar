@@ -2,7 +2,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-internal static class WorkflowExecutionProjectionMutations
+internal static class WorkflowExecutionReportArtifactMutations
 {
     public static void RecordProjectedEvent(
         WorkflowExecutionReport report,

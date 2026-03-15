@@ -128,7 +128,7 @@
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
 - `bash tools/ci/query_projection_priming_guard.sh`：校验 query/read 路径不触发 projection priming 或生命周期操作。
-- `bash tools/ci/projection_source_version_guard.sh`：校验 current-state readmodel 路径不发明本地 source version。
+- `bash tools/ci/projection_state_version_guard.sh`：校验 current-state readmodel 路径不发明本地 state version。
 - `bash tools/ci/projection_state_mirror_current_state_guard.sh`：校验新的 `*CurrentState*Projector` 不回读同类 readmodel。
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
 - `bash tools/ci/playground_asset_drift_guard.sh`：校验 CLI playground 与 Demo Web 静态资源漂移。
@@ -154,7 +154,7 @@
 - 涉及测试新增/修改时，提交前必须执行：`bash tools/ci/test_stability_guards.sh`。
 - 涉及 workflow actor binding、definition identity、resume/signal 路径的变更时，提交前必须执行：`bash tools/ci/workflow_binding_boundary_guard.sh`。
 - 涉及 query/read port、projection priming、projection lifecycle 与 query 边界的变更时，提交前必须执行：`bash tools/ci/query_projection_priming_guard.sh`。
-- 涉及 current-state readmodel、source version 或 state mirror projector 的变更时，提交前必须执行：`bash tools/ci/projection_source_version_guard.sh` 与 `bash tools/ci/projection_state_mirror_current_state_guard.sh`。
+- 涉及 current-state readmodel、state version 或 state mirror projector 的变更时，提交前必须执行：`bash tools/ci/projection_state_version_guard.sh` 与 `bash tools/ci/projection_state_mirror_current_state_guard.sh`。
 - CI 守卫（full-scan）：禁止 `GetAwaiter().GetResult()`；禁止 `TypeUrl.Contains(...)` 字符串路由；禁止 `Aevatar.Workflow.Core` 依赖 `Aevatar.AI.Core`；禁止中间层 `actor/entity/run/session` ID 映射 Dic 事实态字段（仅扫描 Projection/Application/Orchestration 中间层）；禁止投影端口回退到 `actorId` 反查上下文模型；要求新增非抽象 `Reducer` 类必须被测试引用；要求事件类型到 reducer 的路由采用 `TypeUrl` 派生 + 精确键路由（由 `tools/ci/projection_route_mapping_guard.sh` 专项校验，含 `EventTypeUrl` 分组与 `TryGetValue` 命中）。
 
 ## 提交与 PR 规范

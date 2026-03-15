@@ -3,7 +3,7 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBase<StepCompletedEvent>
+public sealed class StepCompletedEventReducer : WorkflowExecutionReportArtifactReducerBase<StepCompletedEvent>
 {
     protected override bool Reduce(
         WorkflowExecutionReport report,
@@ -12,19 +12,19 @@ public sealed class StepCompletedEventReducer : WorkflowExecutionEventReducerBas
         StepCompletedEvent evt,
         DateTimeOffset now)
     {
-        var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
+        var step = WorkflowExecutionReportArtifactMutations.GetOrCreateStep(report, evt.StepId);
         step.CompletedAt = now;
         step.Success = evt.Success;
         step.Error = evt.Error ?? "";
         step.WorkerId = evt.WorkerId ?? "";
-        step.OutputPreview = WorkflowExecutionProjectionMutations.Truncate(evt.Output ?? "", 240);
+        step.OutputPreview = WorkflowExecutionReportArtifactMutations.Truncate(evt.Output ?? "", 240);
         step.CompletionAnnotations = evt.Annotations.ToDictionary(kv => kv.Key, kv => kv.Value);
         step.NextStepId = evt.NextStepId ?? string.Empty;
         step.BranchKey = evt.BranchKey ?? string.Empty;
         step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
         step.AssignedValue = evt.AssignedValue ?? string.Empty;
 
-        WorkflowExecutionProjectionMutations.AddTimeline(
+        WorkflowExecutionReportArtifactMutations.AddTimeline(
             report,
             now,
             "step.completed",

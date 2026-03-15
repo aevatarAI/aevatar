@@ -19,7 +19,7 @@ using AIEvents = Aevatar.AI.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public class WorkflowExecutionReadModelProjectorTests
+public class WorkflowExecutionReportArtifactProjectorTests
 {
     private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
 
@@ -91,7 +91,7 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldBuildRunReadModel_EndToEnd()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -160,7 +160,7 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldIgnoreUnknownEvents()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -195,7 +195,7 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldDeduplicateByEnvelopeId()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -236,7 +236,7 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldApplyWorkflowSuspendedEvent()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -284,7 +284,7 @@ public class WorkflowExecutionReadModelProjectorTests
         [
             new TextMessageStartProjectionReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>([]),
         ];
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -321,7 +321,7 @@ public class WorkflowExecutionReadModelProjectorTests
     public async Task Projector_ShouldUseEnvelopeTimestamp_WhenProvided()
     {
         var store = CreateStore();
-        var projector = new WorkflowExecutionReadModelProjector(
+        var projector = new WorkflowExecutionReportArtifactProjector(
             CreateDispatcher(store),
             store,
             CreateDeduplicator(),
@@ -361,6 +361,7 @@ public class WorkflowExecutionReadModelProjectorTests
         var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "a-older",
             WorkflowName = "w",
             RootActorId = "a-older",
             StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
@@ -369,6 +370,7 @@ public class WorkflowExecutionReadModelProjectorTests
         });
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "a-newer",
             WorkflowName = "w",
             RootActorId = "a-newer",
             StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -394,6 +396,7 @@ public class WorkflowExecutionReadModelProjectorTests
 
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "missing",
             RootActorId = "missing",
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = DateTimeOffset.UtcNow,

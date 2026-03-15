@@ -13,7 +13,7 @@ public sealed class WorkflowProjectionActivationService
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
     private readonly ProjectionOwnershipCoordinatorOptions _ownershipOptions;
     private readonly IProjectionSessionEventHub<WorkflowProjectionControlEvent>? _projectionControlHub;
-    private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
+    private readonly IWorkflowExecutionReportArtifactUpdater _readModelUpdater;
     private readonly ILogger<WorkflowExecutionRuntimeLease>? _runtimeLeaseLogger;
 
     public WorkflowProjectionActivationService(
@@ -21,7 +21,7 @@ public sealed class WorkflowProjectionActivationService
         IProjectionClock clock,
         IWorkflowExecutionProjectionContextFactory contextFactory,
         IProjectionOwnershipCoordinator ownershipCoordinator,
-        IWorkflowProjectionReadModelUpdater readModelUpdater,
+        IWorkflowExecutionReportArtifactUpdater readModelUpdater,
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         ILogger<WorkflowExecutionRuntimeLease>? runtimeLeaseLogger = null)

@@ -45,7 +45,8 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunDetachedCleanupScheduler, ActorWorkflowRunDetachedCleanupOutbox>());
         services.TryAddSingleton<IWorkflowRunDetachedCleanupOutbox>(sp =>
             (ActorWorkflowRunDetachedCleanupOutbox)sp.GetRequiredService<IWorkflowRunDetachedCleanupScheduler>());
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowExecutionReportArtifactDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
@@ -80,7 +81,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, WorkflowProjectionReleaseService>();
         services.TryAddSingleton<IProjectionPortActivationService<WorkflowBindingRuntimeLease>, WorkflowBindingProjectionActivationService>();
         services.TryAddSingleton<IProjectionPortReleaseService<WorkflowBindingRuntimeLease>, WorkflowBindingProjectionReleaseService>();
-        services.TryAddSingleton<IWorkflowProjectionReadModelUpdater, WorkflowProjectionReadModelUpdater>();
+        services.TryAddSingleton<IWorkflowExecutionReportArtifactUpdater, WorkflowExecutionReportArtifactUpdater>();
         services.TryAddSingleton<IWorkflowProjectionQueryReader, WorkflowProjectionQueryReader>();
         services.TryAddSingleton<WorkflowBindingProjectionPortService>();
         services.TryAddSingleton<WorkflowExecutionProjectionPortService>();
@@ -96,13 +97,16 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>,
             WorkflowActorBindingProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>,
+            WorkflowExecutionCurrentStateProjector>());
         return services;
     }
 
     /// <summary>
     /// Registers a custom reducer from another assembly/module.
     /// </summary>
-    public static IServiceCollection AddWorkflowExecutionProjectionReducer<TReducer>(this IServiceCollection services)
+    public static IServiceCollection AddWorkflowExecutionReportArtifactReducer<TReducer>(this IServiceCollection services)
         where TReducer : class, IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton(
@@ -114,7 +118,7 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers a custom projector from another assembly/module.
     /// </summary>
-    public static IServiceCollection AddWorkflowExecutionProjectionProjector<TProjector>(this IServiceCollection services)
+    public static IServiceCollection AddWorkflowExecutionReportArtifactProjector<TProjector>(this IServiceCollection services)
         where TProjector : class, IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton(
@@ -126,7 +130,7 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers all reducer/projector implementations from an extension assembly.
     /// </summary>
-    public static IServiceCollection AddWorkflowExecutionProjectionExtensionsFromAssembly(
+    public static IServiceCollection AddWorkflowExecutionReportArtifactExtensionsFromAssembly(
         this IServiceCollection services,
         Assembly assembly)
     {

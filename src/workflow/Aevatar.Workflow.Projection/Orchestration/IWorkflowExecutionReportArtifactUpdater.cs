@@ -1,6 +1,6 @@
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public interface IWorkflowProjectionReadModelUpdater
+public interface IWorkflowExecutionReportArtifactUpdater
 {
     Task RefreshMetadataAsync(
         string actorId,

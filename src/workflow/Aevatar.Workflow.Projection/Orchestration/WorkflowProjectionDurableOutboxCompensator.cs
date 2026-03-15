@@ -39,7 +39,7 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
             FailedStore = context.FailedStore,
             SucceededStores = { context.SucceededStores },
             ReadModelType = context.ReadModelType,
-            ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(context.ReadModel),
+            ReadModel = WorkflowExecutionReportArtifactPayloadMapper.Pack(context.ReadModel),
             Key = context.ReadModel.Id,
             EnqueuedAtUtc = Timestamp.FromDateTime(now),
             LastError = context.Exception.GetType().Name,

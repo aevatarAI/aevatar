@@ -4,7 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-internal static class WorkflowExecutionReportSnapshotMapper
+internal static class WorkflowExecutionReportArtifactPayloadMapper
 {
     public static Any Pack(WorkflowExecutionReport report)
     {

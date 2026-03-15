@@ -117,7 +117,7 @@
 1. `src/Aevatar.Scripting.Abstractions/Protos/scripting_schema_options.proto`
 2. `src/Aevatar.Scripting.Abstractions/Protos/scripting_runtime_options.proto`
 3. `src/workflow/Aevatar.Workflow.Projection/workflow_projection_transport.proto`
-4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionReportSnapshotMapper.cs`
+4. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionReportArtifactPayloadMapper.cs`
 
 结论：
 

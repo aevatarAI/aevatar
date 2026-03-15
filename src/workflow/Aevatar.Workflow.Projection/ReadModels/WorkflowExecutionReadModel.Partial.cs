@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
@@ -36,6 +37,9 @@ public sealed partial class WorkflowExecutionReport
       IHasProjectionTimeline,
       IHasProjectionRoleReplies
 {
+    [JsonIgnore]
+    public string ActorId => RootActorId;
+
     public DateTimeOffset CreatedAt
     {
         get => ToDateTimeOffset(CreatedAtUtcValue);
@@ -153,6 +157,28 @@ public sealed partial class WorkflowExecutionReport
     private static DateTimeOffset ToDateTimeOffset(Timestamp? value) =>
         value == null ? default : value.ToDateTimeOffset();
 
+}
+
+public sealed partial class WorkflowExecutionCurrentStateDocument
+    : IProjectionReadModel,
+      IProjectionReadModelCloneable<WorkflowExecutionCurrentStateDocument>
+{
+    [JsonIgnore]
+    public string ActorId => RootActorId;
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public bool? Success
+    {
+        get => SuccessWrapper;
+        set => SuccessWrapper = value;
+    }
+
+    public WorkflowExecutionCurrentStateDocument DeepClone() => Clone();
 }
 
 public sealed partial class WorkflowExecutionSummary

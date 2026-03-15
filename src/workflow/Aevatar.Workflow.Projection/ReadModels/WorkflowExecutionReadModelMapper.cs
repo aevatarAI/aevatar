@@ -4,6 +4,27 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
+    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
+    {
+        return new WorkflowActorSnapshot
+        {
+            ActorId = source.RootActorId,
+            WorkflowName = source.WorkflowName,
+            LastCommandId = source.CommandId,
+            CompletionStatus = MapCompletionStatus(source.Status),
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
+            LastSuccess = source.Success,
+            LastOutput = source.FinalOutput,
+            LastError = source.FinalError,
+            TotalSteps = 0,
+            RequestedSteps = 0,
+            CompletedSteps = 0,
+            RoleReplyCount = 0,
+        };
+    }
+
     public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionReport source)
     {
         return new WorkflowActorSnapshot
@@ -26,6 +47,18 @@ public sealed class WorkflowExecutionReadModelMapper
     }
 
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionReport source)
+    {
+        return new WorkflowActorProjectionState
+        {
+            ActorId = source.RootActorId,
+            LastCommandId = source.CommandId,
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
+        };
+    }
+
+    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
         {
@@ -105,4 +138,18 @@ public sealed class WorkflowExecutionReadModelMapper
             WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
+
+    private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
+        {
+            "running" => WorkflowRunCompletionStatus.Running,
+            "completed" => WorkflowRunCompletionStatus.Completed,
+            "failed" => WorkflowRunCompletionStatus.Failed,
+            "stopped" => WorkflowRunCompletionStatus.Stopped,
+            "not_found" => WorkflowRunCompletionStatus.NotFound,
+            "disabled" => WorkflowRunCompletionStatus.Disabled,
+            _ => WorkflowRunCompletionStatus.Unknown,
+        };
+    }
 }

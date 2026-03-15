@@ -6,7 +6,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowExecutionReportSnapshotMapperTests
+public sealed class WorkflowExecutionReportArtifactPayloadMapperTests
 {
     [Fact]
     public void PackAndTryUnpack_ShouldRoundTripRichWorkflowExecutionReport()
@@ -108,8 +108,8 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
             },
         };
 
-        var payload = WorkflowExecutionReportSnapshotMapper.Pack(report);
-        var ok = WorkflowExecutionReportSnapshotMapper.TryUnpack(payload, out var unpacked);
+        var payload = WorkflowExecutionReportArtifactPayloadMapper.Pack(report);
+        var ok = WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(payload, out var unpacked);
 
         ok.Should().BeTrue();
         unpacked.Should().NotBeNull();
@@ -197,8 +197,8 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
             Summary = new WorkflowExecutionSummary(),
         };
 
-        var payload = WorkflowExecutionReportSnapshotMapper.Pack(report);
-        var ok = WorkflowExecutionReportSnapshotMapper.TryUnpack(payload, out var unpacked);
+        var payload = WorkflowExecutionReportArtifactPayloadMapper.Pack(report);
+        var ok = WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(payload, out var unpacked);
 
         ok.Should().BeTrue();
         unpacked.Should().NotBeNull();
@@ -230,10 +230,10 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
     {
         WorkflowExecutionReport? report;
 
-        WorkflowExecutionReportSnapshotMapper.TryUnpack(null, out report).Should().BeFalse();
+        WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(null, out report).Should().BeFalse();
         report.Should().BeNull();
 
-        WorkflowExecutionReportSnapshotMapper.TryUnpack(
+        WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(
             Any.Pack(new StringValue { Value = "wrong" }),
             out report).Should().BeFalse();
         report.Should().BeNull();
@@ -243,7 +243,7 @@ public sealed class WorkflowExecutionReportSnapshotMapperTests
             TypeUrl = $"type.googleapis.com/{WorkflowExecutionReport.Descriptor.FullName}",
             Value = ByteString.CopyFromUtf8("not-a-valid-protobuf"),
         };
-        WorkflowExecutionReportSnapshotMapper.TryUnpack(corrupted, out report).Should().BeFalse();
+        WorkflowExecutionReportArtifactPayloadMapper.TryUnpack(corrupted, out report).Should().BeFalse();
         report.Should().BeNull();
     }
 }

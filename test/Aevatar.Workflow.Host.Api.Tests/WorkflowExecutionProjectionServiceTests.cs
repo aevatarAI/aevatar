@@ -551,6 +551,7 @@ public class WorkflowExecutionProjectionServiceTests
             forwardingRegistry);
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
         store = new ObservableWorkflowExecutionDocumentStore();
+        var currentStateStore = CreateCurrentStateStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
         var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
@@ -559,13 +560,19 @@ public class WorkflowExecutionProjectionServiceTests
             new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
         };
         var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
-        var projector = new WorkflowExecutionReadModelProjector(
+        var currentStateDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionCurrentStateDocument>(
+            [new ProjectionDocumentStoreBinding<WorkflowExecutionCurrentStateDocument>(currentStateStore)]);
+        var projector = new WorkflowExecutionReportArtifactProjector(
             storeDispatcher,
             store,
             new TestEventDeduplicator(),
             resolvedClock,
             BuildReducers());
-        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
+        var currentStateProjector = new WorkflowExecutionCurrentStateProjector(
+            currentStateDispatcher,
+            resolvedClock);
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+            [currentStateProjector, projector]);
         var dispatcher = new ProjectionDispatcher<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(coordinator);
         var runRegistry = new ProjectionSubscriptionRegistry<WorkflowExecutionProjectionContext>(
             dispatcher,
@@ -604,10 +611,11 @@ public class WorkflowExecutionProjectionServiceTests
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventStreamHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventStreamHub, resolvedClock);
         var queryReader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             mapper,
             relationStore);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, store, resolvedClock);
+        var readModelUpdater = new WorkflowExecutionReportArtifactUpdater(storeDispatcher, store, resolvedClock);
         var activationService = new WorkflowProjectionActivationService(
             lifecycle,
             resolvedClock,
@@ -637,6 +645,7 @@ public class WorkflowExecutionProjectionServiceTests
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle)
     {
         var store = CreateStore();
+        var currentStateStore = CreateCurrentStateStore();
         var clock = new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
         var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
@@ -649,8 +658,9 @@ public class WorkflowExecutionProjectionServiceTests
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
         var sinkFailurePolicy = new WorkflowProjectionSinkFailurePolicy(sinkManager, runEventHub, clock);
-        var readModelUpdater = new WorkflowProjectionReadModelUpdater(storeDispatcher, store, clock);
+        var readModelUpdater = new WorkflowExecutionReportArtifactUpdater(storeDispatcher, store, clock);
         var queryReader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             mapper,
             relationStore);
@@ -706,6 +716,11 @@ public class WorkflowExecutionProjectionServiceTests
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);
+
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionCurrentStateDocument, string> CreateCurrentStateStore() => new(
+        keySelector: document => document.RootActorId,
+        keyFormatter: key => key,
+        defaultSortSelector: document => document.UpdatedAt);
 
     private static EventEnvelope Wrap(IMessage evt, string publisherId = "root") => new()
     {

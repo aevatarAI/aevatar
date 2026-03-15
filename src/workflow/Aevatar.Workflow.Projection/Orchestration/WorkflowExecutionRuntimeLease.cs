@@ -22,7 +22,7 @@ public sealed class WorkflowExecutionRuntimeLease
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly IProjectionOwnershipCoordinator? _ownershipCoordinator;
     private readonly IProjectionSessionEventHub<WorkflowProjectionControlEvent>? _projectionControlHub;
-    private readonly IWorkflowProjectionReadModelUpdater? _readModelUpdater;
+    private readonly IWorkflowExecutionReportArtifactUpdater? _readModelUpdater;
     private readonly ILogger<WorkflowExecutionRuntimeLease> _logger;
     private int _ownershipHeartbeatStopped;
     private int _projectionReleaseListenerStopped;
@@ -34,7 +34,7 @@ public sealed class WorkflowExecutionRuntimeLease
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
-        IWorkflowProjectionReadModelUpdater? readModelUpdater = null,
+        IWorkflowExecutionReportArtifactUpdater? readModelUpdater = null,
         ILogger<WorkflowExecutionRuntimeLease>? logger = null)
         : base(context.RootActorId)
     {

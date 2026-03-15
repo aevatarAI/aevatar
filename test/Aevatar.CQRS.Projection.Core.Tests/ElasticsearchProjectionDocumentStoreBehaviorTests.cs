@@ -289,9 +289,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
         public long StateVersion { get; set; }
 
         public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
 
         public string Value { get; set; } = "";
     }
@@ -300,9 +304,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         public string Id { get; set; } = string.Empty;
 
+        public string ActorId => Id;
+
         public long StateVersion { get; set; }
 
         public string LastEventId { get; set; } = string.Empty;
+
+        public DateTimeOffset UpdatedAt { get; set; }
 
         public string DocumentIndexScope { get; set; } = string.Empty;
     }

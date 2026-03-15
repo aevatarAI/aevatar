@@ -3,7 +3,7 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<StepRequestEvent>
+public sealed class StepRequestEventReducer : WorkflowExecutionReportArtifactReducerBase<StepRequestEvent>
 {
     protected override bool Reduce(
         WorkflowExecutionReport report,
@@ -12,13 +12,13 @@ public sealed class StepRequestEventReducer : WorkflowExecutionEventReducerBase<
         StepRequestEvent evt,
         DateTimeOffset now)
     {
-        var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
+        var step = WorkflowExecutionReportArtifactMutations.GetOrCreateStep(report, evt.StepId);
         step.StepType = evt.StepType;
         step.TargetRole = evt.TargetRole;
         step.RequestedAt = now;
         step.RequestParameters = evt.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value);
 
-        WorkflowExecutionProjectionMutations.AddTimeline(
+        WorkflowExecutionReportArtifactMutations.AddTimeline(
             report,
             now,
             "step.request",

@@ -13,6 +13,8 @@ public interface IScriptNativeDocumentMaterializer
         string definitionActorId,
         string revision,
         ScriptDomainFactCommitted fact,
+        string sourceEventId,
+        DateTimeOffset updatedAt,
         IMessage? semanticReadModel,
         ScriptReadModelMaterializationPlan plan);
 }

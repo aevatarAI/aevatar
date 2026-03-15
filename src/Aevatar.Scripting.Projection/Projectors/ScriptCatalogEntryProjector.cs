@@ -1,9 +1,8 @@
-using Aevatar.Scripting.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Projection.Projectors;
@@ -11,16 +10,13 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptCatalogEntryProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionDocumentReader<ScriptCatalogEntryDocument, string> _documentReader;
     private readonly IProjectionWriteDispatcher<ScriptCatalogEntryDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptCatalogEntryProjector(
-        IProjectionDocumentReader<ScriptCatalogEntryDocument, string> documentReader,
         IProjectionWriteDispatcher<ScriptCatalogEntryDocument> writeDispatcher,
         IProjectionClock clock)
     {
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
@@ -40,72 +36,43 @@ public sealed class ScriptCatalogEntryProjector
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var updatedAt = EventEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
-        if (envelope.Payload?.Is(ScriptCatalogRevisionPromotedEvent.Descriptor) == true)
+        if (!CommittedStateEventEnvelope.TryUnpackState<ScriptCatalogState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent?.EventData == null ||
+            state == null)
         {
-            var evt = envelope.Payload.Unpack<ScriptCatalogRevisionPromotedEvent>();
-            if (string.IsNullOrWhiteSpace(evt.ScriptId))
-                return;
-
-            var documentId = BuildDocumentId(context.RootActorId, evt.ScriptId);
-            var document = (await _documentReader.GetAsync(documentId, ct))?.DeepClone()
-                           ?? new ScriptCatalogEntryDocument
-                           {
-                               Id = documentId,
-                               CatalogActorId = context.RootActorId,
-                               ScriptId = evt.ScriptId ?? string.Empty,
-                               CreatedAt = updatedAt,
-                           };
-            document.CatalogActorId = context.RootActorId;
-            document.ScriptId = evt.ScriptId ?? string.Empty;
-            document.PreviousRevision = document.ActiveRevision ?? string.Empty;
-            document.ActiveRevision = evt.Revision ?? string.Empty;
-            document.ActiveDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
-            document.ActiveSourceHash = evt.SourceHash ?? string.Empty;
-            document.LastProposalId = evt.ProposalId ?? string.Empty;
-            document.UpdatedAt = updatedAt;
-            document.LastEventId = string.Concat(document.ScriptId, ":", document.ActiveRevision, ":promoted");
-            document.StateVersion += 1;
-            if (!document.RevisionHistory.Any(x => string.Equals(x, document.ActiveRevision, StringComparison.Ordinal)))
-                document.RevisionHistory.Add(document.ActiveRevision);
-            await _writeDispatcher.UpsertAsync(document, ct);
             return;
         }
 
-        if (envelope.Payload?.Is(ScriptCatalogRolledBackEvent.Descriptor) != true)
-            return;
-
-        var rollback = envelope.Payload.Unpack<ScriptCatalogRolledBackEvent>();
-        if (string.IsNullOrWhiteSpace(rollback.ScriptId))
-            return;
-
-        var rollbackDocumentId = BuildDocumentId(context.RootActorId, rollback.ScriptId);
-        var rollbackDocument = (await _documentReader.GetAsync(rollbackDocumentId, ct))?.DeepClone()
-                               ?? new ScriptCatalogEntryDocument
-                               {
-                                   Id = rollbackDocumentId,
-                                   CatalogActorId = context.RootActorId,
-                                   ScriptId = rollback.ScriptId ?? string.Empty,
-                                   CreatedAt = updatedAt,
-                               };
-        rollbackDocument.CatalogActorId = context.RootActorId;
-        rollbackDocument.ScriptId = rollback.ScriptId ?? string.Empty;
-        var previouslyActiveRevision = rollbackDocument.ActiveRevision ?? string.Empty;
-        rollbackDocument.PreviousRevision = rollback.PreviousRevision ?? previouslyActiveRevision;
-        rollbackDocument.ActiveRevision = rollback.TargetRevision ?? string.Empty;
-        if (!string.Equals(rollbackDocument.ActiveRevision, previouslyActiveRevision, StringComparison.Ordinal))
+        var scriptId = ResolveScriptId(stateEvent.EventData);
+        if (string.IsNullOrWhiteSpace(scriptId) ||
+            !state.Entries.TryGetValue(scriptId, out var entry) ||
+            entry == null)
         {
-            rollbackDocument.ActiveDefinitionActorId = string.Empty;
-            rollbackDocument.ActiveSourceHash = string.Empty;
+            return;
         }
 
-        rollbackDocument.LastProposalId = rollback.ProposalId ?? string.Empty;
-        rollbackDocument.UpdatedAt = updatedAt;
-        rollbackDocument.LastEventId = string.Concat(rollbackDocument.ScriptId, ":", rollbackDocument.ActiveRevision, ":rolled-back");
-        rollbackDocument.StateVersion += 1;
-        if (!rollbackDocument.RevisionHistory.Any(x => string.Equals(x, rollbackDocument.ActiveRevision, StringComparison.Ordinal)))
-            rollbackDocument.RevisionHistory.Add(rollbackDocument.ActiveRevision);
-        await _writeDispatcher.UpsertAsync(rollbackDocument, ct);
+        var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        var document = new ScriptCatalogEntryDocument
+        {
+            Id = BuildDocumentId(context.RootActorId, scriptId),
+            CatalogActorId = context.RootActorId,
+            ScriptId = string.IsNullOrWhiteSpace(entry.ScriptId) ? scriptId : entry.ScriptId,
+            ActiveRevision = entry.ActiveRevision ?? string.Empty,
+            ActiveDefinitionActorId = entry.ActiveDefinitionActorId ?? string.Empty,
+            ActiveSourceHash = entry.ActiveSourceHash ?? string.Empty,
+            PreviousRevision = entry.PreviousRevision ?? string.Empty,
+            LastProposalId = entry.LastProposalId ?? string.Empty,
+            StateVersion = stateEvent.Version,
+            LastEventId = stateEvent.EventId ?? string.Empty,
+            CreatedAt = updatedAt,
+            UpdatedAt = updatedAt,
+        };
+        document.RevisionHistory = entry.RevisionHistory.ToArray();
+        await _writeDispatcher.UpsertAsync(document, ct);
     }
 
     public ValueTask CompleteAsync(
@@ -121,4 +88,17 @@ public sealed class ScriptCatalogEntryProjector
 
     public static string BuildDocumentId(string catalogActorId, string scriptId) =>
         string.Concat(catalogActorId ?? string.Empty, ":", scriptId ?? string.Empty);
+
+    private static string? ResolveScriptId(Any eventData)
+    {
+        ArgumentNullException.ThrowIfNull(eventData);
+
+        if (eventData.Is(ScriptCatalogRevisionPromotedEvent.Descriptor))
+            return eventData.Unpack<ScriptCatalogRevisionPromotedEvent>().ScriptId;
+
+        if (eventData.Is(ScriptCatalogRolledBackEvent.Descriptor))
+            return eventData.Unpack<ScriptCatalogRolledBackEvent>().ScriptId;
+
+        return null;
+    }
 }

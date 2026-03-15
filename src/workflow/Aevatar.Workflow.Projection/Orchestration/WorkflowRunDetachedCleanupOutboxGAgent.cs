@@ -271,7 +271,7 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         WorkflowRunDetachedCleanupOutboxEntry entry,
         string ownershipSessionId)
     {
-        var readModelUpdater = Services.GetRequiredService<IWorkflowProjectionReadModelUpdater>();
+        var readModelUpdater = Services.GetRequiredService<IWorkflowExecutionReportArtifactUpdater>();
         var ownershipCoordinator = Services.GetRequiredService<IProjectionOwnershipCoordinator>();
         var normalizedSessionId = string.IsNullOrWhiteSpace(ownershipSessionId)
             ? entry.CommandId

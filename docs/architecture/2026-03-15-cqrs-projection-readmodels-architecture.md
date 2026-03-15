@@ -64,7 +64,7 @@
   - `WorkflowExecutionRuntimeLease.cs:133`
 - Workflow query/read model
   - `WorkflowProjectionActivationService.cs:40`
-  - `WorkflowExecutionReadModelProjector.cs:44`
+  - `WorkflowExecutionReportArtifactProjector.cs:44`
   - `WorkflowProjectionQueryReader.cs:22`
   - `WorkflowRunDurableCompletionResolver.cs:19`
   - `WorkflowRunDetachedCleanupOutboxGAgent.cs:187`
@@ -84,7 +84,7 @@ flowchart LR
   B --> C["ProjectionSubscriptionRegistry"]
   C --> D["ProjectionDispatcher"]
   D --> E["ProjectionCoordinator"]
-  E --> F1["WorkflowExecutionReadModelProjector"]
+  E --> F1["WorkflowExecutionReportArtifactProjector"]
   E --> F2["ScriptReadModelProjector"]
   E --> F3["ScriptNativeDocumentProjector"]
   E --> F4["ScriptNativeGraphProjector"]
@@ -132,7 +132,7 @@ flowchart LR
    - 语义由 query contract + readmodel schema 定义
    - 一致性看的是：
      - readmodel 是否已物化
-     - `SourceVersion` 是否达到要求
+     - `StateVersion` 是否达到要求
      - 当前结果是否最终一致但诚实
 
 因此必须禁止两种混淆：
@@ -288,7 +288,7 @@ sequenceDiagram
     participant D as "ProjectionOwnershipCoordinatorGAgent"
     participant E as "ProjectionLifecycleService"
     participant F as "Actor Stream"
-    participant G as "WorkflowExecutionReadModelProjector"
+    participant G as "WorkflowExecutionReportArtifactProjector"
     participant H as "Document / Graph Store"
 
     A->>B: EnsureActorProjectionAsync(actorId, workflowName, input, commandId)
@@ -331,7 +331,7 @@ sequenceDiagram
 
 ### 6.3 Workflow read model 写入链
 
-`WorkflowExecutionReadModelProjector` 的写路径是：
+`WorkflowExecutionReportArtifactProjector` 的写路径是：
 
 1. 归一化 envelope
 2. 按 `Payload.TypeUrl` 命中 reducer 集合
@@ -341,14 +341,14 @@ sequenceDiagram
 6. `RefreshDerivedFields()` 刷新 summary/updatedAt
 7. `IProjectionWriteDispatcher<WorkflowExecutionReport>.UpsertAsync(report)`
 
-对应代码：`WorkflowExecutionReadModelProjector.cs:44-77`。
+对应代码：`WorkflowExecutionReportArtifactProjector.cs:44-77`。
 
-`WorkflowExecutionProjectionMutations.RecordProjectedEvent(...)` 是 projection state 的直接来源：
+`WorkflowExecutionReportArtifactMutations.RecordProjectedEvent(...)` 是 workflow report artifact 状态推进的直接来源：
 
 - `StateVersion++`
 - `LastEventId = envelope.Id`
 
-对应代码：`WorkflowExecutionProjectionMutations.cs:7-17`。
+对应代码：`WorkflowExecutionReportArtifactMutations.cs:7-17`。
 
 ### 6.4 Workflow 查询分别依赖什么数据
 
@@ -582,9 +582,9 @@ flowchart LR
 
 ### 9.1 Workflow 去重开关名义存在，实际默认是透传
 
-`WorkflowExecutionReadModelProjector` 调用了 `_deduplicator.TryRecordAsync(...)`。
+`WorkflowExecutionReportArtifactProjector` 调用了 `_deduplicator.TryRecordAsync(...)`。
 
-对应代码：`WorkflowExecutionReadModelProjector.cs:55-60`。
+对应代码：`WorkflowExecutionReportArtifactProjector.cs:55-60`。
 
 但 workflow 默认注册的是：
 
@@ -738,8 +738,8 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionActivationService.cs:40`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:133`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:44`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:7`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs:44`
+- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs:7`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs:22`
 - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs:19`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowRunDetachedCleanupOutboxGAgent.cs:187`

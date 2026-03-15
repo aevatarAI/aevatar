@@ -151,9 +151,13 @@ public class StateMirrorProjectionTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
         public long StateVersion { get; set; }
 
         public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
 
         public int Count { get; set; }
 
@@ -204,6 +208,7 @@ public class StateMirrorProjectionTests
                 Id = source.Id,
                 StateVersion = source.StateVersion,
                 LastEventId = source.LastEventId,
+                UpdatedAt = source.UpdatedAt,
                 Count = source.Count,
                 InternalNote = source.InternalNote,
             };

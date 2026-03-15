@@ -372,7 +372,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     }
 
     private static Any CreateReadModelPayload(string rootActorId) =>
-        WorkflowExecutionReportSnapshotMapper.Pack(CreateReadModel(rootActorId));
+        WorkflowExecutionReportArtifactPayloadMapper.Pack(CreateReadModel(rootActorId));
 
     private static WorkflowExecutionReport CreateReadModel(string rootActorId) =>
         new()

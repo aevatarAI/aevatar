@@ -7,12 +7,12 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionReleaseService
     : ProjectionReleaseServiceBase<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
-    private readonly IWorkflowProjectionReadModelUpdater _readModelUpdater;
+    private readonly IWorkflowExecutionReportArtifactUpdater _readModelUpdater;
     private readonly IProjectionOwnershipCoordinator _ownershipCoordinator;
 
     public WorkflowProjectionReleaseService(
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
-        IWorkflowProjectionReadModelUpdater readModelUpdater,
+        IWorkflowExecutionReportArtifactUpdater readModelUpdater,
         IProjectionOwnershipCoordinator ownershipCoordinator)
         : base(lifecycle)
     {

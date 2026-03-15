@@ -3,13 +3,13 @@ using Aevatar.Workflow.Projection.Reducers;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionReadModelUpdater
+public sealed class WorkflowExecutionReportArtifactUpdater : IWorkflowExecutionReportArtifactUpdater
 {
     private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
     private readonly IProjectionClock _clock;
 
-    public WorkflowProjectionReadModelUpdater(
+    public WorkflowExecutionReportArtifactUpdater(
         IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher,
         IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         IProjectionClock clock)
@@ -60,7 +60,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         if (report.EndedAt < report.StartedAt)
             report.EndedAt = report.StartedAt;
 
-        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, updatedAt);
+        WorkflowExecutionReportArtifactMutations.RefreshDerivedFields(report, updatedAt);
         await _writeDispatcher.UpsertAsync(report, ct);
     }
 
@@ -84,7 +84,7 @@ public sealed class WorkflowProjectionReadModelUpdater : IWorkflowProjectionRead
         if (report.EndedAt < report.StartedAt)
             report.EndedAt = updatedAt;
 
-        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, updatedAt);
+        WorkflowExecutionReportArtifactMutations.RefreshDerivedFields(report, updatedAt);
         await _writeDispatcher.UpsertAsync(report, ct);
     }
 }

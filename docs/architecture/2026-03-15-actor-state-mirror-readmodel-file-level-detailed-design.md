@@ -70,8 +70,8 @@
    - 新增 actor-scoped readmodel 应只需新增 projection payload mapper、metadata provider、materializer
    - 不再要求增加 reducer 链和回放逻辑
 5. `语义命名优先`
-   - `StateVersion` 若表达的是源端已提交版本，必须重命名为 `SourceVersion`
-   - `LastEventId` 若表达的是源事实标识，必须重命名为 `SourceEventId`
+   - `StateVersion` 直接表达源端已提交版本，不再额外引入 `SourceVersion`
+   - `LastEventId` 直接表达最后一次已物化事实标识，不再额外引入 `SourceEventId`
 6. `Explicit Consumption`
    - 同一 actor 可以有多个 readmodel，但每个 readmodel 都必须绑定明确消费场景
    - 必须能指出具体 query/API/UI/search/graph 入口
@@ -104,8 +104,8 @@
 
 关键文件：
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 - `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunDurableCompletionResolver.cs`
@@ -113,8 +113,8 @@
 当前问题：
 
 1. `WorkflowExecutionReport` 同时承载当前态、timeline、summary、graph 输入
-2. `WorkflowExecutionReadModelProjector` 先读旧文档，再按 event reducer 推下一态
-3. `WorkflowExecutionProjectionMutations.RecordProjectedEvent(...)` 使用本地 `StateVersion++`
+2. `WorkflowExecutionReportArtifactProjector` 先读旧文档，再按 event reducer 推下一态
+3. `WorkflowExecutionReportArtifactMutations.RecordProjectedEvent(...)` 使用局部 artifact 版本推进
 4. `WorkflowExecutionReadModelMapper` 同时映射 state mirror、projection state、timeline、graph，职责过载
 5. query 侧把混合 report 当成当前态事实源
 
@@ -192,14 +192,14 @@ sequenceDiagram
 
 1. `IProjectionReadModel`
    - 直接表示 `actor-scoped current-state readmodel`
-   - 暴露 `Id / ActorId / SourceVersion / SourceEventId / UpdatedAt`
+   - 暴露 `Id / ActorId / StateVersion / LastEventId / UpdatedAt`
 2. `Artifact / Export / Log` 独立契约
    - 不再占用 readmodel 根接口
    - 不进入当前态 projection 主链
 3. `ProjectionWriteResult`
    - 表示 provider 写入结果
 4. `ProjectionWriteResultEvaluator`
-   - 负责按 `SourceVersion / SourceEventId` 评估 `Applied / Duplicate / Stale / Conflict`
+   - 负责按 `StateVersion / LastEventId` 评估 `Applied / Duplicate / Stale / Conflict`
 5. `ReadModelProjector`
    - 一个 projector 只负责一个 readmodel 物化目标
 
@@ -236,7 +236,7 @@ sequenceDiagram
 设计说明：
 
 - 这里不再保留“最小身份 readmodel”。
-- 既然架构已经强制 `readmodel = actor-scoped current-state replica`，那根接口本身就必须承载 `ActorId / SourceVersion / SourceEventId / UpdatedAt`。
+- 既然架构已经强制 `readmodel = actor-scoped current-state replica`，那根接口本身就必须承载 `ActorId / StateVersion / LastEventId / UpdatedAt`。
 - 不符合这条规则的对象直接退出 readmodel 主链，转到 `artifact/export/log` 抽象。
 
 ### 7.2 Projection Runtime Abstractions
@@ -272,7 +272,7 @@ sequenceDiagram
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
 | `src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs` | 内存读写与查询 | 只有无条件覆盖 | `修改` | 在 `lock` 内实现条件写和结果返回 |
-| `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs` | ES document 读写 | 只有 PUT 覆盖，没有版本语义 | `修改` | 基于 `SourceVersion + SourceEventId` 执行 compare-and-write |
+| `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs` | ES document 读写 | 只有 PUT 覆盖，没有版本语义 | `修改` | 基于 `StateVersion + LastEventId` 执行 compare-and-write |
 | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.Indexing.cs` | ES mapping/index bootstrap | 缺少 `source_version/source_event_id` 索引语义 | `修改` | 为 actor-scoped readmodel 建 long/keyword mapping |
 | `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/README.md` | provider 文档 | 未体现条件写 | `修改` | 说明 state-mirror current-state 写入契约 |
 
@@ -313,8 +313,8 @@ sequenceDiagram
 
 | 文件 | 当前职责 | 问题 | 变更动作 | 目标职责 |
 | --- | --- | --- | --- | --- |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs` | 事件 reducer 驱动 report 物化 | 当前态、timeline、summary 耦合 | `删除或降级` | 只保留为 history/report artifact 路径，退出当前态主路径 |
-| `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs` | report 局部变更 | 本地 `StateVersion++` 违反权威版本原则 | `删除或裁剪` | 删除当前态版本推进逻辑 |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReportArtifactProjector.cs` | 事件 reducer 驱动 report artifact 物化 | 当前态、timeline、summary 耦合 | `删除或降级` | 只保留为 history/report artifact 路径，退出当前态主路径 |
+| `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionReportArtifactMutations.cs` | report artifact 局部变更 | 仅允许保留 artifact 自身辅助变更，不得回流当前态语义 | `删除或裁剪` | 删除当前态版本推进逻辑 |
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModelMapper.cs` | mixed mapper | 职责过载 | `拆分` | 拆成 readmodel mapper / graph mapper / timeline mapper |
 | `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs` | readmodel/timeline/graph 一体读取 | 违反 SRP | `拆分` | `WorkflowActorReadModelQueryReader` + `WorkflowActorGraphQueryReader`，必要时保留 façade |
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs` | mixed report 文档 | 当前态不该继续依赖它 | `降级` | 仅保留 artifact/history 语义 |
@@ -403,8 +403,8 @@ sequenceDiagram
 | `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionStoreDispatcherTests.cs` | `修改` | 覆盖单 readmodel 写入结果聚合、`stale`、`duplicate`、`conflict` |
 | `test/Aevatar.CQRS.Projection.Core.Tests/ElasticsearchProjectionDocumentStoreBehaviorTests.cs` | `修改` | 覆盖 ES 条件写 |
 | `test/Aevatar.CQRS.Projection.Core.Tests/ProjectionGraphStoreBindingTests.cs` | `删除或迁移` | graph 应退出单 readmodel sink 模型，改测独立 graph projector |
-| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReadModelProjectorTests.cs` | `删除或重写` | 改为 `WorkflowActorReadModelProjectorTests` |
-| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportSnapshotMapperTests.cs` | `删除或重写` | 改为 `WorkflowActorReadModelDocumentMapperTests` |
+| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportArtifactProjectorTests.cs` | `删除或重写` | 改为 `WorkflowExecutionReportArtifactProjectorTests` |
+| `test/Aevatar.Workflow.Host.Api.Tests/WorkflowExecutionReportArtifactPayloadMapperTests.cs` | `删除或重写` | 改为 `WorkflowExecutionReportArtifactPayloadMapperTests` |
 | `test/Aevatar.Workflow.Application.Tests/WorkflowRunDurableCompletionResolverCoverageTests.cs` | `修改` | 覆盖新的 readmodel DTO |
 | `test/Aevatar.Workflow.Application.Tests/WorkflowRunStateMirrorEmitterTests.cs` | `修改` | 验证复用抽取后的 projection-payload contract |
 | `test/Aevatar.Scripting.Core.Tests/Projection/ScriptReadModelProjectorTests.cs` | `删除或重写` | 改为 direct current-state readmodel projector 测试 |
@@ -420,7 +420,7 @@ sequenceDiagram
 | `tools/ci/architecture_guards.sh` | `修改` | 接入新的 current-state state-mirror guards |
 | `tools/ci/query_projection_priming_guard.sh` | `新增` | 持续禁止 query-time priming |
 | `tools/ci/projection_state_mirror_current_state_guard.sh` | `新增` | 禁止 current-state projector 读取旧文档做 reducer |
-| `tools/ci/projection_source_version_guard.sh` | `新增` | 禁止当前态路径中的本地 `StateVersion++` |
+| `tools/ci/projection_state_version_guard.sh` | `新增` | 禁止当前态路径中的本地 `StateVersion++` |
 
 建议的静态门禁规则：
 

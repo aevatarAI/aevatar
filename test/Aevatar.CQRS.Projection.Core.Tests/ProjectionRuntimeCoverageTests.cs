@@ -48,8 +48,12 @@ public sealed class ProjectionRuntimeCoverageTests
     {
         public string Id { get; init; } = string.Empty;
 
+        public string ActorId => Id;
+
         public long StateVersion { get; init; }
 
         public string LastEventId { get; init; } = string.Empty;
+
+        public DateTimeOffset UpdatedAt { get; init; }
     }
 }

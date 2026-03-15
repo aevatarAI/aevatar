@@ -3,7 +3,7 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBase<StartWorkflowEvent>
+public sealed class StartWorkflowEventReducer : WorkflowExecutionReportArtifactReducerBase<StartWorkflowEvent>
 {
     protected override bool Reduce(
         WorkflowExecutionReport report,
@@ -15,7 +15,7 @@ public sealed class StartWorkflowEventReducer : WorkflowExecutionEventReducerBas
         report.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? report.WorkflowName : evt.WorkflowName;
         var timelineData = BuildStartAuditData(evt);
 
-        WorkflowExecutionProjectionMutations.AddTimeline(
+        WorkflowExecutionReportArtifactMutations.AddTimeline(
             report,
             now,
             "workflow.start",

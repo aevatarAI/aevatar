@@ -79,6 +79,8 @@ public sealed class ScriptNativeGraphProjectorTests
         var graph = graphMaterializer.Materialize(graphReadModel);
         graphReadModel.SchemaId.Should().Be("claim_case");
         graphReadModel.GraphScope.Should().Be("script-native-claim_case");
+        graphReadModel.StateVersion.Should().Be(3);
+        graphReadModel.LastEventId.Should().Be("evt-graph-1");
         graph.Nodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-runtime");
         graph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");
         graph.Edges.Should().ContainSingle(x =>

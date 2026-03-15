@@ -23,7 +23,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         IEventStore? eventStore = null,
         IWorkflowExecutionProjectionQueryPort? queryPort = null,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
-        IWorkflowProjectionReadModelUpdater? readModelUpdater = null,
+        IWorkflowExecutionReportArtifactUpdater? readModelUpdater = null,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         IWorkflowRunActorPort? actorPort = null,
@@ -42,7 +42,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         services.AddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>(
             lifecycle ?? new RecordingLifecycleService());
         services.AddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
-        services.AddSingleton<IWorkflowProjectionReadModelUpdater>(readModelUpdater ?? new RecordingReadModelUpdater());
+        services.AddSingleton<IWorkflowExecutionReportArtifactUpdater>(readModelUpdater ?? new RecordingReadModelUpdater());
         services.AddSingleton<IProjectionOwnershipCoordinator>(ownershipCoordinator ?? new RecordingOwnershipCoordinator());
         services.AddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>(projectionControlHub ?? new RecordingProjectionControlHub());
         services.AddSingleton<IWorkflowRunActorPort>(actorPort ?? new RecordingActorPort());
@@ -755,7 +755,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingReadModelUpdater : IWorkflowProjectionReadModelUpdater
+    private sealed class RecordingReadModelUpdater : IWorkflowExecutionReportArtifactUpdater
     {
         public List<string> MarkStoppedActorIds { get; } = [];
 

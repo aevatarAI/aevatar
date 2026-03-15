@@ -11,6 +11,9 @@ public sealed partial class ScriptReadModelDocument
       IProjectionReadModelCloneable<ScriptReadModelDocument>
 {
     [JsonIgnore]
+    public string ActorId => Id;
+
+    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
@@ -24,6 +27,9 @@ public sealed partial class ScriptDefinitionSnapshotDocument
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptDefinitionSnapshotDocument>
 {
+    [JsonIgnore]
+    public string ActorId => DefinitionActorId;
+
     [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
@@ -45,6 +51,9 @@ public sealed partial class ScriptCatalogEntryDocument
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptCatalogEntryDocument>
 {
+    [JsonIgnore]
+    public string ActorId => CatalogActorId;
+
     [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
@@ -98,6 +107,9 @@ public sealed partial class ScriptNativeDocumentReadModel
     private IDictionary<string, object?>? _fieldsCache;
 
     [JsonIgnore]
+    public string ActorId => Id;
+
+    [JsonIgnore]
     public IDictionary<string, object?> Fields
     {
         get => _fieldsCache ??= ScriptProjectionReadModelSupport.ToDictionary(FieldsValue);
@@ -124,6 +136,9 @@ public sealed partial class ScriptNativeGraphReadModel
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptNativeGraphReadModel>
 {
+    [JsonIgnore]
+    public string ActorId => Id;
+
     [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {

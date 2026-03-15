@@ -5,9 +5,9 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Workflow.Projection.Reducers;
 
 /// <summary>
-/// Generic reducer base for a single protobuf event type.
+/// Generic artifact reducer base for a single protobuf event type.
 /// </summary>
-public abstract class WorkflowExecutionEventReducerBase<TEvent>
+public abstract class WorkflowExecutionReportArtifactReducerBase<TEvent>
     : IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>
     where TEvent : class, IMessage<TEvent>, new()
 {

@@ -36,7 +36,7 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
         {
             try
             {
-                var documentReader = _serviceProvider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
+                var documentReader = _serviceProvider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
                 _ = await documentReader.QueryAsync(
                     new ProjectionDocumentQuery
                     {
@@ -45,7 +45,7 @@ internal sealed class WorkflowReadModelStartupValidationHostedService : IHostedS
                     cancellationToken);
                 _logger.LogInformation(
                     "Workflow read-model document startup probe passed. readModelType={ReadModelType}",
-                    typeof(WorkflowExecutionReport).FullName);
+                    typeof(WorkflowExecutionCurrentStateDocument).FullName);
             }
             catch (Exception ex)
             {

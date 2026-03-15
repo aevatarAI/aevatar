@@ -15,11 +15,10 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptCatalogEntryProjectorTests
 {
     [Fact]
-    public async Task Promote_ShouldCreateDocument_WhenCatalogEntryDoesNotExist()
+    public async Task Promote_ShouldCreateDocument_FromCommittedCatalogState()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
-            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -31,15 +30,22 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-promote",
-                Any.Pack(new ScriptCatalogRevisionPromotedEvent
+                eventId: "evt-promote",
+                version: 1,
+                payload: Any.Pack(new ScriptCatalogRevisionPromotedEvent
                 {
                     ScriptId = "script-1",
                     Revision = "rev-1",
-                    DefinitionActorId = "definition-1",
-                    SourceHash = "hash-1",
-                    ProposalId = "proposal-1",
-                })),
+                }),
+                state: BuildCatalogState(
+                    lastAppliedEventVersion: 1,
+                    scriptId: "script-1",
+                    activeRevision: "rev-1",
+                    activeDefinitionActorId: "definition-1",
+                    activeSourceHash: "hash-1",
+                    previousRevision: string.Empty,
+                    lastProposalId: "proposal-1",
+                    revisionHistory: ["rev-1"])),
             CancellationToken.None);
 
         var document = await dispatcher.GetAsync("script-catalog:script-1", CancellationToken.None);
@@ -48,16 +54,18 @@ public sealed class ScriptCatalogEntryProjectorTests
         document.ScriptId.Should().Be("script-1");
         document.ActiveRevision.Should().Be("rev-1");
         document.ActiveDefinitionActorId.Should().Be("definition-1");
+        document.ActiveSourceHash.Should().Be("hash-1");
         document.LastProposalId.Should().Be("proposal-1");
+        document.StateVersion.Should().Be(1);
+        document.LastEventId.Should().Be("evt-promote");
         document.RevisionHistory.Should().ContainSingle(x => x == "rev-1");
     }
 
     [Fact]
-    public async Task Rollback_ShouldCreateDocument_WhenCatalogEntryDoesNotExist()
+    public async Task Rollback_ShouldCreateDocument_FromCommittedCatalogState()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
-            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -69,14 +77,22 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-rollback",
-                Any.Pack(new ScriptCatalogRolledBackEvent
+                eventId: "evt-rollback",
+                version: 2,
+                payload: Any.Pack(new ScriptCatalogRolledBackEvent
                 {
                     ScriptId = "script-1",
                     TargetRevision = "rev-1",
-                    PreviousRevision = "rev-2",
-                    ProposalId = "proposal-rollback",
-                })),
+                }),
+                state: BuildCatalogState(
+                    lastAppliedEventVersion: 2,
+                    scriptId: "script-1",
+                    activeRevision: "rev-1",
+                    activeDefinitionActorId: string.Empty,
+                    activeSourceHash: string.Empty,
+                    previousRevision: "rev-2",
+                    lastProposalId: "proposal-rollback",
+                    revisionHistory: ["rev-1"])),
             CancellationToken.None);
 
         var document = await dispatcher.GetAsync("script-catalog:script-1", CancellationToken.None);
@@ -86,15 +102,16 @@ public sealed class ScriptCatalogEntryProjectorTests
         document.ActiveRevision.Should().Be("rev-1");
         document.PreviousRevision.Should().Be("rev-2");
         document.LastProposalId.Should().Be("proposal-rollback");
+        document.StateVersion.Should().Be(2);
+        document.LastEventId.Should().Be("evt-rollback");
         document.RevisionHistory.Should().ContainSingle(x => x == "rev-1");
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldIgnore_UnrelatedEvents()
+    public async Task ProjectAsync_ShouldIgnore_UnrelatedCommittedEvents()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
-            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -106,13 +123,23 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-other",
-                Any.Pack(new ScriptDefinitionUpsertedEvent
+                eventId: "evt-other",
+                version: 1,
+                payload: Any.Pack(new ScriptDefinitionUpsertedEvent
                 {
                     ScriptId = "script-1",
                     ScriptRevision = "rev-1",
                     SourceText = "source",
-                })),
+                }),
+                state: BuildCatalogState(
+                    lastAppliedEventVersion: 1,
+                    scriptId: "script-1",
+                    activeRevision: "rev-1",
+                    activeDefinitionActorId: "definition-1",
+                    activeSourceHash: "hash-1",
+                    previousRevision: string.Empty,
+                    lastProposalId: "proposal-1",
+                    revisionHistory: ["rev-1"])),
             CancellationToken.None);
 
         (await dispatcher.QueryAsync(
@@ -129,7 +156,6 @@ public sealed class ScriptCatalogEntryProjectorTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
         var projector = new ScriptCatalogEntryProjector(
             dispatcher,
-            dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
@@ -140,22 +166,26 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-promote-empty",
-                Any.Pack(new ScriptCatalogRevisionPromotedEvent
+                eventId: "evt-promote-empty",
+                version: 1,
+                payload: Any.Pack(new ScriptCatalogRevisionPromotedEvent
                 {
                     ScriptId = "",
                     Revision = "rev-1",
-                })),
+                }),
+                state: new ScriptCatalogState()),
             CancellationToken.None);
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-rollback-empty",
-                Any.Pack(new ScriptCatalogRolledBackEvent
+                eventId: "evt-rollback-empty",
+                version: 2,
+                payload: Any.Pack(new ScriptCatalogRolledBackEvent
                 {
                     ScriptId = "",
                     TargetRevision = "rev-1",
-                })),
+                }),
+                state: new ScriptCatalogState()),
             CancellationToken.None);
 
         (await dispatcher.QueryAsync(
@@ -167,22 +197,10 @@ public sealed class ScriptCatalogEntryProjectorTests
     }
 
     [Fact]
-    public async Task Promote_ShouldUpdateExistingDocument_WithoutDuplicatingRevisionHistory()
+    public async Task Promote_ShouldUpdateDocument_UsingCommittedCatalogEntryState()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
-        await dispatcher.UpsertAsync(new ScriptCatalogEntryDocument
-        {
-            Id = "script-catalog:script-1",
-            CatalogActorId = "script-catalog",
-            ScriptId = "script-1",
-            ActiveRevision = "rev-1",
-            ActiveDefinitionActorId = "definition-1",
-            ActiveSourceHash = "hash-1",
-            RevisionHistory = { "rev-1" },
-            StateVersion = 3,
-        }, CancellationToken.None);
         var projector = new ScriptCatalogEntryProjector(
-            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 2, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -194,15 +212,22 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-promote-update",
-                Any.Pack(new ScriptCatalogRevisionPromotedEvent
+                eventId: "evt-promote-update",
+                version: 4,
+                payload: Any.Pack(new ScriptCatalogRevisionPromotedEvent
                 {
                     ScriptId = "script-1",
                     Revision = "rev-1",
-                    DefinitionActorId = "definition-2",
-                    SourceHash = "hash-2",
-                    ProposalId = "proposal-2",
-                })),
+                }),
+                state: BuildCatalogState(
+                    lastAppliedEventVersion: 4,
+                    scriptId: "script-1",
+                    activeRevision: "rev-1",
+                    activeDefinitionActorId: "definition-2",
+                    activeSourceHash: "hash-2",
+                    previousRevision: "rev-1",
+                    lastProposalId: "proposal-2",
+                    revisionHistory: ["rev-1"])),
             CancellationToken.None);
 
         var document = await dispatcher.GetAsync("script-catalog:script-1", CancellationToken.None);
@@ -213,27 +238,15 @@ public sealed class ScriptCatalogEntryProjectorTests
         document.ActiveSourceHash.Should().Be("hash-2");
         document.LastProposalId.Should().Be("proposal-2");
         document.StateVersion.Should().Be(4);
+        document.LastEventId.Should().Be("evt-promote-update");
         document.RevisionHistory.Should().Equal("rev-1");
     }
 
     [Fact]
-    public async Task Rollback_ShouldPreserveBinding_WhenTargetMatchesCurrentRevision()
+    public async Task Rollback_ShouldPreserveBinding_WhenCatalogStateStillPointsToSameRevision()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument>();
-        await dispatcher.UpsertAsync(new ScriptCatalogEntryDocument
-        {
-            Id = "script-catalog:script-1",
-            CatalogActorId = "script-catalog",
-            ScriptId = "script-1",
-            ActiveRevision = "rev-2",
-            PreviousRevision = "rev-1",
-            ActiveDefinitionActorId = "definition-2",
-            ActiveSourceHash = "hash-2",
-            RevisionHistory = { "rev-1", "rev-2" },
-            StateVersion = 5,
-        }, CancellationToken.None);
         var projector = new ScriptCatalogEntryProjector(
-            dispatcher,
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 3, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
@@ -245,14 +258,22 @@ public sealed class ScriptCatalogEntryProjectorTests
         await projector.ProjectAsync(
             context,
             BuildEnvelope(
-                "evt-rollback-same",
-                Any.Pack(new ScriptCatalogRolledBackEvent
+                eventId: "evt-rollback-same",
+                version: 6,
+                payload: Any.Pack(new ScriptCatalogRolledBackEvent
                 {
                     ScriptId = "script-1",
                     TargetRevision = "rev-2",
-                    PreviousRevision = "rev-1",
-                    ProposalId = "proposal-rollback",
-                })),
+                }),
+                state: BuildCatalogState(
+                    lastAppliedEventVersion: 6,
+                    scriptId: "script-1",
+                    activeRevision: "rev-2",
+                    activeDefinitionActorId: "definition-2",
+                    activeSourceHash: "hash-2",
+                    previousRevision: "rev-1",
+                    lastProposalId: "proposal-rollback",
+                    revisionHistory: ["rev-1", "rev-2"])),
             CancellationToken.None);
 
         var document = await dispatcher.GetAsync("script-catalog:script-1", CancellationToken.None);
@@ -263,6 +284,7 @@ public sealed class ScriptCatalogEntryProjectorTests
         document.ActiveSourceHash.Should().Be("hash-2");
         document.LastProposalId.Should().Be("proposal-rollback");
         document.StateVersion.Should().Be(6);
+        document.LastEventId.Should().Be("evt-rollback-same");
         document.RevisionHistory.Should().Equal("rev-1", "rev-2");
     }
 
@@ -272,18 +294,63 @@ public sealed class ScriptCatalogEntryProjectorTests
         ScriptCatalogEntryProjector.BuildDocumentId(null!, null!).Should().Be(":");
     }
 
-    private static EventEnvelope BuildEnvelope(string id, Any payload) =>
-        new()
+    private static EventEnvelope BuildEnvelope(
+        string eventId,
+        long version,
+        Any payload,
+        ScriptCatalogState state)
+    {
+        var occurredAt = Timestamp.FromDateTime(DateTime.UtcNow);
+        return new EventEnvelope
         {
-            Id = id,
-            Payload = payload,
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
+            Id = eventId,
+            Timestamp = occurredAt.Clone(),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("projection-test"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                    Timestamp = occurredAt.Clone(),
+                    EventData = payload.Clone(),
+                },
+                StateRoot = Any.Pack(state),
+            }),
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = id,
+                CorrelationId = eventId,
             },
         };
+    }
+
+    private static ScriptCatalogState BuildCatalogState(
+        long lastAppliedEventVersion,
+        string scriptId,
+        string activeRevision,
+        string activeDefinitionActorId,
+        string activeSourceHash,
+        string previousRevision,
+        string lastProposalId,
+        IEnumerable<string> revisionHistory)
+    {
+        var state = new ScriptCatalogState
+        {
+            LastAppliedEventVersion = lastAppliedEventVersion,
+            LastEventId = $"evt-{lastAppliedEventVersion}",
+        };
+        state.Entries[scriptId] = new ScriptCatalogEntryState
+        {
+            ScriptId = scriptId,
+            ActiveRevision = activeRevision,
+            ActiveDefinitionActorId = activeDefinitionActorId,
+            ActiveSourceHash = activeSourceHash,
+            PreviousRevision = previousRevision,
+            LastProposalId = lastProposalId,
+        };
+        state.Entries[scriptId].RevisionHistory.Add(revisionHistory);
+        return state;
+    }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {

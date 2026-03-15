@@ -456,9 +456,13 @@ public class ProjectionGraphStoreBindingTests
     {
         public string Id { get; init; } = "";
 
+        public string ActorId => Id;
+
         public long StateVersion { get; init; }
 
         public string LastEventId { get; init; } = "";
+
+        public DateTimeOffset UpdatedAt { get; init; }
 
         public string GraphScope { get; init; } = "";
 
@@ -484,9 +488,13 @@ public class ProjectionGraphStoreBindingTests
     {
         public string Id { get; init; } = "";
 
+        public string ActorId => Id;
+
         public long StateVersion { get; init; }
 
         public string LastEventId { get; init; } = "";
+
+        public DateTimeOffset UpdatedAt { get; init; }
     }
 
     private sealed class EmptyCleanupGraphStore : IProjectionGraphStore

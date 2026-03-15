@@ -89,12 +89,17 @@ public sealed class ScriptNativeDocumentProjector
             fact,
             artifact,
             _codec);
+        var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
+            envelope,
+            DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs));
         var nativeDocument = _materializer.Materialize(
             context.RootActorId,
             state.ScriptId,
             state.DefinitionActorId,
             state.Revision,
             fact,
+            string.IsNullOrWhiteSpace(stateEvent.EventId) ? envelope.Id ?? string.Empty : stateEvent.EventId,
+            updatedAt,
             semanticReadModel,
             plan);
         await _nativeWriteDispatcher.UpsertAsync(nativeDocument, ct);

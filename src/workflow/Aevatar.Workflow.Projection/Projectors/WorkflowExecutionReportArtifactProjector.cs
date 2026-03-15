@@ -6,9 +6,9 @@ using Aevatar.Foundation.Abstractions.Deduplication;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 /// <summary>
-/// EventEnvelope -> WorkflowExecutionReport projector.
+/// EventEnvelope -> WorkflowExecutionReport artifact projector.
 /// </summary>
-public sealed class WorkflowExecutionReadModelProjector
+public sealed class WorkflowExecutionReportArtifactProjector
     : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
 {
     private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
@@ -17,7 +17,7 @@ public sealed class WorkflowExecutionReadModelProjector
     private readonly IProjectionClock _clock;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>> _reducersByType;
 
-    public WorkflowExecutionReadModelProjector(
+    public WorkflowExecutionReportArtifactProjector(
         IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher,
         IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
         IEventDeduplicator deduplicator,
@@ -71,11 +71,11 @@ public sealed class WorkflowExecutionReadModelProjector
         if (!mutated)
             return;
 
-        WorkflowExecutionProjectionMutations.RecordProjectedEvent(
+        WorkflowExecutionReportArtifactMutations.RecordProjectedEvent(
             report,
             observed.Id,
             ResolveObservedStateVersion(envelope, report.StateVersion));
-        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
+        WorkflowExecutionReportArtifactMutations.RefreshDerivedFields(report, now);
         await _writeDispatcher.UpsertAsync(report, ct);
     }
 
@@ -104,7 +104,7 @@ public sealed class WorkflowExecutionReadModelProjector
             report.EndedAt = completedAt;
         if (report.CompletionStatus == WorkflowExecutionCompletionStatus.Running)
             report.CompletionStatus = WorkflowExecutionCompletionStatus.Completed;
-        WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, completedAt);
+        WorkflowExecutionReportArtifactMutations.RefreshDerivedFields(report, completedAt);
         await _writeDispatcher.UpsertAsync(report, ct);
     }
 

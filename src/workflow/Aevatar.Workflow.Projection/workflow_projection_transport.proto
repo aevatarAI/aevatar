@@ -32,6 +32,26 @@ message WorkflowExecutionReport {
   WorkflowExecutionSummary summary_value = 24;
 }
 
+message WorkflowExecutionCurrentStateDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc_value = 4;
+  string root_actor_id = 5;
+  string command_id = 6;
+  string definition_actor_id = 7;
+  string run_id = 8;
+  string workflow_name = 9;
+  string status = 10;
+  bool compiled = 11;
+  string compilation_error = 12;
+  string input = 13;
+  string final_output = 14;
+  string final_error = 15;
+  int32 execution_state_count = 16;
+  google.protobuf.BoolValue success_wrapper = 17;
+}
+
 message WorkflowExecutionTopologyEdge {
   string parent = 1;
   string child = 2;

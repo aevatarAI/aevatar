@@ -5,26 +5,29 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
 {
-    private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _documentReader;
+    private readonly IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> _currentStateReader;
+    private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _reportReader;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
 
     public WorkflowProjectionQueryReader(
-        IProjectionDocumentReader<WorkflowExecutionReport, string> documentReader,
+        IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> currentStateReader,
+        IProjectionDocumentReader<WorkflowExecutionReport, string> reportReader,
         WorkflowExecutionReadModelMapper mapper,
         IProjectionGraphStore graphStore)
     {
-        _documentReader = documentReader;
-        _mapper = mapper;
-        _graphStore = graphStore;
+        _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
+        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
     }
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken ct = default)
     {
-        var report = await _documentReader.GetAsync(actorId, ct);
-        return report == null ? null : _mapper.ToActorSnapshot(report);
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
+        return currentState == null ? null : _mapper.ToActorSnapshot(currentState);
     }
 
     public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
@@ -32,13 +35,13 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var reports = await _documentReader.QueryAsync(
+        var currentStates = await _currentStateReader.QueryAsync(
             new ProjectionDocumentQuery
             {
                 Take = boundedTake,
             },
             ct);
-        return reports.Items
+        return currentStates.Items
             .Select(_mapper.ToActorSnapshot)
             .ToList();
     }
@@ -47,8 +50,8 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         string actorId,
         CancellationToken ct = default)
     {
-        var report = await _documentReader.GetAsync(actorId, ct);
-        return report == null ? null : _mapper.ToActorProjectionState(report);
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
+        return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
     }
 
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
@@ -57,7 +60,7 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var report = await _documentReader.GetAsync(actorId, ct);
+        var report = await _reportReader.GetAsync(actorId, ct);
         if (report == null)
             return [];
 

@@ -128,9 +128,13 @@ public class ProjectionStoreDispatcherTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
         public long StateVersion { get; set; }
 
         public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
 
         public string Value { get; set; } = "";
     }

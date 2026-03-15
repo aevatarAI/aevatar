@@ -72,6 +72,15 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
+bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
+
+if rg -n "WorkflowExecutionReadModelProjector|IWorkflowProjectionReadModelUpdater|WorkflowProjectionReadModelUpdater|WorkflowExecutionReportDocumentMetadataProvider|AddWorkflowExecutionProjectionReducer|AddWorkflowExecutionProjectionProjector|AddWorkflowExecutionProjectionExtensionsFromAssembly|WorkflowExecutionReportSnapshotMapper|WorkflowExecutionEventReducerBase|WorkflowExecutionProjectionMutations" src/workflow test/Aevatar.Workflow.Host.Api.Tests; then
+  echo "Legacy workflow readmodel naming is forbidden. Use artifact-oriented workflow projection names."
+  exit 1
+fi
+
 if rg -n "Projection:ReadModel:Bindings" src test; then
   echo "Projection:ReadModel:Bindings is forbidden. Use Projection:Document:* and Projection:Graph:* options."
   exit 1

@@ -13,12 +13,12 @@ Workflow 领域的 CQRS 读侧实现。当前投影已经切到 run-isolated 语
 
 ## 组成
 
-- `WorkflowExecutionReadModelProjector`
+- `WorkflowExecutionReportArtifactProjector`
 - `WorkflowExecutionAGUIEventProjector`
 - `WorkflowProjectionActivationService`
 - `WorkflowProjectionReleaseService`
 - `WorkflowProjectionQueryReader`
-- `WorkflowProjectionReadModelUpdater`
+- `WorkflowExecutionReportArtifactUpdater`
 
 ## 主链路
 
@@ -27,7 +27,7 @@ Workflow 领域的 CQRS 读侧实现。当前投影已经切到 run-isolated 语
 flowchart LR
   ES["WorkflowRunGAgent Envelope Stream"]
   COOR["ProjectionCoordinator"]
-  RM["WorkflowExecutionReadModelProjector"]
+  RM["WorkflowExecutionReportArtifactProjector"]
   AG["WorkflowExecutionAGUIEventProjector"]
   DOC["Document Store"]
   GRAPH["Graph Store"]

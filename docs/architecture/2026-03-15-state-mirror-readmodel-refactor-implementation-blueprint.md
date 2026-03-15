@@ -70,7 +70,7 @@
    - 这是对 actor2 已提交事实的读取
    - 查询语义由 readmodel 契约定义
    - 一致性要求是：
-     - 某个 `SourceVersion` 是否已物化可见
+     - 某个 `StateVersion` 是否已物化可见
      - 查询结果是否最终一致但诚实
      - 查询返回是否明确自己的版本水位
 
@@ -114,7 +114,7 @@ Projection 主链只保留一种 transport envelope：
 
 1. 它们都只表达同一个 actor 当前态的不同查询形态
 2. 它们都来自同一个 actor 的 committed state，以及由此产生的 `EventEnvelope<ProjectionPayload>`
-3. 它们都带同一个 `SourceVersion`
+3. 它们都带同一个 `StateVersion`
 4. 它们不能各自再推导出第二套业务状态机
 
 新增 readmodel 还必须满足：
@@ -241,14 +241,14 @@ sequenceDiagram
 最低必须包含：
 
 1. `ActorId`
-2. `SourceVersion`
+2. `StateVersion`
 3. `OccurredAtUtc`
 4. `SchemaVersion`
 5. `StateMirror` 或其他强类型 `ProjectionPayload`
 
 建议同时包含：
 
-1. `SourceEventId`
+1. `LastEventId`
 2. `CommandId`
 3. `CorrelationId`
 4. `Revision / DefinitionId`
@@ -259,7 +259,7 @@ actor-scoped readmodel 必须满足：
 
 1. 只服务单个 actor 当前态查询
 2. 能被单个 `ProjectionPayload` 确定性推进
-3. 持久化时保存 `ActorId + SourceVersion`
+3. 持久化时保存 `ActorId + StateVersion`
 4. 不依赖历史事件重算
 
 ### 5.3 主读模型与辅助读模型
@@ -294,13 +294,13 @@ actor-scoped readmodel 必须满足：
 每个 actor-scoped readmodel 必须保存：
 
 1. `ActorId`
-2. `SourceVersion`
+2. `StateVersion`
 3. `OccurredAtUtc`
-4. 可选 `SourceEventId`
+4. 可选 `LastEventId`
 
 其中：
 
-- `SourceVersion` 必须等于该 actor 权威状态对应的 committed version
+- `StateVersion` 必须等于该 actor 权威状态对应的 committed version
 - 禁止使用本地 `projection counter`
 - 禁止使用本地 `StateVersion++`
 
@@ -327,7 +327,7 @@ actor-scoped readmodel 必须满足：
 query 侧只允许：
 
 1. 直接读已物化 readmodel
-2. 返回该 readmodel 的 `SourceVersion`
+2. 返回该 readmodel 的 `StateVersion`
 3. 如有需要，显式暴露“最后物化时间”
 
 query 侧禁止：
@@ -373,7 +373,7 @@ query 侧禁止：
 1. `ProjectionPayload / state mirror payload` 的统一强类型基模
 2. 收紧后的 `IProjectionReadModel`
 3. 条件写接口：
-   - 按 `SourceVersion` 单调覆盖
+   - 按 `StateVersion` 单调覆盖
    - 返回 `Applied / Stale / Duplicate / Conflict`
 4. 独立 readmodel projector 的分发契约
 
@@ -383,6 +383,7 @@ query 侧禁止：
 2. 宽松的“只有 Id 就算 readmodel”根接口语义
 3. 允许 query/read path 触发 projection 生命周期的抽象
 4. 本地 projection counter 冒充 source version 的模型
+4. 本地 projection counter 冒充 state version 的模型
 5. 用 `sink role` 偷偷表达主次顺序的 runtime 设计
 
 ### 8.2 Projection Runtime
@@ -394,7 +395,7 @@ query 侧禁止：
 
 必须实现：
 
-1. 每个 readmodel 独立按 `SourceVersion` 条件覆盖
+1. 每个 readmodel 独立按 `StateVersion` 条件覆盖
 2. 同一 `EventEnvelope<ProjectionPayload>` 可驱动多个 projector 并行或顺序执行，但不再通过 `sink role` 表达主次
 3. 某个辅助 readmodel 写失败，只标记该 readmodel 降级，不回滚其他已成功 readmodel
 4. `Primary Query ReadModel` 是 query/application 层的显式依赖，不由 runtime sink 抽象隐式决定
@@ -409,14 +410,14 @@ query 侧禁止：
 
 所有 document provider 必须支持：
 
-1. 基于 `SourceVersion` 的条件 upsert
+1. 基于 `StateVersion` 的条件 upsert
 2. 幂等 duplicate 判定
 3. stale/conflict 的稳定结果类型
-4. 持久化 `SourceVersion`
+4. 持久化 `StateVersion`
 
 graph/index provider 的要求是：
 
-1. 仍保存相同 `SourceVersion`
+1. 仍保存相同 `StateVersion`
 2. 明确自己是辅助查询物化，不反向定义主事实
 3. 失败时可重试或后台补偿
 
@@ -426,7 +427,7 @@ graph/index provider 的要求是：
 
 1. 写侧 actor 直接发布 `WorkflowActorSnapshotCommitted`
 2. projection 直接写 `WorkflowActorSnapshotDocument`
-3. `card/list/graph` 由同一份 committed state 语义和同一 `SourceVersion` 派生
+3. `card/list/graph` 由同一份 committed state 语义和同一 `StateVersion` 派生
 
 需要新增：
 
@@ -434,7 +435,7 @@ graph/index provider 的要求是：
 2. `WorkflowActorSnapshotDocument`
 3. `WorkflowActorSnapshotProjector`
 4. `WorkflowActorSnapshotDocumentMapper`
-5. 基于 `SourceVersion` 的 writer 逻辑
+5. 基于 `StateVersion` 的 writer 逻辑
 
 需要迁移的查询入口：
 
@@ -446,8 +447,8 @@ graph/index provider 的要求是：
 
 需要删除或降级：
 
-1. `WorkflowExecutionReadModelProjector` 的当前态职责
-2. `WorkflowExecutionProjectionMutations.cs` 中本地 `StateVersion++`
+1. `WorkflowExecutionReportArtifactProjector` 的旧当前态职责
+2. `WorkflowExecutionReportArtifactMutations.cs` 中旧的本地版本推进逻辑
 3. 当前态与 timeline/report 混写模式
 
 ### 8.5 Scripting
@@ -462,7 +463,7 @@ graph/index provider 的要求是：
 
 1. `scripting` state-mirror proto
 2. projection-payload projector
-3. 基于 `SourceVersion` 的覆盖写
+3. 基于 `StateVersion` 的覆盖写
 
 需要删除：
 
@@ -499,7 +500,7 @@ graph/index provider 的要求是：
 ### Phase 1：打基础设施底座
 
 1. 引入 readmodel 条件写结果模型
-2. provider 实现 `SourceVersion` 条件覆盖
+2. provider 实现 `StateVersion` 条件覆盖
 3. projection 分发改为“同一 `EventEnvelope<ProjectionPayload>` -> 多个独立 readmodel projector”
 
 完成标准：
@@ -547,7 +548,7 @@ graph/index provider 的要求是：
 2. 禁止 current-state projector 依赖“读旧文档 + 当前事件”规约当前态
 3. 禁止本地 `StateVersion++` 出现在 current-state readmodel 路径
 4. 禁止新增通用 `history/aggregate view` 作为默认 readmodel
-5. 要求 actor-scoped readmodel 持久化 `SourceVersion`
+5. 要求 actor-scoped readmodel 持久化 `StateVersion`
 
 ## 11. 验收标准
 
@@ -585,7 +586,7 @@ graph/index provider 的要求是：
 
 1. 先迁当前态主查询，再删旧路径
 2. 先迁主查询 readmodel，再补辅助 readmodel
-3. 所有 actor-scoped readmodel 统一带 `SourceVersion`
+3. 所有 actor-scoped readmodel 统一带 `StateVersion`
 4. 以门禁约束防止旧设计回流
 
 ## 13. 最终落点

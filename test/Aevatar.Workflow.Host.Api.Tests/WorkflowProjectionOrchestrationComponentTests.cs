@@ -303,6 +303,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-2",
             RootActorId = "actor-2",
             CommandId = "cmd-old",
             WorkflowName = "old-workflow",
@@ -318,7 +319,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
                 new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
             });
-        var updater = new WorkflowProjectionReadModelUpdater(
+        var updater = new WorkflowExecutionReportArtifactUpdater(
             dispatcher,
             store,
             new FixedClock(stoppedAt));
@@ -359,6 +360,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-unknown",
             RootActorId = "actor-unknown",
             CommandId = "cmd-unknown",
             WorkflowName = "workflow",
@@ -373,7 +375,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
                 new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
             });
-        var updater = new WorkflowProjectionReadModelUpdater(
+        var updater = new WorkflowExecutionReportArtifactUpdater(
             dispatcher,
             store,
             new FixedClock(stoppedAt));
@@ -393,6 +395,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var store = CreateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-3",
             RootActorId = "actor-3",
             CommandId = "cmd-3",
             WorkflowName = "direct",
@@ -426,7 +429,22 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 RoleReplyCount = 1,
             },
         });
+        var currentStateStore = CreateCurrentStateStore();
+        await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-3",
+            RootActorId = "actor-3",
+            CommandId = "cmd-3",
+            WorkflowName = "demo",
+            Status = "completed",
+            FinalOutput = "done",
+            Success = true,
+            StateVersion = 3,
+            LastEventId = "evt-3",
+            UpdatedAt = new DateTimeOffset(2026, 2, 21, 10, 5, 0, TimeSpan.Zero),
+        });
         var reader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             new WorkflowExecutionReadModelMapper(),
             new InMemoryProjectionGraphStore());
@@ -440,7 +458,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         projectionState.Should().NotBeNull();
         projectionState!.LastCommandId.Should().Be("cmd-3");
         snapshot.LastOutput.Should().Be("done");
-        snapshot.TotalSteps.Should().Be(3);
+        snapshot.TotalSteps.Should().Be(0);
         timeline.Should().HaveCount(2);
         timeline[0].Stage.Should().Be("step-3");
         timeline[1].Stage.Should().Be("step-2");
@@ -450,13 +468,24 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task QueryReader_GraphQueries_ShouldRespectDirectionFiltersAndBounds()
     {
         var store = CreateStore();
+        var currentStateStore = CreateCurrentStateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-graph",
             RootActorId = "actor-graph",
             WorkflowName = "direct",
             CommandId = "cmd-graph",
             StartedAt = DateTimeOffset.UtcNow,
             Summary = new WorkflowExecutionSummary(),
+        });
+        await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-graph",
+            RootActorId = "actor-graph",
+            CommandId = "cmd-graph",
+            WorkflowName = "direct",
+            Status = "running",
+            UpdatedAt = DateTimeOffset.UtcNow,
         });
 
         var graphStore = new InMemoryProjectionGraphStore();
@@ -512,6 +541,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         });
 
         var reader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             new WorkflowExecutionReadModelMapper(),
             graphStore);
@@ -562,8 +592,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task QueryReader_GetActorGraphEnrichedSnapshotAsync_ShouldReturnNullForMissingSnapshot_AndComposeWhenExists()
     {
         var store = CreateStore();
+        var currentStateStore = CreateCurrentStateStore();
         var graphStore = new InMemoryProjectionGraphStore();
         var reader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             new WorkflowExecutionReadModelMapper(),
             graphStore);
@@ -574,6 +606,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var now = DateTimeOffset.UtcNow;
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-enriched",
             RootActorId = "actor-enriched",
             WorkflowName = "wf-enriched",
             CommandId = "cmd-enriched",
@@ -585,6 +618,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                 CompletedSteps = 1,
                 RoleReplyCount = 0,
             },
+        });
+        await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-enriched",
+            RootActorId = "actor-enriched",
+            CommandId = "cmd-enriched",
+            WorkflowName = "wf-enriched",
+            Status = "running",
+            UpdatedAt = now,
         });
         await graphStore.UpsertNodeAsync(new ProjectionGraphNode
         {
@@ -606,8 +648,10 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var now = DateTimeOffset.UtcNow;
         var store = CreateStore();
+        var currentStateStore = CreateCurrentStateStore();
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-a",
             RootActorId = "actor-a",
             WorkflowName = "wf",
             CommandId = "cmd-a",
@@ -623,16 +667,36 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             ],
             Summary = new WorkflowExecutionSummary(),
         });
+        await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-a",
+            RootActorId = "actor-a",
+            CommandId = "cmd-a",
+            WorkflowName = "wf",
+            Status = "running",
+            UpdatedAt = now.AddMinutes(-1),
+        });
         await store.UpsertAsync(new WorkflowExecutionReport
         {
+            Id = "actor-b",
             RootActorId = "actor-b",
             WorkflowName = "wf",
             CommandId = "cmd-b",
             StartedAt = now.AddMinutes(-1),
             Summary = new WorkflowExecutionSummary(),
         });
+        await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-b",
+            RootActorId = "actor-b",
+            CommandId = "cmd-b",
+            WorkflowName = "wf",
+            Status = "running",
+            UpdatedAt = now,
+        });
 
         var reader = new WorkflowProjectionQueryReader(
+            currentStateStore,
             store,
             new WorkflowExecutionReadModelMapper(),
             new InMemoryProjectionGraphStore());
@@ -911,13 +975,18 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);
 
+    private static InMemoryProjectionDocumentStore<WorkflowExecutionCurrentStateDocument, string> CreateCurrentStateStore() => new(
+        keySelector: document => document.RootActorId,
+        keyFormatter: key => key,
+        defaultSortSelector: document => document.UpdatedAt);
+
     private static WorkflowExecutionRuntimeLease CreateLease(
         string actorId,
         string commandId,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
-        IWorkflowProjectionReadModelUpdater? readModelUpdater = null) => new(
+        IWorkflowExecutionReportArtifactUpdater? readModelUpdater = null) => new(
         new WorkflowExecutionProjectionContext
         {
             ProjectionId = actorId,
@@ -1073,7 +1142,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
     }
 
-    private sealed class RecordingReadModelUpdater : IWorkflowProjectionReadModelUpdater
+    private sealed class RecordingReadModelUpdater : IWorkflowExecutionReportArtifactUpdater
     {
         public List<(string ActorId, WorkflowExecutionProjectionContext Context)> Refreshed { get; } = [];
         public List<string> MarkStoppedActorIds { get; } = [];

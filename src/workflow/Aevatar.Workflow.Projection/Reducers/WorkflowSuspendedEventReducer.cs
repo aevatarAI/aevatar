@@ -3,7 +3,7 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Reducers;
 
-public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReducerBase<WorkflowSuspendedEvent>
+public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionReportArtifactReducerBase<WorkflowSuspendedEvent>
 {
     protected override bool Reduce(
         WorkflowExecutionReport report,
@@ -12,7 +12,7 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
         WorkflowSuspendedEvent evt,
         DateTimeOffset now)
     {
-        var step = WorkflowExecutionProjectionMutations.GetOrCreateStep(report, evt.StepId);
+        var step = WorkflowExecutionReportArtifactMutations.GetOrCreateStep(report, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
         step.SuspensionPrompt = evt.Prompt ?? string.Empty;
         step.SuspensionTimeoutSeconds = evt.TimeoutSeconds;
@@ -27,7 +27,7 @@ public sealed class WorkflowSuspendedEventReducer : WorkflowExecutionEventReduce
         if (!string.IsNullOrWhiteSpace(evt.VariableName))
             data["variable_name"] = evt.VariableName;
 
-        WorkflowExecutionProjectionMutations.AddTimeline(
+        WorkflowExecutionReportArtifactMutations.AddTimeline(
             report,
             now,
             "workflow.suspended",

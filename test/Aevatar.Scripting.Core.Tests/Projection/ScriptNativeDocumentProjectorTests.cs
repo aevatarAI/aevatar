@@ -72,6 +72,8 @@ public sealed class ScriptNativeDocumentProjectorTests
         nativeDocument.Id.Should().Be("runtime-1");
         nativeDocument.SchemaId.Should().Be("script_profile");
         nativeDocument.DocumentIndexScope.Should().StartWith("script-native-script-profile-");
+        nativeDocument.StateVersion.Should().Be(7);
+        nativeDocument.LastEventId.Should().Be("evt-1");
         nativeDocument.Fields["actor_id"].Should().Be("actor-1");
         nativeDocument.Fields["policy_id"].Should().Be("policy-1");
         nativeDocument.Fields["tags"].Should().BeAssignableTo<IReadOnlyList<object?>>();
