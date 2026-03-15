@@ -1,3 +1,6 @@
+ignore:
+  - "tools/**"
+
 comment:
   layout: "diff, flags, files"
   behavior: default
