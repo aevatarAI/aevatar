@@ -21,4 +21,10 @@ public sealed class DefaultServiceCommandTargetProvisioner : ActorTargetProvisio
 
     public Task<string> EnsureDeploymentTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
         EnsureActorAsync<ServiceDeploymentManagerGAgent>(ServiceActorIds.Deployment(identity), ct);
+
+    public Task<string> EnsureServingSetTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+        EnsureActorAsync<ServiceServingSetManagerGAgent>(ServiceActorIds.ServingSet(identity), ct);
+
+    public Task<string> EnsureRolloutTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+        EnsureActorAsync<ServiceRolloutManagerGAgent>(ServiceActorIds.Rollout(identity), ct);
 }

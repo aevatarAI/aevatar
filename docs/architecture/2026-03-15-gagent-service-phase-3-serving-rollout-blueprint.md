@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
-- 版本：R2
+- 状态：Implemented
+- 版本：R3
 - 日期：2026-03-15
 - 关联文档：
   - `AGENTS.md`
@@ -428,6 +428,43 @@ Phase 3 完成时，应满足：
 3. rollout 有独立 actor、独立事件、独立读模型
 4. `publish / activate / invoke / rollout` 四条主链全部进入统一 CQRS/Projection 主链
 5. 可以明确暂停、继续、回滚 rollout，而不依赖手工脚本或 host 内临时逻辑
+
+### 16.1 当前实现落点
+
+当前仓库已经按本蓝图完成落地，核心入口如下：
+
+1. `ServiceServingSetManagerGAgent`
+   - `src/platform/Aevatar.GAgentService.Core/GAgents/ServiceServingSetManagerGAgent.cs`
+2. `ServiceRolloutManagerGAgent`
+   - `src/platform/Aevatar.GAgentService.Core/GAgents/ServiceRolloutManagerGAgent.cs`
+3. `ServiceDeploymentManagerGAgent`
+   - `src/platform/Aevatar.GAgentService.Core/GAgents/ServiceDeploymentManagerGAgent.cs`
+4. serving/rollout/traffic projection
+   - `src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceDeploymentCatalogProjector.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceServingSetProjector.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceRolloutProjector.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceTrafficViewProjector.cs`
+5. serving/rollout/traffic query facade
+   - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceDeploymentCatalogQueryReader.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceServingSetQueryReader.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceRolloutQueryReader.cs`
+   - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceTrafficViewQueryReader.cs`
+6. hosting API
+   - `src/platform/Aevatar.GAgentService.Hosting/Endpoints/ServicePhase3Endpoints.cs`
+
+### 16.2 当前验证结果
+
+本阶段代码收口时，以下验证已通过：
+
+1. `dotnet build aevatar.slnx --nologo --disable-build-servers -m:1`
+2. `dotnet test aevatar.slnx --nologo --no-build --disable-build-servers -m:1`
+3. `bash tools/ci/architecture_guards.sh`
+4. `bash tools/ci/test_stability_guards.sh`
+5. `bash tools/ci/projection_route_mapping_guard.sh`
+6. `bash tools/ci/solution_split_guards.sh`
+7. `bash tools/ci/solution_split_test_guards.sh`
+8. `bash tools/ci/code_metrics_analyzer_guard.sh`
+9. `bash tools/ci/coverage_quality_guard.sh`
 
 ## 17. 下一阶段展望
 

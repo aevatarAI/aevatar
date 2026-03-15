@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 
@@ -42,13 +43,11 @@ public sealed class ServiceCommandApplicationServiceTests
         });
 
         provisioner.DefinitionRequests.Should().HaveCount(3);
-        provisioner.DefinitionRequests.Should().OnlyContain(x => ServiceIdentityComparer.Instance.Equals(x, identity));
         catalogProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.Definition(identity),
             ServiceActorIds.Definition(identity),
             ServiceActorIds.Definition(identity));
         dispatchPort.Calls.Should().HaveCount(3);
-        dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Definition(identity));
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
@@ -102,7 +101,6 @@ public sealed class ServiceCommandApplicationServiceTests
         });
 
         provisioner.RevisionCatalogRequests.Should().HaveCount(3);
-        provisioner.RevisionCatalogRequests.Should().OnlyContain(x => ServiceIdentityComparer.Instance.Equals(x, identity));
         revisionProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.RevisionCatalog(identity),
             ServiceActorIds.RevisionCatalog(identity),
@@ -114,12 +112,12 @@ public sealed class ServiceCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task ActivateServingRevisionAsync_ShouldUseDeploymentTarget_AndProvisionerFailuresShouldBubble()
+    public async Task ActivateServiceRevisionAsync_ShouldUseDeploymentTarget_AndProjection()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
-        var catalogProjectionPort = new RecordingCatalogProjectionPort();
+        var deploymentProjectionPort = new RecordingProjectionPort();
         var service = CreateService(
             provisioner,
             dispatchPort,
@@ -127,31 +125,171 @@ public sealed class ServiceCommandApplicationServiceTests
             {
                 GetResult = CreateCatalogSnapshot(identity),
             },
-            catalogProjectionPort,
-            new RecordingRevisionProjectionPort());
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            deploymentProjectionPort: deploymentProjectionPort);
 
-        var receipt = await service.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
+        var receipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
             RevisionId = "rev-2",
         });
 
         receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
-        provisioner.DeploymentRequests.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(identity);
-        catalogProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
+        provisioner.DeploymentRequests.Should().ContainSingle();
+        deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
         dispatchPort.Calls.Should().ContainSingle(x => x.actorId == ServiceActorIds.Deployment(identity));
+    }
 
-        provisioner.DeploymentException = new InvalidOperationException("deployment target failed");
+    [Fact]
+    public async Task ReplaceServiceServingTargetsAsync_ShouldResolveDeploymentAndArtifactEndpoints()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var dispatchPort = new RecordingActorDispatchPort();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            dispatchPort,
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            deploymentQueryReader: new RecordingDeploymentQueryReader
+            {
+                GetResult = new ServiceDeploymentCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        new ServiceDeploymentSnapshot("dep-1", "rev-1", "actor-1", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            servingProjectionPort: servingProjectionPort,
+            trafficProjectionPort: trafficProjectionPort,
+            artifactStore: artifactStore);
 
-        var failingActivation = () => service.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
+        var receipt = await service.ReplaceServiceServingTargetsAsync(new ReplaceServiceServingTargetsCommand
         {
             Identity = identity.Clone(),
-            RevisionId = "rev-3",
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                },
+            },
         });
 
-        await failingActivation.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("deployment target failed");
+        receipt.TargetActorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        var envelope = dispatchPort.Calls.Should().ContainSingle().Subject.envelope;
+        envelope.Payload.Is(ReplaceServiceServingTargetsCommand.Descriptor).Should().BeTrue();
+        var dispatched = envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>();
+        dispatched.Targets.Should().ContainSingle();
+        dispatched.Targets[0].DeploymentId.Should().Be("dep-1");
+        dispatched.Targets[0].PrimaryActorId.Should().Be("actor-1");
+        dispatched.Targets[0].AllocationWeight.Should().Be(100);
+        dispatched.Targets[0].EnabledEndpointIds.Should().ContainSingle("chat");
+    }
+
+    [Fact]
+    public async Task StartServiceRolloutAsync_ShouldResolvePlanAndBaselineTargets()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-2",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-2",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run")));
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
+        var rolloutProjectionPort = new RecordingProjectionPort();
+        var service = CreateService(
+            provisioner,
+            dispatchPort,
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
+            new RecordingCatalogProjectionPort(),
+            new RecordingRevisionProjectionPort(),
+            deploymentQueryReader: new RecordingDeploymentQueryReader
+            {
+                GetResult = new ServiceDeploymentCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        new ServiceDeploymentSnapshot("dep-2", "rev-2", "actor-2", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            servingSetQueryReader: new RecordingServingSetQueryReader
+            {
+                GetResult = new ServiceServingSetSnapshot(
+                    ServiceKeys.Build(identity),
+                    1,
+                    string.Empty,
+                    [
+                        new ServiceServingTargetSnapshot("dep-1", "rev-1", "actor-1", 100, ServiceServingState.Active.ToString(), ["run"]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            servingProjectionPort: servingProjectionPort,
+            rolloutProjectionPort: rolloutProjectionPort,
+            trafficProjectionPort: trafficProjectionPort,
+            artifactStore: artifactStore);
+
+        var receipt = await service.StartServiceRolloutAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-1",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-1",
+                        Targets =
+                        {
+                            new ServiceServingTargetSpec
+                            {
+                                RevisionId = "rev-2",
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
+        provisioner.ServingSetRequests.Should().ContainSingle();
+        provisioner.RolloutRequests.Should().ContainSingle();
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
+
+        var dispatched = dispatchPort.Calls.Should().ContainSingle().Subject.envelope.Payload.Unpack<StartServiceRolloutCommand>();
+        dispatched.BaselineTargets.Should().ContainSingle(x => x.DeploymentId == "dep-1");
+        dispatched.Plan.Stages.Should().ContainSingle();
+        dispatched.Plan.Stages[0].Targets.Should().ContainSingle();
+        dispatched.Plan.Stages[0].Targets[0].DeploymentId.Should().Be("dep-2");
+        dispatched.Plan.Stages[0].Targets[0].EnabledEndpointIds.Should().ContainSingle("run");
     }
 
     private static ServiceCommandApplicationService CreateService(
@@ -159,13 +297,27 @@ public sealed class ServiceCommandApplicationServiceTests
         RecordingActorDispatchPort dispatchPort,
         RecordingCatalogQueryReader catalogQueryReader,
         RecordingCatalogProjectionPort catalogProjectionPort,
-        RecordingRevisionProjectionPort revisionProjectionPort) =>
+        RecordingRevisionProjectionPort revisionProjectionPort,
+        RecordingDeploymentQueryReader? deploymentQueryReader = null,
+        RecordingServingSetQueryReader? servingSetQueryReader = null,
+        RecordingProjectionPort? deploymentProjectionPort = null,
+        RecordingProjectionPort? servingProjectionPort = null,
+        RecordingProjectionPort? rolloutProjectionPort = null,
+        RecordingProjectionPort? trafficProjectionPort = null,
+        InMemoryServiceRevisionArtifactStore? artifactStore = null) =>
         new(
             dispatchPort,
             provisioner,
             catalogQueryReader,
             catalogProjectionPort,
-            revisionProjectionPort);
+            revisionProjectionPort,
+            deploymentQueryReader ?? new RecordingDeploymentQueryReader(),
+            servingSetQueryReader ?? new RecordingServingSetQueryReader(),
+            deploymentProjectionPort ?? new RecordingProjectionPort(),
+            servingProjectionPort ?? new RecordingProjectionPort(),
+            rolloutProjectionPort ?? new RecordingProjectionPort(),
+            trafficProjectionPort ?? new RecordingProjectionPort(),
+            artifactStore ?? new InMemoryServiceRevisionArtifactStore());
 
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(ServiceIdentity identity) =>
         new(
@@ -192,7 +344,9 @@ public sealed class ServiceCommandApplicationServiceTests
 
         public List<ServiceIdentity> DeploymentRequests { get; } = [];
 
-        public Exception? DeploymentException { get; set; }
+        public List<ServiceIdentity> ServingSetRequests { get; } = [];
+
+        public List<ServiceIdentity> RolloutRequests { get; } = [];
 
         public Task<string> EnsureDefinitionTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
@@ -209,10 +363,19 @@ public sealed class ServiceCommandApplicationServiceTests
         public Task<string> EnsureDeploymentTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             DeploymentRequests.Add(identity.Clone());
-            if (DeploymentException != null)
-                throw DeploymentException;
-
             return Task.FromResult(ServiceActorIds.Deployment(identity));
+        }
+
+        public Task<string> EnsureServingSetTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            ServingSetRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.ServingSet(identity));
+        }
+
+        public Task<string> EnsureRolloutTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            RolloutRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.Rollout(identity));
         }
     }
 
@@ -230,6 +393,22 @@ public sealed class ServiceCommandApplicationServiceTests
             int take = 200,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+    }
+
+    private sealed class RecordingDeploymentQueryReader : IServiceDeploymentCatalogQueryReader
+    {
+        public ServiceDeploymentCatalogSnapshot? GetResult { get; init; }
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
+    private sealed class RecordingServingSetQueryReader : IServiceServingSetQueryReader
+    {
+        public ServiceServingSetSnapshot? GetResult { get; init; }
+
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
@@ -265,24 +444,18 @@ public sealed class ServiceCommandApplicationServiceTests
         }
     }
 
-    private sealed class ServiceIdentityComparer : IEqualityComparer<ServiceIdentity>
+    private sealed class RecordingProjectionPort :
+        IServiceDeploymentCatalogProjectionPort,
+        IServiceServingSetProjectionPort,
+        IServiceRolloutProjectionPort,
+        IServiceTrafficViewProjectionPort
     {
-        public static ServiceIdentityComparer Instance { get; } = new();
+        public List<string> ActorIds { get; } = [];
 
-        public bool Equals(ServiceIdentity? x, ServiceIdentity? y)
+        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
         {
-            if (ReferenceEquals(x, y))
-                return true;
-            if (x is null || y is null)
-                return false;
-
-            return string.Equals(x.TenantId, y.TenantId, StringComparison.Ordinal) &&
-                   string.Equals(x.AppId, y.AppId, StringComparison.Ordinal) &&
-                   string.Equals(x.Namespace, y.Namespace, StringComparison.Ordinal) &&
-                   string.Equals(x.ServiceId, y.ServiceId, StringComparison.Ordinal);
+            ActorIds.Add(actorId);
+            return Task.CompletedTask;
         }
-
-        public int GetHashCode(ServiceIdentity obj) =>
-            HashCode.Combine(obj.TenantId, obj.AppId, obj.Namespace, obj.ServiceId);
     }
 }

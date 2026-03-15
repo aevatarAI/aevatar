@@ -33,7 +33,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     }
 
     [EventHandler]
-    public async Task HandleActivateAsync(ActivateServingRevisionCommand command)
+    public async Task HandleActivateAsync(ActivateServiceRevisionCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureDeploymentIdentity(command.Identity, allowInitialize: true);
@@ -53,24 +53,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             CancellationToken.None);
         EnsureActivationAllowed(admissionDecision);
 
-        if (!string.IsNullOrWhiteSpace(currentState.ActiveDeploymentId) &&
-            !string.IsNullOrWhiteSpace(currentState.PrimaryActorId))
+        var existingActive = currentState.Deployments.Values.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, command.RevisionId, StringComparison.Ordinal) &&
+            x.Status == ServiceDeploymentStatus.Active &&
+            !string.IsNullOrWhiteSpace(x.PrimaryActorId));
+        if (existingActive != null)
         {
-            await _runtimeActivator.DeactivateAsync(
-                new ServiceRuntimeDeactivationRequest(
-                    command.Identity.Clone(),
-                    currentState.ActiveDeploymentId,
-                    currentState.ActiveRevisionId,
-                    currentState.PrimaryActorId),
-                CancellationToken.None);
-
-            await PersistDomainEventAsync(new ServiceDeploymentDeactivatedEvent
-            {
-                Identity = command.Identity.Clone(),
-                DeploymentId = currentState.ActiveDeploymentId,
-                RevisionId = currentState.ActiveRevisionId,
-                DeactivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            });
+            return;
         }
 
         var activation = await _runtimeActivator.ActivateAsync(
@@ -98,23 +87,29 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureDeploymentIdentity(command.Identity, allowInitialize: false);
-        var currentState = State.Clone();
-        if (string.IsNullOrWhiteSpace(currentState.ActiveDeploymentId) || string.IsNullOrWhiteSpace(currentState.PrimaryActorId))
+        if (string.IsNullOrWhiteSpace(command.DeploymentId))
+            throw new InvalidOperationException("deployment_id is required.");
+
+        if (!State.Deployments.TryGetValue(command.DeploymentId, out var deployment) ||
+            string.IsNullOrWhiteSpace(deployment.PrimaryActorId) ||
+            deployment.Status != ServiceDeploymentStatus.Active)
+        {
             return;
+        }
 
         await _runtimeActivator.DeactivateAsync(
             new ServiceRuntimeDeactivationRequest(
                 command.Identity.Clone(),
-                currentState.ActiveDeploymentId,
-                currentState.ActiveRevisionId,
-                currentState.PrimaryActorId),
+                deployment.DeploymentId,
+                deployment.RevisionId,
+                deployment.PrimaryActorId),
             CancellationToken.None);
 
         await PersistDomainEventAsync(new ServiceDeploymentDeactivatedEvent
         {
             Identity = command.Identity.Clone(),
-            DeploymentId = currentState.ActiveDeploymentId,
-            RevisionId = currentState.ActiveRevisionId,
+            DeploymentId = deployment.DeploymentId,
+            RevisionId = deployment.RevisionId,
             DeactivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
@@ -131,12 +126,15 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     {
         var next = state.Clone();
         next.Identity = evt.Identity?.Clone() ?? new ServiceIdentity();
-        next.ActiveDeploymentId = evt.DeploymentId ?? string.Empty;
-        next.ActiveRevisionId = evt.RevisionId ?? string.Empty;
-        next.PrimaryActorId = evt.PrimaryActorId ?? string.Empty;
-        next.Status = evt.Status;
-        next.ActivatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        next.UpdatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        next.Deployments[evt.DeploymentId] = new ServiceDeploymentRecord
+        {
+            DeploymentId = evt.DeploymentId ?? string.Empty,
+            RevisionId = evt.RevisionId ?? string.Empty,
+            PrimaryActorId = evt.PrimaryActorId ?? string.Empty,
+            Status = evt.Status,
+            ActivatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            UpdatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+        };
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "activated");
         return next;
@@ -146,8 +144,19 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     {
         var next = state.Clone();
         next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
-        next.Status = ServiceDeploymentStatus.Deactivated;
-        next.UpdatedAt = evt.DeactivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        if (next.Deployments.TryGetValue(evt.DeploymentId, out var deployment))
+        {
+            next.Deployments[evt.DeploymentId] = new ServiceDeploymentRecord
+            {
+                DeploymentId = deployment.DeploymentId,
+                RevisionId = deployment.RevisionId,
+                PrimaryActorId = deployment.PrimaryActorId,
+                Status = ServiceDeploymentStatus.Deactivated,
+                ActivatedAt = deployment.ActivatedAt?.Clone(),
+                UpdatedAt = evt.DeactivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            };
+        }
+
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "deactivated");
         return next;
@@ -156,8 +165,19 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private static ServiceDeploymentState ApplyHealthChanged(ServiceDeploymentState state, ServiceDeploymentHealthChangedEvent evt)
     {
         var next = state.Clone();
-        next.Status = evt.Status;
-        next.UpdatedAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow);
+        if (next.Deployments.TryGetValue(evt.DeploymentId, out var deployment))
+        {
+            next.Deployments[evt.DeploymentId] = new ServiceDeploymentRecord
+            {
+                DeploymentId = deployment.DeploymentId,
+                RevisionId = deployment.RevisionId,
+                PrimaryActorId = deployment.PrimaryActorId,
+                Status = evt.Status,
+                ActivatedAt = deployment.ActivatedAt?.Clone(),
+                UpdatedAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            };
+        }
+
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "health");
         return next;

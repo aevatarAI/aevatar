@@ -28,7 +28,35 @@ public interface IServiceCommandPort
         SetDefaultServingRevisionCommand command,
         CancellationToken ct = default);
 
-    Task<ServiceCommandAcceptedReceipt> ActivateServingRevisionAsync(
-        ActivateServingRevisionCommand command,
+    Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
+        ActivateServiceRevisionCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(
+        DeactivateServiceDeploymentCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(
+        ReplaceServiceServingTargetsCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(
+        StartServiceRolloutCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(
+        AdvanceServiceRolloutCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(
+        PauseServiceRolloutCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(
+        ResumeServiceRolloutCommand command,
+        CancellationToken ct = default);
+
+    Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(
+        RollbackServiceRolloutCommand command,
         CancellationToken ct = default);
 }

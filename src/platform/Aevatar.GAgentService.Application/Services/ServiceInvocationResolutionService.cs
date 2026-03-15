@@ -8,13 +8,16 @@ namespace Aevatar.GAgentService.Application.Services;
 public sealed class ServiceInvocationResolutionService
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
+    private readonly IServiceTrafficViewQueryReader _trafficViewQueryReader;
     private readonly IServiceRevisionArtifactStore _artifactStore;
 
     public ServiceInvocationResolutionService(
         IServiceCatalogQueryReader catalogQueryReader,
+        IServiceTrafficViewQueryReader trafficViewQueryReader,
         IServiceRevisionArtifactStore artifactStore)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
+        _trafficViewQueryReader = trafficViewQueryReader ?? throw new ArgumentNullException(nameof(trafficViewQueryReader));
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
     }
 
@@ -31,16 +34,17 @@ public sealed class ServiceInvocationResolutionService
         var serviceKey = ServiceKeys.Build(request.Identity);
         var definition = await _catalogQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Service '{serviceKey}' was not found.");
-        if (string.IsNullOrWhiteSpace(definition.ActiveServingRevisionId) ||
-            string.IsNullOrWhiteSpace(definition.PrimaryActorId) ||
-            !string.Equals(definition.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"Service '{serviceKey}' has no active deployment.");
-        }
+        var trafficView = await _trafficViewQueryReader.GetAsync(request.Identity, ct)
+            ?? throw new InvalidOperationException($"Service '{serviceKey}' has no serving traffic view.");
+        var endpointView = trafficView.Endpoints.FirstOrDefault(x =>
+            string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
+        if (endpointView == null || endpointView.Targets.Count == 0)
+            throw new InvalidOperationException($"Endpoint '{request.EndpointId}' has no serving target on service '{serviceKey}'.");
 
-        var artifact = await _artifactStore.GetAsync(serviceKey, definition.ActiveServingRevisionId, ct)
+        var selectedTarget = SelectTarget(endpointView.Targets, request);
+        var artifact = await _artifactStore.GetAsync(serviceKey, selectedTarget.RevisionId, ct)
             ?? throw new InvalidOperationException(
-                $"Prepared artifact for '{serviceKey}' revision '{definition.ActiveServingRevisionId}' was not found.");
+                $"Prepared artifact for '{serviceKey}' revision '{selectedTarget.RevisionId}' was not found.");
         var endpoint = artifact.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
         if (endpoint == null)
@@ -49,12 +53,55 @@ public sealed class ServiceInvocationResolutionService
         return new ServiceInvocationResolvedTarget(
             new ServiceInvocationResolvedService(
                 serviceKey,
-                definition.ActiveServingRevisionId,
-                definition.DeploymentId,
-                definition.PrimaryActorId,
-                definition.DeploymentStatus,
+                selectedTarget.RevisionId,
+                selectedTarget.DeploymentId,
+                selectedTarget.PrimaryActorId,
+                selectedTarget.ServingState,
                 definition.PolicyIds),
             artifact,
             endpoint);
+    }
+
+    private static ServiceTrafficTargetSnapshot SelectTarget(
+        IReadOnlyList<ServiceTrafficTargetSnapshot> targets,
+        ServiceInvocationRequest request)
+    {
+        var activeTargets = targets
+            .Where(x => x.AllocationWeight > 0 && string.Equals(x.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal))
+            .ToList();
+        if (activeTargets.Count == 0)
+            throw new InvalidOperationException("No active serving targets are available.");
+
+        var totalWeight = activeTargets.Sum(x => x.AllocationWeight);
+        var seed = request.CommandId;
+        if (string.IsNullOrWhiteSpace(seed))
+            seed = request.CorrelationId;
+        if (string.IsNullOrWhiteSpace(seed))
+            seed = request.EndpointId;
+
+        var slot = (int)(ComputeDeterministicHash(seed ?? string.Empty) % (uint)totalWeight);
+        var cumulative = 0;
+        foreach (var target in activeTargets)
+        {
+            cumulative += target.AllocationWeight;
+            if (slot < cumulative)
+                return target;
+        }
+
+        return activeTargets[^1];
+    }
+
+    private static uint ComputeDeterministicHash(string value)
+    {
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+        var hash = offsetBasis;
+        foreach (var ch in value)
+        {
+            hash ^= ch;
+            hash *= prime;
+        }
+
+        return hash;
     }
 }

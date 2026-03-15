@@ -34,13 +34,33 @@ public sealed class ServiceInvocationApplicationServiceTests
                     identity.Namespace,
                     identity.ServiceId,
                     "Orders",
-                    "r1",
-                    "r1",
-                    "dep-1",
-                    "actor-1",
-                    ServiceDeploymentStatus.Active.ToString(),
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    ServiceDeploymentStatus.Unspecified.ToString(),
                     [],
                     ["service-policy"],
+                    DateTimeOffset.UtcNow),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    1,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "chat",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    100,
+                                    ServiceServingState.Active.ToString()),
+                            ]),
+                    ],
                     DateTimeOffset.UtcNow),
             },
             artifactStore);
@@ -81,6 +101,14 @@ public sealed class ServiceInvocationApplicationServiceTests
             int take = 200,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+    }
+
+    private sealed class RecordingTrafficViewQueryReader : IServiceTrafficViewQueryReader
+    {
+        public ServiceTrafficViewSnapshot? GetResult { get; init; }
+
+        public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
     }
 
     private sealed class RecordingAuthorizer : IInvokeAdmissionAuthorizer

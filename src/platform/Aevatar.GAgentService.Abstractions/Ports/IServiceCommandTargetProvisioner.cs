@@ -15,4 +15,12 @@ public interface IServiceCommandTargetProvisioner
     Task<string> EnsureDeploymentTargetAsync(
         ServiceIdentity identity,
         CancellationToken ct = default);
+
+    Task<string> EnsureServingSetTargetAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
+
+    Task<string> EnsureRolloutTargetAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
 }

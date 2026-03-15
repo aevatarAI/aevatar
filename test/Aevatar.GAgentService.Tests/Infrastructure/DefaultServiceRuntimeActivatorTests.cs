@@ -29,15 +29,15 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "deployment-actor"));
 
         result.DeploymentId.Should().Be("deployment-actor:r2");
-        result.PrimaryActorId.Should().Be("static:r2");
-        runtime.CreateCalls.Should().ContainSingle(x => x.actorId == "static:r2");
+        result.PrimaryActorId.Should().Be("static:r2:deployment-actor:r2");
+        runtime.CreateCalls.Should().ContainSingle(x => x.actorId == "static:r2:deployment-actor:r2");
     }
 
     [Fact]
     public async Task ActivateAsync_ShouldReuseExistingWorkflowDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting("workflow-definition-1");
+        runtime.MarkExisting("workflow-definition-1:deployment-actor:r1");
         var workflowPort = new RecordingWorkflowRunActorPort();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
@@ -66,7 +66,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "r1",
                 "deployment-actor"));
 
-        result.PrimaryActorId.Should().Be("workflow-definition-1");
+        result.PrimaryActorId.Should().Be("workflow-definition-1:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.CreateDefinitionCalls.Should().BeEmpty();
     }
@@ -109,7 +109,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         runtimePort.Calls.Should().ContainSingle();
         runtimePort.Calls[0].definitionActorId.Should().Be("definition-1");
         runtimePort.Calls[0].revision.Should().Be("script-r1");
-        runtimePort.Calls[0].runtimeActorId.Should().Be("gagent-service:script-runtime:tenant:app:default:svc");
+        runtimePort.Calls[0].runtimeActorId.Should().Be("gagent-service:script-runtime:deployment-actor:r1");
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     public async Task ActivateAsync_ShouldReuseExistingStaticActor_AndHonorDefaultActorId()
     {
         var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting("gagent-service:static-runtime:tenant:app:default:svc");
+        runtime.MarkExisting("gagent-service:static-runtime:deployment-actor:r2");
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
             new RecordingScriptRuntimeProvisioningPort(),
@@ -155,7 +155,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "r2",
                 "deployment-actor"));
 
-        result.PrimaryActorId.Should().Be("gagent-service:static-runtime:tenant:app:default:svc");
+        result.PrimaryActorId.Should().Be("gagent-service:static-runtime:deployment-actor:r2");
         runtime.CreateCalls.Should().BeEmpty();
     }
 
@@ -191,8 +191,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "r1",
                 "deployment-actor"));
 
-        result.PrimaryActorId.Should().Be("gagent-service:workflow-definition:tenant:app:default:svc");
-        workflowPort.CreateDefinitionCalls.Should().ContainSingle("gagent-service:workflow-definition:tenant:app:default:svc");
+        result.PrimaryActorId.Should().Be("gagent-service:workflow-definition:deployment-actor:r1");
+        workflowPort.CreateDefinitionCalls.Should().ContainSingle("gagent-service:workflow-definition:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
     }
 
@@ -200,7 +200,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     public async Task ActivateAsync_ShouldRejectMissingWorkflowDefinitionActor_WhenRuntimeClaimsItExists()
     {
         var runtime = new RecordingActorRuntime();
-        runtime.MarkExistsWithoutActor("workflow-definition-1");
+        runtime.MarkExistsWithoutActor("workflow-definition-1:deployment-actor:r1");
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
             new RecordingScriptRuntimeProvisioningPort(),

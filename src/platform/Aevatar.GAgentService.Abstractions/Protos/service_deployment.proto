@@ -9,30 +9,42 @@ import "service_endpoint.proto";
 
 enum ServiceDeploymentStatus {
   SERVICE_DEPLOYMENT_STATUS_UNSPECIFIED = 0;
-  SERVICE_DEPLOYMENT_STATUS_INACTIVE = 1;
-  SERVICE_DEPLOYMENT_STATUS_ACTIVE = 2;
-  SERVICE_DEPLOYMENT_STATUS_DEACTIVATED = 3;
+  SERVICE_DEPLOYMENT_STATUS_ACTIVE = 1;
+  SERVICE_DEPLOYMENT_STATUS_DEACTIVATED = 2;
+  SERVICE_DEPLOYMENT_STATUS_FAILED = 3;
+}
+
+message ServiceDeploymentRecord {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  ServiceDeploymentStatus status = 4;
+  google.protobuf.Timestamp activated_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
 }
 
 message ServiceDeploymentState {
   ServiceIdentity identity = 1;
-  string active_deployment_id = 2;
-  string active_revision_id = 3;
-  string primary_actor_id = 4;
-  ServiceDeploymentStatus status = 5;
-  google.protobuf.Timestamp activated_at = 6;
-  google.protobuf.Timestamp updated_at = 7;
-  int64 last_applied_event_version = 8;
-  string last_event_id = 9;
+  map<string, ServiceDeploymentRecord> deployments = 2;
+  int64 last_applied_event_version = 3;
+  string last_event_id = 4;
 }
 
-message ActivateServingRevisionCommand {
+message ActivateServiceRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
 }
 
 message DeactivateServiceDeploymentCommand {
   ServiceIdentity identity = 1;
+  string deployment_id = 2;
+}
+
+message ServiceDeploymentDeactivatedEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string revision_id = 3;
+  google.protobuf.Timestamp deactivated_at = 4;
 }
 
 message ServiceDeploymentActivatedEvent {
@@ -42,13 +54,6 @@ message ServiceDeploymentActivatedEvent {
   string primary_actor_id = 4;
   ServiceDeploymentStatus status = 5;
   google.protobuf.Timestamp activated_at = 6;
-}
-
-message ServiceDeploymentDeactivatedEvent {
-  ServiceIdentity identity = 1;
-  string deployment_id = 2;
-  string revision_id = 3;
-  google.protobuf.Timestamp deactivated_at = 4;
 }
 
 message ServiceDeploymentHealthChangedEvent {

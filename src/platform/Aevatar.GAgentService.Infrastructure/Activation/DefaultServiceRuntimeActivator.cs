@@ -67,8 +67,8 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         var actorType = Type.GetType(plan.ActorTypeName, throwOnError: true)
             ?? throw new InvalidOperationException($"Static actor type '{plan.ActorTypeName}' was not found.");
         var actorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
-            ? $"gagent-service:static-runtime:{serviceKey}"
-            : plan.PreferredActorId;
+            ? $"gagent-service:static-runtime:{deploymentId}"
+            : $"{plan.PreferredActorId}:{deploymentId}";
         if (!await _runtime.ExistsAsync(actorId))
             _ = await _runtime.CreateAsync(actorType, actorId, ct);
 
@@ -81,7 +81,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         string deploymentId,
         CancellationToken ct)
     {
-        var runtimeActorId = $"gagent-service:script-runtime:{serviceKey}";
+        var runtimeActorId = $"gagent-service:script-runtime:{deploymentId}";
         var actorId = await _scriptRuntimeProvisioningPort.EnsureRuntimeAsync(
             plan.DefinitionActorId,
             plan.Revision,
@@ -97,8 +97,8 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         CancellationToken ct)
     {
         var preferredActorId = string.IsNullOrWhiteSpace(plan.DefinitionActorId)
-            ? $"gagent-service:workflow-definition:{serviceKey}"
-            : plan.DefinitionActorId;
+            ? $"gagent-service:workflow-definition:{deploymentId}"
+            : $"{plan.DefinitionActorId}:{deploymentId}";
         IActor actor;
         if (await _runtime.ExistsAsync(preferredActorId))
         {

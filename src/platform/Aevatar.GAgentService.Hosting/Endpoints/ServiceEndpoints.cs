@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
-public static class ServiceEndpoints
+public static partial class ServiceEndpoints
 {
     public static IEndpointRouteBuilder MapGAgentServiceEndpoints(this IEndpointRouteBuilder app)
     {
@@ -25,6 +25,7 @@ public static class ServiceEndpoints
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
         group.MapGet("/{serviceId}/revisions", HandleGetRevisionsAsync);
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
+        group.MapGAgentServicePhase3Endpoints();
         group.MapGAgentServiceGovernanceEndpoints();
         return app;
     }
@@ -150,11 +151,11 @@ public static class ServiceEndpoints
 
     private static async Task<IResult> HandleActivateAsync(
         string serviceId,
-        ActivateServiceHttpRequest request,
+        ActivateServiceRevisionHttpRequest request,
         [FromServices] IServiceCommandPort commandPort,
         CancellationToken ct)
     {
-        var receipt = await commandPort.ActivateServingRevisionAsync(new ActivateServingRevisionCommand
+        var receipt = await commandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
             Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
             RevisionId = request.RevisionId ?? string.Empty,
@@ -326,7 +327,7 @@ public static class ServiceEndpoints
         string Namespace,
         string RevisionId);
 
-    public sealed record ActivateServiceHttpRequest(
+    public sealed record ActivateServiceRevisionHttpRequest(
         string TenantId,
         string AppId,
         string Namespace,

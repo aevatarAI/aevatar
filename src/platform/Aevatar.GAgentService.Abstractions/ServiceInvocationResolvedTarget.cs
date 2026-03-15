@@ -2,10 +2,10 @@ namespace Aevatar.GAgentService.Abstractions;
 
 public sealed record ServiceInvocationResolvedService(
     string ServiceKey,
-    string ActiveRevisionId,
+    string RevisionId,
     string DeploymentId,
     string PrimaryActorId,
-    string DeploymentStatus,
+    string ServingState,
     IReadOnlyList<string> PolicyIds);
 
 public sealed record ServiceInvocationResolvedTarget(

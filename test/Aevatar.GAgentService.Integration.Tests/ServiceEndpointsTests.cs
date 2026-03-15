@@ -140,7 +140,7 @@ public sealed class ServiceEndpointsTests
             new ServiceEndpoints.SetDefaultServingRevisionHttpRequest("tenant", "app", "ns", "rev-1"));
         var activateResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders:activate",
-            new ServiceEndpoints.ActivateServiceHttpRequest("tenant", "app", "ns", "rev-1"));
+            new ServiceEndpoints.ActivateServiceRevisionHttpRequest("tenant", "app", "ns", "rev-1"));
 
         prepareResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         publishResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -150,7 +150,170 @@ public sealed class ServiceEndpointsTests
         host.CommandPort.PrepareRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.PublishRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.SetDefaultServingRevisionCommand!.RevisionId.Should().Be("rev-1");
-        host.CommandPort.ActivateServingRevisionCommand!.RevisionId.Should().Be("rev-1");
+        host.CommandPort.ActivateServiceRevisionCommand!.RevisionId.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task Phase3Endpoints_ShouldDispatchCommandsAndReturnSnapshots()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.QueryPort.GetServiceDeploymentsResult = new ServiceDeploymentCatalogSnapshot(
+            "tenant:app:ns:orders",
+            [
+                new ServiceDeploymentSnapshot("dep-1", "rev-1", "actor-1", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+            ],
+            DateTimeOffset.UtcNow);
+        host.QueryPort.GetServiceServingSetResult = new ServiceServingSetSnapshot(
+            "tenant:app:ns:orders",
+            3,
+            "rollout-1",
+            [
+                new ServiceServingTargetSnapshot("dep-1", "rev-1", "actor-1", 100, ServiceServingState.Active.ToString(), ["chat"]),
+            ],
+            DateTimeOffset.UtcNow);
+        host.QueryPort.GetServiceRolloutResult = new ServiceRolloutSnapshot(
+            "tenant:app:ns:orders",
+            "rollout-1",
+            "Rollout",
+            ServiceRolloutStatus.InProgress.ToString(),
+            0,
+            [
+                new ServiceRolloutStageSnapshot(
+                    "stage-1",
+                    0,
+                    [
+                        new ServiceServingTargetSnapshot("dep-1", "rev-1", "actor-1", 100, ServiceServingState.Active.ToString(), ["chat"]),
+                    ]),
+            ],
+            [],
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        host.QueryPort.GetServiceTrafficViewResult = new ServiceTrafficViewSnapshot(
+            "tenant:app:ns:orders",
+            3,
+            "rollout-1",
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot("dep-1", "rev-1", "actor-1", 100, ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var deployResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders:deploy",
+            new ServiceEndpoints.ActivateServiceRevisionHttpRequest("tenant", "app", "ns", "rev-2"));
+        var servingResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders:serving-targets",
+            new ServiceEndpoints.ReplaceServiceServingTargetsHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                [
+                    new ServiceEndpoints.ServiceServingTargetHttpRequest("rev-2", 100, "active", ["chat"]),
+                ]));
+        var rolloutResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/rollouts",
+            new ServiceEndpoints.StartServiceRolloutHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                "rollout-2",
+                "Rollout 2",
+                [
+                    new ServiceEndpoints.ServiceRolloutStageHttpRequest(
+                        "stage-1",
+                        [
+                            new ServiceEndpoints.ServiceServingTargetHttpRequest("rev-2", 100, "active", ["chat"]),
+                        ]),
+                ]));
+
+        var deployments = await host.Client.GetFromJsonAsync<ServiceDeploymentCatalogSnapshot>("/api/services/orders/deployments?tenantId=tenant&appId=app&namespace=ns");
+        var serving = await host.Client.GetFromJsonAsync<ServiceServingSetSnapshot>("/api/services/orders/serving?tenantId=tenant&appId=app&namespace=ns");
+        var rollout = await host.Client.GetFromJsonAsync<ServiceRolloutSnapshot>("/api/services/orders/rollouts?tenantId=tenant&appId=app&namespace=ns");
+        var traffic = await host.Client.GetFromJsonAsync<ServiceTrafficViewSnapshot>("/api/services/orders/traffic?tenantId=tenant&appId=app&namespace=ns");
+
+        deployResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        servingResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        rolloutResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.ActivateServiceRevisionCommand!.RevisionId.Should().Be("rev-2");
+        host.CommandPort.ReplaceServiceServingTargetsCommand!.Targets.Should().ContainSingle();
+        host.CommandPort.StartServiceRolloutCommand!.Plan.RolloutId.Should().Be("rollout-2");
+        deployments!.Deployments.Should().ContainSingle();
+        serving!.Targets.Should().ContainSingle();
+        rollout!.RolloutId.Should().Be("rollout-1");
+        traffic!.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
+        host.QueryPort.LastGetServiceDeploymentsIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
+        host.QueryPort.LastGetServiceServingSetIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
+        host.QueryPort.LastGetServiceRolloutIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
+        host.QueryPort.LastGetServiceTrafficViewIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "ns",
+            ServiceId = "orders",
+        });
+    }
+
+    [Fact]
+    public async Task Phase3ActionEndpoints_ShouldDispatchDeactivateAndRolloutLifecycleCommands()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var deactivateResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/deployments/dep-2:deactivate",
+            new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
+        var advanceResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/rollouts/rollout-2:advance",
+            new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
+        var pauseResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/rollouts/rollout-2:pause",
+            new ServiceEndpoints.RolloutActionHttpRequest("tenant", "app", "ns", "hold"));
+        var resumeResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/rollouts/rollout-2:resume",
+            new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
+        var rollbackResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/rollouts/rollout-2:rollback",
+            new ServiceEndpoints.RolloutActionHttpRequest("tenant", "app", "ns", "rollback-now"));
+
+        deactivateResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        advanceResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        pauseResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        resumeResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        rollbackResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        host.CommandPort.DeactivateServiceDeploymentCommand.Should().NotBeNull();
+        host.CommandPort.DeactivateServiceDeploymentCommand!.DeploymentId.Should().Be("dep-2");
+        host.CommandPort.AdvanceServiceRolloutCommand.Should().NotBeNull();
+        host.CommandPort.AdvanceServiceRolloutCommand!.RolloutId.Should().Be("rollout-2");
+        host.CommandPort.PauseServiceRolloutCommand.Should().NotBeNull();
+        host.CommandPort.PauseServiceRolloutCommand!.RolloutId.Should().Be("rollout-2");
+        host.CommandPort.PauseServiceRolloutCommand.Reason.Should().Be("hold");
+        host.CommandPort.ResumeServiceRolloutCommand.Should().NotBeNull();
+        host.CommandPort.ResumeServiceRolloutCommand!.RolloutId.Should().Be("rollout-2");
+        host.CommandPort.RollbackServiceRolloutCommand.Should().NotBeNull();
+        host.CommandPort.RollbackServiceRolloutCommand!.RolloutId.Should().Be("rollout-2");
+        host.CommandPort.RollbackServiceRolloutCommand.Reason.Should().Be("rollback-now");
     }
 
     [Fact]
@@ -489,7 +652,21 @@ public sealed class ServiceEndpointsTests
 
         public SetDefaultServingRevisionCommand? SetDefaultServingRevisionCommand { get; private set; }
 
-        public ActivateServingRevisionCommand? ActivateServingRevisionCommand { get; private set; }
+        public ActivateServiceRevisionCommand? ActivateServiceRevisionCommand { get; private set; }
+
+        public DeactivateServiceDeploymentCommand? DeactivateServiceDeploymentCommand { get; private set; }
+
+        public ReplaceServiceServingTargetsCommand? ReplaceServiceServingTargetsCommand { get; private set; }
+
+        public StartServiceRolloutCommand? StartServiceRolloutCommand { get; private set; }
+
+        public AdvanceServiceRolloutCommand? AdvanceServiceRolloutCommand { get; private set; }
+
+        public PauseServiceRolloutCommand? PauseServiceRolloutCommand { get; private set; }
+
+        public ResumeServiceRolloutCommand? ResumeServiceRolloutCommand { get; private set; }
+
+        public RollbackServiceRolloutCommand? RollbackServiceRolloutCommand { get; private set; }
 
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default)
         {
@@ -524,10 +701,52 @@ public sealed class ServiceEndpointsTests
             return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-default-serving", "corr-default-serving"));
         }
 
-        public Task<ServiceCommandAcceptedReceipt> ActivateServingRevisionAsync(ActivateServingRevisionCommand command, CancellationToken ct = default)
+        public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
-            ActivateServingRevisionCommand = command;
+            ActivateServiceRevisionCommand = command;
             return Task.FromResult(new ServiceCommandAcceptedReceipt("deployment-actor", "cmd-activate-serving", "corr-activate-serving"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default)
+        {
+            DeactivateServiceDeploymentCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("deployment-actor", "cmd-deactivate-serving", "corr-deactivate-serving"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand command, CancellationToken ct = default)
+        {
+            ReplaceServiceServingTargetsCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("serving-actor", "cmd-replace-serving", "corr-replace-serving"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> StartServiceRolloutAsync(StartServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            StartServiceRolloutCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-start-rollout", "corr-start-rollout"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> AdvanceServiceRolloutAsync(AdvanceServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            AdvanceServiceRolloutCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-advance-rollout", "corr-advance-rollout"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> PauseServiceRolloutAsync(PauseServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            PauseServiceRolloutCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-pause-rollout", "corr-pause-rollout"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> ResumeServiceRolloutAsync(ResumeServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            ResumeServiceRolloutCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-resume-rollout", "corr-resume-rollout"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RollbackServiceRolloutAsync(RollbackServiceRolloutCommand command, CancellationToken ct = default)
+        {
+            RollbackServiceRolloutCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("rollout-actor", "cmd-rollback-rollout", "corr-rollback-rollout"));
         }
     }
 
@@ -539,9 +758,25 @@ public sealed class ServiceEndpointsTests
 
         public ServiceRevisionCatalogSnapshot? GetServiceRevisionsResult { get; set; }
 
+        public ServiceDeploymentCatalogSnapshot? GetServiceDeploymentsResult { get; set; }
+
+        public ServiceServingSetSnapshot? GetServiceServingSetResult { get; set; }
+
+        public ServiceRolloutSnapshot? GetServiceRolloutResult { get; set; }
+
+        public ServiceTrafficViewSnapshot? GetServiceTrafficViewResult { get; set; }
+
         public ServiceIdentity? LastGetServiceIdentity { get; private set; }
 
         public ServiceIdentity? LastGetServiceRevisionsIdentity { get; private set; }
+
+        public ServiceIdentity? LastGetServiceDeploymentsIdentity { get; private set; }
+
+        public ServiceIdentity? LastGetServiceServingSetIdentity { get; private set; }
+
+        public ServiceIdentity? LastGetServiceRolloutIdentity { get; private set; }
+
+        public ServiceIdentity? LastGetServiceTrafficViewIdentity { get; private set; }
 
         public int LastListServicesTake { get; private set; }
 
@@ -566,6 +801,30 @@ public sealed class ServiceEndpointsTests
         {
             LastGetServiceRevisionsIdentity = identity;
             return Task.FromResult(GetServiceRevisionsResult);
+        }
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastGetServiceDeploymentsIdentity = identity;
+            return Task.FromResult(GetServiceDeploymentsResult);
+        }
+
+        public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastGetServiceServingSetIdentity = identity;
+            return Task.FromResult(GetServiceServingSetResult);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastGetServiceRolloutIdentity = identity;
+            return Task.FromResult(GetServiceRolloutResult);
+        }
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastGetServiceTrafficViewIdentity = identity;
+            return Task.FromResult(GetServiceTrafficViewResult);
         }
     }
 

@@ -84,6 +84,26 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceDeploymentCatalogReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceServingSetReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceRolloutReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceRolloutReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
         }
         else
         {
@@ -92,6 +112,22 @@ public static class ServiceCollectionExtensions
                 keyFormatter: key => key,
                 listSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceServingSetReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceRolloutReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                listSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
                 listSortSelector: readModel => readModel.UpdatedAt);

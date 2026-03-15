@@ -23,5 +23,6 @@
     <Protobuf Include="Protos/service_artifact.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_revision.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_deployment.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
   </ItemGroup>
 </Project>

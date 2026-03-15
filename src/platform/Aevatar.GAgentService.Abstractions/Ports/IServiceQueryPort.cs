@@ -18,4 +18,20 @@ public interface IServiceQueryPort
     Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
         ServiceIdentity identity,
         CancellationToken ct = default);
+
+    Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
+
+    Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
+
+    Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
+
+    Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+        ServiceIdentity identity,
+        CancellationToken ct = default);
 }
