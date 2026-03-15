@@ -1,4 +1,4 @@
-# Actor-State Snapshot ReadModel 重构实施蓝图（2026-03-15）
+# Actor-State Mirror ReadModel 重构实施蓝图（2026-03-15）
 
 ## 1. 文档元信息
 
@@ -6,7 +6,7 @@
 - 版本：`R2`
 - 日期：`2026-03-15`
 - 原则：`删除优于兼容`
-- 目标：把现有通用 event-reducer projection 框架，收敛成“以 actor 已提交状态为强事实源的 snapshot replication 框架”
+- 目标：把现有通用 event-reducer projection 框架，收敛成“以 actor 已提交状态为强事实源、以 readmodel 为唯一查询面、按需采用 state-mirror/readmodel-fact 物化的 projection 框架”
 - 关联文档：
   - `docs/architecture/2026-03-15-cqrs-projection-readmodels-architecture.md`
   - `AGENTS.md`
@@ -21,8 +21,9 @@
 
 本轮重构后的目标架构是：
 
-- `one authoritative actor state -> many actor-scoped current-state readmodels`
-- 所有 readmodel 只允许从 actor 的已提交 `state / snapshot fact` 物化
+- `one authoritative actor state -> zero or many actor-scoped current-state readmodels`
+- 所有查询仍然只走 `readmodel`
+- 对有明确消费场景的当前态查询，可由 actor 的已提交 `state` 计算出 `projection-ready readmodel fact`，再物化为 readmodel
 - `readmodel` 根概念本身就只保留给 actor-scoped current-state replica；不符合者不再叫 readmodel
 - `projection` 只负责复制、校验、索引、分发，不再承担第二套业务计算
 - 跨 actor 聚合必须建模为新的 `aggregate actor`
@@ -40,7 +41,7 @@
 
 1. `actor` 的已提交业务状态
 2. 与该状态一一对应的 `committed version`
-3. 从该状态发布出来的强类型 `snapshot fact`
+3. 从该状态按需计算出来的强类型 `projection-ready readmodel fact`
 
 不是权威事实源的东西：
 
@@ -50,17 +51,46 @@
 4. 中间层临时缓存
 5. `graph/document/index` store 内的派生副本
 
+### 3.1.1 业务消息语义与查询语义分离
+
+必须明确区分两条不同语义：
+
+1. 业务消息语义
+   - 例子：`actor1 -> event envelope A -> actor2 -> event envelope B -> actor1`
+   - 这是 actor 与 actor 之间的业务协议
+   - 协议语义由参与 actor 自行协商
+   - 一致性要求是：
+     - 某条消息是否被接收
+     - 某个 actor turn 是否 committed
+     - 某个 reply / continuation 是否到达
+     - 某个业务阶段是否完成
+
+2. 查询语义
+   - 例子：`actor3 -> query -> actor2 readmodel`
+   - 这是对 actor2 已提交事实的读取
+   - 查询语义由 readmodel 契约定义
+   - 一致性要求是：
+     - 某个 `SourceVersion` 是否已物化可见
+     - 查询结果是否最终一致但诚实
+     - 查询返回是否明确自己的版本水位
+
+因此本轮重构要求：
+
+1. 业务消息链路继续由 actor 协议处理，不通过 query/readmodel 模拟 reply
+2. 查询链路继续只走 readmodel，不向 actor 协议偷取“强完成”语义
+3. 两条链路的 ACK、完成判定、时延预期、一致性承诺必须分开建模
+
 ### 3.2 一个 actor 可以有多个 readmodel
 
 这里要明确修正先前过度收紧的说法。
 
-正确约束不是 `one actor -> one readmodel`，而是：
+正确约束不是 `one actor -> one readmodel`，也不是“每个 actor 必有一个 state mirror”，而是：
 
-- `one authoritative actor state -> many actor-scoped readmodels`
+- `one authoritative actor state -> zero or many actor-scoped readmodels`
 
 允许存在多份 readmodel，例如：
 
-1. `snapshot document`
+1. `primary query readmodel`
 2. `search index document`
 3. `graph mirror`
 4. `list/card summary document`
@@ -68,9 +98,22 @@
 但这些 readmodel 必须同时满足：
 
 1. 它们都只表达同一个 actor 当前态的不同查询形态
-2. 它们都来自同一个 `snapshot fact`
+2. 它们都来自同一个 actor 的 committed state，以及由此产生的 committed event 或 readmodel fact
 3. 它们都带同一个 `SourceVersion`
 4. 它们不能各自再推导出第二套业务状态机
+
+新增 readmodel 还必须满足：
+
+1. 必须声明明确消费场景，例如 API query、UI card/list、search index、graph traversal
+2. 必须声明消费方或入口，例如具体 query reader、application service、host endpoint、页面模块
+3. 必须说明为什么现有 readmodel 不能直接复用
+4. 没有稳定消费场景的 readmodel 不得新增
+
+如果某个 actor 没有稳定查询消费场景，则：
+
+1. 不必为它新增 readmodel
+2. 不必为它单独定义 `state mirror fact`
+3. 仍然保留 `actor -> committed event -> downstream actor/readmodel` 的主链即可
 
 这条规则还意味着：
 
@@ -89,9 +132,9 @@
 
 这些语义如果是稳定业务事实，必须转成新的 `aggregate actor`：
 
-- 它自己消费上游事件或快照
+- 它自己消费上游 committed event 或 projection-ready readmodel fact
 - 它自己维护权威状态
-- 它自己发布快照
+- 它自己按需发布 readmodel fact
 - 它自己拥有 readmodel
 
 ### 3.4 正常路径与修复路径分离
@@ -121,10 +164,10 @@
 flowchart TB
   C["Command"] --> A["Actor Turn"]
   A --> ES["Commit Event Store + Actor State"]
-  ES --> SF["Emit Typed Snapshot Fact"]
+  ES --> SF["Emit Committed Event / ReadModel Fact"]
   SF --> PP["Projection Pipeline"]
 
-  PP --> D1["Canonical Snapshot Document"]
+  PP --> D1["Primary Query ReadModel"]
   PP --> D2["Search / List / Card Documents"]
   PP --> D3["Actor-Scoped Graph Mirror"]
 
@@ -134,7 +177,7 @@ flowchart TB
 
   U["Upstream Actor Facts"] --> AA["Aggregate Actor"]
   AA --> AES["Commit Aggregate State"]
-  AES --> ASF["Emit Aggregate Snapshot Fact"]
+  AES --> ASF["Emit Aggregate Event / ReadModel Fact"]
   ASF --> PP
 ```
 
@@ -144,9 +187,9 @@ flowchart TB
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TD
   N["Need a new query model"] --> A{"Single actor current state?"}
-  A -->|Yes| B{"All fields derivable from one committed snapshot?"}
+  A -->|Yes| B{"All query fields derivable from one actor committed state?"}
   A -->|No| G["Create Aggregate Actor"]
-  B -->|Yes| C["Emit Snapshot Fact"]
+  B -->|Yes| C["Emit ReadModel Fact"]
   B -->|No| D["Move missing semantics into Actor"]
   D --> C
   C --> E["Projection writes one or many actor-scoped readmodels"]
@@ -167,17 +210,18 @@ sequenceDiagram
 
   C->>A: "Dispatch command"
   A->>ES: "Commit actor state at version N"
-  A->>P: "Publish SnapshotFact(version=N)"
-  P->>D: "Upsert snapshot document if source_version is newer"
+  A->>P: "Publish committed event / readmodel fact"
+  P->>D: "Upsert readmodel if source_version is newer"
   P->>D: "Upsert search/list/graph replicas with same source_version"
-  Q->>D: "Read actor-scoped materialized views"
+  Q->>D: "Read actor-scoped readmodels"
 ```
 
 ## 5. 核心抽象
 
-### 5.1 Snapshot Fact
+### 5.1 ReadModel Fact / State Mirror Fact
 
-`Snapshot Fact` 是 actor 发布给 projection 的强类型查询快照，不是原始内部 state dump。
+`ReadModel Fact` 是 actor 基于 committed state 计算出来、发布给 projection 的强类型读模型输入契约。  
+其中 `state mirror fact` 只是“当前态 readmodel 可直接由 state 推导”时的一种特例，不是每个 actor 的必选项，更不是查询对象本身。
 
 最低必须包含：
 
@@ -185,7 +229,7 @@ sequenceDiagram
 2. `SourceVersion`
 3. `OccurredAtUtc`
 4. `SchemaVersion`
-5. `SnapshotPayload`
+5. `ReadModelPayload`
 
 建议同时包含：
 
@@ -199,21 +243,21 @@ sequenceDiagram
 actor-scoped readmodel 必须满足：
 
 1. 只服务单个 actor 当前态查询
-2. 能被单个 `snapshot fact` 直接覆盖
+2. 能被单个 committed event 或 readmodel fact 确定性推进
 3. 持久化时保存 `ActorId + SourceVersion`
 4. 不依赖历史事件重算
 
-### 5.3 Canonical 与 Derived
+### 5.3 主读模型与辅助读模型
 
 同一个 actor 可以有多份 readmodel，但要区分：
 
-1. `Canonical Snapshot Document`
-   - 当前态主文档
+1. `Primary Query ReadModel`
+   - 当前态主查询文档
    - 最完整、最稳定
-   - query 的默认来源
-2. `Derived ReadModels`
+   - query/application 显式依赖它
+2. `Auxiliary ReadModels`
    - search/list/card/graph 等派生查询形态
-   - 仍由同一个 snapshot fact 生成
+   - 仍由同一个 actor 的 committed state 与 source version 驱动
    - 不能拥有超出 actor 当前态的新业务事实
 
 ### 5.4 Aggregate Actor
@@ -247,7 +291,7 @@ actor-scoped readmodel 必须满足：
 
 ### 6.2 写入语义
 
-所有 snapshot readmodel 的正常写入语义统一为：
+所有 state-mirror readmodel 的正常写入语义统一为：
 
 `monotonic overwrite by source version`
 
@@ -316,7 +360,7 @@ query 侧禁止：
 3. 条件写接口：
    - 按 `SourceVersion` 单调覆盖
    - 返回 `Applied / Stale / Duplicate / Conflict`
-4. `Canonical` 与 `Derived` 写入角色区分
+4. 独立 readmodel projector 的分发契约
 
 需要删除或弱化的抽象：
 
@@ -324,20 +368,21 @@ query 侧禁止：
 2. 宽松的“只有 Id 就算 readmodel”根接口语义
 3. 允许 query/read path 触发 projection 生命周期的抽象
 4. 本地 projection counter 冒充 source version 的模型
+5. 用 `sink role` 偷偷表达主次顺序的 runtime 设计
 
 ### 8.2 Projection Runtime
 
 运行时需要收敛成两件事：
 
-1. 解包 `snapshot fact`
-2. 把同一份快照复制到多个 actor-scoped readmodel store
+1. 解包 committed event 或 `readmodel fact`
+2. 把同一份投影输入分发给多个独立的 actor-scoped readmodel projector
 
 必须实现：
 
-1. `canonical document` 先写
-2. `derived readmodel` 后写
-3. `canonical` 写失败时，不继续推进派生写入
-4. `derived` 写失败只标记降级，不回滚 `canonical`
+1. 每个 readmodel 独立按 `SourceVersion` 条件覆盖
+2. 同一 committed event / readmodel fact 可驱动多个 projector 并行或顺序执行，但不再通过 `sink role` 表达主次
+3. 某个辅助 readmodel 写失败，只标记该 readmodel 降级，不回滚其他已成功 readmodel
+4. `Primary Query ReadModel` 是 query/application 层的显式依赖，不由 runtime sink 抽象隐式决定
 
 不再承担：
 
@@ -357,7 +402,7 @@ query 侧禁止：
 graph/index provider 的要求是：
 
 1. 仍保存相同 `SourceVersion`
-2. 明确自己是 `derived`
+2. 明确自己是辅助查询物化，不反向定义主事实
 3. 失败时可重试或后台补偿
 
 ### 8.4 Workflow
@@ -366,11 +411,11 @@ graph/index provider 的要求是：
 
 1. 写侧 actor 直接发布 `WorkflowActorSnapshotCommitted`
 2. projection 直接写 `WorkflowActorSnapshotDocument`
-3. `card/list/graph` 由同一份 snapshot fact 派生
+3. `card/list/graph` 由同一份 committed state 语义和同一 `SourceVersion` 派生
 
 需要新增：
 
-1. `workflow` snapshot proto
+1. `workflow` state-mirror proto
 2. `WorkflowActorSnapshotDocument`
 3. `WorkflowActorSnapshotProjector`
 4. `WorkflowActorSnapshotDocumentMapper`
@@ -396,12 +441,12 @@ graph/index provider 的要求是：
 
 1. 写侧直接发布 `ScriptReadModelSnapshotCommitted`
 2. projection 直接写 `ScriptReadModelDocument`
-3. native document / native graph 都只消费 snapshot fact
+3. native document / native graph 都只消费统一的 readmodel 投影输入
 
 需要新增：
 
-1. `scripting` snapshot proto
-2. snapshot projector
+1. `scripting` state-mirror proto
+2. readmodel-fact projector
 3. 基于 `SourceVersion` 的覆盖写
 
 需要删除：
@@ -421,7 +466,7 @@ graph/index provider 的要求是：
    - current-state projector 读取旧 readmodel 做 reducer
    - 本地 `StateVersion++` 冒充 source version
 3. 为 `Applied / Stale / Duplicate / Conflict` 增加 provider tests
-4. 为 `workflow / scripting` 增加 snapshot-fact 路径集成测试
+4. 为 `workflow / scripting` 增加 state-mirror 路径集成测试
 
 ## 9. 迁移步骤
 
@@ -430,7 +475,7 @@ graph/index provider 的要求是：
 1. 更新 `AGENTS.md`
 2. 更新架构文档
 3. 增加 query-time priming guard
-4. 增加 snapshot current-state guard
+4. 增加 state-mirror current-state guard
 
 完成标准：
 
@@ -440,17 +485,17 @@ graph/index provider 的要求是：
 
 1. 引入 readmodel 条件写结果模型
 2. provider 实现 `SourceVersion` 条件覆盖
-3. dispatcher 支持 `canonical -> derived` 顺序
+3. projection 分发改为“同一 committed event / readmodel fact -> 多个独立 readmodel projector”
 
 完成标准：
 
-- snapshot readmodel 写入具备稳定结果语义
+- state-mirror readmodel 写入具备稳定结果语义
 
 ### Phase 2：Workflow 当前态迁移
 
-1. 写侧发布 workflow snapshot fact
-2. 新建 snapshot document 与 projector
-3. 查询入口全部切到新 snapshot document
+1. 写侧发布 workflow readmodel fact
+2. 新建 workflow 主查询 readmodel 与 projector
+3. 查询入口全部切到新的 workflow readmodel
 4. 旧 mixed report model 退化为 artifact/history
 
 完成标准：
@@ -459,9 +504,9 @@ graph/index provider 的要求是：
 
 ### Phase 3：Scripting 当前态迁移
 
-1. 写侧发布 scripting snapshot fact
+1. 写侧发布 scripting readmodel fact
 2. 语义 readmodel 改为直接覆盖
-3. native document / graph 改为 snapshot 驱动
+3. native document / graph 改为 readmodel-fact 驱动
 4. 删除 projection 侧 `ReduceReadModel` 当前态路径
 
 完成标准：
@@ -477,7 +522,7 @@ graph/index provider 的要求是：
 
 完成标准：
 
-- projection 框架语义收敛为 snapshot replication framework
+- projection 框架语义收敛为 state-mirror replication framework
 
 ## 10. 门禁要求
 
@@ -493,8 +538,8 @@ graph/index provider 的要求是：
 
 当且仅当下面条件全部满足，本轮重构才算完成：
 
-1. `workflow` 当前态查询全部由 snapshot fact 驱动
-2. `scripting` 当前态查询全部由 snapshot fact 驱动
+1. `workflow` 当前态查询全部读取新的 workflow readmodel
+2. `scripting` 当前态查询全部读取新的 scripting readmodel
 3. query path 中不存在 replay / priming / refresh 逻辑
 4. provider 层支持 `Applied / Stale / Duplicate / Conflict`
 5. 当前态 readmodel 的版本全部来自权威 actor committed version
@@ -524,8 +569,8 @@ graph/index provider 的要求是：
 ### 12.3 风险控制
 
 1. 先迁当前态主查询，再删旧路径
-2. `canonical` 先落地，再补 `derived`
-3. 所有 derived store 统一带 `SourceVersion`
+2. 先迁主查询 readmodel，再补辅助 readmodel
+3. 所有 actor-scoped readmodel 统一带 `SourceVersion`
 4. 以门禁约束防止旧设计回流
 
 ## 13. 最终落点
@@ -540,4 +585,4 @@ graph/index provider 的要求是：
 
 这不是对旧 CQRS projection 细节的局部修补，而是把框架主语义改回：
 
-`authoritative actor state + snapshot replication + actorized aggregation`
+`authoritative actor state + state-mirror replication + actorized aggregation`

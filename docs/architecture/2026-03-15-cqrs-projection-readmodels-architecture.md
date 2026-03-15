@@ -10,6 +10,20 @@
 - `scripting execution` 读侧当前没有等价的 ownership 协调器，更多依赖“外部只启动一个 projection session”的使用纪律。
 - `document` 与 `graph` 是两条平行写分支；当前没有跨 store 原子提交，也没有统一版本栅栏，因此跨 store 一致性只能做到最终收敛，不能声称同版本快照。
 
+术语说明：
+
+- 本文中代码符号如果仍使用 `*Snapshot*` 命名，表示历史代码命名，不代表现行架构应该继续使用 `snapshot` 描述 readmodel。
+- 在当前架构语义里，查询对象始终是 `readmodel`；`state mirror` 只表示某些当前态 readmodel 的投影输入模式。
+- 新增 readmodel 必须绑定明确消费场景；没有明确 query/API/UI/search/graph 入口的模型，不得新增。
+
+语义边界说明：
+
+- `actor1 -> envelope A -> actor2 -> envelope B -> actor1` 是业务消息语义，属于 actor 间协议协商。
+- `actor3 -> query -> actor2 readmodel` 是查询语义，属于对 actor2 已提交事实的读取。
+- 业务消息语义要求的是“某个 actor turn 是否提交、某个协议阶段是否推进、某个回复事件是否到达”。
+- 查询语义要求的是“某个 source version 是否已经物化进 readmodel 并可见”。
+- 两条链路的一致性要求不同，完成判定也不同；不得拿 readmodel 可见性代替 actor 协议完成，也不得拿业务 ACK 代替 readmodel 新鲜度。
+
 当前最需要正视的并发/一致性风险有 5 个：
 
 1. Projection Core 没有给每个 context 再包一层串行 mailbox，事件顺序与同一订阅回调是否并发，依赖底层 stream provider。
@@ -98,6 +112,34 @@ flowchart LR
 - Projection 的事实来源是 committed / observable envelope，不是 query-time replay。
 - Query 与 Projection 是解耦的：query 只消费物化结果，不驱动补投影。
 
+## 3.1 业务消息链路与查询链路不是一回事
+
+需要明确区分两条主链：
+
+1. 业务消息链路
+   - 例子：`actor1 -> event envelope A -> actor2 -> event envelope B -> actor1`
+   - 这是 actor 与 actor 之间的业务协议
+   - 语义由 actor1 / actor2 自行协商
+   - 一致性看的是：
+     - 消息是否进入 inbox
+     - 事件是否 committed
+     - continuation/reply 是否到达
+     - 协议是否推进到某个业务阶段
+
+2. 查询链路
+   - 例子：`actor3 -> query -> actor2 readmodel`
+   - 这是对 actor2 已提交事实的只读观察
+   - 语义由 query contract + readmodel schema 定义
+   - 一致性看的是：
+     - readmodel 是否已物化
+     - `SourceVersion` 是否达到要求
+     - 当前结果是否最终一致但诚实
+
+因此必须禁止两种混淆：
+
+1. 用 query/readmodel 去模拟 actor 间业务 reply
+2. 用业务 ACK/receipt 去暗示 readmodel 已经追平
+
 ## 4. 读一致性到底如何确定
 
 ### 4.1 一致性不是一个值，而是分层承诺
@@ -108,8 +150,8 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | `AcceptedForDispatch` | command receipt | `DefaultCommandDispatchPipeline`、`DefaultCommandInteractionService.cs:45` | 命令已被 dispatch 接受，`commandId` 稳定 | actor 已处理、projection 已看到、read model 已更新 |
 | `ProjectionObserved` | projection state | `WorkflowProjectionQueryReader.cs:46`、`WorkflowExecutionReadModelMapper.cs:28` | projection document 至少记录到某个 `lastEventId/stateVersion` | run 已结束、graph 已同步 |
-| `DocumentVisible` | document snapshot | `WorkflowProjectionQueryReader.cs:22`、`ScriptReadModelQueryReader.cs:34` | 文档分支的 read model 已可见 | graph 分支同版本 |
-| `TerminalCompletionVisible` | workflow snapshot completion status | `WorkflowRunDurableCompletionResolver.cs:30` | workflow 终态已经进入 document snapshot | 其它 projector/store 全部完成 |
+| `DocumentVisible` | document state mirror | `WorkflowProjectionQueryReader.cs:22`、`ScriptReadModelQueryReader.cs:34` | 文档分支的 read model 已可见 | graph 分支同版本 |
+| `TerminalCompletionVisible` | workflow state-mirror completion status | `WorkflowRunDurableCompletionResolver.cs:30` | workflow 终态已经进入 document state mirror | 其它 projector/store 全部完成 |
 | `CrossStoreAligned` | 无统一证据 | 不存在统一版本栅栏 | 只能靠外部约束或运维观察推断 | 当前代码不能证明 document 与 graph 同版本 |
 
 ### 4.2 Workflow 当前如何判定“读一致”
@@ -130,7 +172,7 @@ flowchart LR
 
 - “命令已被接受”看 receipt。
 - “projection 至少看到了运行时事件”看 `projection state`。
-- “run 已到终态”看 `snapshot completion status`。
+- “run 已到终态”看 `state-mirror completion status`。
 - 这三个都不等价。
 
 ### 4.3 Scripting 当前如何判定“读一致”
@@ -138,12 +180,12 @@ flowchart LR
 `scripting` 更简单，当前没有 workflow 那样分层明显的 completion 语义：
 
 - `GetSnapshotAsync()` 直接返回 `ScriptReadModelDocument -> ScriptReadModelSnapshot`。
-- `ExecuteDeclaredQueryAsync()` 先读这个 snapshot，再按 snapshot 里的 `DefinitionActorId + Revision` 去拿 definition snapshot，最后在内存里执行脚本声明的 query。
+- `ExecuteDeclaredQueryAsync()` 先读这个 state mirror，再按其中的 `DefinitionActorId + Revision` 去拿 definition snapshot，最后在内存里执行脚本声明的 query。
 - 对应代码：`ScriptReadModelQueryReader.cs:34-39`、`:56-137`。
 
 这说明 scripting 的 query 语义是：
 
-- 查询结果只对“当前已物化的语义 read model snapshot”负责。
+- 查询结果只对“当前已物化的语义 read model”负责。
 - 它不承诺“已经看到最新 committed event”。
 - 它也不承诺“projection 当前一定处于活跃状态”。
 
@@ -304,9 +346,9 @@ sequenceDiagram
 | 查询 | 直接数据源 | 代码 | 一致性说明 |
 | --- | --- | --- | --- |
 | `GetActorSnapshotAsync` | `WorkflowExecutionReport` document | `WorkflowProjectionQueryReader.cs:22-28` | 与 timeline / projection state 同属于 document 分支 |
-| `ListActorSnapshotsAsync` | document query | `WorkflowProjectionQueryReader.cs:30-44` | 多条 snapshot 间无全局事务顺序保证 |
+| `ListActorSnapshotsAsync` | document query | `WorkflowProjectionQueryReader.cs:30-44` | 多条 state mirror 间无全局事务顺序保证 |
 | `GetActorProjectionStateAsync` | 同一个 `WorkflowExecutionReport` document | `WorkflowProjectionQueryReader.cs:46-52` | 只代表 projection 元信息，不代表终态 |
-| `ListActorTimelineAsync` | `report.Timeline` | `WorkflowProjectionQueryReader.cs:54-69` | 与 snapshot 同文档分支，单次读取内部一致 |
+| `ListActorTimelineAsync` | `report.Timeline` | `WorkflowProjectionQueryReader.cs:54-69` | 与 state mirror 同文档分支，单次读取内部一致 |
 | `GetActorGraphEdgesAsync` | graph store | `WorkflowProjectionQueryReader.cs:71-95` | 与 document 分支可能存在版本偏斜 |
 | `GetActorGraphSubgraphAsync` | graph store | `WorkflowProjectionQueryReader.cs:97-124` | 仅对 graph 分支负责 |
 | `GetActorGraphEnrichedSnapshotAsync` | 先读 document，再读 graph | `WorkflowProjectionQueryReader.cs:126-143` | 没有统一版本号，不保证两次读取同版本 |
@@ -325,7 +367,7 @@ sequenceDiagram
 
 #### 6.5.2 durable completion
 
-`WorkflowRunDurableCompletionResolver` 不看 live sink，不看 actor state，只看 query port 返回的 snapshot completion status。
+`WorkflowRunDurableCompletionResolver` 不看 live sink，不看 actor state，只看 query port 返回的 state-mirror completion status。
 
 对应代码：`WorkflowRunDurableCompletionResolver.cs:19-53`。
 
@@ -409,13 +451,13 @@ flowchart LR
 | --- | --- | --- | --- |
 | `GetSnapshotAsync` | `ScriptReadModelDocument` | `ScriptReadModelQueryReader.cs:34-40` | 返回的是已经物化好的语义 read model |
 | `ListSnapshotsAsync` | document query | `ScriptReadModelQueryReader.cs:42-54` | 与 workflow 一样，是 document 分支枚举 |
-| `ExecuteDeclaredQueryAsync` | snapshot + definition snapshot + in-process behavior query | `ScriptReadModelQueryReader.cs:56-137` | 不做 event replay，但会做 query-time behavior execution |
+| `ExecuteDeclaredQueryAsync` | state mirror + definition snapshot + in-process behavior query | `ScriptReadModelQueryReader.cs:56-137` | 不做 event replay，但会做 query-time behavior execution |
 
 `ExecuteDeclaredQueryAsync(...)` 的特点是：
 
 - 它不是对 event store replay。
 - 它也不是去 actor 发 query。
-- 它是对“已经物化好的 typed read model snapshot”做一次纯查询执行。
+- 它是对“已经物化好的 typed read model”做一次纯查询执行。
 
 ### 7.5 Scripting query 的活跃性语义
 
@@ -525,7 +567,7 @@ flowchart LR
 
 - 新节点已写入，但旧边还未清理；
 - 一部分边已是新版本，另一部分还是旧版本；
-- root snapshot 已更新，但 graph subgraph 仍是上一版本。
+- root state mirror 已更新，但 graph subgraph 仍是上一版本。
 
 ## 9. 当前最重要的并发风险清单
 
@@ -617,7 +659,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 - 统一 read timestamp
 - store-side multi-read transaction
 
-因此 enriched snapshot 只是“snapshot + subgraph 的组合结果”，不是“原子复合快照”。
+因此 enriched state mirror 只是“state mirror + subgraph 的组合结果”，不是“原子复合视图”。
 
 ## 10. 对“读一致性如何确定”的可操作答案
 
@@ -630,11 +672,11 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 - `GetActorProjectionStateAsync`
   - 可用于证明 projection 至少已看到某些 runtime 事件。
 - `WorkflowRunDurableCompletionResolver`
-  - 可用于证明 workflow 终态已经进入 document snapshot。
+  - 可用于证明 workflow 终态已经进入 document state mirror。
 
 当前不能安全对外声称的是：
 
-- snapshot 与 graph 一定同版本。
+- state mirror 与 graph 一定同版本。
 - receipt 返回后 read model 一定立刻可读。
 - release 完成后绝对没有在途 projection 写入。
 
@@ -643,9 +685,9 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 当前可以安全对外声称的是：
 
 - `GetSnapshotAsync`
-  - 返回的是已经物化好的语义 read model snapshot。
+  - 返回的是已经物化好的语义 read model。
 - `ExecuteDeclaredQueryAsync`
-  - 是对 typed read model snapshot 的声明式查询执行，不是 query-time replay。
+  - 是对 typed read model 的声明式查询执行，不是 query-time replay。
 
 当前不能安全对外声称的是：
 
@@ -660,7 +702,7 @@ services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
 1. 给 Projection Core 增加 per-context 串行 mailbox，消除对底层 stream 回调模型的隐式依赖。
 2. 把 workflow 的 `PassthroughEventDeduplicator` 改成真实去重实现，至少对 `actorId + envelopeId` 生效。
 3. 给 document / graph provider 与补偿回放加入版本比较，禁止旧版本覆盖新版本。
-4. 为跨 store 组合读引入版本戳，至少让 `GraphEnrichedSnapshot` 能暴露“snapshot version / graph version”。
+4. 为跨 store 组合读引入版本戳，至少让 `GraphEnrichedSnapshot` 能暴露“state-mirror version / graph version”。
 5. 把 scripting execution projection 也收敛到 ownership-coordinated 模型，不再依赖外部使用纪律。
 6. 把 “activation 后 metadata refresh” 收敛到启动前初始化，或纳入同一串行 turn，减少首批事件竞争窗口。
 

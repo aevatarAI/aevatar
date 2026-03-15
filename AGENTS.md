@@ -39,6 +39,7 @@
 ## Command / Envelope / Dispatch 抽象（强制）
 - 统一包络不等于统一语义：`Envelope` 只是 Actor System 的统一消息包络，可承载 `command/reply/internal signal/domain event/query`；是否可持久化、可投影、可对外观察必须由消息契约显式定义，禁止因“都走 Envelope”而混淆语义。
 - 已提交领域事件必须可观察：write-side 一旦完成 committed domain event，必须把该事实送入统一 observation/projection 主链；禁止只落 event store / actor state 而不进入可观察流，再由上层用 query fallback 猜测完成态。
+- 业务消息语义与查询语义必须分离：`actor1 -> event envelope A -> actor2 -> event envelope B -> actor1` 这类链路是业务消息协议，由参与 actor 自行协商；`actor3 -> query -> actor2 readmodel` 是查询语义，只能读取 actor2 已物化事实，二者的契约、一致性要求、完成判定都不得混用。
 - 禁止 generic actor query/reply：内部模块不得为“读取另一个 actor 当前状态”定义通用 `Query*Requested -> *Responded` 协议，也不得保留通用 `request-reply client` 作为兜底读取手段；查询默认只能落到 read model，跨 actor 交互默认只能是 command/event 驱动的业务协议。
 - 禁止用 stream request-reply 冒充 RPC：`stream` 用于事件分发与观察，不用于在 actor turn 内实现同步 query/reply；凡是“先发消息、再等另一条 reply 消息回来”的链路，都必须改成正式 read model 查询，或改成 continuation 化的事件协议。
 - 命令骨架必须内聚：标准命令生命周期应收敛为 `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`；业务模块只负责目标解析、载荷映射和结果映射，禁止各能力入口各自拼装一套流程。
@@ -54,28 +55,32 @@
 - 身份与事实必须分离：稳定 ID 只负责寻址与复用键，不承载可变业务事实；可变绑定必须显式建模、显式读取。
 - 读写边界不能混合：写侧端口只负责 lifecycle / command；读取必须走窄 query contract 或 projection，禁止在 Application / Infrastructure 直接读取 write-model 内部状态。
 - 禁止用侧读冒充 query：当系统缺少正式 query/reply 语义时，禁止通过直读其他 actor 的 event store、持久态快照或任意“事实重建器”在中间层拼装查询结果；这类跨 actor 读取必须回到 actor-owned contract、projection，或显式的事件化 continuation。
-- 禁止 query-time replay：`QueryPort / QueryService / ApplicationService / Infrastructure read adapter` 不得在请求路径中直接读取 `IEventStore`、重放 committed events、临时重建 snapshot/document 后立刻返回；事实回放只能属于正式 projection/materialization 流程，不属于 query 执行流程本身。
+- 禁止 query-time replay：`QueryPort / QueryService / ApplicationService / Infrastructure read adapter` 不得在请求路径中直接读取 `IEventStore`、重放 committed events、临时重建 state mirror/document 后立刻返回；事实回放只能属于正式 projection/materialization 流程，不属于 query 执行流程本身。
 - read model 物化必须脱离 query 调用栈：如果查询需要“先刷新 read model”，刷新动作也必须通过正式 projection 会话、后台 materializer、写侧预挂接 projection，或显式的 read-model 更新管线完成；禁止在 query 方法里同步补跑一遍 ES/materialization 逻辑。
 - projection 只消费 committed 事实：projection/read model 必须基于 committed domain event 或其同源 durable feed 构建；禁止订阅入站 command、self continuation 或 actor 运行时偶然结构去推测业务完成态。
 - 默认路径必须先定义资源语义：任何“缺失即创建”的默认策略，都必须同时定义稳定归属、复用规则和清理责任；禁止生成不可达、不可复用、不可回收的隐式资源。
 - 本地可用不等于分布式正确：凡是依赖本地 runtime 偶然细节才能成立的实现，都视为未完成设计，必须收敛到 runtime-neutral 协议。
 - 抽象一旦能被滥用，就等于设计未完成：若某个通用接口允许绕过读写分离、绕过 actor 边界或绕过权威事实源，应继续收窄，而不是靠约定克制。
 
-## 权威状态 / 快照复制抽象（强制）
-- 单一权威拥有者：每个稳定业务事实都必须有唯一 `actor` 作为权威拥有者；`committed event store + actor state` 是唯一真相，`read model` 只是快照副本，禁止反向定义业务事实。
+## 权威状态 / 读模型物化抽象（强制）
+- 单一权威拥有者：每个稳定业务事实都必须有唯一 `actor` 作为权威拥有者；`committed event store + actor state` 是唯一真相，`read model` 只是查询副本，禁止反向定义业务事实。
+- 查询始终走 readmodel：对外查询默认只能读取 readmodel；不得把 actor 内部状态、state mirror fact 或 event replay 暴露成查询主路径。
+- 业务协议一致性与查询一致性分层处理：actor 间业务消息链路只对“消息已接收、事件已提交、协议已推进到某一步”负责；query/readmodel 链路只对“某个 source version 已物化可见”负责，禁止把 readmodel 可见性当成 actor 间业务协商完成，也禁止把业务 ACK 冒充成 query 新鲜度保证。
 - 一权威状态可物化多个 readmodel：默认模型是 `one authoritative actor state -> many actor-scoped current-state readmodels`；不同 readmodel 只表达同一 actor 当前态的不同查询形态，不得各自重新计算第二套业务状态机。
+- 不是每个 actor 都必须产出 readmodel：只有存在稳定消费场景时，才为该 actor 增加 readmodel；没有消费场景的 actor，不必新增 readmodel，也不必额外发布 state mirror fact。
+- 新增 readmodel 必须先声明消费场景：同一 actor 可以对应多个 readmodel，但每个 readmodel 都必须有明确的消费方、查询入口、返回 DTO 或 UI/搜索/图查询场景；没有稳定消费场景的 readmodel 不得新增。
 - readmodel 根契约必须收紧：`readmodel` 在仓库内默认就表示 `actor-scoped current-state replica`；不符合这条约束的对象不得继续挂在通用 readmodel/projection 主链下，必须改名并降级为 `artifact/export/log`，或由新的 `aggregate actor` 拥有。
 - 聚合必须 actor 化：跨 actor 聚合、汇总、关联、编排结果若具有稳定业务语义，必须建模为新的 `aggregate actor`；禁止把这类语义长期放在通用 `history/aggregate view` 或 query-time 拼装层中。
-- projection 退化为快照复制：Projection Pipeline 的默认职责是把 actor 产出的强类型 `snapshot fact` 复制到多个 document/index/search/graph store；禁止把 projection 作为第二套通用业务计算框架。
+- projection 负责读模型物化：Projection Pipeline 的默认职责是消费 committed event，或消费由 actor committed state 计算出的 projection-ready readmodel fact，再物化到多个 document/index/search/graph store；禁止把 projection 作为第二套通用业务计算框架。
 - 正常路径禁止 replay：正常 query path 和正常 projection path 都不得依赖 `event replay / rebuild / backfill`；`replay` 只属于后台修复、迁移、灾难恢复，不属于线上读路径。
-- actor 负责语义，projection 负责物化：凡是可以由 actor 直接确定的当前态查询语义，必须前移到 actor 内产出强类型快照；projection 只负责校验、覆盖写入、索引和分发，不负责在读侧重新推导当前态。
-- actor 不直接拥有存储实现：actor 可以发布 `projection-ready snapshot fact`，但不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；这些仍属于 projection/runtime/provider 边界。
+- actor 负责语义，projection 负责物化：凡是可以由 actor 直接确定的当前态查询语义，应尽量前移到 actor 内，基于 committed state 计算出 projection-ready readmodel fact；projection 只负责校验、覆盖写入、索引和分发，不负责在读侧重新推导当前态。
+- actor 不直接拥有存储实现：actor 可以发布 `projection-ready readmodel fact`；其中 `state mirror fact` 只是当前态 readmodel 的一种可选输入模式，但 actor 不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；这些仍属于 projection/runtime/provider 边界。
 - 版本必须跟权威源对齐：每个 actor-scoped readmodel 的版本必须来自同一个权威 actor 的 committed version 或其等价水位；禁止使用本地 `projection counter`、本地 `StateVersion++` 或其他派生计数冒充权威版本。
-- 覆盖复制优先：默认 readmodel 写入语义是“基于权威源版本的单调覆盖”；旧快照不得覆盖新快照，重复快照必须幂等，冲突版本必须显式报错。
+- 覆盖复制优先：默认 readmodel 写入语义是“基于权威源版本的单调覆盖”；旧读模型不得覆盖新读模型，重复写入必须幂等，冲突版本必须显式报错。
 - 不默认保留通用历史视图：`timeline / audit / report / analytics` 不是默认 readmodel 形态；如确有业务价值，要么降级为 artifact/export，要么由专门 actor 拥有，不得继续伪装成主查询模型。
 - 查询诚实性优先于伪强一致：readmodel 可以最终一致，但必须诚实暴露自己的权威源版本或刷新戳；禁止在 `accepted ACK`、弱读结果或局部物化结果上暗示“已经强一致”。
 - 不得 query-time priming：查询前若需要先“确保投影存在/刷新 read model”，该动作必须在显式 activation、lease、binder 或后台物化流程中完成；禁止在 query 方法内同步补投影。
-- 快照契约必须面向查询语义：`snapshot fact` 必须是面向读侧的稳定强类型契约，而不是 actor 内部 state 的原样 dump；内部运行态、临时控制字段、仅执行期可见信息不得默认扩散到 projection 主链。
+- 状态镜像契约必须面向查询语义：若某个当前态 readmodel 采用 `state mirror fact` 作为输入，该契约必须是面向读侧的稳定强类型契约，而不是 actor 内部 state 的原样 dump；内部运行态、临时控制字段、仅执行期可见信息不得默认扩散到 projection 主链。
 
 ## Actor 生命周期判定（强制）
 - 默认优先 `run/session/task-scoped actor`：凡是一次执行、一次会话、一次临时编排即可完成职责的能力，默认建模为短生命周期 actor；静态 `GAgent`、workflow、scripting 只要协议一致，都可作为这类 actor 的实现来源。
