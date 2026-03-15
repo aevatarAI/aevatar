@@ -20,6 +20,7 @@ env:
   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   AEVATAR_LLM_API_KEY: ${{ secrets.AEVATAR_LLM_API_KEY }}
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
   # Optional test overrides for real OpenAI integration test.
   AEVATAR_TEST_OPENAI_BASE_URL: ${{ secrets.AEVATAR_TEST_OPENAI_BASE_URL }}
   AEVATAR_TEST_OPENAI_MODEL: ${{ secrets.AEVATAR_TEST_OPENAI_MODEL }}
@@ -259,6 +260,26 @@ jobs:
           COVERAGE_LINE_THRESHOLD: "85"
           COVERAGE_BRANCH_THRESHOLD: "72"
         run: bash tools/ci/coverage_quality_guard.sh
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-quality-report
+          path: artifacts/coverage
+          if-no-files-found: error
+
+      - name: Upload coverage to Codecov
+        if: ${{ success() && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          directory: ./artifacts/coverage
+          fail_ci_if_error: true
+          flags: ci
+          name: coverage-quality
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ env.CODECOV_TOKEN }}
 
   code-metrics-report:
     if: |
