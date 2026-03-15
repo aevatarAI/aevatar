@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-14
 - 适用范围：
@@ -21,8 +21,28 @@
   - `docs/architecture/2026-03-14-gagent-service-phase-1-detailed-design.md`
   - `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
 - 本文定位：
-  - 本文只讨论 `GAgentService Phase 2` 的代码级实施方案。
-  - 本文以目标态为准，不保留兼容层设计。
+  - 本文保留 Phase 2 最初的多 actor 设计稿，仅作为历史基线。
+  - 当前实现已收敛为 `ServiceConfigurationGAgent + ServiceConfigurationReadModel + Activation/Invoke Admission` 主线。
+  - 以当前实现为准时，请优先阅读：
+    - `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
+    - `docs/architecture/2026-03-15-gagent-service-slimming-refactor-blueprint.md`
+    - `docs/architecture/2026-03-15-gagent-service-phase-3-serving-rollout-blueprint.md`
+
+## 1.1 状态说明
+
+这份文档中的以下设计已经被后续重构替换：
+
+1. `ServiceBindingManagerGAgent + ServiceEndpointCatalogGAgent + ServicePolicyGAgent`
+2. `ServiceBindingProjector + ServiceEndpointCatalogProjector + ServicePolicyProjector`
+3. `IServiceQueryPort` 承载平台级统一查询
+4. 应用层通过三套治理 snapshot 组装 `ActivationCapabilityView`
+
+当前代码的收敛结果是：
+
+1. 单一 `ServiceConfigurationGAgent`
+2. 单一 `ServiceConfigurationReadModel`
+3. 分拆后的 `IServiceLifecycleQueryPort` / `IServiceServingQueryPort`
+4. `ActivationCapabilityViewAssembler` 只组合 `ServiceConfiguration + PreparedArtifact`
 
 ## 2. 问题定义
 

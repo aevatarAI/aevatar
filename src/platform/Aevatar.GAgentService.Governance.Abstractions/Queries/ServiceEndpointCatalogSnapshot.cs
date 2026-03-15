@@ -1,3 +1,6 @@
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions;
+
 namespace Aevatar.GAgentService.Governance.Abstractions.Queries;
 
 public sealed record ServiceEndpointCatalogSnapshot(
@@ -8,9 +11,9 @@ public sealed record ServiceEndpointCatalogSnapshot(
 public sealed record ServiceEndpointExposureSnapshot(
     string EndpointId,
     string DisplayName,
-    string Kind,
+    ServiceEndpointKind Kind,
     string RequestTypeUrl,
     string ResponseTypeUrl,
     string Description,
-    string ExposureKind,
+    ServiceEndpointExposureKind ExposureKind,
     IReadOnlyList<string> PolicyIds);

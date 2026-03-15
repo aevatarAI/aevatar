@@ -24,6 +24,15 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
         return readModel == null ? null : Map(readModel);
     }
 
+    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(
+        int take = 1000,
+        CancellationToken ct = default)
+    {
+        var boundedTake = Math.Clamp(take, 1, 10_000);
+        var items = await _documentStore.ListAsync(boundedTake, ct);
+        return items.Select(Map).ToList();
+    }
+
     public async Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
         string tenantId,
         string appId,

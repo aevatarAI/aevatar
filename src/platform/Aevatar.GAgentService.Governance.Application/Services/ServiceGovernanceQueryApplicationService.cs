@@ -7,26 +7,35 @@ namespace Aevatar.GAgentService.Governance.Application.Services;
 public sealed class ServiceGovernanceQueryApplicationService
     : IServiceGovernanceQueryPort
 {
-    private readonly IServiceBindingQueryReader _bindingQueryReader;
-    private readonly IServiceEndpointCatalogQueryReader _endpointCatalogQueryReader;
-    private readonly IServicePolicyQueryReader _policyQueryReader;
+    private readonly IServiceConfigurationQueryReader _configurationQueryReader;
 
     public ServiceGovernanceQueryApplicationService(
-        IServiceBindingQueryReader bindingQueryReader,
-        IServiceEndpointCatalogQueryReader endpointCatalogQueryReader,
-        IServicePolicyQueryReader policyQueryReader)
+        IServiceConfigurationQueryReader configurationQueryReader)
     {
-        _bindingQueryReader = bindingQueryReader ?? throw new ArgumentNullException(nameof(bindingQueryReader));
-        _endpointCatalogQueryReader = endpointCatalogQueryReader ?? throw new ArgumentNullException(nameof(endpointCatalogQueryReader));
-        _policyQueryReader = policyQueryReader ?? throw new ArgumentNullException(nameof(policyQueryReader));
+        _configurationQueryReader = configurationQueryReader ?? throw new ArgumentNullException(nameof(configurationQueryReader));
     }
 
-    public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        _bindingQueryReader.GetAsync(identity, ct);
+    public async Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        var configuration = await _configurationQueryReader.GetAsync(identity, ct);
+        return configuration == null
+            ? null
+            : new ServiceBindingCatalogSnapshot(configuration.ServiceKey, configuration.Bindings, configuration.UpdatedAt);
+    }
 
-    public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        _endpointCatalogQueryReader.GetAsync(identity, ct);
+    public async Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        var configuration = await _configurationQueryReader.GetAsync(identity, ct);
+        return configuration == null
+            ? null
+            : new ServiceEndpointCatalogSnapshot(configuration.ServiceKey, configuration.Endpoints, configuration.UpdatedAt);
+    }
 
-    public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        _policyQueryReader.GetAsync(identity, ct);
+    public async Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        var configuration = await _configurationQueryReader.GetAsync(identity, ct);
+        return configuration == null
+            ? null
+            : new ServicePolicyCatalogSnapshot(configuration.ServiceKey, configuration.Policies, configuration.UpdatedAt);
+    }
 }

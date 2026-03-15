@@ -11,22 +11,16 @@ namespace Aevatar.GAgentService.Governance.Application.Services;
 public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityViewReader
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
-    private readonly IServiceBindingQueryReader _bindingQueryReader;
-    private readonly IServiceEndpointCatalogQueryReader _endpointCatalogQueryReader;
-    private readonly IServicePolicyQueryReader _policyQueryReader;
+    private readonly IServiceConfigurationQueryReader _configurationQueryReader;
     private readonly IServiceRevisionArtifactStore _artifactStore;
 
     public ActivationCapabilityViewAssembler(
         IServiceCatalogQueryReader catalogQueryReader,
-        IServiceBindingQueryReader bindingQueryReader,
-        IServiceEndpointCatalogQueryReader endpointCatalogQueryReader,
-        IServicePolicyQueryReader policyQueryReader,
+        IServiceConfigurationQueryReader configurationQueryReader,
         IServiceRevisionArtifactStore artifactStore)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
-        _bindingQueryReader = bindingQueryReader ?? throw new ArgumentNullException(nameof(bindingQueryReader));
-        _endpointCatalogQueryReader = endpointCatalogQueryReader ?? throw new ArgumentNullException(nameof(endpointCatalogQueryReader));
-        _policyQueryReader = policyQueryReader ?? throw new ArgumentNullException(nameof(policyQueryReader));
+        _configurationQueryReader = configurationQueryReader ?? throw new ArgumentNullException(nameof(configurationQueryReader));
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
     }
 
@@ -50,24 +44,22 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
             ?? throw new InvalidOperationException($"Service definition '{serviceKey}' was not found.");
         var artifact = await _artifactStore.GetAsync(serviceKey, revisionId, ct)
             ?? throw new InvalidOperationException($"Prepared artifact for '{serviceKey}' revision '{revisionId}' was not found.");
-        var bindingCatalog = await _bindingQueryReader.GetAsync(identity, ct);
-        var endpointCatalog = await _endpointCatalogQueryReader.GetAsync(identity, ct);
-        var policyCatalog = await _policyQueryReader.GetAsync(identity, ct);
+        var configuration = await _configurationQueryReader.GetAsync(identity, ct);
 
         var view = new ActivationCapabilityView
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
         };
-        view.Bindings.Add(bindingCatalog?.Bindings
+        view.Bindings.Add(configuration?.Bindings
             .Where(x => !x.Retired)
             .Select(MapBinding) ?? []);
-        view.Endpoints.Add(endpointCatalog?.Endpoints.Select(MapEndpoint) ?? []);
+        view.Endpoints.Add(configuration?.Endpoints.Select(MapEndpoint) ?? []);
         view.Policies.Add(ResolvePolicies(
             catalog.PolicyIds,
-            bindingCatalog?.Bindings.SelectMany(x => x.PolicyIds) ?? [],
-            endpointCatalog?.Endpoints.SelectMany(x => x.PolicyIds) ?? [],
-            policyCatalog,
+            configuration?.Bindings.SelectMany(x => x.PolicyIds) ?? [],
+            configuration?.Endpoints.SelectMany(x => x.PolicyIds) ?? [],
+            configuration,
             view.MissingPolicyIds));
 
         foreach (var declaredEndpoint in artifact.Endpoints)
@@ -94,7 +86,7 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
         IEnumerable<string> definitionPolicyIds,
         IEnumerable<string> bindingPolicyIds,
         IEnumerable<string> endpointPolicyIds,
-        ServicePolicyCatalogSnapshot? policyCatalog,
+        ServiceConfigurationSnapshot? configuration,
         Google.Protobuf.Collections.RepeatedField<string> missingPolicyIds)
     {
         var referencedPolicyIds = new HashSet<string>(StringComparer.Ordinal);
@@ -104,7 +96,7 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
 
         foreach (var policyId in referencedPolicyIds)
         {
-            var policy = policyCatalog?.Policies.FirstOrDefault(x =>
+            var policy = configuration?.Policies.FirstOrDefault(x =>
                 string.Equals(x.PolicyId, policyId, StringComparison.Ordinal) &&
                 !x.Retired);
             if (policy != null)
@@ -132,42 +124,30 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
         {
             BindingId = snapshot.BindingId,
             DisplayName = snapshot.DisplayName,
-            BindingKind = Enum.TryParse<ServiceBindingKind>(snapshot.BindingKind, out var bindingKind)
-                ? bindingKind
-                : ServiceBindingKind.Unspecified,
+            BindingKind = snapshot.BindingKind,
         };
         spec.PolicyIds.Add(snapshot.PolicyIds);
-        if (!string.IsNullOrWhiteSpace(snapshot.TargetServiceKey))
+        if (snapshot.ServiceRef != null)
         {
-            var parts = snapshot.TargetServiceKey.Split(':', StringSplitOptions.None);
-            if (parts.Length == 4)
+            spec.ServiceRef = new BoundServiceRef
             {
-                spec.ServiceRef = new BoundServiceRef
-                {
-                    Identity = new ServiceIdentity
-                    {
-                        TenantId = parts[0],
-                        AppId = parts[1],
-                        Namespace = parts[2],
-                        ServiceId = parts[3],
-                    },
-                    EndpointId = snapshot.TargetEndpointId ?? string.Empty,
-                };
-            }
+                Identity = snapshot.ServiceRef.Identity.Clone(),
+                EndpointId = snapshot.ServiceRef.EndpointId ?? string.Empty,
+            };
         }
-        else if (!string.IsNullOrWhiteSpace(snapshot.ConnectorType) || !string.IsNullOrWhiteSpace(snapshot.ConnectorId))
+        else if (snapshot.ConnectorRef != null)
         {
             spec.ConnectorRef = new BoundConnectorRef
             {
-                ConnectorType = snapshot.ConnectorType ?? string.Empty,
-                ConnectorId = snapshot.ConnectorId ?? string.Empty,
+                ConnectorType = snapshot.ConnectorRef.ConnectorType ?? string.Empty,
+                ConnectorId = snapshot.ConnectorRef.ConnectorId ?? string.Empty,
             };
         }
-        else if (!string.IsNullOrWhiteSpace(snapshot.SecretName))
+        else if (snapshot.SecretRef != null)
         {
             spec.SecretRef = new BoundSecretRef
             {
-                SecretName = snapshot.SecretName,
+                SecretName = snapshot.SecretRef.SecretName,
             };
         }
 
@@ -180,15 +160,11 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
         {
             EndpointId = snapshot.EndpointId,
             DisplayName = snapshot.DisplayName,
-            Kind = Enum.TryParse<ServiceEndpointKind>(snapshot.Kind, out var kind)
-                ? kind
-                : ServiceEndpointKind.Unspecified,
+            Kind = snapshot.Kind,
             RequestTypeUrl = snapshot.RequestTypeUrl,
             ResponseTypeUrl = snapshot.ResponseTypeUrl,
             Description = snapshot.Description,
-            ExposureKind = Enum.TryParse<ServiceEndpointExposureKind>(snapshot.ExposureKind, out var exposureKind)
-                ? exposureKind
-                : ServiceEndpointExposureKind.Unspecified,
+            ExposureKind = snapshot.ExposureKind,
         };
         spec.PolicyIds.Add(snapshot.PolicyIds);
         return spec;

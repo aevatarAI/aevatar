@@ -10,19 +10,16 @@ namespace Aevatar.GAgentService.Governance.Application.Services;
 public sealed class InvokeAdmissionService : IInvokeAdmissionAuthorizer
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
-    private readonly IServiceEndpointCatalogQueryReader _endpointCatalogQueryReader;
-    private readonly IServicePolicyQueryReader _policyQueryReader;
+    private readonly IServiceConfigurationQueryReader _configurationQueryReader;
     private readonly IInvokeAdmissionEvaluator _evaluator;
 
     public InvokeAdmissionService(
         IServiceCatalogQueryReader catalogQueryReader,
-        IServiceEndpointCatalogQueryReader endpointCatalogQueryReader,
-        IServicePolicyQueryReader policyQueryReader,
+        IServiceConfigurationQueryReader configurationQueryReader,
         IInvokeAdmissionEvaluator evaluator)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
-        _endpointCatalogQueryReader = endpointCatalogQueryReader ?? throw new ArgumentNullException(nameof(endpointCatalogQueryReader));
-        _policyQueryReader = policyQueryReader ?? throw new ArgumentNullException(nameof(policyQueryReader));
+        _configurationQueryReader = configurationQueryReader ?? throw new ArgumentNullException(nameof(configurationQueryReader));
         _evaluator = evaluator ?? throw new ArgumentNullException(nameof(evaluator));
     }
 
@@ -42,10 +39,9 @@ public sealed class InvokeAdmissionService : IInvokeAdmissionAuthorizer
 
         var catalog = await _catalogQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Service definition '{serviceKey}' was not found.");
-        var endpointCatalog = await _endpointCatalogQueryReader.GetAsync(request.Identity, ct)
+        var configuration = await _configurationQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Endpoint catalog for '{serviceKey}' was not found.");
-        var policyCatalog = await _policyQueryReader.GetAsync(request.Identity, ct);
-        var endpointEntry = endpointCatalog.Endpoints.FirstOrDefault(x =>
+        var endpointEntry = configuration.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal))
             ?? throw new InvalidOperationException($"Endpoint '{request.EndpointId}' was not published for service '{serviceKey}'.");
 
@@ -58,11 +54,11 @@ public sealed class InvokeAdmissionService : IInvokeAdmissionAuthorizer
             {
                 EndpointId = endpointEntry.EndpointId,
                 DisplayName = endpointEntry.DisplayName,
-                Kind = Enum.TryParse<ServiceEndpointKind>(endpointEntry.Kind, out var kind) ? kind : ServiceEndpointKind.Unspecified,
+                Kind = endpointEntry.Kind,
                 RequestTypeUrl = endpointEntry.RequestTypeUrl,
                 ResponseTypeUrl = endpointEntry.ResponseTypeUrl,
                 Description = endpointEntry.Description,
-                ExposureKind = Enum.TryParse<ServiceEndpointExposureKind>(endpointEntry.ExposureKind, out var exposureKind) ? exposureKind : ServiceEndpointExposureKind.Unspecified,
+                ExposureKind = endpointEntry.ExposureKind,
                 PolicyIds = { endpointEntry.PolicyIds },
             },
             HasActiveDeployment = !string.IsNullOrWhiteSpace(deploymentId),
@@ -84,7 +80,7 @@ public sealed class InvokeAdmissionService : IInvokeAdmissionAuthorizer
 
         foreach (var policyId in referencedPolicyIds)
         {
-            var policy = policyCatalog?.Policies.FirstOrDefault(x =>
+            var policy = configuration.Policies.FirstOrDefault(x =>
                 string.Equals(x.PolicyId, policyId, StringComparison.Ordinal) &&
                 !x.Retired);
             if (policy != null)

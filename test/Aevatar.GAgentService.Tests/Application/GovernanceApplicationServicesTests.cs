@@ -20,7 +20,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class GovernanceApplicationServicesTests
 {
     [Fact]
-    public async Task ActivationCapabilityViewAssembler_ShouldComposeBindingsEndpointsPoliciesAndArtifactFallback()
+    public async Task ActivationCapabilityViewAssembler_ShouldComposeConfigurationAndArtifactFallback()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var artifactStore = new InMemoryServiceRevisionArtifactStore();
@@ -37,63 +37,51 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateCatalogSnapshot(identity, policyIds: ["policy-definition", "policy-missing"]),
             },
-            new RecordingBindingQueryReader
+            new RecordingConfigurationQueryReader
             {
-                GetResult = new ServiceBindingCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                GetResult = CreateConfigurationSnapshot(
+                    identity,
+                    bindings:
                     [
                         new ServiceBindingSnapshot(
                             "binding-a",
                             "Binding A",
-                            ServiceBindingKind.Service.ToString(),
+                            ServiceBindingKind.Service,
                             ["policy-binding"],
                             false,
-                            ServiceKeys.Build(GAgentServiceTestKit.CreateIdentity(serviceId: "dependency")),
-                            "run",
-                            null,
+                            new BoundServiceReferenceSnapshot(
+                                GAgentServiceTestKit.CreateIdentity(serviceId: "dependency"),
+                                "run"),
                             null,
                             null),
                         new ServiceBindingSnapshot(
                             "binding-retired",
                             "Retired",
-                            ServiceBindingKind.Secret.ToString(),
+                            ServiceBindingKind.Secret,
                             [],
                             true,
                             null,
                             null,
-                            null,
-                            null,
-                            "secret"),
+                            new BoundSecretReferenceSnapshot("secret")),
                     ],
-                    DateTimeOffset.UtcNow),
-            },
-            new RecordingEndpointCatalogQueryReader
-            {
-                GetResult = new ServiceEndpointCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                    endpoints:
                     [
                         new ServiceEndpointExposureSnapshot(
                             "published",
                             "Published",
-                            ServiceEndpointKind.Command.ToString(),
+                            ServiceEndpointKind.Command,
                             "type.googleapis.com/demo.Published",
                             string.Empty,
                             "published",
-                            ServiceEndpointExposureKind.Public.ToString(),
+                            ServiceEndpointExposureKind.Public,
                             ["policy-endpoint"]),
                     ],
-                    DateTimeOffset.UtcNow),
-            },
-            new RecordingPolicyQueryReader
-            {
-                GetResult = new ServicePolicyCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                    policies:
                     [
                         CreatePolicySnapshot("policy-definition"),
                         CreatePolicySnapshot("policy-binding"),
                         CreatePolicySnapshot("policy-endpoint"),
-                    ],
-                    DateTimeOffset.UtcNow),
+                    ]),
             },
             artifactStore);
 
@@ -113,9 +101,7 @@ public sealed class GovernanceApplicationServicesTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var assembler = new ActivationCapabilityViewAssembler(
             new RecordingCatalogQueryReader(),
-            new RecordingBindingQueryReader(),
-            new RecordingEndpointCatalogQueryReader(),
-            new RecordingPolicyQueryReader(),
+            new RecordingConfigurationQueryReader(),
             new InMemoryServiceRevisionArtifactStore());
 
         var blankRevision = () => assembler.GetAsync(identity, " ");
@@ -131,9 +117,10 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateCatalogSnapshot(identity),
             },
-            new RecordingBindingQueryReader(),
-            new RecordingEndpointCatalogQueryReader(),
-            new RecordingPolicyQueryReader(),
+            new RecordingConfigurationQueryReader
+            {
+                GetResult = CreateConfigurationSnapshot(identity),
+            },
             new InMemoryServiceRevisionArtifactStore());
 
         var missingArtifact = () => missingArtifactAssembler.GetAsync(identity, "r1");
@@ -158,32 +145,27 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateCatalogSnapshot(identity, policyIds: ["policy-definition", "policy-missing"]),
             },
-            new RecordingEndpointCatalogQueryReader
+            new RecordingConfigurationQueryReader
             {
-                GetResult = new ServiceEndpointCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                GetResult = CreateConfigurationSnapshot(
+                    identity,
+                    endpoints:
                     [
                         new ServiceEndpointExposureSnapshot(
                             "invoke",
                             "Invoke",
-                            ServiceEndpointKind.Command.ToString(),
+                            ServiceEndpointKind.Command,
                             "type.googleapis.com/demo.Invoke",
                             string.Empty,
                             "invoke",
-                            ServiceEndpointExposureKind.Public.ToString(),
+                            ServiceEndpointExposureKind.Public,
                             ["policy-endpoint"]),
                     ],
-                    DateTimeOffset.UtcNow),
-            },
-            new RecordingPolicyQueryReader
-            {
-                GetResult = new ServicePolicyCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                    policies:
                     [
                         CreatePolicySnapshot("policy-definition"),
                         CreatePolicySnapshot("policy-endpoint"),
-                    ],
-                    DateTimeOffset.UtcNow),
+                    ]),
             },
             evaluator);
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
@@ -210,7 +192,7 @@ public sealed class GovernanceApplicationServicesTests
     }
 
     [Fact]
-    public async Task InvokeAdmissionService_ShouldRejectMissingDefinitionMissingCatalogAndRejectedDecision()
+    public async Task InvokeAdmissionService_ShouldRejectMissingDefinitionMissingConfigurationAndRejectedDecision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var evaluator = new RecordingInvokeAdmissionEvaluator
@@ -242,8 +224,7 @@ public sealed class GovernanceApplicationServicesTests
 
         var missingDefinitionService = new InvokeAdmissionService(
             new RecordingCatalogQueryReader(),
-            new RecordingEndpointCatalogQueryReader(),
-            new RecordingPolicyQueryReader(),
+            new RecordingConfigurationQueryReader(),
             evaluator);
         var missingDefinition = () => missingDefinitionService.AuthorizeAsync(
             ServiceKeys.Build(identity),
@@ -254,21 +235,20 @@ public sealed class GovernanceApplicationServicesTests
         await missingDefinition.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Service definition*was not found*");
 
-        var missingCatalogService = new InvokeAdmissionService(
+        var missingConfigurationService = new InvokeAdmissionService(
             new RecordingCatalogQueryReader
             {
                 GetResult = CreateCatalogSnapshot(identity),
             },
-            new RecordingEndpointCatalogQueryReader(),
-            new RecordingPolicyQueryReader(),
+            new RecordingConfigurationQueryReader(),
             evaluator);
-        var missingCatalog = () => missingCatalogService.AuthorizeAsync(
+        var missingConfiguration = () => missingConfigurationService.AuthorizeAsync(
             ServiceKeys.Build(identity),
             "dep-1",
             artifact,
             artifact.Endpoints[0],
             request);
-        await missingCatalog.Should().ThrowAsync<InvalidOperationException>()
+        await missingConfiguration.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Endpoint catalog*was not found*");
 
         var rejectedService = new InvokeAdmissionService(
@@ -276,24 +256,23 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateCatalogSnapshot(identity),
             },
-            new RecordingEndpointCatalogQueryReader
+            new RecordingConfigurationQueryReader
             {
-                GetResult = new ServiceEndpointCatalogSnapshot(
-                    ServiceKeys.Build(identity),
+                GetResult = CreateConfigurationSnapshot(
+                    identity,
+                    endpoints:
                     [
                         new ServiceEndpointExposureSnapshot(
                             "invoke",
                             "Invoke",
-                            ServiceEndpointKind.Command.ToString(),
+                            ServiceEndpointKind.Command,
                             "type.googleapis.com/demo.Invoke",
                             string.Empty,
                             "invoke",
-                            ServiceEndpointExposureKind.Public.ToString(),
+                            ServiceEndpointExposureKind.Public,
                             []),
-                    ],
-                    DateTimeOffset.UtcNow),
+                    ]),
             },
-            new RecordingPolicyQueryReader(),
             evaluator);
         var rejected = () => rejectedService.AuthorizeAsync(
             ServiceKeys.Build(identity),
@@ -306,7 +285,7 @@ public sealed class GovernanceApplicationServicesTests
     }
 
     [Fact]
-    public async Task ServiceGovernanceCommandApplicationService_ShouldEnsureTargetsProjectionsAndDispatchCommands()
+    public async Task ServiceGovernanceCommandApplicationService_ShouldEnsureTargetProjectionAndDispatchCommands()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var targetProvisioner = new RecordingGovernanceCommandTargetProvisioner();
@@ -319,8 +298,6 @@ public sealed class GovernanceApplicationServicesTests
                 GetResult = CreateCatalogSnapshot(identity),
             },
             targetProvisioner,
-            projectionPort,
-            projectionPort,
             projectionPort);
 
         var bindingSpec = CreateServiceBindingSpec(identity, "binding-a", ServiceBindingKind.Service);
@@ -336,14 +313,10 @@ public sealed class GovernanceApplicationServicesTests
         await service.UpdatePolicyAsync(new UpdateServicePolicyCommand { Spec = policySpec.Clone() });
         await service.RetirePolicyAsync(new RetireServicePolicyCommand { Identity = identity.Clone(), PolicyId = "policy-a" });
 
-        targetProvisioner.BindingRequests.Should().HaveCount(3);
-        targetProvisioner.EndpointRequests.Should().HaveCount(2);
-        targetProvisioner.PolicyRequests.Should().HaveCount(3);
+        targetProvisioner.ConfigurationRequests.Should().HaveCount(8);
         projectionPort.ActorIds.Should().HaveCount(8);
         dispatchPort.Calls.Should().HaveCount(8);
-        dispatchPort.Calls.Select(x => x.actorId).Should().Contain(ServiceActorIds.BindingCatalog(identity));
-        dispatchPort.Calls.Select(x => x.actorId).Should().Contain(ServiceActorIds.EndpointCatalog(identity));
-        dispatchPort.Calls.Select(x => x.actorId).Should().Contain(ServiceActorIds.PolicyCatalog(identity));
+        dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Configuration(identity));
         dispatchPort.Calls.Select(x => x.envelope.Propagation.CorrelationId).Should().Contain($"{ServiceKeys.Build(identity)}:binding:binding-a");
         dispatchPort.Calls.Select(x => x.envelope.Propagation.CorrelationId).Should().Contain($"{ServiceKeys.Build(identity)}:policy:policy-a");
         dispatchPort.Calls.Select(x => x.envelope.Propagation.CorrelationId).Should().Contain(ServiceKeys.Build(identity));
@@ -359,8 +332,6 @@ public sealed class GovernanceApplicationServicesTests
             new RecordingDispatchPort(),
             new RecordingCatalogQueryReader(),
             new RecordingGovernanceCommandTargetProvisioner(),
-            new RecordingGovernanceProjectionPort(),
-            new RecordingGovernanceProjectionPort(),
             new RecordingGovernanceProjectionPort());
 
         var missingDefinition = () => missingDefinitionService.CreateBindingAsync(new CreateServiceBindingCommand
@@ -372,7 +343,7 @@ public sealed class GovernanceApplicationServicesTests
 
         var targetProvisioner = new RecordingGovernanceCommandTargetProvisioner
         {
-            EndpointException = new InvalidOperationException("endpoint target failed"),
+            ConfigurationException = new InvalidOperationException("configuration target failed"),
         };
         var failingService = new ServiceGovernanceCommandApplicationService(
             new RecordingDispatchPort(),
@@ -381,8 +352,6 @@ public sealed class GovernanceApplicationServicesTests
                 GetResult = CreateCatalogSnapshot(identity),
             },
             targetProvisioner,
-            new RecordingGovernanceProjectionPort(),
-            new RecordingGovernanceProjectionPort(),
             new RecordingGovernanceProjectionPort());
 
         var failingProvision = () => failingService.CreateEndpointCatalogAsync(new CreateServiceEndpointCatalogCommand
@@ -390,7 +359,7 @@ public sealed class GovernanceApplicationServicesTests
             Spec = CreateEndpointCatalogSpec(identity, "invoke"),
         });
         await failingProvision.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("endpoint target failed");
+            .WithMessage("configuration target failed");
     }
 
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(
@@ -410,6 +379,19 @@ public sealed class GovernanceApplicationServicesTests
             ServiceDeploymentStatus.Unspecified.ToString(),
             [],
             policyIds ?? [],
+            DateTimeOffset.UtcNow);
+
+    private static ServiceConfigurationSnapshot CreateConfigurationSnapshot(
+        ServiceIdentity identity,
+        IReadOnlyList<ServiceBindingSnapshot>? bindings = null,
+        IReadOnlyList<ServiceEndpointExposureSnapshot>? endpoints = null,
+        IReadOnlyList<ServicePolicySnapshot>? policies = null) =>
+        new(
+            ServiceKeys.Build(identity),
+            identity.Clone(),
+            bindings ?? [],
+            endpoints ?? [],
+            policies ?? [],
             DateTimeOffset.UtcNow);
 
     private static ServicePolicySnapshot CreatePolicySnapshot(string policyId) =>
@@ -493,6 +475,9 @@ public sealed class GovernanceApplicationServicesTests
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
 
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
             string tenantId,
             string appId,
@@ -502,27 +487,11 @@ public sealed class GovernanceApplicationServicesTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
     }
 
-    private sealed class RecordingBindingQueryReader : IServiceBindingQueryReader
+    private sealed class RecordingConfigurationQueryReader : IServiceConfigurationQueryReader
     {
-        public ServiceBindingCatalogSnapshot? GetResult { get; init; }
+        public ServiceConfigurationSnapshot? GetResult { get; init; }
 
-        public Task<ServiceBindingCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(GetResult);
-    }
-
-    private sealed class RecordingEndpointCatalogQueryReader : IServiceEndpointCatalogQueryReader
-    {
-        public ServiceEndpointCatalogSnapshot? GetResult { get; init; }
-
-        public Task<ServiceEndpointCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(GetResult);
-    }
-
-    private sealed class RecordingPolicyQueryReader : IServicePolicyQueryReader
-    {
-        public ServicePolicyCatalogSnapshot? GetResult { get; init; }
-
-        public Task<ServicePolicyCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+        public Task<ServiceConfigurationSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
     }
 
@@ -541,38 +510,21 @@ public sealed class GovernanceApplicationServicesTests
 
     private sealed class RecordingGovernanceCommandTargetProvisioner : IServiceGovernanceCommandTargetProvisioner
     {
-        public List<ServiceIdentity> BindingRequests { get; } = [];
+        public List<ServiceIdentity> ConfigurationRequests { get; } = [];
 
-        public List<ServiceIdentity> EndpointRequests { get; } = [];
+        public Exception? ConfigurationException { get; init; }
 
-        public List<ServiceIdentity> PolicyRequests { get; } = [];
-
-        public Exception? EndpointException { get; init; }
-
-        public Task<string> EnsureBindingCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        public Task<string> EnsureConfigurationTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            BindingRequests.Add(identity.Clone());
-            return Task.FromResult(ServiceActorIds.BindingCatalog(identity));
-        }
+            ConfigurationRequests.Add(identity.Clone());
+            if (ConfigurationException != null)
+                throw ConfigurationException;
 
-        public Task<string> EnsureEndpointCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            EndpointRequests.Add(identity.Clone());
-            if (EndpointException != null)
-                throw EndpointException;
-
-            return Task.FromResult(ServiceActorIds.EndpointCatalog(identity));
-        }
-
-        public Task<string> EnsurePolicyCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            PolicyRequests.Add(identity.Clone());
-            return Task.FromResult(ServiceActorIds.PolicyCatalog(identity));
+            return Task.FromResult(ServiceActorIds.Configuration(identity));
         }
     }
 
-    private sealed class RecordingGovernanceProjectionPort
-        : IServiceBindingProjectionPort, IServiceEndpointCatalogProjectionPort, IServicePolicyProjectionPort
+    private sealed class RecordingGovernanceProjectionPort : IServiceConfigurationProjectionPort
     {
         public List<string> ActorIds { get; } = [];
 

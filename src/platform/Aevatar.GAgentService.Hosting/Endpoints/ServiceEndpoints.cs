@@ -25,7 +25,7 @@ public static partial class ServiceEndpoints
         group.MapGet("/{serviceId}", HandleGetServiceAsync);
         group.MapGet("/{serviceId}/revisions", HandleGetRevisionsAsync);
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
-        group.MapGAgentServicePhase3Endpoints();
+        group.MapGAgentServiceServingEndpoints();
         group.MapGAgentServiceGovernanceEndpoints();
         return app;
     }
@@ -165,14 +165,14 @@ public static partial class ServiceEndpoints
 
     private static Task<IReadOnlyList<ServiceCatalogSnapshot>> HandleListServicesAsync(
         [AsParameters] ServiceIdentityQuery query,
-        [FromServices] IServiceQueryPort queryPort,
+        [FromServices] IServiceLifecycleQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.ListServicesAsync(query.TenantId ?? string.Empty, query.AppId ?? string.Empty, query.Namespace ?? string.Empty, query.Take, ct);
 
     private static Task<ServiceCatalogSnapshot?> HandleGetServiceAsync(
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
-        [FromServices] IServiceQueryPort queryPort,
+        [FromServices] IServiceLifecycleQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.GetServiceAsync(
             ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),
@@ -181,7 +181,7 @@ public static partial class ServiceEndpoints
     private static Task<ServiceRevisionCatalogSnapshot?> HandleGetRevisionsAsync(
         string serviceId,
         [AsParameters] ServiceIdentityQuery query,
-        [FromServices] IServiceQueryPort queryPort,
+        [FromServices] IServiceLifecycleQueryPort queryPort,
         CancellationToken ct) =>
         queryPort.GetServiceRevisionsAsync(
             ToIdentity(query.TenantId, query.AppId, query.Namespace, serviceId),

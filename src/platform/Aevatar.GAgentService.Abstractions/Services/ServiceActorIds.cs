@@ -8,15 +8,17 @@ public static class ServiceActorIds
 
     public static string Deployment(ServiceIdentity identity) => Build("deployment", identity);
 
-    public static string ServingSet(ServiceIdentity identity) => Build("serving-set", identity);
+    public static string Configuration(ServiceIdentity identity) => Build("configuration", identity);
 
-    public static string Rollout(ServiceIdentity identity) => Build("rollout", identity);
-
-    public static string BindingCatalog(ServiceIdentity identity) => Build("bindings", identity);
+    public static string Bindings(ServiceIdentity identity) => Build("bindings", identity);
 
     public static string EndpointCatalog(ServiceIdentity identity) => Build("endpoint-catalog", identity);
 
-    public static string PolicyCatalog(ServiceIdentity identity) => Build("policies", identity);
+    public static string Policies(ServiceIdentity identity) => Build("policies", identity);
+
+    public static string ServingSet(ServiceIdentity identity) => Build("serving-set", identity);
+
+    public static string Rollout(ServiceIdentity identity) => Build("rollout", identity);
 
     private static string Build(string prefix, ServiceIdentity identity) =>
         $"gagent-service:{prefix}:{ServiceKeys.Build(identity)}";

@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 
-- 状态：Proposed
+- 状态：Superseded
 - 版本：R1
 - 日期：2026-03-14
 - 适用范围：
@@ -27,6 +27,19 @@
   - `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/AevatarPlatformHostBuilderExtensions.cs`
 
 ## 2. 一句话结论
+
+本文保留 `GAgentService` 平台最初的全量蓝图，仅作为历史基线。
+
+当前实现已经有两点关键收敛，与本文原始设计不同：
+
+1. Phase 2 治理面已收敛为单一 `ServiceConfigurationGAgent`，不再保留 `ServiceBindingManagerGAgent / ServiceEndpointCatalogGAgent / ServicePolicyGAgent` 三个长期 actor。
+2. 平台查询面已拆成 `IServiceLifecycleQueryPort / IServiceServingQueryPort`，不再继续扩张 `IServiceQueryPort`。
+
+以当前实现为准时，请优先阅读：
+
+1. `docs/architecture/2026-03-14-gagent-service-phase-2-binding-policy-blueprint.md`
+2. `docs/architecture/2026-03-15-gagent-service-slimming-refactor-blueprint.md`
+3. `docs/architecture/2026-03-15-gagent-service-phase-3-serving-rollout-blueprint.md`
 
 当前仓库已经具备：
 

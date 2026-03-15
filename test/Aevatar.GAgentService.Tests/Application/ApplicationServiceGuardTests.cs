@@ -104,24 +104,34 @@ public sealed class ApplicationServiceGuardTests
     }
 
     [Fact]
-    public void ServiceQueryApplicationService_ShouldValidateConstructorArguments()
+    public void ServiceLifecycleQueryApplicationService_ShouldValidateConstructorArguments()
     {
-        Action nullCatalogReader = () => new ServiceQueryApplicationService(
+        Action nullCatalogReader = () => new ServiceLifecycleQueryApplicationService(
             null!,
             new NoOpRevisionCatalogQueryReader(),
-            new NoOpDeploymentCatalogQueryReader(),
-            new NoOpServingSetQueryReader(),
-            new NoOpRolloutQueryReader(),
-            new NoOpTrafficViewQueryReader());
-        Action nullTrafficReader = () => new ServiceQueryApplicationService(
+            new NoOpDeploymentCatalogQueryReader());
+        Action nullDeploymentReader = () => new ServiceLifecycleQueryApplicationService(
             new NoOpCatalogQueryReader(),
             new NoOpRevisionCatalogQueryReader(),
-            new NoOpDeploymentCatalogQueryReader(),
+            null!);
+
+        nullCatalogReader.Should().Throw<ArgumentNullException>();
+        nullDeploymentReader.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ServiceServingQueryApplicationService_ShouldValidateConstructorArguments()
+    {
+        Action nullServingReader = () => new ServiceServingQueryApplicationService(
+            null!,
+            new NoOpRolloutQueryReader(),
+            new NoOpTrafficViewQueryReader());
+        Action nullTrafficReader = () => new ServiceServingQueryApplicationService(
             new NoOpServingSetQueryReader(),
             new NoOpRolloutQueryReader(),
             null!);
 
-        nullCatalogReader.Should().Throw<ArgumentNullException>();
+        nullServingReader.Should().Throw<ArgumentNullException>();
         nullTrafficReader.Should().Throw<ArgumentNullException>();
     }
 
@@ -132,48 +142,35 @@ public sealed class ApplicationServiceGuardTests
             null!,
             new NoOpCatalogQueryReader(),
             new NoOpGovernanceCommandTargetProvisioner(),
-            new NoOpGovernanceProjectionPort(),
-            new NoOpGovernanceProjectionPort(),
             new NoOpGovernanceProjectionPort());
         Action nullCatalogReader = () => new ServiceGovernanceCommandApplicationService(
             new NoOpActorDispatchPort(),
             null!,
             new NoOpGovernanceCommandTargetProvisioner(),
-            new NoOpGovernanceProjectionPort(),
-            new NoOpGovernanceProjectionPort(),
             new NoOpGovernanceProjectionPort());
         Action nullProvisioner = () => new ServiceGovernanceCommandApplicationService(
             new NoOpActorDispatchPort(),
             new NoOpCatalogQueryReader(),
             null!,
-            new NoOpGovernanceProjectionPort(),
-            new NoOpGovernanceProjectionPort(),
             new NoOpGovernanceProjectionPort());
+        Action nullProjectionPort = () => new ServiceGovernanceCommandApplicationService(
+            new NoOpActorDispatchPort(),
+            new NoOpCatalogQueryReader(),
+            new NoOpGovernanceCommandTargetProvisioner(),
+            null!);
 
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullCatalogReader.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
+        nullProjectionPort.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void ServiceGovernanceQueryApplicationService_ShouldValidateConstructorArguments()
     {
-        Action nullBindingReader = () => new ServiceGovernanceQueryApplicationService(
-            null!,
-            new NoOpEndpointCatalogQueryReader(),
-            new NoOpPolicyQueryReader());
-        Action nullEndpointReader = () => new ServiceGovernanceQueryApplicationService(
-            new NoOpBindingQueryReader(),
-            null!,
-            new NoOpPolicyQueryReader());
-        Action nullPolicyReader = () => new ServiceGovernanceQueryApplicationService(
-            new NoOpBindingQueryReader(),
-            new NoOpEndpointCatalogQueryReader(),
-            null!);
+        Action nullConfigurationReader = () => new ServiceGovernanceQueryApplicationService(null!);
 
-        nullBindingReader.Should().Throw<ArgumentNullException>();
-        nullEndpointReader.Should().Throw<ArgumentNullException>();
-        nullPolicyReader.Should().Throw<ArgumentNullException>();
+        nullConfigurationReader.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -181,18 +178,19 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullCatalogReader = () => new ActivationCapabilityViewAssembler(
             null!,
-            new NoOpBindingQueryReader(),
-            new NoOpEndpointCatalogQueryReader(),
-            new NoOpPolicyQueryReader(),
+            new NoOpConfigurationQueryReader(),
+            new InMemoryServiceRevisionArtifactStore());
+        Action nullConfigurationReader = () => new ActivationCapabilityViewAssembler(
+            new NoOpCatalogQueryReader(),
+            null!,
             new InMemoryServiceRevisionArtifactStore());
         Action nullArtifactStore = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
-            new NoOpBindingQueryReader(),
-            new NoOpEndpointCatalogQueryReader(),
-            new NoOpPolicyQueryReader(),
+            new NoOpConfigurationQueryReader(),
             null!);
 
         nullCatalogReader.Should().Throw<ArgumentNullException>();
+        nullConfigurationReader.Should().Throw<ArgumentNullException>();
         nullArtifactStore.Should().Throw<ArgumentNullException>();
     }
 
@@ -201,16 +199,19 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullCatalogReader = () => new InvokeAdmissionService(
             null!,
-            new NoOpEndpointCatalogQueryReader(),
-            new NoOpPolicyQueryReader(),
+            new NoOpConfigurationQueryReader(),
+            new NoOpInvokeAdmissionEvaluator());
+        Action nullConfigurationReader = () => new InvokeAdmissionService(
+            new NoOpCatalogQueryReader(),
+            null!,
             new NoOpInvokeAdmissionEvaluator());
         Action nullEvaluator = () => new InvokeAdmissionService(
             new NoOpCatalogQueryReader(),
-            new NoOpEndpointCatalogQueryReader(),
-            new NoOpPolicyQueryReader(),
+            new NoOpConfigurationQueryReader(),
             null!);
 
         nullCatalogReader.Should().Throw<ArgumentNullException>();
+        nullConfigurationReader.Should().Throw<ArgumentNullException>();
         nullEvaluator.Should().Throw<ArgumentNullException>();
     }
 
@@ -230,15 +231,16 @@ public sealed class ApplicationServiceGuardTests
 
     private sealed class NoOpGovernanceCommandTargetProvisioner : IServiceGovernanceCommandTargetProvisioner
     {
-        public Task<string> EnsureBindingCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("binding");
-        public Task<string> EnsureEndpointCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("endpoint");
-        public Task<string> EnsurePolicyCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("policy");
+        public Task<string> EnsureConfigurationTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("configuration");
     }
 
     private sealed class NoOpCatalogQueryReader : IServiceCatalogQueryReader
     {
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceCatalogSnapshot?>(null);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
@@ -305,26 +307,13 @@ public sealed class ApplicationServiceGuardTests
             Task.CompletedTask;
     }
 
-    private sealed class NoOpBindingQueryReader : IServiceBindingQueryReader
+    private sealed class NoOpConfigurationQueryReader : IServiceConfigurationQueryReader
     {
-        public Task<ServiceBindingCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+        public Task<ServiceConfigurationSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceConfigurationSnapshot?>(null);
     }
 
-    private sealed class NoOpEndpointCatalogQueryReader : IServiceEndpointCatalogQueryReader
-    {
-        public Task<ServiceEndpointCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceEndpointCatalogSnapshot?>(null);
-    }
-
-    private sealed class NoOpPolicyQueryReader : IServicePolicyQueryReader
-    {
-        public Task<ServicePolicyCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
-    }
-
-    private sealed class NoOpGovernanceProjectionPort
-        : IServiceBindingProjectionPort, IServiceEndpointCatalogProjectionPort, IServicePolicyProjectionPort
+    private sealed class NoOpGovernanceProjectionPort : IServiceConfigurationProjectionPort
     {
         public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }

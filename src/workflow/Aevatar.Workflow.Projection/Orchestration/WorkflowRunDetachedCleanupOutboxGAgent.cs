@@ -313,13 +313,15 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
     private async Task DestroyCreatedActorsAsync(WorkflowRunDetachedCleanupOutboxEntry entry)
     {
         var actorPort = Services.GetRequiredService<IWorkflowRunActorPort>();
+        var actorIds = entry.CreatedActorIds
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Array.Reverse(actorIds);
 
         Exception? firstException = null;
 
-        foreach (var actorId in entry.CreatedActorIds
-                     .Where(static x => !string.IsNullOrWhiteSpace(x))
-                     .Distinct(StringComparer.Ordinal)
-                     .Reverse())
+        foreach (var actorId in actorIds)
         {
             try
             {

@@ -10,17 +10,20 @@ namespace Aevatar.GAgentService.Governance.Infrastructure.Activation;
 public sealed class DefaultServiceGovernanceCommandTargetProvisioner
     : ActorTargetProvisionerBase, IServiceGovernanceCommandTargetProvisioner
 {
-    public DefaultServiceGovernanceCommandTargetProvisioner(IActorRuntime runtime)
+    private readonly IServiceGovernanceLegacyImporter _legacyImporter;
+
+    public DefaultServiceGovernanceCommandTargetProvisioner(
+        IActorRuntime runtime,
+        IServiceGovernanceLegacyImporter legacyImporter)
         : base(runtime)
     {
+        _legacyImporter = legacyImporter ?? throw new ArgumentNullException(nameof(legacyImporter));
     }
 
-    public Task<string> EnsureBindingCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        EnsureActorAsync<ServiceBindingManagerGAgent>(ServiceActorIds.BindingCatalog(identity), ct);
-
-    public Task<string> EnsureEndpointCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        EnsureActorAsync<ServiceEndpointCatalogGAgent>(ServiceActorIds.EndpointCatalog(identity), ct);
-
-    public Task<string> EnsurePolicyCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        EnsureActorAsync<ServicePolicyGAgent>(ServiceActorIds.PolicyCatalog(identity), ct);
+    public async Task<string> EnsureConfigurationTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        _ = await _legacyImporter.ImportIfNeededAsync(identity, ct);
+        return await EnsureActorAsync<ServiceConfigurationGAgent>(ServiceActorIds.Configuration(identity), ct);
+    }
 }

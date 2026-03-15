@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -34,12 +35,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceCapability(configuration);
 
         services.Should().Contain(x => x.ServiceType == typeof(IServiceCommandPort));
-        services.Should().Contain(x => x.ServiceType == typeof(IServiceQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IServiceLifecycleQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IActivationCapabilityViewReader));
         services.Should().Contain(x => x.ServiceType == typeof(IInvokeAdmissionAuthorizer));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(ServiceGovernanceLegacyMigrationHostedService));
         services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
@@ -243,12 +248,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceBindingCatalogReadModel>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceEndpointCatalogReadModel>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionWriteDispatcher<ServicePolicyCatalogReadModel>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<ServiceBindingCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<ServiceEndpointCatalogReadModel, string>>().Should().NotBeNull();
-        provider.GetRequiredService<IProjectionDocumentReader<ServicePolicyCatalogReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<ServiceConfigurationReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<ServiceConfigurationReadModel, string>>().Should().NotBeNull();
     }
 
     [Fact]
@@ -317,7 +318,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
         using var provider = services.BuildServiceProvider();
 
-        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ServiceBindingCatalogReadModel, string>>();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<ServiceConfigurationReadModel, string>>();
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Endpoints is empty*");

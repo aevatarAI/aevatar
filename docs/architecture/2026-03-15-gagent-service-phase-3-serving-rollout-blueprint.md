@@ -17,7 +17,7 @@
 
 ## 2. 一句话结论
 
-Phase 1 已经完成了统一 `publish / revision / deployment / invoke`，Phase 2 已经完成了 `binding / endpoint exposure / access rules / admission`。
+Phase 1 已经完成了统一 `publish / revision / deployment / invoke`，Phase 2 已经完成了 `service configuration / access rules / admission`。
 
 Phase 3 真正需要补的是：
 
@@ -62,7 +62,7 @@ Phase 3 不应再把 runtime topology、placement、replica orchestration 拉进
 4. 平台有长期 `ServiceRolloutExecution`，承载 rollout 的推进、暂停、回滚、完成与失败事实。
 5. gateway 不再只解析 `service -> active deployment`，而是解析 `service + endpoint + caller scope -> effective traffic allocation`。
 6. rollout 与 serving 状态都进入统一 projection/read model/query 主链，不通过 actor query 拼视图。
-7. invoke admission 继续复用 Phase 2 的 endpoint exposure 和 access rules，不在 Phase 3 重复造治理模型。
+7. invoke admission 继续复用 Phase 2 的 `ServiceConfiguration` 与 access rules，不在 Phase 3 重复造治理模型。
 
 ### 4.2 明确不在 Phase 3 解决
 
@@ -94,11 +94,9 @@ Phase 3 不应再把 runtime topology、placement、replica orchestration 拉进
 2. `ServiceRevision`
 3. `PreparedServiceRevisionArtifact`
 4. `ServiceDeployment`
-5. `ServiceBinding`
-6. `ServiceEndpointCatalog`
-7. `ServicePolicy`
-8. `ActivationAdmissionDecision`
-9. `InvokeAdmissionDecision`
+5. `ServiceConfiguration`
+6. `ActivationAdmissionDecision`
+7. `InvokeAdmissionDecision`
 
 这些对象仍然是 Phase 3 的权威输入或前置约束，不在本阶段拆散。
 
@@ -164,8 +162,7 @@ flowchart LR
         DEP["ServiceDeploymentManagerGAgent"]
         SSET["ServiceServingSetManagerGAgent"]
         ROLL["ServiceRolloutManagerGAgent"]
-        EPC["ServiceEndpointCatalogGAgent"]
-        POL["ServicePolicyGAgent"]
+        CFG["ServiceConfigurationGAgent"]
     end
 
     subgraph rm ["Read Models"]
@@ -186,8 +183,7 @@ flowchart LR
     APP --> DEP
     APP --> SSET
     APP --> ROLL
-    EPC --> APP
-    POL --> APP
+    CFG --> APP
     SSET --> EVT
     ROLL --> EVT
     DEP --> EVT
@@ -210,8 +206,7 @@ flowchart LR
 继续复用：
 
 1. `ServiceDeploymentManagerGAgent`
-2. `ServiceEndpointCatalogGAgent`
-3. `ServicePolicyGAgent`
+2. `ServiceConfigurationGAgent`
 
 ### 8.1 职责边界
 
@@ -226,6 +221,9 @@ flowchart LR
 - `ServiceDeploymentManagerGAgent`
   - 继续负责 deployment 的创建、激活、退役
   - 不承担 rollout 状态机
+- `ServiceConfigurationGAgent`
+  - 继续负责 bindings、endpoint exposure、invoke access rules
+  - 作为 rollout 前置校验和 gateway invoke admission 的配置事实源
 
 ## 9. 对象模型决议
 
@@ -309,7 +307,7 @@ Phase 3 后，gateway 的标准解析骨架应收敛为：
 其中：
 
 1. `Load Traffic View` 只读 read model
-2. `Evaluate Invoke Admission` 继续复用 Phase 2 的 endpoint exposure 与 access rules
+2. `Evaluate Invoke Admission` 继续复用 Phase 2 的 `ServiceConfiguration` 与 access rules
 3. `Select Serving Target` 只基于 typed traffic allocation 做确定性选择
 4. 不能再出现 `service -> active deployment` 的单值假设
 
@@ -450,7 +448,7 @@ Phase 3 完成时，应满足：
    - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceRolloutQueryReader.cs`
    - `src/platform/Aevatar.GAgentService.Projection/Queries/ServiceTrafficViewQueryReader.cs`
 6. hosting API
-   - `src/platform/Aevatar.GAgentService.Hosting/Endpoints/ServicePhase3Endpoints.cs`
+   - `src/platform/Aevatar.GAgentService.Hosting/Endpoints/ServiceServingEndpoints.cs`
 
 ### 16.2 当前验证结果
 

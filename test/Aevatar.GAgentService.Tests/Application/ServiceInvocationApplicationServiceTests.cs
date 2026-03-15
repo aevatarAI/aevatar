@@ -94,6 +94,9 @@ public sealed class ServiceInvocationApplicationServiceTests
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
 
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
             string tenantId,
             string appId,

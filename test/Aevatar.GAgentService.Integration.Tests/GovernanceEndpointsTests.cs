@@ -27,12 +27,18 @@ public sealed class GovernanceEndpointsTests
                 new ServiceBindingSnapshot(
                     "binding-a",
                     "Binding A",
-                    "Service",
+                    ServiceBindingKind.Service,
                     ["policy-a"],
                     false,
-                    "tenant:app:ns:dependency",
-                    "run",
-                    null,
+                    new BoundServiceReferenceSnapshot(
+                        new ServiceIdentity
+                        {
+                            TenantId = "tenant",
+                            AppId = "app",
+                            Namespace = "ns",
+                            ServiceId = "dependency",
+                        },
+                        "run"),
                     null,
                     null),
             ],
@@ -146,11 +152,11 @@ public sealed class GovernanceEndpointsTests
                 new ServiceEndpointExposureSnapshot(
                     "chat",
                     "Chat",
-                    "Chat",
+                    ServiceEndpointKind.Chat,
                     "type.googleapis.com/demo.ChatRequest",
                     "type.googleapis.com/demo.ChatResponse",
                     "chat",
-                    "Public",
+                    ServiceEndpointExposureKind.Public,
                     ["policy-a"]),
             ],
             DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"));

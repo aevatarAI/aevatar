@@ -1,6 +1,9 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Projection.Orchestration;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
@@ -49,4 +52,58 @@ internal sealed class RecordingDocumentStore<TReadModel> :
         LastListTake = take;
         return Task.FromResult<IReadOnlyList<TReadModel>>(_items.Take(take).ToList());
     }
+}
+
+internal sealed class RecordingProjectionActivationService<TContext>
+    : IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>
+    where TContext : class, IProjectionContext
+{
+    private readonly Func<string, string, TContext> _contextFactory;
+
+    public RecordingProjectionActivationService(Func<string, string, TContext> contextFactory)
+    {
+        _contextFactory = contextFactory;
+    }
+
+    public List<(string rootEntityId, string projectionName, string input, string commandId)> Calls { get; } = [];
+
+    public Task<ServiceProjectionRuntimeLease<TContext>> EnsureAsync(
+        string rootEntityId,
+        string projectionName,
+        string input,
+        string commandId,
+        CancellationToken ct = default)
+    {
+        Calls.Add((rootEntityId, projectionName, input, commandId));
+        return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
+            rootEntityId,
+            _contextFactory(rootEntityId, projectionName)));
+    }
+}
+
+internal sealed class RecordingProjectionLifecycle<TContext>
+    : IProjectionLifecycleService<TContext, IReadOnlyList<string>>
+    where TContext : class, IProjectionContext
+{
+    public List<TContext> StartedContexts { get; } = [];
+
+    public List<TContext> StoppedContexts { get; } = [];
+
+    public Task StartAsync(TContext context, CancellationToken ct = default)
+    {
+        StartedContexts.Add(context);
+        return Task.CompletedTask;
+    }
+
+    public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
+    public Task StopAsync(TContext context, CancellationToken ct = default)
+    {
+        StoppedContexts.Add(context);
+        return Task.CompletedTask;
+    }
+
+    public Task CompleteAsync(TContext context, IReadOnlyList<string> completion, CancellationToken ct = default) =>
+        Task.CompletedTask;
 }

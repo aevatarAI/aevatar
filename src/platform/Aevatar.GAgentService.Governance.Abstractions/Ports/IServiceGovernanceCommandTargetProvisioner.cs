@@ -4,15 +4,7 @@ namespace Aevatar.GAgentService.Governance.Abstractions.Ports;
 
 public interface IServiceGovernanceCommandTargetProvisioner
 {
-    Task<string> EnsureBindingCatalogTargetAsync(
-        ServiceIdentity identity,
-        CancellationToken ct = default);
-
-    Task<string> EnsureEndpointCatalogTargetAsync(
-        ServiceIdentity identity,
-        CancellationToken ct = default);
-
-    Task<string> EnsurePolicyCatalogTargetAsync(
+    Task<string> EnsureConfigurationTargetAsync(
         ServiceIdentity identity,
         CancellationToken ct = default);
 }

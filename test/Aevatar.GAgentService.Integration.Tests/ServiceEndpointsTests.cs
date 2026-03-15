@@ -154,7 +154,7 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
-    public async Task Phase3Endpoints_ShouldDispatchCommandsAndReturnSnapshots()
+    public async Task ServingEndpoints_ShouldDispatchCommandsAndReturnSnapshots()
     {
         await using var host = await EndpointTestHost.StartAsync();
         host.QueryPort.GetServiceDeploymentsResult = new ServiceDeploymentCatalogSnapshot(
@@ -276,7 +276,7 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
-    public async Task Phase3ActionEndpoints_ShouldDispatchDeactivateAndRolloutLifecycleCommands()
+    public async Task ServingActionEndpoints_ShouldDispatchDeactivateAndRolloutLifecycleCommands()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
@@ -612,7 +612,8 @@ public sealed class ServiceEndpointsTests
             var queryPort = new RecordingServiceQueryPort();
             var invocationPort = new RecordingServiceInvocationPort();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
-            builder.Services.AddSingleton<IServiceQueryPort>(queryPort);
+            builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
+            builder.Services.AddSingleton<IServiceServingQueryPort>(queryPort);
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
 
             var app = builder.Build();
@@ -750,7 +751,7 @@ public sealed class ServiceEndpointsTests
         }
     }
 
-    private sealed class RecordingServiceQueryPort : IServiceQueryPort
+    private sealed class RecordingServiceQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
 

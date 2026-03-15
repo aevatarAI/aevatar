@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Abstractions";
+
+import "service_binding.proto";
+import "service_endpoint_catalog.proto";
+import "service_endpoint.proto";
+import "service_policy.proto";
+
+message ServiceConfigurationState {
+  ServiceIdentity identity = 1;
+  map<string, ServiceBindingRecordState> bindings = 2;
+  ServiceEndpointCatalogSpec endpoint_catalog = 3;
+  map<string, ServicePolicyRecordState> policies = 4;
+  int64 last_applied_event_version = 5;
+  string last_event_id = 6;
+}
+
+message ImportLegacyServiceConfigurationCommand {
+  ServiceConfigurationState state = 1;
+}
+
+message LegacyServiceConfigurationImportedEvent {
+  ServiceConfigurationState state = 1;
+}

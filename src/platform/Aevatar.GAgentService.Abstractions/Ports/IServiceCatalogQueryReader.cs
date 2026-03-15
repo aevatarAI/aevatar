@@ -8,6 +8,10 @@ public interface IServiceCatalogQueryReader
         ServiceIdentity identity,
         CancellationToken ct = default);
 
+    Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(
+        int take = 1000,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
         string tenantId,
         string appId,

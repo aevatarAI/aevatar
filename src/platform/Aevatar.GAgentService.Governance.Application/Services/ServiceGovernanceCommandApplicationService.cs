@@ -16,24 +16,18 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceGovernanceCommandTargetProvisioner _targetProvisioner;
-    private readonly IServiceBindingProjectionPort _bindingProjectionPort;
-    private readonly IServiceEndpointCatalogProjectionPort _endpointCatalogProjectionPort;
-    private readonly IServicePolicyProjectionPort _policyProjectionPort;
+    private readonly IServiceConfigurationProjectionPort _configurationProjectionPort;
 
     public ServiceGovernanceCommandApplicationService(
         IActorDispatchPort dispatchPort,
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceGovernanceCommandTargetProvisioner targetProvisioner,
-        IServiceBindingProjectionPort bindingProjectionPort,
-        IServiceEndpointCatalogProjectionPort endpointCatalogProjectionPort,
-        IServicePolicyProjectionPort policyProjectionPort)
+        IServiceConfigurationProjectionPort configurationProjectionPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _targetProvisioner = targetProvisioner ?? throw new ArgumentNullException(nameof(targetProvisioner));
-        _bindingProjectionPort = bindingProjectionPort ?? throw new ArgumentNullException(nameof(bindingProjectionPort));
-        _endpointCatalogProjectionPort = endpointCatalogProjectionPort ?? throw new ArgumentNullException(nameof(endpointCatalogProjectionPort));
-        _policyProjectionPort = policyProjectionPort ?? throw new ArgumentNullException(nameof(policyProjectionPort));
+        _configurationProjectionPort = configurationProjectionPort ?? throw new ArgumentNullException(nameof(configurationProjectionPort));
     }
 
     public async Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(
@@ -41,8 +35,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsureBindingCatalogTargetAsync(command.Spec.Identity, ct);
-        await _bindingProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
     }
 
@@ -51,8 +45,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsureBindingCatalogTargetAsync(command.Spec.Identity, ct);
-        await _bindingProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
     }
 
@@ -61,8 +55,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Identity, ct);
-        var actorId = await _targetProvisioner.EnsureBindingCatalogTargetAsync(command.Identity, ct);
-        await _bindingProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Identity, command.BindingId), ct);
     }
 
@@ -71,8 +65,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsureEndpointCatalogTargetAsync(command.Spec.Identity, ct);
-        await _endpointCatalogProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
@@ -81,8 +75,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsureEndpointCatalogTargetAsync(command.Spec.Identity, ct);
-        await _endpointCatalogProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
     }
 
@@ -91,8 +85,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsurePolicyCatalogTargetAsync(command.Spec.Identity, ct);
-        await _policyProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
     }
 
@@ -101,8 +95,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
-        var actorId = await _targetProvisioner.EnsurePolicyCatalogTargetAsync(command.Spec.Identity, ct);
-        await _policyProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
     }
 
@@ -111,8 +105,8 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CancellationToken ct = default)
     {
         await EnsureDefinitionExistsAsync(command.Identity, ct);
-        var actorId = await _targetProvisioner.EnsurePolicyCatalogTargetAsync(command.Identity, ct);
-        await _policyProjectionPort.EnsureProjectionAsync(actorId, ct);
+        var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
+        await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Identity, command.PolicyId), ct);
     }
 

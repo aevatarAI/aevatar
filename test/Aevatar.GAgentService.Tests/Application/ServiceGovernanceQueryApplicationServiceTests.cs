@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Application.Services;
@@ -9,7 +10,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ServiceGovernanceQueryApplicationServiceTests
 {
     [Fact]
-    public async Task QueryService_ShouldDelegateToGovernanceReaders()
+    public async Task QueryService_ShouldProjectConfigurationIntoGovernanceViews()
     {
         var identity = new ServiceIdentity
         {
@@ -19,59 +20,73 @@ public sealed class ServiceGovernanceQueryApplicationServiceTests
             ServiceId = "svc",
         };
         var now = DateTimeOffset.UtcNow;
-        var bindingSnapshot = new ServiceBindingCatalogSnapshot("tenant:app:ns:svc", [], now);
-        var endpointSnapshot = new ServiceEndpointCatalogSnapshot("tenant:app:ns:svc", [], now);
-        var policySnapshot = new ServicePolicyCatalogSnapshot("tenant:app:ns:svc", [], now);
-        var service = new ServiceGovernanceQueryApplicationService(
-            new RecordingBindingQueryReader(bindingSnapshot),
-            new RecordingEndpointCatalogQueryReader(endpointSnapshot),
-            new RecordingPolicyQueryReader(policySnapshot));
+        var configuration = new ServiceConfigurationSnapshot(
+            "tenant:app:ns:svc",
+            identity.Clone(),
+            [
+                new ServiceBindingSnapshot(
+                    "binding-a",
+                    "Binding A",
+                    ServiceBindingKind.Service,
+                    ["policy-a"],
+                    false,
+                    new BoundServiceReferenceSnapshot(
+                        new ServiceIdentity
+                        {
+                            TenantId = "tenant",
+                            AppId = "app",
+                            Namespace = "ns",
+                            ServiceId = "dep",
+                        },
+                        "run"),
+                    null,
+                    null),
+            ],
+            [
+                new ServiceEndpointExposureSnapshot(
+                    "invoke",
+                    "Invoke",
+                    ServiceEndpointKind.Command,
+                    "type.googleapis.com/demo.Invoke",
+                    string.Empty,
+                    "invoke",
+                    ServiceEndpointExposureKind.Public,
+                    ["policy-a"]),
+            ],
+            [
+                new ServicePolicySnapshot(
+                    "policy-a",
+                    "Policy A",
+                    ["binding-a"],
+                    ["tenant/app/ns/caller"],
+                    true,
+                    false),
+            ],
+            now);
+        var service = new ServiceGovernanceQueryApplicationService(new RecordingConfigurationQueryReader(configuration));
 
         var bindings = await service.GetBindingsAsync(identity);
         var endpoints = await service.GetEndpointCatalogAsync(identity);
         var policies = await service.GetPoliciesAsync(identity);
 
-        bindings.Should().BeSameAs(bindingSnapshot);
-        endpoints.Should().BeSameAs(endpointSnapshot);
-        policies.Should().BeSameAs(policySnapshot);
+        bindings.Should().NotBeNull();
+        bindings!.Bindings.Should().ContainSingle(x => x.BindingId == "binding-a" && x.ServiceRef != null);
+        endpoints.Should().NotBeNull();
+        endpoints!.Endpoints.Should().ContainSingle(x => x.EndpointId == "invoke" && x.ExposureKind == ServiceEndpointExposureKind.Public);
+        policies.Should().NotBeNull();
+        policies!.Policies.Should().ContainSingle(x => x.PolicyId == "policy-a" && x.InvokeRequiresActiveDeployment);
     }
 
-    private sealed class RecordingBindingQueryReader : IServiceBindingQueryReader
+    private sealed class RecordingConfigurationQueryReader : IServiceConfigurationQueryReader
     {
-        private readonly ServiceBindingCatalogSnapshot _snapshot;
+        private readonly ServiceConfigurationSnapshot _snapshot;
 
-        public RecordingBindingQueryReader(ServiceBindingCatalogSnapshot snapshot)
+        public RecordingConfigurationQueryReader(ServiceConfigurationSnapshot snapshot)
         {
             _snapshot = snapshot;
         }
 
-        public Task<ServiceBindingCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceBindingCatalogSnapshot?>(_snapshot);
-    }
-
-    private sealed class RecordingEndpointCatalogQueryReader : IServiceEndpointCatalogQueryReader
-    {
-        private readonly ServiceEndpointCatalogSnapshot _snapshot;
-
-        public RecordingEndpointCatalogQueryReader(ServiceEndpointCatalogSnapshot snapshot)
-        {
-            _snapshot = snapshot;
-        }
-
-        public Task<ServiceEndpointCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceEndpointCatalogSnapshot?>(_snapshot);
-    }
-
-    private sealed class RecordingPolicyQueryReader : IServicePolicyQueryReader
-    {
-        private readonly ServicePolicyCatalogSnapshot _snapshot;
-
-        public RecordingPolicyQueryReader(ServicePolicyCatalogSnapshot snapshot)
-        {
-            _snapshot = snapshot;
-        }
-
-        public Task<ServicePolicyCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServicePolicyCatalogSnapshot?>(_snapshot);
+        public Task<ServiceConfigurationSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceConfigurationSnapshot?>(_snapshot);
     }
 }

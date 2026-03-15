@@ -45,7 +45,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
         services.TryAddSingleton<ServiceInvocationResolutionService>();
         services.TryAddSingleton<IServiceCommandPort, ServiceCommandApplicationService>();
-        services.TryAddSingleton<IServiceQueryPort, ServiceQueryApplicationService>();
+        services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
+        services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         return services;
     }

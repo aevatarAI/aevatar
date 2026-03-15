@@ -6,6 +6,8 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
+using Aevatar.GAgentService.Governance.Infrastructure.Migration;
+using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -25,6 +27,7 @@ public static class ServiceCollectionExtensions
 
         services.AddGAgentServiceGovernanceProjection();
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
+        services.TryAddSingleton<IServiceGovernanceLegacyImporter, DefaultServiceGovernanceLegacyImporter>();
         services.TryAddSingleton<IServiceGovernanceCommandTargetProvisioner, DefaultServiceGovernanceCommandTargetProvisioner>();
         services.TryAddSingleton<IActivationAdmissionEvaluator, DefaultActivationAdmissionEvaluator>();
         services.TryAddSingleton<IInvokeAdmissionEvaluator, DefaultInvokeAdmissionEvaluator>();
@@ -35,6 +38,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceGovernanceCommandPort, ServiceGovernanceCommandApplicationService>();
         services.TryAddSingleton<ServiceGovernanceQueryApplicationService>();
         services.TryAddSingleton<IServiceGovernanceQueryPort>(sp => sp.GetRequiredService<ServiceGovernanceQueryApplicationService>());
+        services.AddHostedService<ServiceGovernanceLegacyMigrationHostedService>();
         return services;
     }
 
@@ -62,33 +66,15 @@ public static class ServiceCollectionExtensions
 
         if (elasticsearchEnabled)
         {
-            services.AddElasticsearchDocumentProjectionStore<ServiceBindingCatalogReadModel, string>(
+            services.AddElasticsearchDocumentProjectionStore<ServiceConfigurationReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceBindingCatalogReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServiceEndpointCatalogReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceEndpointCatalogReadModel>>().Metadata,
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
-            services.AddElasticsearchDocumentProjectionStore<ServicePolicyCatalogReadModel, string>(
-                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServicePolicyCatalogReadModel>>().Metadata,
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
         }
         else
         {
-            services.AddInMemoryDocumentProjectionStore<ServiceBindingCatalogReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServiceEndpointCatalogReadModel, string>(
-                keySelector: readModel => readModel.Id,
-                keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
-            services.AddInMemoryDocumentProjectionStore<ServicePolicyCatalogReadModel, string>(
+            services.AddInMemoryDocumentProjectionStore<ServiceConfigurationReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
                 listSortSelector: readModel => readModel.UpdatedAt);
