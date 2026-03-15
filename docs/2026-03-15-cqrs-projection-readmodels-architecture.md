@@ -140,20 +140,14 @@ flowchart LR
 
 当前主链如下：
 
-1. `Reducer`
-   - 只负责“某一类事件是否会修改某个 read model”
-   - 不负责订阅、不负责 store fan-out、不负责 session/live sink
-2. `Projector`
+1. `Projector`
    - 负责 envelope 级 orchestration
-   - 可以读取旧 read model、执行 reducer、写回 read model、或者把事件映射到 session stream
+   - 可以直接把 committed state 物化成 readmodel，或者把 committed event 桥接给语义 actor
+2. `Applier`
+   - 只在少数通用辅助层里保留，用于复用某类事件到某个 readmodel 片段的纯映射逻辑
+   - 不负责订阅、不负责 store fan-out、不负责 session/live sink
 
-Workflow 的 reducer 路由是精确 `TypeUrl` 匹配：
-
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionEventReducerBase.cs:10-39`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:31-37`
-- `tools/ci/projection_route_mapping_guard.sh`
-
-这保证了投影路由不是字符串包含判断，而是 protobuf `TypeUrl` 的精确键路由。
+Workflow 主链已经不再依赖 reducer 路由；事件分类使用精确 `TypeUrl` / 强类型 payload 判断，而不是字符串包含判断。
 
 ## 6. Runtime / Store 的职责边界
 
@@ -189,9 +183,10 @@ Runtime 只做“一次 read model upsert，分发到多个 store binding”：
 2. 当前只对“binding 写失败”提供 compensator/outbox。
 3. 不存在跨 document + graph 的原子事务边界。
 
-Workflow 对这类部分成功有 durable compensation：
+Workflow 对这类部分成功保留 durable compensation，但实现已经上移到 projection core：
 
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDurableOutboxCompensator.cs:23-56`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/DurableProjectionDispatchCompensator.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatchCompensationOutboxGAgent.cs`
 
 但它只补“store dispatch fan-out 失败”，不补 reducer/projector 级逻辑失败。
 
@@ -279,9 +274,7 @@ Workflow 的 read model 里，最关键的证据字段是：
 
 来源：
 
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:7-17`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:53-71`
-- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs:33-156`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs:33-156`
 
 其中：
 
@@ -458,11 +451,13 @@ DI 装配：
 2. 输出仍然走 `IProjectionWriteDispatcher<TReadModel>`
 3. 它适合结构镜像，不适合复杂业务语义
 
-### 10.4 AI Projection：通用 reducer 层
+### 10.4 AI Projection：通用 applier 层
 
-- `src/Aevatar.AI.Projection/Reducers/ProjectionEventApplierReducerBase.cs:9-43`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageStartProjectionApplier.cs`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageContentProjectionApplier.cs`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageEndProjectionApplier.cs`
 
-它本身不持有 query 语义，只提供可复用 reducer/applier，供业务 read model projector 组合。
+它本身不持有 query 语义，只提供可复用的事件到 readmodel 片段映射，供业务 projector 组合。
 
 ## 11. 当前一致性与并发风险
 
@@ -605,7 +600,7 @@ DI 装配：
 ### Workflow
 
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphMirrorProjector.cs`
 - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`

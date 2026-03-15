@@ -548,11 +548,11 @@ public class WorkflowExecutionProjectionServiceTests
         var currentStateStore = CreateCurrentStateStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var reportBindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
+        var reportBindings = new IProjectionWriteSink<WorkflowRunInsightReportDocument>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(reportStore),
+            new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
         };
-        var reportStoreDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(reportBindings);
+        var reportStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(reportBindings);
         var timelineStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunTimelineDocument>(
             [new ProjectionDocumentStoreBinding<WorkflowRunTimelineDocument>(timelineStore)]);
         var graphStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunGraphMirrorReadModel>(
@@ -588,7 +588,7 @@ public class WorkflowExecutionProjectionServiceTests
             runtimeProvider.GetRequiredService<IEventStore>());
         var insightCoordinator = new ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>(
             [
-                new WorkflowRunInsightReadModelProjector(reportStoreDispatcher),
+                new WorkflowRunInsightReportDocumentProjector(reportStoreDispatcher),
                 new WorkflowRunTimelineReadModelProjector(timelineStoreDispatcher),
                 new WorkflowRunGraphMirrorProjector(graphStoreDispatcher),
             ]);
@@ -663,11 +663,11 @@ public class WorkflowExecutionProjectionServiceTests
         var currentStateStore = CreateCurrentStateStore();
         var clock = new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var reportBindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
+        var reportBindings = new IProjectionWriteSink<WorkflowRunInsightReportDocument>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(reportStore),
+            new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
         };
-        _ = new ProjectionStoreDispatcher<WorkflowExecutionReport>(reportBindings);
+        _ = new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(reportBindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
@@ -749,7 +749,7 @@ public class WorkflowExecutionProjectionServiceTests
                 }
             });
 
-    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
+    private static InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);
@@ -941,14 +941,14 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ObservableWorkflowExecutionDocumentStore
-        : IProjectionDocumentReader<WorkflowExecutionReport, string>,
-          IProjectionDocumentWriter<WorkflowExecutionReport>
+        : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
+          IProjectionDocumentWriter<WorkflowRunInsightReportDocument>
     {
-        private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = CreateStore();
+        private readonly InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> _inner = CreateStore();
         private readonly object _gate = new();
         private readonly List<StoreWaiter> _waiters = [];
 
-        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowExecutionReport report, CancellationToken ct = default)
+        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowRunInsightReportDocument report, CancellationToken ct = default)
         {
             var result = await _inner.UpsertAsync(report, ct);
             if (result.IsApplied)
@@ -956,10 +956,10 @@ public class WorkflowExecutionProjectionServiceTests
             return result;
         }
 
-        public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowRunInsightReportDocument?> GetAsync(string actorId, CancellationToken ct = default) =>
             _inner.GetAsync(actorId, ct);
 
-        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<WorkflowRunInsightReportDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             _inner.QueryAsync(query, ct);
@@ -996,7 +996,7 @@ public class WorkflowExecutionProjectionServiceTests
 
         private sealed record StoreWaiter(
             string ActorId,
-            Func<WorkflowExecutionReport?, bool> Predicate)
+            Func<WorkflowRunInsightReportDocument?, bool> Predicate)
         {
             public TaskCompletionSource<bool> Signal { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);

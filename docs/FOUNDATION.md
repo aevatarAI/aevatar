@@ -174,7 +174,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 run-event 推送与失败策略桥接
   - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
   - `WorkflowProjectionQueryReader` 负责 read model 查询映射
-  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReadModelProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 负责 committed state 到多个 readmodel 的物化
+  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 负责 committed state 到多个 readmodel 的物化
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
   - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径（detach live sink 后按 durable completion 收敛）
@@ -188,7 +188,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
-  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReadModelProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 写入各自消费场景的 readmodel store
+  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 写入各自消费场景的 readmodel store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：

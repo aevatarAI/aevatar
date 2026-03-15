@@ -1,8 +1,6 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
-
-internal interface IProjectionDispatchCompensationOutbox
+public interface IProjectionDispatchCompensationOutbox
 {
     Task EnqueueAsync(
         ProjectionCompensationEnqueuedEvent evt,

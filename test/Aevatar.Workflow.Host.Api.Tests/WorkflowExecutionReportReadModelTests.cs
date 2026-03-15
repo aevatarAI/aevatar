@@ -4,14 +4,14 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowExecutionReportReadModelTests
+public sealed class WorkflowRunInsightReportDocumentReadModelTests
 {
     private static readonly WorkflowRunGraphMirrorMaterializer GraphMaterializer = new();
 
     [Fact]
     public void AddTimelineAndRoleReply_ShouldCopyProjectionPayloads()
     {
-        var report = new WorkflowExecutionReport();
+        var report = new WorkflowRunInsightReportDocument();
 
         report.AddTimeline(new ProjectionTimelineEvent
         {

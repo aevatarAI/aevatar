@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public class WorkflowExecutionReportWriterTests
+public class WorkflowRunReportExportWriterTests
 {
     [Fact]
     public void BuildDefaultPaths_ShouldCreateDirectory_AndUseWorkflowExecutionPrefix()
@@ -14,7 +14,7 @@ public class WorkflowExecutionReportWriterTests
 
         try
         {
-            var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
+            var (jsonPath, htmlPath) = WorkflowRunReportExportWriter.BuildDefaultPaths(outputDir);
 
             Directory.Exists(outputDir).Should().BeTrue();
             Path.GetFileName(jsonPath).Should().StartWith("workflow-execution-");
@@ -41,7 +41,7 @@ public class WorkflowExecutionReportWriterTests
 
         try
         {
-            await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
+            await WorkflowRunReportExportWriter.WriteAsync(report, jsonPath, htmlPath);
 
             File.Exists(jsonPath).Should().BeTrue();
             File.Exists(htmlPath).Should().BeTrue();
@@ -81,7 +81,7 @@ public class WorkflowExecutionReportWriterTests
 
         try
         {
-            await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
+            await WorkflowRunReportExportWriter.WriteAsync(report, jsonPath, htmlPath);
 
             var html = await File.ReadAllTextAsync(htmlPath);
             html.Should().Contain("(no links)");

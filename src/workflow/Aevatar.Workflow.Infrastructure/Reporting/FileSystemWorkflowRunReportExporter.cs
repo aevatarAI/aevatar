@@ -29,8 +29,8 @@ internal sealed class FileSystemWorkflowRunReportExporter : IWorkflowRunReportEx
         ct.ThrowIfCancellationRequested();
 
         var outputDir = ResolveOutputDirectory();
-        var (jsonPath, htmlPath) = WorkflowExecutionReportWriter.BuildDefaultPaths(outputDir);
-        await WorkflowExecutionReportWriter.WriteAsync(report, jsonPath, htmlPath);
+        var (jsonPath, htmlPath) = WorkflowRunReportExportWriter.BuildDefaultPaths(outputDir);
+        await WorkflowRunReportExportWriter.WriteAsync(report, jsonPath, htmlPath);
 
         _logger.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
     }

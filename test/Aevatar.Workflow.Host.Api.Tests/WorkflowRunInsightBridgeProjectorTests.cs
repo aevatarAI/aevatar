@@ -35,14 +35,14 @@ public class WorkflowRunInsightBridgeProjectorTests
     private static IEventDeduplicator CreateDeduplicator() => new TestEventDeduplicator();
     private static RecordingProjectionDocumentStore CreateStore() => new();
 
-    private static IProjectionWriteDispatcher<WorkflowExecutionReport> CreateDispatcher(
+    private static IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> CreateDispatcher(
         RecordingProjectionDocumentStore store)
     {
-        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
+        var bindings = new IProjectionWriteSink<WorkflowRunInsightReportDocument>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
+            new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(store),
         };
-        return new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
+        return new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(bindings);
     }
 
     private static ProjectorHarness CreateHarness(IProjectionClock? clock = null)
@@ -73,7 +73,7 @@ public class WorkflowRunInsightBridgeProjectorTests
         var agentTypeVerifier = new DefaultAgentTypeVerifier(new RuntimeActorTypeProbe(runtime));
         var insightActorPort = new ActorWorkflowRunInsightPort(runtime, dispatchPort, agentTypeVerifier);
 
-        var insightProjector = new WorkflowRunInsightReadModelProjector(dispatcher);
+        var insightProjector = new WorkflowRunInsightReportDocumentProjector(dispatcher);
         var insightCoordinator = new ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>([insightProjector]);
         var insightDispatcher = new ProjectionDispatcher<WorkflowRunInsightProjectionContext, bool>(insightCoordinator);
         var insightRegistry = new ProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>(
@@ -355,7 +355,7 @@ public class WorkflowRunInsightBridgeProjectorTests
     public async Task Store_List_ShouldReturnNewestFirst()
     {
         var store = CreateStore();
-        await store.UpsertAsync(new WorkflowExecutionReport
+        await store.UpsertAsync(new WorkflowRunInsightReportDocument
         {
             Id = "a-older",
             WorkflowName = "w",
@@ -364,7 +364,7 @@ public class WorkflowRunInsightBridgeProjectorTests
             EndedAt = DateTimeOffset.UtcNow.AddMinutes(-4),
             Summary = new WorkflowExecutionSummary(),
         });
-        await store.UpsertAsync(new WorkflowExecutionReport
+        await store.UpsertAsync(new WorkflowRunInsightReportDocument
         {
             Id = "a-newer",
             WorkflowName = "w",
@@ -390,7 +390,7 @@ public class WorkflowRunInsightBridgeProjectorTests
         var missing = await store.GetAsync("missing");
         missing.Should().BeNull();
 
-        await store.UpsertAsync(new WorkflowExecutionReport
+        await store.UpsertAsync(new WorkflowRunInsightReportDocument
         {
             Id = "missing",
             RootActorId = "missing",
@@ -421,17 +421,17 @@ public class WorkflowRunInsightBridgeProjectorTests
         WorkflowRunInsightBridgeProjector Projector);
 
     private sealed class RecordingProjectionDocumentStore
-        : IProjectionDocumentWriter<WorkflowExecutionReport>,
-          IProjectionDocumentReader<WorkflowExecutionReport, string>
+        : IProjectionDocumentWriter<WorkflowRunInsightReportDocument>,
+          IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>
     {
-        private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = new(
+        private readonly InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> _inner = new(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.StartedAt);
         private readonly object _gate = new();
         private readonly List<StoreWaiter> _waiters = [];
 
-        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
+        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowRunInsightReportDocument readModel, CancellationToken ct = default)
         {
             var result = await _inner.UpsertAsync(readModel, ct);
             if (result.IsApplied)
@@ -440,10 +440,10 @@ public class WorkflowRunInsightBridgeProjectorTests
             return result;
         }
 
-        public Task<WorkflowExecutionReport?> GetAsync(string key, CancellationToken ct = default) =>
+        public Task<WorkflowRunInsightReportDocument?> GetAsync(string key, CancellationToken ct = default) =>
             _inner.GetAsync(key, ct);
 
-        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<WorkflowRunInsightReportDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             _inner.QueryAsync(query, ct);
@@ -494,7 +494,7 @@ public class WorkflowRunInsightBridgeProjectorTests
 
         public async Task WaitForAsync(
             string actorId,
-            Func<WorkflowExecutionReport?, bool> predicate,
+            Func<WorkflowRunInsightReportDocument?, bool> predicate,
             TimeSpan timeout)
         {
             ArgumentNullException.ThrowIfNull(predicate);
@@ -552,7 +552,7 @@ public class WorkflowRunInsightBridgeProjectorTests
 
         private sealed record StoreWaiter(
             string ActorId,
-            Func<WorkflowExecutionReport?, bool> Predicate)
+            Func<WorkflowRunInsightReportDocument?, bool> Predicate)
         {
             public TaskCompletionSource<bool> Signal { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);

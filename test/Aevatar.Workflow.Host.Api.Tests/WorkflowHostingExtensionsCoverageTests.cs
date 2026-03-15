@@ -54,7 +54,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         builder.Services.Any(x => x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IWorkflowRunActorPort)).Should().BeTrue();
-        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionReport, string>)).Should().BeTrue();
+        builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>)).Should().BeTrue();
         builder.Services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>)).Should().BeTrue();
         builder.Services
             .Where(x => x.ServiceType == typeof(AevatarCapabilityRegistration))
@@ -66,7 +66,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
 
         await using var provider = builder.Services.BuildServiceProvider();
         provider.GetService<ILLMProviderFactory>().Should().NotBeNull();
-        provider.GetService<IProjectionDocumentReader<WorkflowExecutionReport, string>>().Should().NotBeNull();
+        provider.GetService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>().Should().NotBeNull();
         provider.GetService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         provider.GetServices<IWorkflowModulePack>().Should().ContainSingle(x => x is MakerModulePack);
 
@@ -217,7 +217,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
         await using var provider = services.BuildServiceProvider();
 
-        var act = () => provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
+        var act = () => provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Endpoints is empty*");
@@ -301,7 +301,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
 
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
-        services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionReport, string>))
+        services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>))
             .Should()
             .BeTrue();
         services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowActorBindingDocument, string>))
@@ -370,7 +370,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         services.AddWorkflowProjectionReadModelProviders(configuration);
         await using var provider = services.BuildServiceProvider();
 
-        provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>()
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>()
             .Should()
             .NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()

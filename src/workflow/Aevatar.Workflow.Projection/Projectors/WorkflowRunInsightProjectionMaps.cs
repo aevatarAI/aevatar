@@ -27,11 +27,11 @@ internal static class WorkflowRunInsightProjectionMaps
         return false;
     }
 
-    public static WorkflowExecutionReport ToReport(
+    public static WorkflowRunInsightReportDocument ToReportDocument(
         WorkflowRunInsightState source,
         StateEvent stateEvent)
     {
-        var readModel = new WorkflowExecutionReport
+        var readModel = new WorkflowRunInsightReportDocument
         {
             Id = source.RootActorId,
             RootActorId = source.RootActorId,

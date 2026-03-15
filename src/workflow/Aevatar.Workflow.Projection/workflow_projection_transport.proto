@@ -5,7 +5,7 @@ option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 
-message WorkflowExecutionReport {
+message WorkflowRunInsightReportDocument {
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;

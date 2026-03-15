@@ -4,12 +4,12 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
-public sealed class WorkflowRunInsightReadModelProjector
+public sealed class WorkflowRunInsightReportDocumentProjector
     : IProjectionProjector<WorkflowRunInsightProjectionContext, bool>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _writeDispatcher;
 
-    public WorkflowRunInsightReadModelProjector(IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher)
+    public WorkflowRunInsightReportDocumentProjector(IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> writeDispatcher)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
     }
@@ -31,7 +31,7 @@ public sealed class WorkflowRunInsightReadModelProjector
             return;
         }
 
-        var readModel = WorkflowRunInsightProjectionMaps.ToReport(state!, stateEvent!);
+        var readModel = WorkflowRunInsightProjectionMaps.ToReportDocument(state!, stateEvent!);
         await _writeDispatcher.UpsertAsync(readModel, ct);
     }
 

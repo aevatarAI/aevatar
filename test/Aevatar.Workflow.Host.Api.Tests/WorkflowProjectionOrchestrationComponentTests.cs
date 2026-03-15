@@ -794,7 +794,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         policy.Calls.Should().ContainSingle();
     }
 
-    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
+    private static InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);

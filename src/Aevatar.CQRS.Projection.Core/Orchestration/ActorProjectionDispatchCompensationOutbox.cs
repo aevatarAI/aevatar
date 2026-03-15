@@ -1,15 +1,15 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDispatchCompensationOutbox
+public sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDispatchCompensationOutbox
 {
     private const string OutboxPublisherId = "projection.compensation.outbox";
-    private const string DefaultScopeId = "workflow";
+    private const string DefaultScopeId = "default";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IAgentTypeVerifier _agentTypeVerifier;
@@ -47,14 +47,14 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
 
     private async Task<IActor> ResolveOutboxActorAsync(CancellationToken ct)
     {
-        var actorId = WorkflowProjectionDispatchCompensationOutboxGAgent.BuildActorId(DefaultScopeId);
+        var actorId = ProjectionDispatchCompensationOutboxGAgent.BuildActorId(DefaultScopeId);
         var existing = await _runtime.GetAsync(actorId);
         if (existing != null)
             return await EnsureActorTypeAsync(existing, actorId, ct);
 
         try
         {
-            var created = await _runtime.CreateAsync<WorkflowProjectionDispatchCompensationOutboxGAgent>(actorId, ct);
+            var created = await _runtime.CreateAsync<ProjectionDispatchCompensationOutboxGAgent>(actorId, ct);
             return await EnsureActorTypeAsync(created, actorId, ct);
         }
         catch (InvalidOperationException)
@@ -71,7 +71,7 @@ internal sealed class ActorProjectionDispatchCompensationOutbox : IProjectionDis
     {
         if (await _agentTypeVerifier.IsExpectedAsync(
                 actorId,
-                typeof(WorkflowProjectionDispatchCompensationOutboxGAgent),
+                typeof(ProjectionDispatchCompensationOutboxGAgent),
                 ct))
             return actor;
 

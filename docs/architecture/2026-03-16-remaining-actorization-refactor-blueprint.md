@@ -37,18 +37,18 @@
 3. workflow insight 主语义已经 actor 化：
    - `WorkflowRunInsightBridgeProjector`
    - `WorkflowRunInsightGAgent`
-   - `WorkflowRunInsightReadModelProjector`
-4. `WorkflowExecutionCurrentStateDocument` 已从 `WorkflowExecutionReport` 主链中剥离，当前态查询不再依赖旧 report reducer。
+   - `WorkflowRunInsightReportDocumentProjector`
+4. `WorkflowExecutionCurrentStateDocument` 已从 `WorkflowRunInsightReportDocument` 主链中剥离，当前态查询不再依赖旧 report reducer。
 
 ### 3.2 剩余问题总览
 
 | 编号 | 问题 | 当前表现 | 影响 |
 |---|---|---|---|
 | R1 | `scripting` 未彻底 actor 化 | projection/query 仍会加载 behavior artifact 并执行业务逻辑 | 业务语义分散在 actor/projection/query 三处 |
-| R2 | reducer-era core 未删除 | `IProjectionEventReducer`、AI reducer 注册、旧 README 仍在 | 框架抽象与当前架构不一致 |
-| R3 | workflow report/export 外围层仍带历史命名 | `WorkflowExecutionReport` 仍承担 report/export 载体，外围 adapter 还未统一收口 | 报告链与主查询链的边界仍可继续收紧 |
-| R4 | export adapter 命名与边界仍旧 | `IWorkflowRunReportExportPort` 这条链仍需完成全仓统一收口 | 容易把导出能力误认为主查询模型 |
-| R5 | compensation 仍 workflow-specific | `WorkflowProjectionDispatchCompensationOutboxGAgent` 直接绑定 `WorkflowExecutionReport` | runtime 通用能力仍挂在 feature 模块 |
+| R2 | reducer-era core 已退出主链 | 生产代码已移除 reducer 契约与注册，剩余仅为 README/活文档清理 | 新人仍可能被旧文档误导 |
+| R3 | workflow report/export 外围层仍带历史命名 | `WorkflowRunInsightReportDocument` 仍承担 report/export 载体，外围 adapter 还未统一收口 | 报告链与主查询链的边界仍可继续收紧 |
+| R4 | export adapter 已收口为独立导出层 | `IWorkflowRunReportExportPort` / `WorkflowRunReportExportWriter` 已与主查询链分离 | 该项主债已基本消除，剩余仅为零散旧文档 |
+| R5 | compensation 已上移到 projection core | actor outbox、replay hosted service、durable compensator 已迁到 `Aevatar.CQRS.Projection.Core` | 该项主债已消除，剩余仅为文档同步 |
 | R6 | 文档与部分命名残留旧术语 | 少数活文档仍需同步最后一轮主链与 export 命名收口 | 新人会被错误设计误导 |
 
 ## 4. 目标终态
@@ -126,7 +126,7 @@ flowchart LR
 - `graph query`
 - `export`
 
-这些接口必须显式分开，不能继续让一个 `WorkflowExecutionReport` 同时承担全部用途。
+这些接口必须显式分开，不能继续让一个 `WorkflowRunInsightReportDocument` 同时承担全部用途。
 
 ## 6. 剩余改造工作包
 
@@ -141,21 +141,18 @@ flowchart LR
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs`
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs`
 - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs`
-- `src/Aevatar.Scripting.Projection/Projectors/ScriptCommittedStateProjectionSupport.cs`
 - `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 - `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs`
 
 问题本质：
 
-1. projection 还要拉 definition snapshot。
-2. projection 还要解析 behavior artifact。
-3. query reader 还要执行 `ExecuteQueryAsync(...)`。
-
-这意味着 `scripting` 还不是“actor 拥有语义，projection 只物化”。
+1. current-state 主查询路径已经收口为 `actor -> committed fact -> readmodel`。
+2. native document / graph 物化仍会解析 behavior artifact，以生成 provider-specific materialization plan。
+3. 当前剩余问题主要是“native materialization 是否还应继续依赖 behavior artifact”，而不是 query path 补算。
 
 ### 目标
 
-把 scripting 当前态查询面拆成两段：
+把 scripting 查询面进一步收口成两段：
 
 1. actor 输出“已经可被直接物化的 query-side state mirror/readmodel contract”
 2. projection 只做 document/graph 物化
@@ -164,14 +161,13 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `修改` | 只保留写侧 dispatch/apply/project，不再保留 declared-query runtime contract |
-| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `修改` | 在 committed 后产出 query-side contract，不再让 projection 补算 semantic readmodel |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptCommittedStateProjectionSupport.cs` | `删除或降级` | 不再承担 query-side 业务映射 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | `重写` | 直接物化 actor 已给出的 readmodel contract |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `重写` | 只做 readmodel -> native document materialization |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `重写` | 只做 readmodel -> graph mirror materialization |
-| `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs` | `修改` | 只读 readmodel，不再拉 definition snapshot/behavior artifact 解释业务语义 |
-| `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionSnapshotPort.cs` | `收紧` | 仅供显式 provisioning / definition 管理使用，不再被当前态 query/projector 常规依赖 |
+| `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `已完成主体` | 当前态 query contract 已从 production path 移除，仅保留写侧 dispatch/apply/project |
+| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后输出 durable readmodel contract |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | `已完成` | 直接物化 actor 已给出的 readmodel contract |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `待继续收口` | 评估是否还能继续降低对 behavior artifact 的依赖 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `待继续收口` | 同上 |
+| `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs` | `已完成` | 只读 readmodel，不再解释业务语义 |
+| `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionSnapshotPort.cs` | `已收紧` | 当前态 query/projector 常规依赖已移除 |
 
 ### 验收标准
 
@@ -183,58 +179,54 @@ flowchart LR
 
 ## 6.2 WP2: Projection Core 去 reducer 化
 
-> 2026-03-16 进度：主链已完成。`IProjectionEventReducer`、`Aevatar.AI.Projection/Reducers/*`、workflow host 对 `AddAIDefaultProjectionLayer(...)` 的注册均已移除；剩余工作主要是文档和守卫清理。
+> 2026-03-16 进度：主链已完成。`IProjectionEventReducer`、`Aevatar.AI.Projection/Reducers/*`、workflow host 对 reducer-era 扩展的注册均已移除；当前剩余工作主要是 README/活文档清理。
 
 ### 现状
 
-以下抽象仍然属于旧框架时代：
+主链代码已经完成去 reducer 化，但少数活文档仍沿用旧术语：
 
-- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionEventReducer.cs`
-- `src/Aevatar.AI.Projection/Reducers/*`
-- `src/Aevatar.AI.Projection/DependencyInjection/ServiceCollectionExtensions.cs`
-- `src/workflow/extensions/Aevatar.Workflow.Extensions.AIProjection/ServiceCollectionExtensions.cs`
-- `src/Aevatar.CQRS.Projection.Core/README.md`
+- `src/Aevatar.CQRS.Projection.Core.Abstractions/README.md`
+- `docs/2026-03-15-cqrs-projection-readmodels-architecture.md`
+- `docs/architecture/2026-03-16-remaining-actorization-refactor-blueprint.md`
 
 ### 目标
 
 彻底明确：
 
-1. runtime 只认识 `projector`
+1. runtime 只认识 `projector` / `applier`
 2. 事件到读模型的旧 reducer 路由表不再作为框架主扩展点
-3. AI 相关 timeline/role-reply 物化逻辑收口到拥有该语义的 actor 或明确的 materializer 中
+3. 活文档不再引用已删除的 reducer-era 文件
 
 ### 文件级动作
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionEventReducer.cs` | `删除` | 从 core 契约里移除 reducer 扩展点 |
-| `src/Aevatar.AI.Projection/Reducers/*` | `删除或迁移` | 不再通过 reducer 模式扩展主投影链 |
-| `src/Aevatar.AI.Projection/DependencyInjection/ServiceCollectionExtensions.cs` | `重写` | 删除 `AddAllAIProjectionEventReducers` 相关注册 |
-| `src/workflow/extensions/Aevatar.Workflow.Extensions.AIProjection/ServiceCollectionExtensions.cs` | `修改` | 不再调用 reducer-era 扩展 |
-| `src/Aevatar.CQRS.Projection.Core/README.md` | `更新` | 文档只保留 current projector model |
+| `src/Aevatar.CQRS.Projection.Core.Abstractions/README.md` | `更新中` | 文档只保留 current projector/applier model |
+| `docs/2026-03-15-cqrs-projection-readmodels-architecture.md` | `更新中` | 删除对已删除 reducer 文件的引用 |
+| `docs/architecture/2026-03-16-remaining-actorization-refactor-blueprint.md` | `更新中` | 收正为“代码已完成，文档收尾” |
 
 ### 验收标准
 
 1. 解决方案主链中不存在 `IProjectionEventReducer<,>` 的生产代码依赖。
-2. host 组装不再注册 `AddAIDefaultProjectionLayer(...)`。
-3. `Projection Core` README 不再把 reducer 作为典型扩展点。
+2. host 组装不再注册 reducer-era 扩展。
+3. 活文档不再把 reducer 作为现行主链扩展点。
 
 ## 6.3 WP3: Workflow readmodel 按消费场景拆分
 
-> 2026-03-16 进度：主查询链已完成。`WorkflowRunTimelineDocument` 已落地，`WorkflowProjectionQueryReader` 已直接读取 timeline document；graph 已改由 `WorkflowRunGraphMirrorReadModel -> WorkflowRunGraphMirrorMaterializer -> Graph Store` 物化，不再从 `WorkflowExecutionReport` 派生。剩余工作仅是 report/export 外围命名和文档收口。
+> 2026-03-16 进度：主查询链已完成。`WorkflowRunTimelineDocument` 已落地，`WorkflowProjectionQueryReader` 已直接读取 timeline document；graph 已改由 `WorkflowRunGraphMirrorReadModel -> WorkflowRunGraphMirrorMaterializer -> Graph Store` 物化，不再从 `WorkflowRunInsightReportDocument` 派生。剩余工作仅是 report/export 外围命名和文档收口。
 
 ### 现状
 
 虽然 `WorkflowRunInsightGAgent` 已成为语义拥有者，但 report/export 外围仍保留历史命名：
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs`
-- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphMirrorMaterializer.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 
 问题：
 
-1. `WorkflowExecutionReport` 仍是 report/export 载体，尚未完成命名和外围 adapter 收口。
+1. `WorkflowRunInsightReportDocument` 仍是 report/export 载体，尚未完成命名和外围 adapter 收口。
 2. timeline 与 graph 主查询链虽然已经拆分，但活文档和少数外围测试/说明仍沿用旧口径。
 3. report/export 与主查询链之间的概念边界还可以继续硬化。
 
@@ -251,8 +243,8 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs` | `已完成` | 已拆出 `WorkflowRunTimelineDocument` / `WorkflowRunGraphMirrorReadModel` |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs` | `已完成` | 与 timeline/graph projector 并列，由同一 committed state fan-out 到多个 readmodel |
+| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs` | `已完成` | 已拆出 `WorkflowRunTimelineDocument` / `WorkflowRunGraphMirrorReadModel` |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs` | `已完成` | 与 timeline/graph projector 并列，由同一 committed state fan-out 到多个 readmodel |
 | `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs` | `新增并完成` | timeline 成为单独消费场景的 readmodel |
 | `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphMirrorMaterializer.cs` | `新增并完成` | graph 改为从 graph mirror readmodel 物化 |
 | `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs` | `已完成` | timeline query 直接读取 `WorkflowRunTimelineDocument` |
@@ -261,7 +253,7 @@ flowchart LR
 ### 验收标准
 
 1. 一个 readmodel 只服务一个稳定消费场景。
-2. `WorkflowProjectionQueryReader` 不再从单个 `WorkflowExecutionReport` 读取 timeline。
+2. `WorkflowProjectionQueryReader` 不再从单个 `WorkflowRunInsightReportDocument` 读取 timeline。
 3. graph mirror 不再从 report 派生。
 
 ## 6.4 WP4: Workflow export/artifact 降级为 adapter
@@ -298,16 +290,14 @@ flowchart LR
 
 ### 现状
 
-workflow 仍保留专用补偿 actor：
+该项已完成。补偿能力已从 workflow feature 模块迁到 projection core：
 
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDispatchCompensationOutboxGAgent.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDurableOutboxCompensator.cs`
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/ActorProjectionDispatchCompensationOutbox.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatchCompensationOutboxGAgent.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/DurableProjectionDispatchCompensator.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ActorProjectionDispatchCompensationOutbox.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatchCompensationReplayHostedService.cs`
 
-问题：
-
-1. compensation 语义是 projection runtime 问题，不是 workflow 业务问题。
-2. 当前实现直接绑定 `WorkflowExecutionReport`。
+workflow 只保留注册，不再拥有专用补偿 actor/outbox/hosted service。
 
 ### 目标
 
@@ -321,14 +311,14 @@ workflow 仍保留专用补偿 actor：
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `WorkflowProjectionDispatchCompensationOutboxGAgent.cs` | `迁移/泛化` | 提炼成 runtime 通用 actor |
-| `WorkflowProjectionDurableOutboxCompensator.cs` | `迁移/泛化` | 与具体 readmodel 解耦 |
-| `ActorProjectionDispatchCompensationOutbox.cs` | `迁移/泛化` | feature-neutral |
-| `Aevatar.CQRS.Projection.Runtime` | `新增` | 安放通用 compensation 组件 |
+| `ProjectionDispatchCompensationOutboxGAgent.cs` | `已完成` | runtime 通用 actor |
+| `DurableProjectionDispatchCompensator.cs` | `已完成` | 与具体 readmodel 解耦 |
+| `ActorProjectionDispatchCompensationOutbox.cs` | `已完成` | feature-neutral |
+| `ProjectionDispatchCompensationReplayHostedService.cs` | `已完成` | runtime 通用 replay worker |
 
 ### 验收标准
 
-1. workflow 模块里不再出现 projection compensation 的 feature-specific actor/outbox 类型。
+1. workflow 模块里不再出现 projection compensation 的 feature-specific actor/outbox/hosted service 类型。
 2. compensation core 可以复用于其它 readmodel。
 
 ## 6.6 WP6: 文档与命名清理
@@ -413,7 +403,7 @@ workflow 仍保留专用补偿 actor：
    - 禁止主链项目新增 `IProjectionEventReducer<,>` 生产依赖
 
 4. `workflow_readmodel_scope_guard.sh`
-   - 禁止 `WorkflowExecutionReport` 同时被 timeline/graph/current-state query 复用为唯一来源
+   - 禁止 `WorkflowRunInsightReportDocument` 同时被 timeline/graph/current-state query 复用为唯一来源
 
 ## 9. 终态验收清单
 

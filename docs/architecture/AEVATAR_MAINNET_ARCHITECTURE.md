@@ -614,7 +614,7 @@ flowchart LR
 
 当前 workflow insight/report 主链已经 actor 化：
 - `WorkflowRunInsightBridgeProjector` 负责把 committed workflow/AI events 投递给 `WorkflowRunInsightGAgent`
-- `WorkflowRunInsightReadModelProjector` 再从 insight actor 的 committed state 物化 `WorkflowExecutionReport`
+- `WorkflowRunInsightReportDocumentProjector` 再从 insight actor 的 committed state 物化 `WorkflowRunInsightReportDocument`
 
 ---
 

@@ -47,11 +47,11 @@ public class WorkflowExecutionProjectionRegistrationTests
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
-        var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
+        var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
-        var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionReport>>();
+        var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
 
         currentStateStore.Should().NotBeNull();
         timelineStore.Should().NotBeNull();
@@ -164,7 +164,7 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
@@ -190,12 +190,12 @@ public class WorkflowExecutionProjectionRegistrationTests
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
             keySelector: document => document.RootActorId,
             keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
             optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
                 Endpoints = ["http://localhost:9200"],
             },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
     }

@@ -31,9 +31,9 @@ public enum WorkflowExecutionCompletionStatus
     Unknown = 99,
 }
 
-public sealed partial class WorkflowExecutionReport
+public sealed partial class WorkflowRunInsightReportDocument
     : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowExecutionReport>,
+      IProjectionReadModelCloneable<WorkflowRunInsightReportDocument>,
       IHasProjectionTimeline,
       IHasProjectionRoleReplies
 {
@@ -118,7 +118,7 @@ public sealed partial class WorkflowExecutionReport
         set => SummaryValue = value ?? new WorkflowExecutionSummary();
     }
 
-    public WorkflowExecutionReport DeepClone() => Clone();
+    public WorkflowRunInsightReportDocument DeepClone() => Clone();
 
     public void AddTimeline(ProjectionTimelineEvent timelineEvent)
     {
