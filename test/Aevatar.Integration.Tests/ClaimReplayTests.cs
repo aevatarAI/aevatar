@@ -195,9 +195,6 @@ public class ClaimReplayTests
         var dispatcher1 = new InMemoryReadModelDispatcher();
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
-            definitionSnapshotPort,
-            artifactResolver,
-            codec,
             new FixedProjectionClock(projectionNow));
         await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
@@ -207,9 +204,6 @@ public class ClaimReplayTests
         var dispatcher2 = new InMemoryReadModelDispatcher();
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
-            definitionSnapshotPort,
-            artifactResolver,
-            codec,
             new FixedProjectionClock(projectionNow));
         await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
@@ -241,8 +235,7 @@ public class ClaimReplayTests
                             AiSummary = evt.Current.AiSummary,
                             LastCommandId = evt.CommandId ?? string.Empty,
                         },
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleAsync(

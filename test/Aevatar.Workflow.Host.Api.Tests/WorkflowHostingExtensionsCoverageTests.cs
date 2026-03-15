@@ -112,21 +112,6 @@ public sealed class WorkflowHostingExtensionsCoverageTests
     }
 
     [Fact]
-    public void AddAevatarPlatform_WhenWorkflowAIProjectionEnabledWithoutWorkflow_ShouldThrow()
-    {
-        var builder = WebApplication.CreateBuilder();
-
-        var act = () => builder.AddAevatarPlatform(options =>
-        {
-            options.EnableWorkflowCapability = false;
-            options.EnableWorkflowAIProjection = true;
-        });
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Workflow AI projection requires workflow capability*");
-    }
-
-    [Fact]
     public void AddWorkflowProjectionReadModelProviders_ShouldRejectLegacySingleProviderOptions()
     {
         var services = new ServiceCollection();

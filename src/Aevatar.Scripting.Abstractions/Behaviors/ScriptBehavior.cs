@@ -1,5 +1,3 @@
-using Google.Protobuf.Reflection;
-
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
 public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
@@ -63,24 +61,6 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
             : registration.Project(currentState, domainEvent, context);
     }
 
-    public async Task<IMessage?> ExecuteQueryAsync(
-        IMessage query,
-        ScriptTypedReadModelSnapshot snapshot,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-        ArgumentNullException.ThrowIfNull(snapshot);
-
-        var typeUrl = ScriptMessageTypes.GetTypeUrl(query);
-        if (!Descriptor.Queries.TryGetValue(typeUrl, out var queryRegistration))
-        {
-            throw new InvalidOperationException(
-                $"Script behavior `{GetType().FullName}` does not declare query type `{typeUrl}`.");
-        }
-
-        return await queryRegistration.ExecuteAsync(query, snapshot, ct);
-    }
-
     private ScriptBehaviorDescriptor CreateDescriptor()
     {
         var builder = new ScriptBehaviorBuilder<TState, TReadModel>();
@@ -106,7 +86,6 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
         private readonly Dictionary<string, ScriptCommandRegistration> _commands = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptSignalRegistration> _signals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptDomainEventRegistration> _domainEvents = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, ScriptQueryRegistration> _queries = new(StringComparer.Ordinal);
 
         public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnCommand<TCommand>(
             Func<TCommand, ScriptCommandContext<TBuilderState>, CancellationToken, Task> handler)
@@ -202,39 +181,6 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
             return this;
         }
 
-        public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnQuery<TQuery, TResult>(
-            Func<TQuery, ScriptQueryContext<TBuilderReadModel>, CancellationToken, Task<TResult?>> handler)
-            where TQuery : class, IMessage<TQuery>, new()
-            where TResult : class, IMessage<TResult>, new()
-        {
-            ArgumentNullException.ThrowIfNull(handler);
-            var typeUrl = ScriptMessageTypes.GetTypeUrl<TQuery>();
-            if (_queries.ContainsKey(typeUrl))
-                throw new InvalidOperationException($"Query type `{typeUrl}` is already registered.");
-
-            _queries[typeUrl] = new ScriptQueryRegistration(
-                typeUrl,
-                typeof(TQuery),
-                typeof(TResult),
-                async (query, snapshot, ct) =>
-                {
-                    var result = await handler(
-                        CastRequired<TQuery>(query),
-                        new ScriptQueryContext<TBuilderReadModel>(
-                            snapshot.ActorId,
-                            snapshot.ScriptId,
-                            snapshot.DefinitionActorId,
-                            snapshot.Revision,
-                            CastOptional<TBuilderReadModel>(snapshot.ReadModel),
-                            snapshot.StateVersion,
-                            snapshot.LastEventId,
-                            snapshot.UpdatedAt),
-                        ct);
-                    return result;
-                });
-            return this;
-        }
-
         public ScriptBehaviorDescriptor Build()
         {
             var stateDescriptor = ScriptMessageTypes.GetDescriptor(typeof(TBuilderState));
@@ -249,7 +195,6 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
                 new Dictionary<string, ScriptCommandRegistration>(_commands, StringComparer.Ordinal),
                 new Dictionary<string, ScriptSignalRegistration>(_signals, StringComparer.Ordinal),
                 new Dictionary<string, ScriptDomainEventRegistration>(_domainEvents, StringComparer.Ordinal),
-                new Dictionary<string, ScriptQueryRegistration>(_queries, StringComparer.Ordinal),
                 ByteString.Empty,
                 new ScriptRuntimeSemanticsSpec());
         }

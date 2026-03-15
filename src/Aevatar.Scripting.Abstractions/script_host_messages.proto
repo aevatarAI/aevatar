@@ -71,17 +71,8 @@ message ScriptMessageSemanticsSpec {
   string causation_id_field = 11;
 }
 
-message ScriptQuerySemanticsSpec {
-  string query_type_url = 1;
-  string query_descriptor_full_name = 2;
-  string result_type_url = 3;
-  string result_descriptor_full_name = 4;
-  string read_model_scope = 5;
-}
-
 message ScriptRuntimeSemanticsSpec {
   repeated ScriptMessageSemanticsSpec messages = 1;
-  repeated ScriptQuerySemanticsSpec queries = 2;
 }
 
 message ScriptDefinitionState {
@@ -101,13 +92,12 @@ message ScriptDefinitionState {
   string read_model_type_url = 14;
   repeated string command_type_urls = 15;
   repeated string domain_event_type_urls = 16;
-  repeated string query_type_urls = 17;
-  repeated string internal_signal_type_urls = 18;
-  ScriptPackageSpec script_package = 19;
-  bytes protocol_descriptor_set = 20;
-  string state_descriptor_full_name = 21;
-  string read_model_descriptor_full_name = 22;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 23;
+  repeated string internal_signal_type_urls = 17;
+  ScriptPackageSpec script_package = 18;
+  bytes protocol_descriptor_set = 19;
+  string state_descriptor_full_name = 20;
+  string read_model_descriptor_full_name = 21;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 22;
 }
 
 message ScriptBehaviorState {
@@ -212,13 +202,12 @@ message ScriptDefinitionUpsertedEvent {
   string read_model_type_url = 10;
   repeated string command_type_urls = 11;
   repeated string domain_event_type_urls = 12;
-  repeated string query_type_urls = 13;
-  repeated string internal_signal_type_urls = 14;
-  ScriptPackageSpec script_package = 15;
-  bytes protocol_descriptor_set = 16;
-  string state_descriptor_full_name = 17;
-  string read_model_descriptor_full_name = 18;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 19;
+  repeated string internal_signal_type_urls = 13;
+  ScriptPackageSpec script_package = 14;
+  bytes protocol_descriptor_set = 15;
+  string state_descriptor_full_name = 16;
+  string read_model_descriptor_full_name = 17;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 18;
 }
 
 message ScriptDefinitionBindingSpec {
@@ -319,6 +308,7 @@ message ScriptDomainFactCommitted {
   string read_model_type_url = 12;
   int64 state_version = 13;
   int64 occurred_at_unix_time_ms = 14;
+  google.protobuf.Any read_model_payload = 15;
 }
 
 message ScriptBehaviorDispatchFailedEvent {

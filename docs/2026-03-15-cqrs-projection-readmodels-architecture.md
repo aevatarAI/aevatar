@@ -51,8 +51,8 @@
 flowchart LR
     A["Command / Actor Turn"] --> B["PersistDomainEventAsync"]
     B --> C["EventStore Commit"]
-    C --> D["Build ProjectionPayload from committed state"]
-    D --> E["EventEnvelope<ProjectionPayload>"]
+    C --> D["Publish CommittedStateEventPublished<br/>(state_event + state_root)"]
+    D --> E["EventEnvelope<CommittedStateEventPublished>"]
     E --> F["ProjectionSubscriptionRegistry"]
     F --> G["ProjectionDispatcher"]
     G --> H["ProjectionCoordinator"]
@@ -72,11 +72,16 @@ flowchart LR
 1. CQRS read model 和 AGUI/live event 没有各自维护第二条订阅链路，它们是同一个 `ProjectionCoordinator` 下的不同 projector 分支。
 2. Projection 输入只保留 `EventEnvelope`；是否属于投影消息，只由 `payload` 的强类型契约决定。
 
-## 4. projection payload 如何进入 projection pipeline
+## 4. committed observation 如何进入 projection pipeline
 
 ### 4.1 committed fact 的发布
 
-写侧 actor 在 committed 之后，会基于 committed state 计算当前态查询需要的 `ProjectionPayload`，并把它作为 `EventEnvelope.Payload` 发布到 projection 可观察流：
+写侧 actor 在 committed 之后，会统一发布 `CommittedStateEventPublished`，其中包含：
+
+- `state_event`
+- `state_root`
+
+再由 projection runtime 从 `EventEnvelope<CommittedStateEventPublished>` 中解包并物化 readmodel：
 
 - `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
 - `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorPublisher.cs:115-137`
@@ -85,7 +90,7 @@ flowchart LR
 这里的语义是：
 
 1. 先 `EventStore` commit。
-2. 再发布 `EventEnvelope<ProjectionPayload>`。
+2. 再发布 `EventEnvelope<CommittedStateEventPublished>`。
 3. Projection 消费的是“已提交事实的可观察流”，不是未提交命令，也不是 query-time replay。
 
 ### 4.2 Projection 输入契约
@@ -93,15 +98,15 @@ flowchart LR
 当前目标架构下，Projection 输入契约只有一条：
 
 1. transport 只使用 `EventEnvelope`
-2. 当前态 readmodel 只消费 `EventEnvelope<ProjectionPayload>`
+2. 当前态 readmodel 只消费 `EventEnvelope<CommittedStateEventPublished>`
 3. 业务消息 envelope 与投影 envelope 由 payload 契约区分，不再额外包一层投影专用 envelope
-4. projector 直接解包 typed payload，并按消费场景物化 readmodel
+4. projector 直接解包 committed observation，并按消费场景物化 readmodel
 
 因此，“committed event 如何进入 projection pipeline”的准确答案是：
 
 - 不是 query 端去读 `IEventStore`。
 - 不是 projector 自己回放历史事件。
-- 而是 actor commit 后基于 committed state 计算 `ProjectionPayload`，并以 `EventEnvelope` 进入统一 projection 主链。
+- 而是 actor commit 后发布 `CommittedStateEventPublished(state_event + state_root)`，并以 `EventEnvelope` 进入统一 projection 主链。
 
 ## 5. Projection Core 的职责边界
 
@@ -127,14 +132,13 @@ flowchart LR
    - 按注册顺序依次调用所有 projector
    - 单个 projector 失败不会阻断其他 projector，当轮调用结束后聚合为 `ProjectionDispatchAggregateException`
 
-### 5.2 reducer 与 projector 的分工
+### 5.2 当前 projector 主链
 
 抽象定义：
 
-- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionEventReducer.cs:1-15`
 - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs:1-13`
 
-分工如下：
+当前主链如下：
 
 1. `Reducer`
    - 只负责“某一类事件是否会修改某个 read model”
@@ -216,13 +220,12 @@ Workflow 查询链路：
 
 Scripting 查询链路：
 
-- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryService.cs:6-29`
-- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs:15-192`
+- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 
 特点：
 
 1. `GetSnapshotAsync / ListSnapshotsAsync` 直接读 projection document
-2. `ExecuteDeclaredQueryAsync` 也是先读 projection snapshot，再在内存中执行 behavior query
+2. read-side 不再执行 declared query / behavior query
 3. 它不读取 `IEventStore`，也不在 query 路径里补跑 materialization
 
 这符合仓库规则里的“禁止 query-time replay / query-time materialization”。

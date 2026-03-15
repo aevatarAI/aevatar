@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
@@ -26,7 +25,6 @@ public sealed class ScriptNativeDocumentProjectorTests
         var dispatcher = new RecordingNativeDocumentDispatcher();
         var projector = new ScriptNativeDocumentProjector(
             dispatcher,
-            new StaticStructuredDefinitionSnapshotPort(),
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
             new ScriptReadModelMaterializationCompiler(),
             new ScriptNativeDocumentMaterializer(),
@@ -50,6 +48,8 @@ public sealed class ScriptNativeDocumentProjectorTests
                     RunId = "run-1",
                     EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = readModel.Clone() }),
+                    ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+                    ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 7,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
                 },
@@ -64,7 +64,12 @@ public sealed class ScriptNativeDocumentProjectorTests
                         NormalizedText = readModel.NormalizedText,
                     },
                     7,
-                    Any.Pack(readModel).TypeUrl)),
+                    Any.Pack(readModel).TypeUrl,
+                    ScriptSources.StructuredProfileBehavior,
+                    ScriptSources.StructuredProfileBehaviorHash,
+                    ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
+                    "3",
+                    "structured-schema")),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -113,32 +118,6 @@ public sealed class ScriptNativeDocumentProjectorTests
             state,
             "evt-1",
             DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
-
-    private sealed class StaticStructuredDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: ScriptSources.StructuredProfileBehavior,
-                SourceHash: ScriptSources.StructuredProfileBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
-                StateTypeUrl: Any.Pack(new ScriptProfileState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "structured-schema",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: ScriptProfileState.Descriptor.FullName,
-                ReadModelDescriptorFullName: ScriptProfileReadModel.Descriptor.FullName));
-        }
-    }
 
     private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel>
     {

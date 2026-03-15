@@ -83,6 +83,8 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
+            var factsWithEvents = new List<(IMessage DomainEvent, ScriptDomainFactCommitted Fact)>(domainEvents.Count);
+            var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)
             {
                 var domainEvent = domainEvents[i];
@@ -91,7 +93,7 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                 var sequence = i + 1L;
                 var domainEventPayload = _codec.Pack(domainEvent)
                     ?? throw new InvalidOperationException("Script domain event cannot be null.");
-                committed.Add(new ScriptDomainFactCommitted
+                var fact = new ScriptDomainFactCommitted
                 {
                     ActorId = request.ActorId,
                     DefinitionActorId = request.DefinitionActorId,
@@ -107,7 +109,23 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     ReadModelTypeUrl = artifact.Contract.ReadModelTypeUrl ?? request.ReadModelTypeUrl ?? string.Empty,
                     StateVersion = request.CurrentStateVersion + sequence,
                     OccurredAtUnixTimeMs = occurredAtUnixTimeMs,
-                });
+                };
+                committed.Add(fact);
+                factsWithEvents.Add((domainEvent, fact));
+
+                projectedState = behavior.ApplyDomainEvent(
+                    projectedState,
+                    domainEvent,
+                    CreateFactContext(request, fact, eventTypeUrl));
+            }
+
+            foreach (var (domainEvent, fact) in factsWithEvents)
+            {
+                fact.ReadModelPayload = _codec.Pack(
+                    behavior.ProjectReadModel(
+                        projectedState,
+                        domainEvent,
+                        CreateFactContext(request, fact, fact.EventType ?? string.Empty)))?.Clone();
             }
 
             return committed;
@@ -119,6 +137,28 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             else if (behavior is IDisposable disposable)
                 disposable.Dispose();
         }
+    }
+
+    private static ScriptFactContext CreateFactContext(
+        ScriptBehaviorDispatchRequest request,
+        ScriptDomainFactCommitted fact,
+        string eventTypeUrl)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(fact);
+
+        return new ScriptFactContext(
+            fact.ActorId ?? request.ActorId,
+            fact.DefinitionActorId ?? request.DefinitionActorId ?? string.Empty,
+            fact.ScriptId ?? request.ScriptId,
+            fact.Revision ?? request.Revision,
+            fact.RunId ?? string.Empty,
+            fact.CommandId ?? string.Empty,
+            fact.CorrelationId ?? string.Empty,
+            fact.EventSequence,
+            fact.StateVersion,
+            fact.EventType ?? eventTypeUrl,
+            fact.OccurredAtUnixTimeMs);
     }
 
     private static ScriptInboundPayload BuildInboundMessage(EventEnvelope envelope)

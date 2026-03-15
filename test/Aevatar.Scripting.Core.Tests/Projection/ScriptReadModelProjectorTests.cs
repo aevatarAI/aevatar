@@ -2,11 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
-using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -24,9 +20,6 @@ public sealed class ScriptReadModelProjectorTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
-            new StaticUppercaseDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
@@ -56,6 +49,7 @@ public sealed class ScriptReadModelProjectorTests
                 },
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
         var state = ScriptCommittedEnvelopeFactory.CreateState(
@@ -92,9 +86,6 @@ public sealed class ScriptReadModelProjectorTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
-            new StaticUppercaseDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
@@ -121,19 +112,21 @@ public sealed class ScriptReadModelProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldUseStateMirrorAsSourceOfTruth()
+    public async Task ProjectAsync_ShouldUseCommittedReadModelPayloadAsSourceOfTruth()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
-            new StaticUppercaseDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
             ProjectionId = "runtime-3:read-model",
             RootActorId = "runtime-3",
+        };
+        var committedReadModel = new SimpleTextReadModel
+        {
+            HasValue = true,
+            Value = "NEW",
         };
         var fact = new ScriptDomainFactCommitted
         {
@@ -152,7 +145,8 @@ public sealed class ScriptReadModelProjectorTests
                     Value = "OLD",
                 },
             }),
-            ReadModelTypeUrl = string.Empty,
+            ReadModelTypeUrl = Any.Pack(committedReadModel).TypeUrl,
+            ReadModelPayload = Any.Pack(committedReadModel),
             StateVersion = 3,
         };
         var state = ScriptCommittedEnvelopeFactory.CreateState(
@@ -161,7 +155,7 @@ public sealed class ScriptReadModelProjectorTests
             "rev-3",
             new SimpleTextState
             {
-                Value = "NEW",
+                Value = "STALE-STATE",
             },
             fact.StateVersion,
             ScriptSources.UppercaseReadModelTypeUrl);
@@ -177,41 +171,15 @@ public sealed class ScriptReadModelProjectorTests
 
         var document = await dispatcher.GetAsync("runtime-3", CancellationToken.None);
         document.Should().NotBeNull();
-        document!.DefinitionActorId.Should().Be("definition-3");
-        document.ScriptId.Should().Be("script-3");
-        document.Revision.Should().Be("rev-3");
-        document.ReadModelTypeUrl.Should().Be(ScriptSources.UppercaseReadModelTypeUrl);
+        document!.DefinitionActorId.Should().BeEmpty();
+        document.ScriptId.Should().BeEmpty();
+        document.Revision.Should().BeEmpty();
+        document.ReadModelTypeUrl.Should().Be(Any.Pack(committedReadModel).TypeUrl);
         document.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("NEW");
     }
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
         public DateTimeOffset UtcNow => now;
-    }
-
-    private sealed class StaticUppercaseDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().NotBeNullOrWhiteSpace();
-            requestedRevision.Should().NotBeNullOrWhiteSpace();
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: requestedRevision,
-                SourceText: ScriptSources.UppercaseBehavior,
-                SourceHash: ScriptSources.UppercaseBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: Any.Pack(new SimpleTextState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new SimpleTextReadModel()).TypeUrl,
-                ReadModelSchemaVersion: string.Empty,
-                ReadModelSchemaHash: string.Empty,
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
-                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
-        }
     }
 }

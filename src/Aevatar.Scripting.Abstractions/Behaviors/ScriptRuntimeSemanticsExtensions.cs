@@ -57,36 +57,4 @@ public static class ScriptRuntimeSemanticsExtensions
             $"Runtime semantics are missing for message type `{typeUrl}` with kind `{expectedKind}`.");
     }
 
-    public static bool TryGetQuerySemantics(
-        this ScriptRuntimeSemanticsSpec? spec,
-        string queryTypeUrl,
-        out ScriptQuerySemanticsSpec semantics)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(queryTypeUrl);
-
-        if (spec != null)
-        {
-            foreach (var candidate in spec.Queries)
-            {
-                if (string.Equals(candidate.QueryTypeUrl, queryTypeUrl, StringComparison.Ordinal))
-                {
-                    semantics = candidate;
-                    return true;
-                }
-            }
-        }
-
-        semantics = new ScriptQuerySemanticsSpec();
-        return false;
-    }
-
-    public static ScriptQuerySemanticsSpec GetRequiredQuerySemantics(
-        this ScriptRuntimeSemanticsSpec? spec,
-        string queryTypeUrl)
-    {
-        if (spec.TryGetQuerySemantics(queryTypeUrl, out var semantics))
-            return semantics;
-
-        throw new InvalidOperationException($"Runtime semantics are missing for query type `{queryTypeUrl}`.");
-    }
 }

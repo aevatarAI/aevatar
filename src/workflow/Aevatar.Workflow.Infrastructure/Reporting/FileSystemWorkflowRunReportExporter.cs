@@ -6,20 +6,20 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
-internal sealed class FileSystemWorkflowExecutionReportArtifactSink : IWorkflowExecutionReportArtifactSink
+internal sealed class FileSystemWorkflowRunReportExporter : IWorkflowRunReportExportPort
 {
-    private readonly IOptions<WorkflowExecutionReportArtifactOptions> _options;
-    private readonly ILogger<FileSystemWorkflowExecutionReportArtifactSink> _logger;
+    private readonly IOptions<WorkflowRunReportExportOptions> _options;
+    private readonly ILogger<FileSystemWorkflowRunReportExporter> _logger;
 
-    public FileSystemWorkflowExecutionReportArtifactSink(
-        IOptions<WorkflowExecutionReportArtifactOptions> options,
-        ILogger<FileSystemWorkflowExecutionReportArtifactSink> logger)
+    public FileSystemWorkflowRunReportExporter(
+        IOptions<WorkflowRunReportExportOptions> options,
+        ILogger<FileSystemWorkflowRunReportExporter> logger)
     {
         _options = options;
         _logger = logger;
     }
 
-    public async Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default)
+    public async Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(report);
 

@@ -40,7 +40,6 @@ public class ScriptDefinitionGAgentReplayContractTests
         agent.State.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
         agent.State.CommandTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl);
         agent.State.DomainEventTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
-        agent.State.QueryTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
         agent.State.InternalSignalTypeUrls.Should().ContainSingle(Any.Pack(new SimpleTextSignal()).TypeUrl);
         agent.State.RuntimeSemantics.Should().NotBeNull();
         agent.State.RuntimeSemantics.Messages.Should().Contain(x =>
@@ -50,9 +49,6 @@ public class ScriptDefinitionGAgentReplayContractTests
             x.TypeUrl == Any.Pack(new ScriptProfileUpdated()).TypeUrl &&
             x.Kind == ScriptMessageKind.DomainEvent &&
             x.Projectable);
-        agent.State.RuntimeSemantics.Queries.Should().Contain(x =>
-            x.QueryTypeUrl == Any.Pack(new ScriptProfileQueryRequested()).TypeUrl &&
-            x.ResultTypeUrl == Any.Pack(new ScriptProfileQueryResponded()).TypeUrl);
         agent.State.ReadModelSchemaVersion.Should().Be("3");
         agent.State.ReadModelSchema.Should().NotBeNull();
         agent.State.ReadModelSchemaHash.Should().NotBeNullOrWhiteSpace();
@@ -214,7 +210,7 @@ public class ScriptDefinitionGAgentReplayContractTests
     {
         protected override void Configure(IScriptBehaviorBuilder<ScriptProfileState, ScriptProfileReadModel> builder)
         {
-            builder.OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+            _ = builder;
         }
 
         private static Task<ScriptProfileQueryResponded?> HandleQueryAsync(
@@ -249,8 +245,7 @@ public class ScriptDefinitionGAgentReplayContractTests
                         .OnCommand<InvalidProfileCommand>(HandleAsync)
                         .OnEvent<InvalidProfileUpdated>(
                             apply: static (_, evt, _) => new InvalidProfileState { CommandCount = 1 },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<InvalidProfileQueryRequested, InvalidProfileQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -410,8 +405,7 @@ public class ScriptDefinitionGAgentReplayContractTests
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleAsync(

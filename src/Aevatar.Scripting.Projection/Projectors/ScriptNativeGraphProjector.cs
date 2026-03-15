@@ -3,7 +3,6 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Projection.Materialization;
@@ -16,7 +15,6 @@ public sealed class ScriptNativeGraphProjector
     : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
 {
     private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel> _graphWriteDispatcher;
-    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IScriptNativeGraphMaterializer _materializer;
@@ -24,14 +22,12 @@ public sealed class ScriptNativeGraphProjector
 
     public ScriptNativeGraphProjector(
         IProjectionWriteDispatcher<ScriptNativeGraphReadModel> graphWriteDispatcher,
-        IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptBehaviorArtifactResolver artifactResolver,
         IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptNativeGraphMaterializer materializer,
         IProtobufMessageCodec codec)
     {
         _graphWriteDispatcher = graphWriteDispatcher ?? throw new ArgumentNullException(nameof(graphWriteDispatcher));
-        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
@@ -64,31 +60,24 @@ public sealed class ScriptNativeGraphProjector
         }
 
         var fact = stateEvent.EventData.Unpack<ScriptDomainFactCommitted>();
-        var snapshot = await _definitionSnapshotPort.GetRequiredAsync(
-            state.DefinitionActorId,
-            state.Revision,
-            ct);
         var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
-            snapshot.ScriptPackage,
-            snapshot.SourceText);
+            state.ScriptPackage,
+            state.SourceText);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
-            snapshot.ScriptId,
-            snapshot.Revision,
+            string.IsNullOrWhiteSpace(state.ScriptId) ? fact.ScriptId ?? string.Empty : state.ScriptId,
+            string.IsNullOrWhiteSpace(state.Revision) ? fact.Revision ?? string.Empty : state.Revision,
             scriptPackage,
-            snapshot.SourceHash));
+            state.SourceHash));
         var plan = _materializationCompiler.GetOrCompile(
             artifact,
-            snapshot.ReadModelSchemaHash,
-            snapshot.ReadModelSchemaVersion);
+            state.ReadModelSchemaHash,
+            state.ReadModelSchemaVersion);
         if (!plan.SupportsGraph)
             return;
 
-        var semanticReadModel = await ScriptCommittedStateProjectionSupport.BuildSemanticReadModelAsync(
-            context.RootActorId,
-            state,
-            fact,
-            artifact,
-            _codec);
+        var semanticReadModel = _codec.Unpack(fact.ReadModelPayload, artifact.Descriptor.ReadModelClrType);
+        if (semanticReadModel == null)
+            return;
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
             envelope,
             DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs));

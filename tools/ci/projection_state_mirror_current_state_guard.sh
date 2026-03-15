@@ -30,7 +30,7 @@ fi
 
 missing_committed_hits="$(
   for file in "${FILES[@]}"; do
-    if ! rg -q "CommittedStateEventEnvelope\\.TryUnpackState<" "${file}"; then
+    if ! rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
       echo "${file}"
     fi
   done

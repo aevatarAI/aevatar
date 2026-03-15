@@ -43,7 +43,12 @@ internal static class ScriptCommittedEnvelopeFactory
         string revision,
         IMessage stateRoot,
         long lastAppliedEventVersion,
-        string? readModelTypeUrl = null)
+        string? readModelTypeUrl = null,
+        string? sourceText = null,
+        string? sourceHash = null,
+        ScriptPackageSpec? scriptPackage = null,
+        string? readModelSchemaVersion = null,
+        string? readModelSchemaHash = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(definitionActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptId);
@@ -55,9 +60,14 @@ internal static class ScriptCommittedEnvelopeFactory
             DefinitionActorId = definitionActorId,
             ScriptId = scriptId,
             Revision = revision,
+            SourceText = sourceText ?? string.Empty,
+            SourceHash = sourceHash ?? string.Empty,
             StateTypeUrl = Any.Pack(stateRoot).TypeUrl,
             StateRoot = Any.Pack(stateRoot),
             ReadModelTypeUrl = readModelTypeUrl ?? string.Empty,
+            ReadModelSchemaVersion = readModelSchemaVersion ?? string.Empty,
+            ReadModelSchemaHash = readModelSchemaHash ?? string.Empty,
+            ScriptPackage = scriptPackage?.Clone() ?? new ScriptPackageSpec(),
             LastAppliedEventVersion = lastAppliedEventVersion,
             LastEventId = $"evt-{lastAppliedEventVersion}",
         };
