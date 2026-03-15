@@ -89,15 +89,19 @@ resolve_candidates() {
     return
   fi
 
-  local branch_args=()
   if [[ -n "${BRANCH}" ]]; then
-    branch_args+=(--branch "${BRANCH}")
+    gh run list \
+      --workflow "${WORKFLOW_REF}" \
+      --branch "${BRANCH}" \
+      --limit 50 \
+      --json databaseId,headBranch,status,conclusion,createdAt,displayTitle,url \
+      --jq '.[] | select(.status == "completed" and .conclusion == "success") | [.databaseId, .headBranch, .createdAt, .displayTitle, .url] | @tsv'
+    return
   fi
 
   gh run list \
     --workflow "${WORKFLOW_REF}" \
     --limit 50 \
-    "${branch_args[@]}" \
     --json databaseId,headBranch,status,conclusion,createdAt,displayTitle,url \
     --jq '.[] | select(.status == "completed" and .conclusion == "success") | [.databaseId, .headBranch, .createdAt, .displayTitle, .url] | @tsv'
 }
