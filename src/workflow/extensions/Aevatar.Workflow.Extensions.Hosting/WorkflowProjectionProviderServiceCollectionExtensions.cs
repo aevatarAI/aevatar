@@ -83,6 +83,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
             keySelector: static document => document.RootActorId,
             keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
@@ -98,6 +103,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
             keySelector: static document => document.RootActorId,
             keyFormatter: static key => key,
             defaultSortSelector: static document => document.UpdatedAt,

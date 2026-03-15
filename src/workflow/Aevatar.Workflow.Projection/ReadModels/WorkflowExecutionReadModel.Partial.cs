@@ -181,6 +181,56 @@ public sealed partial class WorkflowExecutionCurrentStateDocument
     public WorkflowExecutionCurrentStateDocument DeepClone() => Clone();
 }
 
+public sealed partial class WorkflowRunTimelineDocument
+    : IProjectionReadModel,
+      IProjectionReadModelCloneable<WorkflowRunTimelineDocument>
+{
+    [JsonIgnore]
+    public string ActorId => RootActorId;
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public IList<WorkflowExecutionTimelineEvent> Timeline
+    {
+        get => TimelineEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
+    }
+
+    public WorkflowRunTimelineDocument DeepClone() => Clone();
+}
+
+public sealed partial class WorkflowRunGraphMirrorReadModel
+    : IProjectionReadModel,
+      IProjectionReadModelCloneable<WorkflowRunGraphMirrorReadModel>
+{
+    [JsonIgnore]
+    public string ActorId => RootActorId;
+
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+
+    public IList<WorkflowExecutionTopologyEdge> Topology
+    {
+        get => TopologyEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(TopologyEntries, value);
+    }
+
+    public IList<WorkflowExecutionStepTrace> Steps
+    {
+        get => StepEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(StepEntries, value);
+    }
+
+    public WorkflowRunGraphMirrorReadModel DeepClone() => Clone();
+}
+
 public sealed partial class WorkflowExecutionSummary
 {
     public IDictionary<string, int> StepTypeCounts

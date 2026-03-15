@@ -8,20 +8,20 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowProjectionQueryReader : IWorkflowExecutionProjectionQueryPort
 {
     private readonly IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> _currentStateReader;
-    private readonly IProjectionDocumentReader<WorkflowExecutionReport, string> _reportReader;
+    private readonly IProjectionDocumentReader<WorkflowRunTimelineDocument, string> _timelineReader;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
     private readonly bool _enableActorQueryEndpoints;
 
     public WorkflowProjectionQueryReader(
         IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> currentStateReader,
-        IProjectionDocumentReader<WorkflowExecutionReport, string> reportReader,
+        IProjectionDocumentReader<WorkflowRunTimelineDocument, string> timelineReader,
         WorkflowExecutionReadModelMapper mapper,
         IProjectionGraphStore graphStore,
         WorkflowExecutionProjectionOptions? options = null)
     {
         _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
-        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
+        _timelineReader = timelineReader ?? throw new ArgumentNullException(nameof(timelineReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
         _enableActorQueryEndpoints = options == null || (options.Enabled && options.EnableActorQueryEndpoints);
@@ -79,11 +79,11 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowExecutionProjection
             return [];
 
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var report = await _reportReader.GetAsync(actorId, ct);
-        if (report == null)
+        var timelineDocument = await _timelineReader.GetAsync(actorId, ct);
+        if (timelineDocument == null)
             return [];
 
-        return report.Timeline
+        return timelineDocument.Timeline
             .OrderByDescending(x => x.Timestamp)
             .Take(boundedTake)
             .Select(_mapper.ToActorTimelineItem)

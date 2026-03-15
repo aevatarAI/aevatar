@@ -16,8 +16,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowProjectionOrchestrationComponentTests
 {
-    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
-
     [Fact]
     public async Task ActivationService_ShouldStartProjectionAndReturnRuntimeLease()
     {
@@ -276,17 +274,13 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     [Fact]
     public async Task QueryReader_ShouldMapSnapshotsAndSortTimeline()
     {
-        var store = CreateStore();
-        await store.UpsertAsync(new WorkflowExecutionReport
+        var timelineStore = CreateTimelineStore();
+        await timelineStore.UpsertAsync(new WorkflowRunTimelineDocument
         {
             Id = "actor-3",
             RootActorId = "actor-3",
             CommandId = "cmd-3",
-            WorkflowName = "direct",
-            StartedAt = new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero),
-            EndedAt = new DateTimeOffset(2026, 2, 21, 10, 5, 0, TimeSpan.Zero),
-            Success = true,
-            FinalOutput = "done",
+            UpdatedAt = new DateTimeOffset(2026, 2, 21, 10, 5, 0, TimeSpan.Zero),
             Timeline =
             [
                 new WorkflowExecutionTimelineEvent
@@ -305,13 +299,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                     Stage = "step-2",
                 },
             ],
-            Summary = new WorkflowExecutionSummary
-            {
-                TotalSteps = 3,
-                RequestedSteps = 3,
-                CompletedSteps = 3,
-                RoleReplyCount = 1,
-            },
         });
         var currentStateStore = CreateCurrentStateStore();
         await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
@@ -329,7 +316,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         });
         var reader = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             new WorkflowExecutionReadModelMapper(),
             new InMemoryProjectionGraphStore());
 
@@ -351,17 +338,8 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     [Fact]
     public async Task QueryReader_GraphQueries_ShouldRespectDirectionFiltersAndBounds()
     {
-        var store = CreateStore();
+        var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
-        await store.UpsertAsync(new WorkflowExecutionReport
-        {
-            Id = "actor-graph",
-            RootActorId = "actor-graph",
-            WorkflowName = "direct",
-            CommandId = "cmd-graph",
-            StartedAt = DateTimeOffset.UtcNow,
-            Summary = new WorkflowExecutionSummary(),
-        });
         await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
         {
             Id = "actor-graph",
@@ -426,7 +404,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         var reader = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             new WorkflowExecutionReadModelMapper(),
             graphStore);
 
@@ -475,12 +453,12 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     [Fact]
     public async Task QueryReader_GetActorGraphEnrichedSnapshotAsync_ShouldReturnNullForMissingSnapshot_AndComposeWhenExists()
     {
-        var store = CreateStore();
+        var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
         var graphStore = new InMemoryProjectionGraphStore();
         var reader = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             new WorkflowExecutionReadModelMapper(),
             graphStore);
 
@@ -488,21 +466,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         missing.Should().BeNull();
 
         var now = DateTimeOffset.UtcNow;
-        await store.UpsertAsync(new WorkflowExecutionReport
-        {
-            Id = "actor-enriched",
-            RootActorId = "actor-enriched",
-            WorkflowName = "wf-enriched",
-            CommandId = "cmd-enriched",
-            StartedAt = now,
-            Summary = new WorkflowExecutionSummary
-            {
-                TotalSteps = 1,
-                RequestedSteps = 1,
-                CompletedSteps = 1,
-                RoleReplyCount = 0,
-            },
-        });
         await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
         {
             Id = "actor-enriched",
@@ -531,15 +494,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     public async Task QueryReader_ListSnapshotsAndTimeline_ShouldClampTakeAndHandleMissingActor()
     {
         var now = DateTimeOffset.UtcNow;
-        var store = CreateStore();
+        var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
-        await store.UpsertAsync(new WorkflowExecutionReport
+        await timelineStore.UpsertAsync(new WorkflowRunTimelineDocument
         {
             Id = "actor-a",
             RootActorId = "actor-a",
-            WorkflowName = "wf",
             CommandId = "cmd-a",
-            StartedAt = now.AddMinutes(-2),
+            UpdatedAt = now.AddMinutes(-1),
             Timeline =
             [
                 new WorkflowExecutionTimelineEvent
@@ -549,7 +511,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                     Data = new Dictionary<string, string>(StringComparer.Ordinal) { ["k"] = "v" },
                 },
             ],
-            Summary = new WorkflowExecutionSummary(),
         });
         await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
         {
@@ -559,15 +520,6 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             WorkflowName = "wf",
             Status = "running",
             UpdatedAt = now.AddMinutes(-1),
-        });
-        await store.UpsertAsync(new WorkflowExecutionReport
-        {
-            Id = "actor-b",
-            RootActorId = "actor-b",
-            WorkflowName = "wf",
-            CommandId = "cmd-b",
-            StartedAt = now.AddMinutes(-1),
-            Summary = new WorkflowExecutionSummary(),
         });
         await currentStateStore.UpsertAsync(new WorkflowExecutionCurrentStateDocument
         {
@@ -581,7 +533,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
         var reader = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             new WorkflowExecutionReadModelMapper(),
             new InMemoryProjectionGraphStore());
 
@@ -846,6 +798,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);
+
+    private static InMemoryProjectionDocumentStore<WorkflowRunTimelineDocument, string> CreateTimelineStore() => new(
+        keySelector: document => document.RootActorId,
+        keyFormatter: key => key,
+        defaultSortSelector: document => document.UpdatedAt);
 
     private static InMemoryProjectionDocumentStore<WorkflowExecutionCurrentStateDocument, string> CreateCurrentStateStore() => new(
         keySelector: document => document.RootActorId,

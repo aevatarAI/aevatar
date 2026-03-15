@@ -4,12 +4,13 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
-public sealed class WorkflowRunInsightReadModelProjector
+public sealed class WorkflowRunGraphMirrorProjector
     : IProjectionProjector<WorkflowRunInsightProjectionContext, bool>
 {
-    private readonly IProjectionWriteDispatcher<WorkflowExecutionReport> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel> _writeDispatcher;
 
-    public WorkflowRunInsightReadModelProjector(IProjectionWriteDispatcher<WorkflowExecutionReport> writeDispatcher)
+    public WorkflowRunGraphMirrorProjector(
+        IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel> writeDispatcher)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
     }
@@ -26,13 +27,14 @@ public sealed class WorkflowRunInsightReadModelProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!WorkflowRunInsightProjectionMaps.TryUnpack(envelope, out var stateEvent, out var state))
-        {
-            return;
-        }
+        _ = context;
 
-        var readModel = WorkflowRunInsightProjectionMaps.ToReport(state!, stateEvent!);
-        await _writeDispatcher.UpsertAsync(readModel, ct);
+        if (!WorkflowRunInsightProjectionMaps.TryUnpack(envelope, out var stateEvent, out var state))
+            return;
+
+        await _writeDispatcher.UpsertAsync(
+            WorkflowRunInsightProjectionMaps.ToGraphMirrorReadModel(state!, stateEvent!),
+            ct);
     }
 
     public ValueTask CompleteAsync(

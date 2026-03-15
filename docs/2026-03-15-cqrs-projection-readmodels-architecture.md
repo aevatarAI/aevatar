@@ -206,9 +206,10 @@ Workflow 查询链路：
 
 读取规则：
 
-1. `snapshot / projection state / timeline` 来自 document store
-2. `graph edges / subgraph` 来自 graph store
-3. `graph enriched snapshot` 是“先读 snapshot，再读 subgraph”的组合，不是原子读
+1. `snapshot / projection state` 来自 current-state document store
+2. `timeline` 来自 `WorkflowRunTimelineDocument`
+3. `graph edges / subgraph` 来自 graph store
+4. `graph enriched snapshot` 是“先读 snapshot，再读 subgraph”的组合，不是原子读
 
 因此 Workflow 的一致性不是单一等级，而是：
 
@@ -550,7 +551,7 @@ DI 装配：
 
 结果：
 
-1. `snapshot/timeline` 可能已经更新，而 `graph` 仍旧滞后
+1. `current-state/timeline` 可能已经更新，而 `graph` 仍旧滞后
 2. `GetActorGraphEnrichedSnapshotAsync` 读到的是“某个时刻的文档 + 另一个时刻的图”
 3. 如果 graph 补偿积压，偏斜会持续，不只是瞬时
 
@@ -603,7 +604,10 @@ DI 装配：
 
 ### Workflow
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:11-128`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphMirrorProjector.cs`
 - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`

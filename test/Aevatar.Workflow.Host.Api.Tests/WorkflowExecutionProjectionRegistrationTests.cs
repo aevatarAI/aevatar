@@ -46,15 +46,19 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
+        var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
+        var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionReport>>();
 
         currentStateStore.Should().NotBeNull();
+        timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
+        timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -93,6 +97,17 @@ public class WorkflowExecutionProjectionRegistrationTests
         var provider = new WorkflowExecutionCurrentStateDocumentMetadataProvider();
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-current-states");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowRunTimelineDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    {
+        var provider = new WorkflowRunTimelineDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("workflow-run-timelines");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
@@ -144,6 +159,11 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
@@ -160,6 +180,14 @@ public class WorkflowExecutionProjectionRegistrationTests
                 Endpoints = ["http://localhost:9200"],
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
             keySelector: document => document.RootActorId,
             keyFormatter: key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(

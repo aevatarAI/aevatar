@@ -32,19 +32,15 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class WorkflowRunInsightBridgeProjectorTests
 {
-    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
-
     private static IEventDeduplicator CreateDeduplicator() => new TestEventDeduplicator();
     private static RecordingProjectionDocumentStore CreateStore() => new();
 
     private static IProjectionWriteDispatcher<WorkflowExecutionReport> CreateDispatcher(
         RecordingProjectionDocumentStore store)
     {
-        var graphStore = new InMemoryProjectionGraphStore();
         var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
         {
             new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(graphStore, GraphMaterializer),
         };
         return new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
     }

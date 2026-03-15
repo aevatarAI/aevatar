@@ -23,7 +23,7 @@
 
 1. `scripting` 仍在 projection/query 侧执行业务型 readmodel/query 逻辑。
 2. `Projection Core` 仍保留 reducer 时代的通用抽象和默认注册路径。
-3. `workflow` 的 insight readmodel 仍偏 monolithic，graph/timeline/export 还没完全拆成明确消费场景。
+3. `workflow` 的 report/export 命名与外围 adapter 还没完全收口，但 timeline/graph 主查询链已经从 monolithic report 中拆开。
 4. store dispatch compensation 与 workflow export artifact 仍带明显的 feature-specific 历史痕迹。
 
 这份文档的目标不是重复已经完成的重构，而是明确剩余改造范围、终态边界、文件级动作和验收标准。
@@ -46,7 +46,7 @@
 |---|---|---|---|
 | R1 | `scripting` 未彻底 actor 化 | projection/query 仍会加载 behavior artifact 并执行业务逻辑 | 业务语义分散在 actor/projection/query 三处 |
 | R2 | reducer-era core 未删除 | `IProjectionEventReducer`、AI reducer 注册、旧 README 仍在 | 框架抽象与当前架构不一致 |
-| R3 | workflow readmodel 仍偏单体 | `WorkflowExecutionReport` 同时承载 report/timeline/graph 源 | 一个 readmodel 覆盖多个消费场景 |
+| R3 | workflow report/export 外围层仍带历史命名 | `WorkflowExecutionReport` 仍承担 report/export 载体，外围 adapter 还未统一收口 | 报告链与主查询链的边界仍可继续收紧 |
 | R4 | export adapter 命名与边界仍旧 | `IWorkflowRunReportExportPort` 这条链仍需完成全仓统一收口 | 容易把导出能力误认为主查询模型 |
 | R5 | compensation 仍 workflow-specific | `WorkflowProjectionDispatchCompensationOutboxGAgent` 直接绑定 `WorkflowExecutionReport` | runtime 通用能力仍挂在 feature 模块 |
 | R6 | 文档与部分命名残留旧术语 | 少数活文档仍需同步最后一轮主链与 export 命名收口 | 新人会被错误设计误导 |
@@ -221,24 +221,26 @@ flowchart LR
 
 ## 6.3 WP3: Workflow readmodel 按消费场景拆分
 
+> 2026-03-16 进度：主查询链已完成。`WorkflowRunTimelineDocument` 已落地，`WorkflowProjectionQueryReader` 已直接读取 timeline document；graph 已改由 `WorkflowRunGraphMirrorReadModel -> WorkflowRunGraphMirrorMaterializer -> Graph Store` 物化，不再从 `WorkflowExecutionReport` 派生。剩余工作仅是 report/export 外围命名和文档收口。
+
 ### 现状
 
-虽然 `WorkflowRunInsightGAgent` 已成为语义拥有者，但查询面仍偏向单文档：
+虽然 `WorkflowRunInsightGAgent` 已成为语义拥有者，但 report/export 外围仍保留历史命名：
 
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs`
-- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionGraphMaterializer.cs`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphMirrorMaterializer.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 
 问题：
 
-1. `WorkflowExecutionReport` 仍同时承载 report/timeline/graph 源。
-2. graph 仍从 report 物化，而不是直接从 insight state 或显式 graph readmodel 物化。
-3. timeline 仍是 report 内部集合，不是单独消费场景的 readmodel。
+1. `WorkflowExecutionReport` 仍是 report/export 载体，尚未完成命名和外围 adapter 收口。
+2. timeline 与 graph 主查询链虽然已经拆分，但活文档和少数外围测试/说明仍沿用旧口径。
+3. report/export 与主查询链之间的概念边界还可以继续硬化。
 
 ### 目标
 
-把 workflow 查询面拆成明确 readmodel：
+把 workflow 查询面拆成明确 readmodel，并保持 report/export 只作为外围 adapter：
 
 1. `WorkflowExecutionCurrentStateDocument`
 2. `WorkflowRunInsightReportDocument`
@@ -249,11 +251,12 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs` | `拆分` | 把 current-state/report/timeline 结构分离 |
-| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs` | `重写` | 一个 committed state 驱动多个明确 readmodel projector |
-| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionGraphMaterializer.cs` | `重写或替换` | graph 不再依赖 monolithic report |
-| `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs` | `修改` | 直接面向多个 readmodel/query port 读取 |
-| `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs` | `修改` | provider 注册跟随新 readmodel 拆分 |
+| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs` | `已完成` | 已拆出 `WorkflowRunTimelineDocument` / `WorkflowRunGraphMirrorReadModel` |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReadModelProjector.cs` | `已完成` | 与 timeline/graph projector 并列，由同一 committed state fan-out 到多个 readmodel |
+| `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs` | `新增并完成` | timeline 成为单独消费场景的 readmodel |
+| `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphMirrorMaterializer.cs` | `新增并完成` | graph 改为从 graph mirror readmodel 物化 |
+| `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs` | `已完成` | timeline query 直接读取 `WorkflowRunTimelineDocument` |
+| `src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/WorkflowProjectionProviderServiceCollectionExtensions.cs` | `已完成` | provider 注册已覆盖 timeline document |
 
 ### 验收标准
 
