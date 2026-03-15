@@ -235,7 +235,7 @@ public class ClaimReplayTests
                             AiSummary = evt.Current.AiSummary,
                             LastCommandId = evt.CommandId ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
             }
 

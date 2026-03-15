@@ -197,21 +197,22 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             var currentState = _codec.Unpack(state.StateRoot, artifact.Descriptor.StateClrType);
             var domainEvent = _codec.Unpack(payload, domainEventRegistration.MessageClrType)
                 ?? throw new InvalidOperationException($"Failed to unpack domain event payload `{eventTypeUrl}`.");
+            var factContext = new Aevatar.Scripting.Abstractions.Behaviors.ScriptFactContext(
+                evt.ActorId ?? Id,
+                evt.DefinitionActorId ?? state.DefinitionActorId ?? string.Empty,
+                string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
+                string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
+                evt.RunId ?? string.Empty,
+                evt.CommandId ?? string.Empty,
+                evt.CorrelationId ?? string.Empty,
+                evt.EventSequence,
+                evt.StateVersion,
+                evt.EventType ?? eventTypeUrl,
+                evt.OccurredAtUnixTimeMs);
             var appliedState = behavior.ApplyDomainEvent(
                 currentState,
                 domainEvent,
-                new Aevatar.Scripting.Abstractions.Behaviors.ScriptFactContext(
-                    evt.ActorId ?? Id,
-                    evt.DefinitionActorId ?? state.DefinitionActorId ?? string.Empty,
-                    string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
-                    string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
-                    evt.RunId ?? string.Empty,
-                    evt.CommandId ?? string.Empty,
-                    evt.CorrelationId ?? string.Empty,
-                    evt.EventSequence,
-                    evt.StateVersion,
-                    evt.EventType ?? eventTypeUrl,
-                    evt.OccurredAtUnixTimeMs));
+                factContext);
             next.StateRoot = _codec.Pack(appliedState)?.Clone();
         }
         finally

@@ -43,35 +43,38 @@ public sealed class WorkflowExecutionReadModelProjector
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized == null)
+        if (!CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) ||
+            observed?.Payload == null)
             return;
 
-        var typeUrl = normalized.Payload?.TypeUrl;
+        var typeUrl = observed.Payload.TypeUrl;
         if (string.IsNullOrWhiteSpace(typeUrl))
             return;
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
-        if (!string.IsNullOrWhiteSpace(normalized.Id))
+        if (!string.IsNullOrWhiteSpace(observed.Id))
         {
-            var dedupKey = $"{context.RootActorId}:{normalized.Id}";
+            var dedupKey = $"{context.RootActorId}:{observed.Id}";
             if (!await _deduplicator.TryRecordAsync(dedupKey))
                 return;
         }
 
-        var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
+        var now = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var report = await _documentReader.GetAsync(context.RootActorId, ct) ?? CreateInitialReport(context);
         report.Id = context.RootActorId;
         if (string.IsNullOrWhiteSpace(report.RootActorId))
             report.RootActorId = context.RootActorId;
         var mutated = false;
         foreach (var reducer in reducers)
-            mutated |= reducer.Reduce(report, context, normalized, now);
+            mutated |= reducer.Reduce(report, context, observed, now);
 
         if (!mutated)
             return;
 
-        WorkflowExecutionProjectionMutations.RecordProjectedEvent(report, normalized);
+        WorkflowExecutionProjectionMutations.RecordProjectedEvent(
+            report,
+            observed.Id,
+            ResolveObservedStateVersion(envelope, report.StateVersion));
         WorkflowExecutionProjectionMutations.RefreshDerivedFields(report, now);
         await _writeDispatcher.UpsertAsync(report, ct);
     }
@@ -125,5 +128,16 @@ public sealed class WorkflowExecutionReadModelProjector
         };
         report.Summary = new WorkflowExecutionSummary();
         return report;
+    }
+
+    private static long ResolveObservedStateVersion(EventEnvelope envelope, long fallbackStateVersion)
+    {
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out _, out var stateVersion) &&
+            stateVersion > 0)
+        {
+            return stateVersion;
+        }
+
+        return fallbackStateVersion;
     }
 }

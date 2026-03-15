@@ -84,6 +84,9 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             HttpStatusCode.OK,
             """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.NotFound,
+            """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"result":"created"}"""));
 
@@ -132,9 +135,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             Value = "v1",
         });
 
-        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests.Should().HaveCount(3);
         handler.CapturedRequests[0].Method.Should().Be("PUT");
         handler.CapturedRequests[0].PathAndQuery.Should().NotContain("/_doc/");
+        handler.CapturedRequests[1].Method.Should().Be("GET");
+        handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_doc/actor-1");
         handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
@@ -148,8 +153,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
 
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -181,11 +188,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             DocumentIndexScope = "dynamic-beta",
         });
 
-        handler.CapturedRequests.Should().HaveCount(4);
+        handler.CapturedRequests.Should().HaveCount(6);
         handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha");
         handler.CapturedRequests[1].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
-        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
-        handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+        handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-dynamic-alpha/_doc/actor-1");
+        handler.CapturedRequests[3].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta");
+        handler.CapturedRequests[4].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
+        handler.CapturedRequests[5].PathAndQuery.Should().EndWith("/aevatar-dynamic-beta/_doc/actor-2");
     }
 
     [Fact]
@@ -280,12 +289,20 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         public string Id { get; set; } = "";
 
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
         public string Value { get; set; } = "";
     }
 
     private sealed class DynamicStoreReadModel : IProjectionReadModel
     {
         public string Id { get; set; } = string.Empty;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = string.Empty;
 
         public string DocumentIndexScope { get; set; } = string.Empty;
     }

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Runtime;
@@ -35,32 +36,42 @@ public sealed class ScriptNativeGraphProjectorTests
         {
             ProjectionId = "claim-runtime:native-graph",
             RootActorId = "claim-runtime",
-            CurrentSemanticReadModelDocument = new ScriptReadModelDocument
-            {
-                Id = "claim-runtime",
-                ScriptId = "claim_orchestrator",
-                DefinitionActorId = "definition-1",
-                Revision = "rev-claim-1",
-                ReadModelTypeUrl = Any.Pack(new ClaimReadModel()).TypeUrl,
-                ReadModelPayload = Any.Pack(BuildClaimReadModel()),
-                StateVersion = 3,
-            },
         };
+        var readModel = BuildClaimReadModel();
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ScriptDomainFactCommitted
-            {
-                ActorId = "claim-runtime",
-                DefinitionActorId = "definition-1",
-                ScriptId = "claim_orchestrator",
-                Revision = "rev-claim-1",
-                RunId = "run-claim-1",
-                EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
-                DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = BuildClaimReadModel() }),
-                StateVersion = 3,
-                OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
-            }),
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "claim-runtime",
+                    DefinitionActorId = "definition-1",
+                    ScriptId = "claim_orchestrator",
+                    Revision = "rev-claim-1",
+                    RunId = "run-claim-1",
+                    EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
+                    DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = readModel.Clone() }),
+                    StateVersion = 3,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+                },
+                ScriptCommittedEnvelopeFactory.CreateState(
+                    "definition-1",
+                    "claim_orchestrator",
+                    "rev-claim-1",
+                    new ClaimState
+                    {
+                        CaseId = readModel.CaseId,
+                        PolicyId = readModel.PolicyId,
+                        DecisionStatus = readModel.DecisionStatus,
+                        ManualReviewRequired = readModel.ManualReviewRequired,
+                        AiSummary = readModel.AiSummary,
+                        RiskScore = readModel.RiskScore,
+                        CompliancePassed = readModel.CompliancePassed,
+                        LastCommandId = readModel.LastCommandId,
+                        TraceSteps = { readModel.TraceSteps },
+                    },
+                    3,
+                    Any.Pack(readModel).TypeUrl)),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -99,16 +110,12 @@ public sealed class ScriptNativeGraphProjectorTests
         };
     }
 
-    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
-    {
-        return new EventEnvelope
-        {
-            Id = "evt-graph-1",
-            Payload = Any.Pack(fact),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
-        };
-    }
+    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact, ScriptBehaviorState state) =>
+        ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
+            fact,
+            state,
+            "evt-graph-1",
+            DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
 
     private sealed class StaticClaimDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
@@ -140,11 +147,11 @@ public sealed class ScriptNativeGraphProjectorTests
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
-        public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.DeepClone();
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 }

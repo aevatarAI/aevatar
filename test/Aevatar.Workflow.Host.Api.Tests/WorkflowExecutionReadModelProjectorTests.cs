@@ -59,17 +59,33 @@ public class WorkflowExecutionReadModelProjectorTests
         new WorkflowCompletedEventReducer(),
     ];
 
-    private static EventEnvelope Wrap(
+    private static EventEnvelope WrapCommitted(
         IMessage evt,
+        long version,
         string publisherId = "root",
         string? id = null,
-        DateTime? utcTimestamp = null) => new()
+        DateTime? utcTimestamp = null)
     {
-        Id = id ?? Guid.NewGuid().ToString("N"),
-        Timestamp = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime()),
-        Payload = Any.Pack(evt),
-        Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, TopologyAudience.Children),
-    };
+        var eventId = id ?? Guid.NewGuid().ToString("N");
+        var occurredAt = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime());
+        return new EventEnvelope
+        {
+            Id = eventId,
+            Timestamp = occurredAt.Clone(),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherId),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                    Timestamp = occurredAt.Clone(),
+                    EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(new WorkflowRunState()),
+            }),
+        };
+    }
 
     [Fact]
     public async Task Projector_ShouldBuildRunReadModel_EndToEnd()
@@ -94,35 +110,35 @@ public class WorkflowExecutionReadModelProjectorTests
         };
 
         await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new StartWorkflowEvent
+        await coordinator.ProjectAsync(context, WrapCommitted(new StartWorkflowEvent
         {
             WorkflowName = "direct",
             Input = "hello",
-        }));
-        await coordinator.ProjectAsync(context, Wrap(new StepRequestEvent
+        }, version: 1));
+        await coordinator.ProjectAsync(context, WrapCommitted(new StepRequestEvent
         {
             StepId = "s1",
             StepType = "llm_call",
             TargetRole = "assistant",
-        }));
-        await coordinator.ProjectAsync(context, Wrap(new StepCompletedEvent
+        }, version: 2));
+        await coordinator.ProjectAsync(context, WrapCommitted(new StepCompletedEvent
         {
             StepId = "s1",
             Success = true,
             Output = "done",
             WorkerId = "assistant",
-        }));
-        await coordinator.ProjectAsync(context, Wrap(new AIEvents.TextMessageEndEvent
+        }, version: 3));
+        await coordinator.ProjectAsync(context, WrapCommitted(new AIEvents.TextMessageEndEvent
         {
             SessionId = "wf-run-1:s1",
             Content = "analysis result",
-        }, "assistant"));
-        await coordinator.ProjectAsync(context, Wrap(new WorkflowCompletedEvent
+        }, version: 4, publisherId: "assistant"));
+        await coordinator.ProjectAsync(context, WrapCommitted(new WorkflowCompletedEvent
         {
             WorkflowName = "direct",
             Success = true,
             Output = "final answer",
-        }));
+        }, version: 5));
         await coordinator.CompleteAsync(context, [new WorkflowExecutionTopologyEdge("root", "assistant")]);
 
         var report = await store.GetAsync("root");
@@ -163,10 +179,10 @@ public class WorkflowExecutionReadModelProjectorTests
         };
 
         await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new ChatRequestEvent
+        await coordinator.ProjectAsync(context, WrapCommitted(new ChatRequestEvent
         {
             Prompt = "hello",
-        }));
+        }, version: 1));
         await coordinator.CompleteAsync(context, []);
 
         var report = await store.GetAsync("root");
@@ -198,12 +214,12 @@ public class WorkflowExecutionReadModelProjectorTests
         };
 
         await coordinator.InitializeAsync(context);
-        var evt = Wrap(new StepRequestEvent
+        var evt = WrapCommitted(new StepRequestEvent
         {
             StepId = "s1",
             StepType = "llm_call",
             TargetRole = "assistant",
-        }, id: "evt-dup-1");
+        }, version: 1, id: "evt-dup-1");
 
         await coordinator.ProjectAsync(context, evt);
         await coordinator.ProjectAsync(context, evt);
@@ -239,13 +255,13 @@ public class WorkflowExecutionReadModelProjectorTests
         };
 
         await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new WorkflowSuspendedEvent
+        await coordinator.ProjectAsync(context, WrapCommitted(new WorkflowSuspendedEvent
         {
             StepId = "s1",
             SuspensionType = "human_input",
             Prompt = "Need approval",
             TimeoutSeconds = 60,
-        }));
+        }, version: 1));
         await coordinator.CompleteAsync(context, []);
 
         var report = await store.GetAsync("root");
@@ -287,10 +303,10 @@ public class WorkflowExecutionReadModelProjectorTests
         };
 
         await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new AIEvents.TextMessageStartEvent
+        await coordinator.ProjectAsync(context, WrapCommitted(new AIEvents.TextMessageStartEvent
         {
             SessionId = "wf-run-1:s1",
-        }, id: "evt-noop-1"));
+        }, version: 1, id: "evt-noop-1"));
         await coordinator.CompleteAsync(context, []);
 
         var report = await store.GetAsync("root");
@@ -326,11 +342,11 @@ public class WorkflowExecutionReadModelProjectorTests
         var t = new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Utc);
 
         await coordinator.InitializeAsync(context);
-        await coordinator.ProjectAsync(context, Wrap(new StartWorkflowEvent
+        await coordinator.ProjectAsync(context, WrapCommitted(new StartWorkflowEvent
         {
             WorkflowName = "direct",
             Input = "hello",
-        }, utcTimestamp: t));
+        }, version: 1, utcTimestamp: t));
         await coordinator.CompleteAsync(context, []);
 
         var report = await store.GetAsync("root");

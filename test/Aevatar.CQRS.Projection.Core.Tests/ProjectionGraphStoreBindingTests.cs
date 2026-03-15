@@ -456,6 +456,10 @@ public class ProjectionGraphStoreBindingTests
     {
         public string Id { get; init; } = "";
 
+        public long StateVersion { get; init; }
+
+        public string LastEventId { get; init; } = "";
+
         public string GraphScope { get; init; } = "";
 
         public IReadOnlyList<ProjectionGraphNode> GraphNodes { get; init; } = [];
@@ -479,6 +483,10 @@ public class ProjectionGraphStoreBindingTests
     private sealed class NonGraphReadModel : IProjectionReadModel
     {
         public string Id { get; init; } = "";
+
+        public long StateVersion { get; init; }
+
+        public string LastEventId { get; init; } = "";
     }
 
     private sealed class EmptyCleanupGraphStore : IProjectionGraphStore

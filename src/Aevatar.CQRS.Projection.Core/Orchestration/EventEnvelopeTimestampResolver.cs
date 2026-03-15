@@ -1,6 +1,6 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public static class ProjectionEnvelopeTimestampResolver
+public static class EventEnvelopeTimestampResolver
 {
     public static DateTimeOffset Resolve(EventEnvelope envelope, DateTimeOffset fallbackUtcNow)
     {

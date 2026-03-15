@@ -26,6 +26,7 @@ message ClaimCaseState {
   double risk_score = 6;
   bool compliance_passed = 7;
   string last_command_id = 8;
+  repeated string trace_steps = 9;
 }
 
 message ClaimCaseReadModel {

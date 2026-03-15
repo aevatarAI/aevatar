@@ -28,11 +28,10 @@ public abstract class ProjectionSessionEventProjectorBase<TContext, TTopology, T
         ArgumentNullException.ThrowIfNull(envelope);
         ct.ThrowIfCancellationRequested();
 
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized == null)
+        if (!ProjectionDispatchRouteFilter.ShouldDispatch(envelope))
             return;
 
-        var entries = ResolveSessionEventEntries(context, normalized);
+        var entries = ResolveSessionEventEntries(context, envelope);
         if (entries.Count == 0)
             return;
 

@@ -10,13 +10,13 @@ internal sealed class InMemoryProjectionDocumentStore<TReadModel>
 {
     private readonly Dictionary<string, TReadModel> _items = new(StringComparer.Ordinal);
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
 
         ct.ThrowIfCancellationRequested();
         _items[readModel.Id] = Clone(readModel);
-        return Task.CompletedTask;
+        return Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)

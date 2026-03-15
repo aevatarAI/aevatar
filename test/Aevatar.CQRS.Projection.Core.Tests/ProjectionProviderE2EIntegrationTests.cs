@@ -63,6 +63,10 @@ public sealed class ProjectionProviderE2EIntegrationTests
     {
         public string Id { get; set; } = "";
 
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
         public string Value { get; set; } = "";
 
         public long UpdatedAtEpochMs { get; set; }

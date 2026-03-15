@@ -40,7 +40,7 @@ public sealed class ScriptCatalogEntryProjector
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var updatedAt = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
+        var updatedAt = EventEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
         if (envelope.Payload?.Is(ScriptCatalogRevisionPromotedEvent.Descriptor) == true)
         {
             var evt = envelope.Payload.Unpack<ScriptCatalogRevisionPromotedEvent>();

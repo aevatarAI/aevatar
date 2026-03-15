@@ -14,7 +14,7 @@ namespace Aevatar.Scripting.Core.Tests.Contract;
 public sealed class ScriptPackageRuntimeContractTests
 {
     [Fact]
-    public async Task CompiledBehavior_ShouldSupportDispatchApplyReduceAndQuery()
+    public async Task CompiledBehavior_ShouldSupportDispatchApplyProjectAndQuery()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -42,7 +42,7 @@ public sealed class ScriptPackageRuntimeContractTests
                                         LastCommandId = evt.CommandId ?? string.Empty,
                                         NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                                     },
-                                    reduce: static (_, evt, _) => evt.Current)
+                                    project: static (_, evt, _) => evt.Current)
                                 .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
                         }
 
@@ -180,8 +180,8 @@ public sealed class ScriptPackageRuntimeContractTests
                     fact.StateVersion,
                     fact.EventType,
                     fact.OccurredAtUnixTimeMs));
-            var readModel = behavior.ReduceReadModel(
-                null,
+            var readModel = behavior.ProjectReadModel(
+                state,
                 fact.DomainEventPayload!.Unpack<ScriptProfileUpdated>(),
                 new ScriptFactContext(
                     fact.ActorId,

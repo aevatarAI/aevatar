@@ -47,5 +47,9 @@ public sealed class ProjectionRuntimeCoverageTests
     private sealed class TestReadModel : IProjectionReadModel
     {
         public string Id { get; init; } = string.Empty;
+
+        public long StateVersion { get; init; }
+
+        public string LastEventId { get; init; } = string.Empty;
     }
 }

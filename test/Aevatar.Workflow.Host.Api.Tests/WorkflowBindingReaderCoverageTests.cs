@@ -125,11 +125,11 @@ public sealed class WorkflowActorBindingProjectorTests
     {
         public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);
 
-        public Task UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Documents[readModel.Id] = readModel.DeepClone();
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)

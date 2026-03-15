@@ -36,7 +36,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         _logger = logger ?? NullLogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
@@ -46,8 +46,14 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         try
         {
             key = ResolveReadModelKey(readModel);
+            ProjectionWriteResult result;
             lock (_gate)
-                _itemsByKey[key] = Clone(readModel);
+            {
+                _itemsByKey.TryGetValue(key, out var existing);
+                result = ProjectionWriteResultEvaluator.Evaluate(existing, readModel);
+                if (result.IsApplied)
+                    _itemsByKey[key] = Clone(readModel);
+            }
 
             var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
             _logger.LogInformation(
@@ -56,8 +62,8 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
                 typeof(TReadModel).FullName,
                 key,
                 elapsedMs,
-                "ok");
-            return Task.CompletedTask;
+                result.Disposition);
+            return Task.FromResult(result);
         }
         catch (Exception ex)
         {

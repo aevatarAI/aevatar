@@ -128,6 +128,10 @@ public class ProjectionStoreDispatcherTests
     {
         public string Id { get; set; } = "";
 
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
         public string Value { get; set; } = "";
     }
 
@@ -148,12 +152,12 @@ public class ProjectionStoreDispatcherTests
 
         public string LastValue { get; private set; } = "";
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             UpsertCount++;
             LastValue = readModel.Value;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 
@@ -179,7 +183,7 @@ public class ProjectionStoreDispatcherTests
 
         public int UpsertCount { get; private set; }
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             AttemptCount++;
@@ -191,7 +195,7 @@ public class ProjectionStoreDispatcherTests
             }
 
             UpsertCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 

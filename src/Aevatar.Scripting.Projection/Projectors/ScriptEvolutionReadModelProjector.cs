@@ -46,13 +46,11 @@ public sealed class ScriptEvolutionReadModelProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized == null)
+        if (!CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) ||
+            observed?.Payload == null)
             return;
 
-        var payload = normalized.Payload;
-        if (payload == null)
-            return;
+        var payload = observed.Payload;
         var readModelId = ResolveReadModelId(context, payload);
         if (string.IsNullOrWhiteSpace(readModelId))
             return;
@@ -61,7 +59,7 @@ public sealed class ScriptEvolutionReadModelProjector
         if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
             return;
 
-        var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
+        var now = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var readModel = (await _documentReader.GetAsync(readModelId, ct))?.DeepClone()
                         ?? new ScriptEvolutionReadModel
                         {
@@ -72,12 +70,17 @@ public sealed class ScriptEvolutionReadModelProjector
 
         var mutated = false;
         foreach (var reducer in reducers)
-            mutated |= reducer.Reduce(readModel, context, normalized, now);
+            mutated |= reducer.Reduce(readModel, context, observed, now);
 
         if (!mutated)
             return;
 
-        readModel.LastEventId = normalized.Id ?? string.Empty;
+        readModel.LastEventId = observed.Id ?? string.Empty;
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out _, out var stateVersion) &&
+            stateVersion > 0)
+        {
+            readModel.StateVersion = stateVersion;
+        }
         readModel.UpdatedAt = now;
         await _writeDispatcher.UpsertAsync(readModel, ct);
     }

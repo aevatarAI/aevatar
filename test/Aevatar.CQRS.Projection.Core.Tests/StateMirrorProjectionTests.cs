@@ -151,6 +151,10 @@ public class StateMirrorProjectionTests
     {
         public string Id { get; set; } = "";
 
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
         public int Count { get; set; }
 
         public string InternalNote { get; set; } = "";
@@ -162,11 +166,11 @@ public class StateMirrorProjectionTests
     {
         private readonly Dictionary<string, ProjectionReadModel> _items = new(StringComparer.Ordinal);
 
-        public Task UpsertAsync(ProjectionReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ProjectionReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _items[readModel.Id] = Clone(readModel);
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<ProjectionReadModel?> GetAsync(string key, CancellationToken ct = default)
@@ -198,6 +202,8 @@ public class StateMirrorProjectionTests
             return new ProjectionReadModel
             {
                 Id = source.Id,
+                StateVersion = source.StateVersion,
+                LastEventId = source.LastEventId,
                 Count = source.Count,
                 InternalNote = source.InternalNote,
             };

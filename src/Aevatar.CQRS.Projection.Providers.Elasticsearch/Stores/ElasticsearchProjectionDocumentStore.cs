@@ -82,7 +82,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
         UpsertCoreAsync(readModel, allowCreateIndex: true, ct);
 
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
@@ -180,7 +180,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         };
     }
 
-    private async Task UpsertCoreAsync(
+    private async Task<ProjectionWriteResult> UpsertCoreAsync(
         TReadModel readModel,
         bool allowCreateIndex,
         CancellationToken ct)
@@ -196,6 +196,21 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
+            var existing = await TryGetExistingAsync(indexTarget.IndexName, keyValue, ct);
+            var result = ProjectionWriteResultEvaluator.Evaluate(existing, readModel);
+            if (!result.IsApplied)
+            {
+                var skippedElapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+                _logger.LogInformation(
+                    "Projection read-model write skipped. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                    ProviderName,
+                    typeof(TReadModel).FullName,
+                    keyValue,
+                    skippedElapsedMs,
+                    result.Disposition);
+                return result;
+            }
+
             using var request = new HttpRequestMessage(
                 HttpMethod.Put,
                 $"{indexTarget.IndexName}/_doc/{Uri.EscapeDataString(keyValue)}")
@@ -212,13 +227,43 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
                 typeof(TReadModel).FullName,
                 keyValue,
                 elapsedMs,
-                "ok");
+                ProjectionWriteDisposition.Applied);
+            return ProjectionWriteResult.Applied();
         }
         catch (Exception ex)
         {
             LogWriteFailure(keyValue, startedAt, ex);
             throw;
         }
+    }
+
+    private async Task<TReadModel?> TryGetExistingAsync(
+        string indexName,
+        string keyValue,
+        CancellationToken ct)
+    {
+        using var response = await _httpClient.GetAsync($"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
+            {
+                if (_autoCreateIndex || _missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
+                    throw BuildMissingIndexException("get", payload);
+
+                return null;
+            }
+
+            return null;
+        }
+
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "get", ct);
+        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(successfulPayload);
+        if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
+            return null;
+
+        return DeserializeOrNull(sourceNode.GetRawText());
     }
 
     private bool TryHandleMissingIndexForRead(string operation, string payload)

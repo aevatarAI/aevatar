@@ -45,7 +45,9 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
                 skipped.Reason);
         }
 
-        _bindings = configuredBindings;
+        _bindings = configuredBindings
+            .OrderBy(ResolveBindingOrder)
+            .ToArray();
         if (_bindings.Count == 0)
         {
             var skipSummary = skippedBindings.Count == 0
@@ -61,7 +63,7 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
             _bindings.Count);
     }
 
-    public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public async Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
@@ -72,7 +74,15 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
             ct.ThrowIfCancellationRequested();
             try
             {
-                await UpsertWithRetryAsync(binding, readModel, ct);
+                var result = await UpsertWithRetryAsync(binding, readModel, ct);
+                if (result.IsNonTerminal)
+                    return result;
+                if (result.IsRejected)
+                {
+                    throw new InvalidOperationException(
+                        $"Projection binding '{binding.SinkName}' rejected read model '{typeof(TReadModel).FullName}' with '{result.Disposition}'.");
+                }
+
                 succeededBindings.Add(binding);
             }
             catch (Exception ex)
@@ -87,9 +97,11 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
                 throw;
             }
         }
+
+        return ProjectionWriteResult.Applied();
     }
 
-    private async Task UpsertWithRetryAsync(
+    private async Task<ProjectionWriteResult> UpsertWithRetryAsync(
         IProjectionWriteSink<TReadModel> binding,
         TReadModel readModel,
         CancellationToken ct)
@@ -102,8 +114,7 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
             ct.ThrowIfCancellationRequested();
             try
             {
-                await binding.UpsertAsync(readModel, ct);
-                return;
+                return await binding.UpsertAsync(readModel, ct);
             }
             catch (Exception ex) when (attempt < maxAttempts)
             {
@@ -127,6 +138,14 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
             $"Projection binding write failed for store '{binding.SinkName}' after {maxAttempts} attempt(s).",
             lastException);
     }
+
+    private static int ResolveBindingOrder(IProjectionWriteSink<TReadModel> binding) =>
+        binding switch
+        {
+            ProjectionDocumentStoreBinding<TReadModel> => 0,
+            ProjectionGraphStoreBinding<TReadModel> => 10,
+            _ => 100,
+        };
 
     private Task CompensateAsync(
         string operation,

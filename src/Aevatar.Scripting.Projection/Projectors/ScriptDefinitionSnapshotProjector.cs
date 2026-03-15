@@ -41,7 +41,7 @@ public sealed class ScriptDefinitionSnapshotProjector
             return;
 
         var evt = envelope.Payload.Unpack<ScriptDefinitionUpsertedEvent>();
-        var updatedAt = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
+        var updatedAt = EventEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
         await _writeDispatcher.UpsertAsync(
             new ScriptDefinitionSnapshotDocument
             {

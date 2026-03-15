@@ -142,6 +142,7 @@ message EventStoreCommitResult {
 
 message CommittedStateEventPublished {
   StateEvent state_event = 1;
+  google.protobuf.Any state_root = 2;
 }
 
 // Hierarchy change events.

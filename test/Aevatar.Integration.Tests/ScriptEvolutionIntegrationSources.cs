@@ -23,7 +23,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<TextNormalizationRequested>(HandleAsync)
                     .OnEvent<TextNormalizationCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
             }
 
@@ -91,7 +91,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<ScriptOnlyEvolutionRequested>(HandleAsync)
                     .OnEvent<ScriptOnlyEvolutionCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -219,7 +219,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<MultiScriptEvolutionRequested>(HandleAsync)
                     .OnEvent<MultiScriptEvolutionCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -462,7 +462,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<SelfEvolutionV1Requested>(HandleAsync)
                     .OnEvent<SelfEvolutionV1Completed>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -570,7 +570,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<SelfEvolutionV2Requested>(HandleAsync)
                     .OnEvent<SelfEvolutionV2Completed>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -651,7 +651,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<CatalogControlRequested>(HandleAsync)
                     .OnEvent<CatalogControlCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -760,7 +760,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<InteractionUpsertRequested>(HandleAsync)
                     .OnEvent<InteractionUpsertCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(
@@ -858,7 +858,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<OrleansClusterRequested>(HandleAsync)
                     .OnEvent<OrleansClusterCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static async Task HandleAsync(

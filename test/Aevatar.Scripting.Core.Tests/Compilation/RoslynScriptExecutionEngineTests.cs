@@ -35,7 +35,7 @@ public sealed class RoslynScriptExecutionEngineTests
                                 .OnCommand<SimpleTextCommand>(HandleCommandAsync)
                                 .OnEvent<SimpleTextEvent>(
                                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                                    reduce: static (_, evt, _) => evt.Current)
+                                    project: static (_, evt, _) => evt.Current)
                                 .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
                         }
 

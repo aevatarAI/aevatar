@@ -1,13 +1,12 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
+using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -53,14 +52,21 @@ public sealed class ScriptNativeDocumentProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
+        if (!CommittedStateEventEnvelope.TryUnpackState<ScriptBehaviorState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent?.EventData?.Is(ScriptDomainFactCommitted.Descriptor) != true ||
+            state == null)
+        {
             return;
+        }
 
-        var fact = normalized.Payload.Unpack<ScriptDomainFactCommitted>();
+        var fact = stateEvent.EventData.Unpack<ScriptDomainFactCommitted>();
         var snapshot = await _definitionSnapshotPort.GetRequiredAsync(
-            fact.DefinitionActorId,
-            fact.Revision,
+            state.DefinitionActorId,
+            state.Revision,
             ct);
         var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
             snapshot.ScriptPackage,
@@ -70,16 +76,6 @@ public sealed class ScriptNativeDocumentProjector
             snapshot.Revision,
             scriptPackage,
             snapshot.SourceHash));
-        var eventTypeUrl = fact.DomainEventPayload?.TypeUrl ?? string.Empty;
-        var eventSemantics = artifact.Descriptor.RuntimeSemantics.GetRequiredMessageSemantics(eventTypeUrl, ScriptMessageKind.DomainEvent);
-        if (eventSemantics.Kind != ScriptMessageKind.DomainEvent || !eventSemantics.Projectable)
-            return;
-        if (!string.IsNullOrWhiteSpace(eventSemantics.ReadModelScope) &&
-            !string.Equals(eventSemantics.ReadModelScope, artifact.Descriptor.ReadModelDescriptor.FullName, StringComparison.Ordinal) &&
-            !string.Equals(eventSemantics.ReadModelScope, fact.ReadModelTypeUrl, StringComparison.Ordinal))
-        {
-            return;
-        }
         var plan = _materializationCompiler.GetOrCompile(
             artifact,
             snapshot.ReadModelSchemaHash,
@@ -87,22 +83,17 @@ public sealed class ScriptNativeDocumentProjector
         if (!plan.SupportsDocument)
             return;
 
-        var semanticDocument = context.CurrentSemanticReadModelDocument
-            ?? throw new InvalidOperationException(
-                $"Semantic script read model document was not present in projection context for actor `{context.RootActorId}`.");
-        if (semanticDocument.StateVersion != fact.StateVersion)
-        {
-            throw new InvalidOperationException(
-                $"Semantic script read model version mismatch for actor `{context.RootActorId}`. " +
-                $"Expected state_version={fact.StateVersion}, actual={semanticDocument.StateVersion}.");
-        }
-
-        var semanticReadModel = _codec.Unpack(semanticDocument.ReadModelPayload, artifact.Descriptor.ReadModelClrType);
+        var semanticReadModel = await ScriptCommittedStateProjectionSupport.BuildSemanticReadModelAsync(
+            context.RootActorId,
+            state,
+            fact,
+            artifact,
+            _codec);
         var nativeDocument = _materializer.Materialize(
             context.RootActorId,
-            string.IsNullOrWhiteSpace(fact.ScriptId) ? snapshot.ScriptId : fact.ScriptId,
-            string.IsNullOrWhiteSpace(fact.DefinitionActorId) ? semanticDocument.DefinitionActorId : fact.DefinitionActorId,
-            string.IsNullOrWhiteSpace(fact.Revision) ? snapshot.Revision : fact.Revision,
+            state.ScriptId,
+            state.DefinitionActorId,
+            state.Revision,
             fact,
             semanticReadModel,
             plan);
