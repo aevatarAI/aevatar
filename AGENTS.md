@@ -72,10 +72,10 @@
 - 新增 readmodel 必须先声明消费场景：同一 actor 可以对应多个 readmodel，但每个 readmodel 都必须有明确的消费方、查询入口、返回 DTO 或 UI/搜索/图查询场景；没有稳定消费场景的 readmodel 不得新增。
 - readmodel 根契约必须收紧：`readmodel` 在仓库内默认就表示 `actor-scoped current-state replica`；不符合这条约束的对象不得继续挂在通用 readmodel/projection 主链下，必须改名并降级为 `artifact/export/log`，或由新的 `aggregate actor` 拥有。
 - 聚合必须 actor 化：跨 actor 聚合、汇总、关联、编排结果若具有稳定业务语义，必须建模为新的 `aggregate actor`；禁止把这类语义长期放在通用 `history/aggregate view` 或 query-time 拼装层中。
-- projection 负责读模型物化：Projection Pipeline 的默认职责是消费 actor 发布的 `EventEnvelope<ProjectionPayload>`，再物化到多个 document/index/search/graph store；禁止把 projection 作为第二套通用业务计算框架。
+- projection 负责读模型物化：Projection Pipeline 的默认职责是消费 actor 发布的 `EventEnvelope<CommittedStateEventPublished>`，再基于其中的 `state_event + state_root` 物化到多个 document/index/search/graph store；禁止把 projection 作为第二套通用业务计算框架。
 - 正常路径禁止 replay：正常 query path 和正常 projection path 都不得依赖 `event replay / rebuild / backfill`；`replay` 只属于后台修复、迁移、灾难恢复，不属于线上读路径。
-- actor 负责语义，projection 负责物化：凡是可以由 actor 直接确定的当前态查询语义，应尽量前移到 actor 内，基于 committed state 计算出强类型 `ProjectionPayload` 并通过 `EventEnvelope` 发布；projection 只负责校验、覆盖写入、索引和分发，不负责在读侧重新推导当前态。
-- actor 不直接拥有存储实现：actor 可以发布 `EventEnvelope<ProjectionPayload>`；其中 `state mirror payload` 只是当前态 readmodel 的一种可选输入模式，但 actor 不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；这些仍属于 projection/runtime/provider 边界。
+- actor 负责语义，projection 负责物化：凡是可以由 actor 直接确定的当前态查询语义，应尽量前移到 actor 内，并在 committed 后通过 `EventEnvelope<CommittedStateEventPublished>` 暴露 `state_root`；projection 只负责校验、覆盖写入、索引和分发，不负责在读侧重新推导当前态。
+- actor 不直接拥有存储实现：actor 可以发布 `EventEnvelope<CommittedStateEventPublished>`；其中 `state_root` 是当前态 readmodel 的统一 committed 输入，但 actor 不得直接承担 `document store / graph store / query provider / index schema` 的物化职责；这些仍属于 projection/runtime/provider 边界。
 - 版本必须跟权威源对齐：每个 actor-scoped readmodel 的版本必须来自同一个权威 actor 的 committed version 或其等价水位；禁止使用本地 `projection counter`、本地 `StateVersion++` 或其他派生计数冒充权威版本。
 - 覆盖复制优先：默认 readmodel 写入语义是“基于权威源版本的单调覆盖”；旧读模型不得覆盖新读模型，重复写入必须幂等，冲突版本必须显式报错。
 - 不默认保留通用历史视图：`timeline / audit / report / analytics` 不是默认 readmodel 形态；如确有业务价值，要么降级为 artifact/export，要么由专门 actor 拥有，不得继续伪装成主查询模型。
@@ -116,7 +116,7 @@
 - 新增状态对象、事件对象、持久化载荷时，先定义 `.proto` 契约并生成类型，再接入实现；禁止先写临时序列化结构、后补 `Protobuf`。
 
 ## 项目结构与模块组织
-- `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.Workflow.Core`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Abstractions/Core/WorkflowExecution`、`Aevatar.Host.*`）。
+- `src/`：生产代码，按能力与分层组织（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
 - `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
 - `tools/`：开发工具；`demos/`：示例与演示程序。
@@ -133,7 +133,7 @@
 - `bash tools/ci/projection_route_mapping_guard.sh`：单独执行“事件类型 -> reducer 路由映射正确性”静态门禁。
 - `bash tools/ci/playground_asset_drift_guard.sh`：校验 CLI playground 与 Demo Web 静态资源漂移。
 - `bash tools/ci/solution_split_guards.sh`：执行分片构建门禁（Foundation/AI/CQRS/Workflow/Hosting）。
-- `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/CQRS/Workflow）。
+- `bash tools/ci/solution_split_test_guards.sh`：执行分片测试门禁（Foundation/AI/CQRS/Workflow/Hosting/Distributed）。
 - `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --collect:"XPlat Code Coverage"`：单项目覆盖率。
 - `dotnet run --project src/workflow/Aevatar.Workflow.Host.Api`：启动 Workflow API（`/api/chat`、`/api/ws/chat`）。
 
