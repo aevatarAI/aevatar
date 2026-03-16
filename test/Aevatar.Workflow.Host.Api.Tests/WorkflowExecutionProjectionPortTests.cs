@@ -27,7 +27,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         lease.Should().BeSameAs(activation.LeaseToReturn);
         activation.Requests.Should().ContainSingle();
         activation.Requests[0].RootActorId.Should().Be("actor-1");
-        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution");
+        activation.Requests[0].ProjectionKind.Should().Be("workflow-execution-session");
         activation.Requests[0].SessionId.Should().Be("cmd-1");
     }
 
@@ -43,7 +43,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
             SessionId = "cmd-1",
         });
         var sink = new RecordingRunEventSink();
@@ -75,7 +75,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         var lease = new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
             SessionId = "cmd-1",
         });
 
@@ -91,7 +91,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         public WorkflowExecutionRuntimeLease LeaseToReturn { get; } = new(new WorkflowExecutionProjectionContext
         {
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
             SessionId = "cmd-1",
         });
 

@@ -26,14 +26,14 @@
 
 但从软件工程角度看，当前系统仍有 8 类明显问题：
 
-1. DI 与 runtime 装配矩阵过宽，存在重复注册、未落地抽象和死代码迹象。
-2. `projectionKind` / scope 命名仍偏字符串化，跨子域口径不一致。
+1. feature 级 DI 与 runtime 装配矩阵仍然偏宽，虽然核心 helper 已收口，但 feature 手工装配仍然很多。
+2. `projectionKind` / scope 命名已集中到 feature 常量集，但本质上仍是字符串协议。
 3. 一个 root actor 会被多个 scope actor 直接订阅，订阅数随 feature 和 session 数增长。
-4. 失败处理能落状态，但缺少成体系的 replay / alert / cleanup 运维闭环。
-5. 多个 artifact projector 仍采用 read-modify-write，文档会随事件增长。
+4. failure handling 已有 replay / alert / retention 骨架，但仍缺少完整运维闭环。
+5. 部分 artifact projector 仍采用 read-modify-write，文档会随事件增长。
 6. graph materialization 成本偏高，当前实现接近“每次全量重写 + 清理”。
 7. document / graph 多 store fan-out 仍然只是 best-effort，没有事务边界。
-8. 各 feature 的 enable / lifecycle / kind 语义不完全对齐，增加理解和运维成本。
+8. 各 feature 的 enable / lifecycle 语义已更接近一致，但 outward contract 仍不完全对齐。
 
 ## 3. 范围与核验
 
@@ -247,10 +247,8 @@ flowchart LR
 
     subgraph D["Durable Materialization"]
         D1["WorkflowExecutionCurrentStateProjector"]
-        D2["WorkflowRunInsightReportArtifactProjector"]
-        D3["WorkflowRunTimelineArtifactProjector"]
-        D4["WorkflowRunGraphArtifactProjector"]
-        D5["WorkflowActorBindingProjector"]
+        D2["WorkflowRunInsightReportArtifactProjector<br/>report -> timeline/graph"]
+        D3["WorkflowActorBindingProjector"]
     end
 
     subgraph S["Session Observation"]
@@ -273,13 +271,10 @@ flowchart LR
     A5 --> D1
     A5 --> D2
     A5 --> D3
-    A5 --> D4
-    A5 --> D5
     A5 --> S1 --> S2 --> S3
     D1 --> R1
-    D3 --> R2
-    D4 --> R2
-    D5 --> R3
+    D2 --> R2
+    D3 --> R3
 ```
 
 #### 8.1.2 Workflow durable 链
@@ -288,8 +283,7 @@ flowchart LR
   - `WorkflowExecutionCurrentStateProjector`
 - artifacts:
   - `WorkflowRunInsightReportArtifactProjector`
-  - `WorkflowRunTimelineArtifactProjector`
-  - `WorkflowRunGraphArtifactProjector`
+    - 单一可变 artifact source，读取 `report` 后派生覆盖 `timeline/graph`
   - `WorkflowActorBindingProjector`
 
 #### 8.1.3 Workflow session 链
@@ -455,38 +449,37 @@ flowchart LR
 4. current-state 不回读旧 current-state 文档。
 5. reducer route mapping 使用精确 `TypeUrl` 命中，而不是字符串 contains。
 6. Workflow provider 选择在 Hosting 层，避免业务层直连 provider。
+7. core runtime registration helper 已真正承担 activation / release / context / failure ops 装配职责。
+8. Workflow artifact durable 链已从三路 projector 收敛到单一 `report` 累积源，再派生 `timeline/graph`。
 
 ## 10. 从软件工程角度看存在的问题
 
-### 10.1 装配矩阵过宽，抽象与实现有漂移
+### 10.1 装配矩阵仍偏宽，但核心 runtime helper 已收口
 
 问题表现：
 
 1. Workflow、Scripting、Platform、Governance 都在各自 `ServiceCollectionExtensions` 里手工注册 context factory、lease factory、activation、release、query、metadata、projector。
-2. `ProjectionAssemblyRegistration` 已存在，但当前仓库没有实际使用它。
-3. `AddProjectionMaterializationRuntimeCore(...)` 和 `AddEventSinkProjectionRuntimeCore(...)` 是公开注册入口，但当前实现本身不注册任何内容，只是空语义包装。
+2. 旧的 `ProjectionAssemblyRegistration` 已删除，但 feature 层仍有不少重复样板。
+3. `AddProjectionMaterializationRuntimeCore(...)` 和 `AddEventSinkProjectionRuntimeCore(...)` 现在已经真正注册 activation / release / context / failure ops；但 projector、query port、feature options 仍要逐域手工装配。
 
 结果：
 
 - 新增一个 projection feature 的样板代码很多。
-- 抽象层数不少，但真正复用的只有一部分。
-- 维护者会误以为某些 “runtime registration helper” 真正承担了装配职责。
+- 核心 runtime helper 已不再误导，但 feature outward wiring 仍显分散。
+- 抽象复用比之前更好，不过装配复杂度还没完全降下来。
 
-### 10.2 `projectionKind` 仍然偏字符串化，而且口径不一致
+### 10.2 `projectionKind` 已集中命名，但本质上仍是字符串协议
 
 问题表现：
 
-1. 各 feature port 通过字符串字面量或常量传 `ProjectionKind`。
-2. 命名风格不一致：
-  - Workflow session 和 durable 使用不同 kind。
-  - Scripting execution 的 session 与 durable 复用了同一个 kind 文本。
-  - Governance 直接在 port 里写 `"service-configuration"` 字面量。
+1. 各 feature 已收口到 `WorkflowProjectionKinds / ScriptProjectionKinds / ServiceProjectionKinds / ServiceGovernanceProjectionKinds` 这类集中常量。
+2. 但这些常量仍是字符串协议，scope actor key、日志和运维维度仍依赖文本口径稳定。
+3. session 与 durable 在不同 feature 之间仍有不同的 outward naming 习惯。
 
 结果：
 
-- 监控、日志、排障时很难统一按 kind 维度观察。
-- 代码重构时容易产生“字符串改了一半”的问题。
-- 同样的运行时结构，在各子域里看起来像不同协议。
+- 直接散落的字面量问题已明显下降。
+- 但 kind 仍缺少更强的仓库内语义约束，改名和排障仍依赖人工保持一致。
 
 ### 10.3 scope actor 数量和订阅数量会随 feature/session 扩张
 
@@ -502,32 +495,33 @@ flowchart LR
 - Workflow/Scripting 这种 feature 较重的子域，会天然放大 stream fan-out。
 - 这不会立刻违反语义，但会提高运行时和运维复杂度。
 
-### 10.4 失败能落状态，但缺少完整运维闭环
+### 10.4 failure ops 已有骨架，但仍缺少完整运维闭环
 
 问题表现：
 
 1. scope failure 会把失败 envelope 持久到 `ProjectionScopeState.Failures`。
-2. 当前代码里有 `ReplayProjectionFailuresCommand`，但仓库里没有看到成体系的外部入口、后台恢复作业或告警整合。
+2. 当前 core 已新增 `IProjectionFailureReplayService`、`IProjectionFailureAlertSink` 与 bounded retention，scope failure 不再无限增长。
+3. 但仓库里仍没有看到成体系的外部入口、后台恢复作业或告警整合。
 
 结果：
 
-- 框架具备“记录失败”的能力，但没有真正的操作面。
-- full envelope 持久进 failure state，本身也会带来状态膨胀风险。
-- 一旦某类 projector 持续失败，系统更像是“积压失败事实”，而不是“可控恢复”。
+- 框架已经具备“记录失败 + 触发告警 + 管理员重放”的基础能力。
+- 但缺少真正的操作面和恢复编排，仍然更像骨架而不是完整产品能力。
+- full envelope 持久进 failure state 的体积风险，也只是通过 retention 做了上限控制。
 
 ### 10.5 artifact projector 中的 read-modify-write 仍然很重
 
 问题表现：
 
-1. Workflow `report/timeline/graph/binding` 都会先读旧文档，再基于当前事件改写，再整体 upsert。
-2. Platform 的 catalog / rollout / revision / configuration 也有类似增量拼装。
+1. Workflow durable artifact 已收敛为“只读 `report`，再派生覆盖 `timeline/graph`”，不再由三个 projector 各自 read-modify-write。
+2. Platform 的 catalog / rollout / revision / configuration 仍有类似增量拼装。
 3. 这类 readmodel 往往不是小快照，而是会不断累积列表和聚合字段。
 
 结果：
 
-- 每次事件都需要一次额外读。
-- 文档越大，序列化和 provider 交互成本越高。
-- 逻辑虽然还在 committed 主链上，但读侧物化变成了“持续维护一个不断长大的聚合文档”。
+- Workflow artifact 写放大已经从“三次读 + 三次拼装”压到“一次读 + 派生覆盖写”。
+- 但增长型文档依然存在，文档越大，序列化和 provider 交互成本仍会上升。
+- 平台类增量聚合文档依旧会面临同类问题。
 
 ### 10.6 graph materialization 是当前最重的热点
 
@@ -538,7 +532,7 @@ flowchart LR
   - upsert 全部目标 nodes/edges
   - 枚举 owner 下现存 nodes/edges
   - 删除目标集合以外的 managed nodes/edges
-2. Workflow `WorkflowRunGraphArtifactProjector` 又是每个 committed event 都可能更新 graph artifact document。
+2. 即使 Workflow 已把 artifact projector 合并，`WorkflowRunInsightReportArtifactProjector` 仍会在每个 committed event 后覆盖写 graph artifact document。
 
 结果：
 
@@ -564,32 +558,31 @@ flowchart LR
 
 问题表现：
 
-1. Workflow、Scripting 都有显式 options 开关。
-2. Platform/Governance projection port 目前基本是 always-on。
+1. Workflow、Scripting、Platform、Governance 现在都已有显式 options / kind 常量收口。
+2. 但不同 feature 对“禁用时 query 怎么表现、session 是否存在、materialization 是否必须常开”的 outward contract 仍不完全一致。
 3. 有的 feature 同时提供 durable + session，有的只有 durable。
 
 结果：
 
-- 运维配置和 feature contract 难以一眼看清。
-- “为什么这个子域能禁用、那个不能禁用” 缺少统一口径。
-- 运行时能力虽然复用了 Core，但 feature outward contract 仍然不够对称。
+- 旧的“有些子域完全没有显式开关”问题已经收敛。
+- 但 feature outward contract 仍然不够对称，运维仍需要分别理解各子域行为。
 
 ## 11. 我认为最值得优先处理的 4 个方向
 
 1. 收敛装配模型：
-   - 把重复的 `context/lease/activation/release` 手工注册进一步模板化。
-   - 删除未实际承载职责的空 helper 或未使用抽象。
+   - 把重复的 `projector/query/options` feature 样板继续模板化。
+   - 保持 core helper 只做真正承担职责的收口，不再回到空包装。
 
 2. 压缩 artifact 写放大：
-   - 对 timeline/report/graph 这类增长型 artifact 明确分层。
-   - 避免每个事件都做整文档 read-modify-write 或整图清理。
+   - 继续把 Platform/Governance 一类增长型文档向“单一 source + 派生输出”靠拢。
+   - graph 侧要避免每个事件都做整图清理。
 
 3. 补齐失败运维闭环：
-   - 给 projection failure 增加明确的 replay、告警、观测和清理通道。
-   - 不要只把 envelope 存进去，然后靠人工猜。
+   - 把已有 replay / alert / retention 骨架接出真正的 admin surface、观测与后台恢复作业。
+   - 不要停留在“能记失败”，而要可观测、可重放、可清理。
 
 4. 统一 kind / lifecycle 语义：
-   - 统一 `projectionKind` 命名口径。
+   - 继续稳定 `projectionKind` 命名口径和 outward contract。
    - 明确哪些 feature 必须 always-on，哪些可以配置关闭。
    - 让日志、监控、排障维度稳定下来。
 
@@ -605,9 +598,9 @@ flowchart LR
 
 所以现在最需要解决的，已经不是“方向错误”，而是“系统工程化还不够收敛”：
 
-- 装配复杂度偏高
-- artifact 与 graph 路径写放大明显
-- 多 store 一致性与失败恢复仍偏弱
-- feature contract 还不够统一
+- feature 装配复杂度仍偏高
+- graph 路径仍是热点，平台类增长文档仍有写放大
+- 多 store 一致性与 failure ops 仍偏弱
+- feature outward contract 还不够统一
 
 如果后续要继续重构，我建议优先把“装配收口 + artifact 减重 + failure ops”作为同一阶段推进，而不是只继续新增 projector。

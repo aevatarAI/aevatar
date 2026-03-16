@@ -105,18 +105,4 @@ public sealed class WorkflowExecutionReadModelMapper
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
-
-    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus status) =>
-        status switch
-        {
-            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
-            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
-            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
-            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
-            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
-            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
-            WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.Running,
-            _ => WorkflowRunCompletionStatus.Unknown,
-        };
 }

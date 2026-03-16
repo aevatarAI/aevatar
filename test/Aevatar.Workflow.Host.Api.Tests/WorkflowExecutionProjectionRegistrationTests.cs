@@ -68,9 +68,8 @@ public class WorkflowExecutionProjectionRegistrationTests
         graphArtifactDispatcher.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle()
             .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
-        artifactMaterializers.Should().Contain(x => x is WorkflowRunInsightReportArtifactProjector);
-        artifactMaterializers.Should().Contain(x => x is WorkflowRunTimelineArtifactProjector);
-        artifactMaterializers.Should().Contain(x => x is WorkflowRunGraphArtifactProjector);
+        artifactMaterializers.Should().ContainSingle()
+            .Which.Should().BeOfType<WorkflowRunInsightReportArtifactProjector>();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();

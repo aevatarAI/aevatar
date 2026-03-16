@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
 using Aevatar.GAgentService.Governance.Projection.Metadata;
 using Aevatar.GAgentService.Governance.Projection.Orchestration;
@@ -16,49 +17,28 @@ namespace Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddGAgentServiceGovernanceProjection(this IServiceCollection services)
+    public static IServiceCollection AddGAgentServiceGovernanceProjection(
+        this IServiceCollection services,
+        Action<ServiceGovernanceProjectionOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        var options = new ServiceGovernanceProjectionOptions();
+        configure?.Invoke(options);
+        services.Replace(ServiceDescriptor.Singleton(options));
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 
         services.AddProjectionMaterializationRuntimeCore<
             ServiceConfigurationProjectionContext,
-            ServiceConfigurationRuntimeLease>();
-        services.TryAddSingleton<IProjectionScopeContextFactory<ServiceConfigurationProjectionContext>>(
-            _ => new ProjectionScopeContextFactory<ServiceConfigurationProjectionContext>(scopeKey =>
-                new ServiceConfigurationProjectionContext
-                {
-                    RootActorId = scopeKey.RootActorId,
-                    ProjectionKind = scopeKey.ProjectionKind,
-                }));
-
-        services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeActivationService<
-                ServiceConfigurationRuntimeLease,
-                ServiceConfigurationProjectionContext,
-                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                static request => new ServiceConfigurationProjectionContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                },
-                static (_, context) => new ServiceConfigurationRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeReleaseService<
-                ServiceConfigurationRuntimeLease,
-                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                lease => new ProjectionRuntimeScopeKey(
-                    lease.Context.RootActorId,
-                    lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+            ServiceConfigurationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
+            scopeKey => new ServiceConfigurationProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new ServiceConfigurationRuntimeLease(context));
         services.TryAddSingleton<ServiceConfigurationProjectionPort>();
         services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();

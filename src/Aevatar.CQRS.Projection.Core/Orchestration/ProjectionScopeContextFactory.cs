@@ -13,7 +13,6 @@ public sealed class ProjectionScopeContextFactory<TContext>
 
     public TContext Create(ProjectionRuntimeScopeKey scopeKey)
     {
-        ArgumentNullException.ThrowIfNull(scopeKey);
         return _factory(scopeKey);
     }
 }

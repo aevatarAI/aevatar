@@ -10,6 +10,35 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowExecutionQueryPortsCoverageTests
 {
+    [Theory]
+    [InlineData("running", WorkflowRunCompletionStatus.Running)]
+    [InlineData("completed", WorkflowRunCompletionStatus.Completed)]
+    [InlineData("failed", WorkflowRunCompletionStatus.Failed)]
+    [InlineData("stopped", WorkflowRunCompletionStatus.Stopped)]
+    [InlineData("not_found", WorkflowRunCompletionStatus.NotFound)]
+    [InlineData("disabled", WorkflowRunCompletionStatus.Disabled)]
+    [InlineData("unknown", WorkflowRunCompletionStatus.Unknown)]
+    public void WorkflowExecutionReadModelMapper_ShouldMapCurrentStateStatuses(
+        string status,
+        WorkflowRunCompletionStatus expected)
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            Id = "actor-1",
+            RootActorId = "actor-1",
+            CommandId = "cmd-1",
+            Status = status,
+            FinalOutput = "done",
+            FinalError = "err",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-17T08:00:00+00:00"),
+        });
+
+        snapshot.CompletionStatus.Should().Be(expected);
+        snapshot.LastOutput.Should().Be("done");
+        snapshot.LastError.Should().Be("err");
+    }
+
     [Fact]
     public async Task ArtifactQueryPort_WhenDisabled_ShouldReturnEmptyGraphResultsWithoutTouchingStores()
     {
@@ -115,6 +144,105 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
+    public async Task CurrentStateQueryPort_WhenDisabledBlankOrMissing_ShouldShortCircuit()
+    {
+        var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
+        {
+            Enabled = true,
+            EnableActorQueryEndpoints = false,
+        });
+        disabled.CurrentStatePort.EnableActorQueryEndpoints.Should().BeFalse();
+        (await disabled.CurrentStatePort.GetActorSnapshotAsync("actor-1")).Should().BeNull();
+        (await disabled.CurrentStatePort.ListActorSnapshotsAsync()).Should().BeEmpty();
+        (await disabled.CurrentStatePort.GetActorProjectionStateAsync("actor-1")).Should().BeNull();
+        disabled.CurrentStateReader.GetCalls.Should().Be(0);
+        disabled.CurrentStateReader.QueryCalls.Should().Be(0);
+
+        var missing = CreateHarness(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>());
+        (await missing.CurrentStatePort.GetActorSnapshotAsync("   ")).Should().BeNull();
+        (await missing.CurrentStatePort.GetActorProjectionStateAsync("actor-404")).Should().BeNull();
+        missing.CurrentStateReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldOrderClampAndMapEventData()
+    {
+        var harness = CreateHarness(
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                EnableActorQueryEndpoints = true,
+            },
+            timelineReader: new RecordingDocumentReader<WorkflowRunTimelineDocument>
+            {
+                Item = new WorkflowRunTimelineDocument
+                {
+                    Id = "actor-1",
+                    RootActorId = "actor-1",
+                    Timeline =
+                    {
+                        new WorkflowExecutionTimelineEvent
+                        {
+                            Timestamp = DateTimeOffset.Parse("2026-03-17T08:01:00+00:00"),
+                            Stage = "older",
+                            Message = "msg-1",
+                            EventType = "type-1",
+                            Data = { ["k1"] = "v1" },
+                        },
+                        new WorkflowExecutionTimelineEvent
+                        {
+                            Timestamp = DateTimeOffset.Parse("2026-03-17T08:03:00+00:00"),
+                            Stage = "newer",
+                            Message = "msg-2",
+                            EventType = "type-2",
+                            Data = { ["k2"] = "v2" },
+                        },
+                        new WorkflowExecutionTimelineEvent
+                        {
+                            Timestamp = DateTimeOffset.Parse("2026-03-17T08:02:00+00:00"),
+                            Stage = "middle",
+                            Message = "msg-3",
+                            EventType = "type-3",
+                        },
+                    },
+                },
+            });
+
+        var items = await harness.ArtifactPort.ListActorTimelineAsync("actor-1", take: 2);
+
+        items.Select(x => x.Stage).Should().Equal("newer", "middle");
+        items[0].Data.Should().Contain("k2", "v2");
+        harness.TimelineReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldShortCircuitWhenDisabledBlankOrMissing()
+    {
+        var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
+        {
+            Enabled = false,
+            EnableActorQueryEndpoints = true,
+        });
+        (await disabled.ArtifactPort.ListActorTimelineAsync("actor-1")).Should().BeEmpty();
+        disabled.TimelineReader.GetCalls.Should().Be(0);
+
+        var enabled = CreateHarness(new WorkflowExecutionProjectionOptions
+        {
+            Enabled = true,
+            EnableActorQueryEndpoints = true,
+        });
+        (await enabled.ArtifactPort.ListActorTimelineAsync("   ")).Should().BeEmpty();
+        (await enabled.ArtifactPort.ListActorTimelineAsync("actor-404")).Should().BeEmpty();
+        enabled.TimelineReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ArtifactQueryPort_WhenEnabled_ShouldForwardGraphOptionsToGraphStore()
     {
         var now = DateTimeOffset.UtcNow;
@@ -186,6 +314,35 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         harness.GraphStore.LastSubgraphQuery!.RootNodeId.Should().Be("actor-1");
         harness.GraphStore.LastSubgraphQuery.Depth.Should().Be(4);
         harness.GraphStore.LastSubgraphQuery.Take.Should().Be(11);
+    }
+
+    [Fact]
+    public async Task ArtifactQueryPort_ShouldNormalizeBlankEdgeTypes_AndDefaultDirectionToBoth()
+    {
+        var harness = CreateHarness(new WorkflowExecutionProjectionOptions
+        {
+            Enabled = true,
+            EnableActorQueryEndpoints = true,
+        });
+
+        var options = new WorkflowActorGraphQueryOptions
+        {
+            Direction = (WorkflowActorGraphDirection)99,
+            EdgeTypes = [" CHILD_OF ", "", "CHILD_OF", "  ", "OWNS"],
+        };
+
+        await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1", take: 0, options: options);
+        await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
+
+        harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
+        harness.GraphStore.LastGraphEdgesQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
+        harness.GraphStore.LastGraphEdgesQuery.EdgeTypes.Should().Equal("CHILD_OF", "OWNS");
+        harness.GraphStore.LastGraphEdgesQuery.Take.Should().Be(1);
+
+        harness.GraphStore.LastSubgraphQuery.Should().NotBeNull();
+        harness.GraphStore.LastSubgraphQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
+        harness.GraphStore.LastSubgraphQuery.Depth.Should().Be(8);
+        harness.GraphStore.LastSubgraphQuery.Take.Should().Be(2000);
     }
 
     private static QueryPortHarness CreateHarness(

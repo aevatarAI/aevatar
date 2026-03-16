@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Metadata;
@@ -26,13 +27,17 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public async Task CatalogProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
+        var options = new ServiceProjectionOptions();
         var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             });
-        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(activationService);
+        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(
+            options,
+            activationService,
+            new NoOpProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("actor-1");
@@ -44,13 +49,17 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public async Task RevisionProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
+        var options = new ServiceProjectionOptions();
         var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             });
-        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(activationService);
+        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(
+            options,
+            activationService,
+            new NoOpProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(" ");
         await service.EnsureProjectionAsync("actor-2");

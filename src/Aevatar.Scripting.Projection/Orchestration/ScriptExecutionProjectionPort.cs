@@ -11,8 +11,6 @@ public sealed class ScriptExecutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IScriptExecutionProjectionLease, ScriptExecutionRuntimeLease, EventEnvelope>,
       IScriptExecutionProjectionPort
 {
-    private const string ProjectionName = "script-execution-read-model";
-
     public ScriptExecutionProjectionPort(
         ScriptExecutionProjectionOptions options,
         IProjectionSessionActivationService<ScriptExecutionRuntimeLease> activationService,
@@ -33,7 +31,7 @@ public sealed class ScriptExecutionProjectionPort
             new ProjectionSessionStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = ProjectionName,
+                ProjectionKind = ScriptProjectionKinds.ExecutionSession,
                 SessionId = actorId,
             },
             ct);

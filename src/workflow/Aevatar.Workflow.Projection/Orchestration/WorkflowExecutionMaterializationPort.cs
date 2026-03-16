@@ -8,8 +8,6 @@ public sealed class WorkflowExecutionMaterializationPort
     : MaterializationProjectionPortBase<WorkflowExecutionMaterializationRuntimeLease>,
       IWorkflowExecutionMaterializationActivationPort
 {
-    private const string ProjectionKind = "workflow-execution-materialization";
-
     public WorkflowExecutionMaterializationPort(
         WorkflowExecutionProjectionOptions options,
         IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease> activationService,
@@ -28,7 +26,7 @@ public sealed class WorkflowExecutionMaterializationPort
             new ProjectionMaterializationStartRequest
             {
                 RootActorId = rootActorId,
-                ProjectionKind = ProjectionKind,
+                ProjectionKind = WorkflowProjectionKinds.ExecutionMaterialization,
             },
             ct);
 

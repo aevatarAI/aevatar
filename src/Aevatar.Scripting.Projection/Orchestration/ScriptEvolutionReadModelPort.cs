@@ -8,8 +8,6 @@ public sealed class ScriptEvolutionReadModelPort
     : MaterializationProjectionPortBase<ScriptEvolutionMaterializationRuntimeLease>,
       IScriptEvolutionReadModelActivationPort
 {
-    private const string ProjectionName = "script-evolution-read-model";
-
     public ScriptEvolutionReadModelPort(
         ScriptEvolutionProjectionOptions options,
         IProjectionMaterializationActivationService<ScriptEvolutionMaterializationRuntimeLease> activationService,
@@ -28,7 +26,7 @@ public sealed class ScriptEvolutionReadModelPort
             new ProjectionMaterializationStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = ProjectionName,
+                ProjectionKind = ScriptProjectionKinds.EvolutionMaterialization,
             },
             ct);
 

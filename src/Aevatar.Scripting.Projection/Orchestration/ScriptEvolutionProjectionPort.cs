@@ -10,8 +10,6 @@ public sealed class ScriptEvolutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IScriptEvolutionProjectionLease, ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent>,
       IScriptEvolutionProjectionPort
 {
-    private const string ProjectionName = "script-evolution-session";
-
     public ScriptEvolutionProjectionPort(
         ScriptEvolutionProjectionOptions options,
         IProjectionSessionActivationService<ScriptEvolutionRuntimeLease> activationService,
@@ -33,7 +31,7 @@ public sealed class ScriptEvolutionProjectionPort
             new ProjectionSessionStartRequest
             {
                 RootActorId = sessionActorId,
-                ProjectionKind = ProjectionName,
+                ProjectionKind = ScriptProjectionKinds.EvolutionSession,
                 SessionId = proposalId,
             },
             ct);

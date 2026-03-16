@@ -42,115 +42,38 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunGraphArtifactDocument>, WorkflowRunGraphArtifactMaterializer>();
         services.AddProjectionMaterializationRuntimeCore<
             WorkflowExecutionMaterializationContext,
-            WorkflowExecutionMaterializationRuntimeLease>();
+            WorkflowExecutionMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
+            scopeKey => new WorkflowExecutionMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new WorkflowExecutionMaterializationRuntimeLease(context));
         services.AddProjectionMaterializationRuntimeCore<
             WorkflowBindingProjectionContext,
-            WorkflowBindingRuntimeLease>();
+            WorkflowBindingRuntimeLease,
+            ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
+            scopeKey => new WorkflowBindingProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new WorkflowBindingRuntimeLease(context));
         services.AddEventSinkProjectionRuntimeCore<
             WorkflowExecutionProjectionContext,
             WorkflowExecutionRuntimeLease,
-            WorkflowRunEventEnvelope>();
+            WorkflowRunEventEnvelope,
+            ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
+            scopeKey => new WorkflowExecutionProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new WorkflowExecutionRuntimeLease(context));
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
-        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowExecutionProjectionContext>>(
-            _ => new ProjectionScopeContextFactory<WorkflowExecutionProjectionContext>(scopeKey =>
-                new WorkflowExecutionProjectionContext
-                {
-                    SessionId = scopeKey.SessionId,
-                    RootActorId = scopeKey.RootActorId,
-                    ProjectionKind = scopeKey.ProjectionKind,
-                }));
-        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowExecutionMaterializationContext>>(
-            _ => new ProjectionScopeContextFactory<WorkflowExecutionMaterializationContext>(scopeKey =>
-                new WorkflowExecutionMaterializationContext
-                {
-                    RootActorId = scopeKey.RootActorId,
-                    ProjectionKind = scopeKey.ProjectionKind,
-                }));
-        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowBindingProjectionContext>>(
-            _ => new ProjectionScopeContextFactory<WorkflowBindingProjectionContext>(scopeKey =>
-                new WorkflowBindingProjectionContext
-                {
-                    RootActorId = scopeKey.RootActorId,
-                    ProjectionKind = scopeKey.ProjectionKind,
-                }));
-        services.TryAddSingleton<IProjectionSessionActivationService<WorkflowExecutionRuntimeLease>>(sp =>
-            new ProjectionSessionScopeActivationService<
-                WorkflowExecutionRuntimeLease,
-                WorkflowExecutionProjectionContext,
-                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                request => new WorkflowExecutionProjectionContext
-                {
-                    SessionId = request.SessionId,
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                },
-                static (_, context) => new WorkflowExecutionRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease>>(sp =>
-            new ProjectionSessionScopeReleaseService<
-                WorkflowExecutionRuntimeLease,
-                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                lease => new ProjectionRuntimeScopeKey(
-                    lease.Context.RootActorId,
-                    lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.SessionObservation,
-                    lease.Context.SessionId),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeActivationService<
-                WorkflowExecutionMaterializationRuntimeLease,
-                WorkflowExecutionMaterializationContext,
-                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                request => new WorkflowExecutionMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                },
-                static (_, context) => new WorkflowExecutionMaterializationRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeReleaseService<
-                WorkflowExecutionMaterializationRuntimeLease,
-                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                lease => new ProjectionRuntimeScopeKey(
-                    lease.Context.RootActorId,
-                    lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationActivationService<WorkflowBindingRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeActivationService<
-                WorkflowBindingRuntimeLease,
-                WorkflowBindingProjectionContext,
-                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                request => new WorkflowBindingProjectionContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                },
-                static (_, context) => new WorkflowBindingRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowBindingRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeReleaseService<
-                WorkflowBindingRuntimeLease,
-                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                lease => new ProjectionRuntimeScopeKey(
-                    lease.Context.RootActorId,
-                    lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
@@ -174,12 +97,6 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();
-        services.AddProjectionArtifactMaterializer<
-            WorkflowExecutionMaterializationContext,
-            WorkflowRunTimelineArtifactProjector>();
-        services.AddProjectionArtifactMaterializer<
-            WorkflowExecutionMaterializationContext,
-            WorkflowRunGraphArtifactProjector>();
         return services;
     }
 }

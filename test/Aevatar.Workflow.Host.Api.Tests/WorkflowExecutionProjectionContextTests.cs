@@ -12,12 +12,12 @@ public sealed class WorkflowExecutionProjectionContextTests
         {
             SessionId = "cmd-1",
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
         };
 
         context.SessionId.Should().Be("cmd-1");
         context.RootActorId.Should().Be("actor-1");
-        context.ProjectionKind.Should().Be("workflow-execution");
+        context.ProjectionKind.Should().Be("workflow-execution-session");
     }
 
     [Fact]
@@ -27,13 +27,13 @@ public sealed class WorkflowExecutionProjectionContextTests
         {
             SessionId = "cmd-1",
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
         };
         var second = new WorkflowExecutionProjectionContext
         {
             SessionId = "cmd-2",
             RootActorId = "actor-1",
-            ProjectionKind = "workflow-execution",
+            ProjectionKind = "workflow-execution-session",
         };
 
         first.RootActorId.Should().Be(second.RootActorId);

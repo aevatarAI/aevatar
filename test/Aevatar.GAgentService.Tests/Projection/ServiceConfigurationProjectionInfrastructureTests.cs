@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.Metadata;
@@ -22,8 +23,12 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
     [Fact]
     public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
+        var options = new ServiceGovernanceProjectionOptions();
         var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(activationService);
+        var service = new ServiceConfigurationProjectionPort(
+            options,
+            activationService,
+            new NoOpServiceConfigurationReleaseService());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("config-actor");

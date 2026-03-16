@@ -10,8 +10,6 @@ public sealed class WorkflowExecutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionPort
 {
-    private const string ProjectionKind = "workflow-execution";
-
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
         IProjectionSessionActivationService<WorkflowExecutionRuntimeLease> activationService,
@@ -33,7 +31,7 @@ public sealed class WorkflowExecutionProjectionPort
             new ProjectionSessionStartRequest
             {
                 RootActorId = rootActorId,
-                ProjectionKind = ProjectionKind,
+                ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
                 SessionId = commandId,
             },
             ct);

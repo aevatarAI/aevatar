@@ -7,8 +7,6 @@ public sealed class ScriptAuthorityProjectionPort
     : MaterializationProjectionPortBase<ScriptAuthorityRuntimeLease>,
       IScriptAuthorityReadModelActivationPort
 {
-    private const string ProjectionName = "script-authority-read-model";
-
     public ScriptAuthorityProjectionPort(
         IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease> activationService,
         IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease> releaseService)
@@ -26,7 +24,7 @@ public sealed class ScriptAuthorityProjectionPort
             new ProjectionMaterializationStartRequest
             {
                 RootActorId = actorId,
-                ProjectionKind = ProjectionName,
+                ProjectionKind = ScriptProjectionKinds.AuthorityMaterialization,
             },
             ct);
 

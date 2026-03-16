@@ -8,15 +8,21 @@ namespace Aevatar.Workflow.Projection.Projectors;
 public sealed class WorkflowRunInsightReportArtifactProjector
     : IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>
 {
-    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _documentReader;
-    private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _writeDispatcher;
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
+    private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _reportWriter;
+    private readonly IProjectionWriteDispatcher<WorkflowRunTimelineDocument> _timelineWriter;
+    private readonly IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument> _graphWriter;
 
     public WorkflowRunInsightReportArtifactProjector(
-        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> documentReader,
-        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> writeDispatcher)
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
+        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> reportWriter,
+        IProjectionWriteDispatcher<WorkflowRunTimelineDocument> timelineWriter,
+        IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument> graphWriter)
     {
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
-        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
+        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
+        _reportWriter = reportWriter ?? throw new ArgumentNullException(nameof(reportWriter));
+        _timelineWriter = timelineWriter ?? throw new ArgumentNullException(nameof(timelineWriter));
+        _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
     }
 
     public async ValueTask ProjectAsync(
@@ -29,7 +35,7 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             state == null)
             return;
 
-        var existing = await _documentReader.GetAsync(context.RootActorId, ct);
+        var existing = await _reportReader.GetAsync(context.RootActorId, ct);
         if (existing != null && WorkflowExecutionArtifactMaterializationSupport.ShouldSkip(existing, stateEvent))
             return;
 
@@ -43,6 +49,12 @@ public sealed class WorkflowRunInsightReportArtifactProjector
 
         WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
         WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
-        await _writeDispatcher.UpsertAsync(readModel, ct);
+        await _reportWriter.UpsertAsync(readModel, ct);
+        await _timelineWriter.UpsertAsync(
+            WorkflowExecutionArtifactMaterializationSupport.BuildTimelineDocument(readModel),
+            ct);
+        await _graphWriter.UpsertAsync(
+            WorkflowExecutionArtifactMaterializationSupport.BuildGraphDocument(readModel),
+            ct);
     }
 }

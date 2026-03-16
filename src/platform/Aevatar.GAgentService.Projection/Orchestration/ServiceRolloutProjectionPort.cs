@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
@@ -8,8 +9,10 @@ public sealed class ServiceRolloutProjectionPort
       IServiceRolloutProjectionPort
 {
     public ServiceRolloutProjectionPort(
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>> activationService)
-        : base(activationService, ServiceProjectionNames.Rollouts)
+        ServiceProjectionOptions options,
+        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>> activationService,
+        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>> releaseService)
+        : base(options, activationService, releaseService, ServiceProjectionKinds.Rollouts)
     {
     }
 

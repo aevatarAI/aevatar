@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Orchestration;
 
 namespace Aevatar.GAgentService.Tests.Projection;
@@ -112,5 +113,26 @@ internal sealed class RecordingProjectionActivationService<TContext>
         return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
             request.RootActorId,
             _contextFactory(request.RootActorId, request.ProjectionKind)));
+    }
+}
+
+internal sealed class NoOpProjectionReleaseService<TLease>
+    : IProjectionMaterializationReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
+{
+    public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class NoOpServiceConfigurationReleaseService
+    : IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>
+{
+    public Task ReleaseIfIdleAsync(ServiceConfigurationRuntimeLease lease, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Task.CompletedTask;
     }
 }
