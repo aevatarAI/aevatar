@@ -13,6 +13,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
@@ -44,6 +45,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProtobufMessageCodec, ProtobufMessageCodec>();
         services.TryAddSingleton<IScriptBehaviorCompiler, RoslynScriptBehaviorCompiler>();
         services.TryAddSingleton<IScriptBehaviorArtifactResolver, CachedScriptBehaviorArtifactResolver>();
+        services.TryAddSingleton<IScriptReadModelMaterializationCompiler, ScriptReadModelMaterializationCompiler>();
+        services.TryAddSingleton<IScriptNativeProjectionBuilder, ScriptNativeProjectionBuilder>();
         services.TryAddSingleton<IScriptReadModelSchemaActivationPolicy, DefaultScriptReadModelSchemaActivationPolicy>();
         services.TryAddSingleton<IScriptEvolutionApplicationService, ScriptEvolutionApplicationService>();
         services.TryAddSingleton<IScriptReadModelQueryApplicationService, ScriptReadModelQueryApplicationService>();

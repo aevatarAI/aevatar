@@ -89,7 +89,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var envelope = CreateEnvelope(run.Actor.Id, Any.Pack(chatRequest), commandId, correlationId);
-        await run.Actor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(run.Actor.Id, envelope, ct);
         return CreateReceipt(target, run.Actor.Id, commandId, correlationId);
     }
 

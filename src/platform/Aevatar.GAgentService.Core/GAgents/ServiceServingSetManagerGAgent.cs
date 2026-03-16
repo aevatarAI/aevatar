@@ -3,6 +3,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -10,8 +11,11 @@ namespace Aevatar.GAgentService.Core.GAgents;
 
 public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSetState>
 {
-    public ServiceServingSetManagerGAgent()
+    private readonly IServiceServingTargetResolver _targetResolver;
+
+    public ServiceServingSetManagerGAgent(IServiceServingTargetResolver targetResolver)
     {
+        _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
         InitializeId();
     }
 
@@ -20,13 +24,14 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureIdentity(command.Identity, allowInitialize: true);
-        ValidateTargets(command.Targets);
+        var resolvedTargets = await _targetResolver.ResolveTargetsAsync(command.Identity!, command.Targets, CancellationToken.None);
+        ValidateTargets(resolvedTargets);
 
         await PersistDomainEventAsync(new ServiceServingSetUpdatedEvent
         {
             Identity = command.Identity?.Clone(),
             Generation = State.Generation + 1,
-            Targets = { command.Targets.Select(CloneTarget) },
+            Targets = { resolvedTargets.Select(CloneTarget) },
             RolloutId = command.RolloutId ?? string.Empty,
             Reason = command.Reason ?? string.Empty,
             UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),

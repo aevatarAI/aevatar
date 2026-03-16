@@ -7,7 +7,7 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionProjectionPort
-    : EventSinkProjectionLifecyclePortServiceBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
+    : EventSinkProjectionLifecyclePortBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionPort
 {
     public WorkflowExecutionProjectionPort(

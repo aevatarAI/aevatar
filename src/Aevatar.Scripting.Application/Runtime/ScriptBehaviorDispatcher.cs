@@ -3,6 +3,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
+using Aevatar.Scripting.Core.Materialization;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,13 +12,19 @@ namespace Aevatar.Scripting.Application.Runtime;
 public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 {
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
+    private readonly IScriptNativeProjectionBuilder _nativeProjectionBuilder;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptBehaviorDispatcher(
         IScriptBehaviorArtifactResolver artifactResolver,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
+        IScriptNativeProjectionBuilder nativeProjectionBuilder,
         IProtobufMessageCodec codec)
     {
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
+        _nativeProjectionBuilder = nativeProjectionBuilder ?? throw new ArgumentNullException(nameof(nativeProjectionBuilder));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
     }
 
@@ -119,13 +126,28 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     CreateFactContext(request, fact, eventTypeUrl));
             }
 
+            var materializationPlan = _materializationCompiler.GetOrCompile(
+                artifact,
+                request.ReadModelSchemaHash,
+                request.ReadModelSchemaVersion);
+
             foreach (var (domainEvent, fact) in factsWithEvents)
             {
-                fact.ReadModelPayload = _codec.Pack(
-                    behavior.ProjectReadModel(
-                        projectedState,
-                        domainEvent,
-                        CreateFactContext(request, fact, fact.EventType ?? string.Empty)))?.Clone();
+                var semanticReadModel = behavior.ProjectReadModel(
+                    projectedState,
+                    domainEvent,
+                    CreateFactContext(request, fact, fact.EventType ?? string.Empty));
+                fact.ReadModelPayload = _codec.Pack(semanticReadModel)?.Clone();
+                fact.NativeDocument = _nativeProjectionBuilder.BuildDocument(
+                    semanticReadModel,
+                    materializationPlan);
+                fact.NativeGraph = _nativeProjectionBuilder.BuildGraph(
+                    fact.ActorId ?? request.ActorId,
+                    fact.ScriptId ?? request.ScriptId,
+                    fact.DefinitionActorId ?? request.DefinitionActorId,
+                    fact.Revision ?? request.Revision,
+                    semanticReadModel,
+                    materializationPlan);
             }
 
             return committed;

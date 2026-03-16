@@ -432,14 +432,11 @@ DI 装配：
 - native graph
   - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs:16-121`
 
-这里还有一个很重要的并发保护：
+当前 `scripting native materialization` 已经继续前推到 actor write-side：
 
-- `ScriptNativeDocumentProjector` 和 `ScriptNativeGraphProjector` 都要求 `context.CurrentSemanticReadModelDocument.StateVersion == fact.StateVersion`
-- 对应代码：
-  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs:90-109`
-  - `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs:90-109`
-
-也就是说，native materialization 不是独立从事件重算，而是严格依附于同一轮语义 read model 归约结果。
+- `ScriptBehaviorDispatcher` 在生成 `ScriptDomainFactCommitted` 时，同时写入 durable `native_document` / `native_graph` 子契约。
+- `ScriptNativeDocumentProjector` 和 `ScriptNativeGraphProjector` 不再解析 behavior artifact，也不再在 projection 中编译 materialization plan。
+- projection 侧只负责把 committed durable native contract 落到 document / graph store。
 
 ### 10.3 StateMirror：结构镜像型 read model
 

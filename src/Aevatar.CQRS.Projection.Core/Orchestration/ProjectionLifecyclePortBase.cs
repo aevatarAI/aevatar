@@ -3,7 +3,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Generic lifecycle port base that centralizes projection enable-gate and lease/sink orchestration.
 /// </summary>
-public abstract class ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TSink, TEvent>
+public abstract class ProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TSink, TEvent>
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
     where TSink : class
@@ -14,7 +14,7 @@ public abstract class ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntim
     private readonly IProjectionPortSinkSubscriptionManager<TRuntimeLease, TSink, TEvent> _sinkSubscriptionManager;
     private readonly IProjectionPortLiveSinkForwarder<TRuntimeLease, TSink, TEvent> _liveSinkForwarder;
 
-    protected ProjectionLifecyclePortServiceBase(
+    protected ProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TRuntimeLease> activationService,
         IProjectionPortReleaseService<TRuntimeLease> releaseService,

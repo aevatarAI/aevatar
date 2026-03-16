@@ -7,13 +7,13 @@ using Aevatar.Scripting.Projection.Configuration;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
-public sealed class ScriptExecutionProjectionPortService
-    : EventSinkProjectionLifecyclePortServiceBase<IScriptExecutionProjectionLease, ScriptExecutionRuntimeLease, EventEnvelope>,
+public sealed class ScriptExecutionProjectionPort
+    : EventSinkProjectionLifecyclePortBase<IScriptExecutionProjectionLease, ScriptExecutionRuntimeLease, EventEnvelope>,
       IScriptExecutionProjectionPort
 {
     private const string ProjectionName = "script-execution-read-model";
 
-    public ScriptExecutionProjectionPortService(
+    public ScriptExecutionProjectionPort(
         ScriptExecutionProjectionOptions options,
         IProjectionPortActivationService<ScriptExecutionRuntimeLease> activationService,
         IProjectionPortReleaseService<ScriptExecutionRuntimeLease> releaseService,

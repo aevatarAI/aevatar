@@ -44,7 +44,7 @@
 
 | 编号 | 问题 | 当前表现 | 影响 |
 |---|---|---|---|
-| R1 | `scripting` 未彻底 actor 化 | projection/query 仍会加载 behavior artifact 并执行业务逻辑 | 业务语义分散在 actor/projection/query 三处 |
+| R1 | `scripting` actor 化收口 | current-state、native document、native graph 已全部改为消费 actor committed durable fact | 该项主债已消除，剩余仅为文档同步 |
 | R2 | reducer-era core 已退出主链 | 生产代码已移除 reducer 契约与注册，剩余仅为 README/活文档清理 | 新人仍可能被旧文档误导 |
 | R3 | workflow report/export 外围层仍带历史命名 | `WorkflowRunInsightReportDocument` 仍承担 report/export 载体，外围 adapter 还未统一收口 | 报告链与主查询链的边界仍可继续收紧 |
 | R4 | export adapter 已收口为独立导出层 | `IWorkflowRunReportExportPort` / `WorkflowRunReportExportWriter` 已与主查询链分离 | 该项主债已基本消除，剩余仅为零散旧文档 |
@@ -132,7 +132,7 @@ flowchart LR
 
 ## 6.1 WP1: Scripting 彻底 actor 化
 
-> 2026-03-16 进度：已完成。`ScriptReadModelProjector`、native document/graph projector 已切到 write-side committed payload；`ScriptReadModelQueryReader` 已收口为 snapshot/document 读取；`OnQuery<TQuery, TResult>`、`ExecuteQueryAsync(...)`、`QueryTypeUrls`、`QueryResultTypeUrls` 等 declared-query 生产契约已从 scripting 主链删除；`IScriptBehaviorRuntimeCapabilities.GetReadModelSnapshotAsync(...)` 这类 runtime readmodel 侧读能力也已移除。
+> 2026-03-16 进度：已完成。`ScriptReadModelProjector`、native document/graph projector 已切到 actor write-side 产出的 durable committed fact；`ScriptReadModelQueryReader` 已收口为 snapshot/document 读取；`OnQuery<TQuery, TResult>`、`ExecuteQueryAsync(...)`、`QueryTypeUrls`、`QueryResultTypeUrls` 等 declared-query 生产契约已从 scripting 主链删除；`IScriptBehaviorRuntimeCapabilities.GetReadModelSnapshotAsync(...)` 这类 runtime readmodel 侧读能力也已移除。
 
 ### 现状
 
@@ -144,11 +144,11 @@ flowchart LR
 - `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 - `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs`
 
-问题本质：
+当前这条主债已经收口完成：
 
 1. current-state 主查询路径已经收口为 `actor -> committed fact -> readmodel`。
-2. native document / graph 物化仍会解析 behavior artifact，以生成 provider-specific materialization plan。
-3. 当前剩余问题主要是“native materialization 是否还应继续依赖 behavior artifact”，而不是 query path 补算。
+2. `ScriptBehaviorDispatcher` 在 write-side 基于 behavior artifact + schema plan 生成 durable `native_document/native_graph` 子契约。
+3. `ScriptNativeDocumentProjector` 与 `ScriptNativeGraphProjector` 只消费 committed fact，不再解析 behavior artifact，也不再在 projection 中编译 materialization plan。
 
 ### 目标
 
@@ -162,24 +162,26 @@ flowchart LR
 | 文件 | 动作 | 目标 |
 |---|---|---|
 | `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `已完成主体` | 当前态 query contract 已从 production path 移除，仅保留写侧 dispatch/apply/project |
-| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后输出 durable readmodel contract |
+| `src/Aevatar.Scripting.Application/Runtime/ScriptBehaviorDispatcher.cs` | `已完成` | write-side 同时产出 semantic readmodel 与 native durable projection contract |
+| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后发布由 write-side 已准备好的 durable readmodel contract |
 | `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | `已完成` | 直接物化 actor 已给出的 readmodel contract |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `待继续收口` | 评估是否还能继续降低对 behavior artifact 的依赖 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `待继续收口` | 同上 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `已完成` | 只消费 `ScriptDomainFactCommitted.native_document` 并落库 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `已完成` | 只消费 `ScriptDomainFactCommitted.native_graph` 并落库 |
 | `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs` | `已完成` | 只读 readmodel，不再解释业务语义 |
 | `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionSnapshotPort.cs` | `已收紧` | 当前态 query/projector 常规依赖已移除 |
 
 ### 验收标准
 
 1. `ScriptReadModelProjector` 不再注入 `IScriptDefinitionSnapshotPort`。
-2. `ScriptReadModelProjector` 不再注入 `IScriptBehaviorArtifactResolver`。
-3. `ScriptReadModelQueryReader` 不再执行 `behavior.ExecuteQueryAsync(...)`。
-4. scripting current-state 路径只依赖 committed observation 中已有的 durable 数据。
-5. production path 中不存在 `OnQuery<TQuery, TResult>`、`QueryTypeUrls`、`QueryResultTypeUrls`。
+2. `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 不再注入 `IScriptBehaviorArtifactResolver`。
+3. `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 不再注入 `IScriptReadModelMaterializationCompiler`。
+4. `ScriptReadModelQueryReader` 不再执行 `behavior.ExecuteQueryAsync(...)`。
+5. scripting current-state 路径只依赖 committed observation 中已有的 durable 数据。
+6. production path 中不存在 `OnQuery<TQuery, TResult>`、`QueryTypeUrls`、`QueryResultTypeUrls`。
 
 ## 6.2 WP2: Projection Core 去 reducer 化
 
-> 2026-03-16 进度：主链已完成。`IProjectionEventReducer`、`Aevatar.AI.Projection/Reducers/*`、workflow host 对 reducer-era 扩展的注册均已移除；当前剩余工作主要是 README/活文档清理。
+> 2026-03-16 进度：已完成。`IProjectionEventReducer`、`Aevatar.AI.Projection/Reducers/*`、workflow host 对 reducer-era 扩展的注册均已移除；活文档也已同步收正为 current projector/applier model。
 
 ### 现状
 
@@ -201,9 +203,10 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/Aevatar.CQRS.Projection.Core.Abstractions/README.md` | `更新中` | 文档只保留 current projector/applier model |
-| `docs/2026-03-15-cqrs-projection-readmodels-architecture.md` | `更新中` | 删除对已删除 reducer 文件的引用 |
-| `docs/architecture/2026-03-16-remaining-actorization-refactor-blueprint.md` | `更新中` | 收正为“代码已完成，文档收尾” |
+| `src/Aevatar.CQRS.Projection.Core.Abstractions/README.md` | `已完成` | 文档只保留 current projector/applier model |
+| `src/Aevatar.CQRS.Projection.Core/README.md` | `已完成` | 文档已同步为 current projector/lifecycle port base 口径 |
+| `docs/2026-03-15-cqrs-projection-readmodels-architecture.md` | `已完成` | 已删除对已删除 reducer 文件的引用 |
+| `docs/architecture/2026-03-16-remaining-actorization-refactor-blueprint.md` | `已完成` | 已收正为“代码已完成，文档收尾” |
 
 ### 验收标准
 
@@ -213,22 +216,22 @@ flowchart LR
 
 ## 6.3 WP3: Workflow readmodel 按消费场景拆分
 
-> 2026-03-16 进度：主查询链已完成。`WorkflowRunTimelineDocument` 已落地，`WorkflowProjectionQueryReader` 已直接读取 timeline document；graph 已改由 `WorkflowRunGraphMirrorReadModel -> WorkflowRunGraphMirrorMaterializer -> Graph Store` 物化，不再从 `WorkflowRunInsightReportDocument` 派生。剩余工作仅是 report/export 外围命名和文档收口。
+> 2026-03-16 进度：已完成。`WorkflowRunTimelineDocument` 已落地，`WorkflowProjectionQueryReader` 已直接读取 timeline document；graph 已改由 `WorkflowRunGraphMirrorReadModel -> WorkflowRunGraphMirrorMaterializer -> Graph Store` 物化，不再从 `WorkflowRunInsightReportDocument` 派生。外围命名与活文档也已同步收口。
 
 ### 现状
 
-虽然 `WorkflowRunInsightGAgent` 已成为语义拥有者，但 report/export 外围仍保留历史命名：
+`WorkflowRunInsightGAgent` 已成为语义拥有者，workflow 主查询面也已经按消费场景拆开：
 
 - `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs`
 - `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphMirrorMaterializer.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionQueryReader.cs`
 
-问题：
+当前结果：
 
-1. `WorkflowRunInsightReportDocument` 仍是 report/export 载体，尚未完成命名和外围 adapter 收口。
-2. timeline 与 graph 主查询链虽然已经拆分，但活文档和少数外围测试/说明仍沿用旧口径。
-3. report/export 与主查询链之间的概念边界还可以继续硬化。
+1. `WorkflowRunInsightReportDocument` 已明确退回 report/export 载体。
+2. timeline 与 graph 主查询链已脱离 monolithic report。
+3. report/export 与主查询链的概念边界已通过命名和门禁固定。
 
 ### 目标
 
@@ -258,9 +261,11 @@ flowchart LR
 
 ## 6.4 WP4: Workflow export/artifact 降级为 adapter
 
+> 2026-03-16 进度：已完成。workflow 导出侧已统一为 `report export` 语义，不再把主查询或 projection 主链表述成 artifact sink。
+
 ### 现状
 
-以下链路仍保留旧 `artifact` 命名：
+导出链路已收口为明确的 export adapter：
 
 - `src/workflow/Aevatar.Workflow.Application.Abstractions/Reporting/IWorkflowRunReportExportPort.cs`
 - `src/workflow/Aevatar.Workflow.Application/Reporting/NoopWorkflowRunReportExporter.cs`
@@ -275,11 +280,11 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `IWorkflowRunReportExportPort.cs` | `保留并继续收口` | 已改为 export 语义，继续清理全仓旧引用 |
+| `IWorkflowRunReportExportPort.cs` | `已完成` | 已改为 export 语义 |
 | `NoopWorkflowRunReportExporter.cs` | `保留` | 对齐 export 语义 |
 | `FileSystemWorkflowRunReportExporter.cs` | `保留` | 明确是 file export adapter |
 | `WorkflowRunReportExportOptions.cs` | `保留` | 对齐 export 语义 |
-| `Workflow Application/Infrastructure` 注册文件 | `修改` | 不再把导出能力表述成 artifact sink |
+| `Workflow Application/Infrastructure` 注册文件 | `已完成` | 不再把导出能力表述成 artifact sink |
 
 ### 验收标准
 
