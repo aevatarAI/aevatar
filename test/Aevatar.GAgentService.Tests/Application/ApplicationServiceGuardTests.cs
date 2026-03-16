@@ -21,60 +21,34 @@ public sealed class ApplicationServiceGuardTests
         Action nullDispatch = () => new ServiceCommandApplicationService(
             null!,
             new NoOpServiceCommandTargetProvisioner(),
-            new NoOpCatalogQueryReader(),
             new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
-            new NoOpDeploymentCatalogQueryReader(),
-            new NoOpServingSetQueryReader(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new InMemoryServiceRevisionArtifactStore());
+            new NoOpProjectionPort());
         Action nullProvisioner = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
             null!,
-            new NoOpCatalogQueryReader(),
             new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
-            new NoOpDeploymentCatalogQueryReader(),
-            new NoOpServingSetQueryReader(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new InMemoryServiceRevisionArtifactStore());
-        Action nullCatalogReader = () => new ServiceCommandApplicationService(
+            new NoOpProjectionPort());
+        Action nullCatalogProjection = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
             new NoOpServiceCommandTargetProvisioner(),
             null!,
-            new NoOpCatalogProjectionPort(),
             new NoOpRevisionProjectionPort(),
-            new NoOpDeploymentCatalogQueryReader(),
-            new NoOpServingSetQueryReader(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
             new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new InMemoryServiceRevisionArtifactStore());
-        Action nullArtifactStore = () => new ServiceCommandApplicationService(
-            new NoOpActorDispatchPort(),
-            new NoOpServiceCommandTargetProvisioner(),
-            new NoOpCatalogQueryReader(),
-            new NoOpCatalogProjectionPort(),
-            new NoOpRevisionProjectionPort(),
-            new NoOpDeploymentCatalogQueryReader(),
-            new NoOpServingSetQueryReader(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            null!);
+            new NoOpProjectionPort());
 
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
-        nullCatalogReader.Should().Throw<ArgumentNullException>();
-        nullArtifactStore.Should().Throw<ArgumentNullException>();
+        nullCatalogProjection.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -141,27 +115,18 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullDispatch = () => new ServiceGovernanceCommandApplicationService(
             null!,
-            new NoOpCatalogQueryReader(),
-            new NoOpGovernanceCommandTargetProvisioner(),
-            new NoOpGovernanceProjectionPort());
-        Action nullCatalogReader = () => new ServiceGovernanceCommandApplicationService(
-            new NoOpActorDispatchPort(),
-            null!,
             new NoOpGovernanceCommandTargetProvisioner(),
             new NoOpGovernanceProjectionPort());
         Action nullProvisioner = () => new ServiceGovernanceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            new NoOpCatalogQueryReader(),
             null!,
             new NoOpGovernanceProjectionPort());
         Action nullProjectionPort = () => new ServiceGovernanceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            new NoOpCatalogQueryReader(),
             new NoOpGovernanceCommandTargetProvisioner(),
             null!);
 
         nullDispatch.Should().Throw<ArgumentNullException>();
-        nullCatalogReader.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
         nullProjectionPort.Should().Throw<ArgumentNullException>();
     }

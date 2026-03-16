@@ -1,8 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.GAgents;
+using Aevatar.GAgentService.Core.Ports;
+using Aevatar.GAgentService.Core.Services;
+using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -421,6 +426,423 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_ShouldResolveTargetsFromDeploymentAndArtifact()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var deploymentQueryReader = new RecordingDeploymentQueryReader
+        {
+            GetResult = new ServiceDeploymentCatalogSnapshot(
+                ServiceKeys.Build(identity),
+                [
+                    new ServiceDeploymentSnapshot("dep-1", "rev-1", "actor-1", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                ],
+                DateTimeOffset.UtcNow),
+        };
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(deploymentQueryReader, artifactStore));
+        await agent.ActivateAsync();
+
+        await agent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                },
+            },
+        });
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].DeploymentId.Should().Be("dep-1");
+        agent.State.Targets[0].PrimaryActorId.Should().Be("actor-1");
+        agent.State.Targets[0].AllocationWeight.Should().Be(100);
+        agent.State.Targets[0].ServingState.Should().Be(ServiceServingState.Active);
+        agent.State.Targets[0].EnabledEndpointIds.Should().ContainSingle("chat");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldRejectMissingResolutionFacts()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var serviceKey = ServiceKeys.Build(identity);
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+
+        var missingRevisionAgent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), artifactStore));
+        await missingRevisionAgent.ActivateAsync();
+
+        await FluentActions.Invoking(() => missingRevisionAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec(),
+            },
+        }))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("revision_id is required for serving targets.");
+
+        var missingDeploymentAgent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(new RecordingDeploymentQueryReader(), artifactStore));
+        await missingDeploymentAgent.ActivateAsync();
+
+        await FluentActions.Invoking(() => missingDeploymentAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                },
+            },
+        }))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"Deployments for '{serviceKey}' were not found.");
+
+        var inactiveDeploymentAgent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(
+                new RecordingDeploymentQueryReader
+                {
+                    GetResult = new ServiceDeploymentCatalogSnapshot(
+                        serviceKey,
+                        [
+                            new ServiceDeploymentSnapshot("dep-x", "rev-x", "actor-x", ServiceDeploymentStatus.Deactivated.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        ],
+                        DateTimeOffset.UtcNow),
+                },
+                artifactStore));
+        await inactiveDeploymentAgent.ActivateAsync();
+
+        await FluentActions.Invoking(() => inactiveDeploymentAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                },
+            },
+        }))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"Active deployment for '{serviceKey}' revision 'rev-1' was not found.");
+
+        var missingArtifactAgent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(
+                new RecordingDeploymentQueryReader
+                {
+                    GetResult = new ServiceDeploymentCatalogSnapshot(
+                        serviceKey,
+                        [
+                            new ServiceDeploymentSnapshot("dep-1", "rev-1", "actor-1", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        ],
+                        DateTimeOffset.UtcNow),
+                },
+                artifactStore));
+        await missingArtifactAgent.ActivateAsync();
+
+        await FluentActions.Invoking(() => missingArtifactAgent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                },
+            },
+        }))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"Prepared artifact for '{serviceKey}' revision 'rev-1' was not found.");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldPreserveExplicitServingFieldsDuringResolution()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run"),
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            new DefaultServiceServingTargetResolver(
+                new RecordingDeploymentQueryReader
+                {
+                    GetResult = new ServiceDeploymentCatalogSnapshot(
+                        ServiceKeys.Build(identity),
+                        [
+                            new ServiceDeploymentSnapshot("dep-1", "rev-1", "actor-1", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        ],
+                        DateTimeOffset.UtcNow),
+                },
+                artifactStore));
+        await agent.ActivateAsync();
+
+        await agent.HandleReplaceAsync(new ReplaceServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-1",
+                    AllocationWeight = 55,
+                    ServingState = ServiceServingState.Paused,
+                    EnabledEndpointIds = { "chat" },
+                },
+            },
+        });
+
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].DeploymentId.Should().Be("dep-1");
+        agent.State.Targets[0].AllocationWeight.Should().Be(55);
+        agent.State.Targets[0].ServingState.Should().Be(ServiceServingState.Paused);
+        agent.State.Targets[0].EnabledEndpointIds.Should().Equal("chat");
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldResolvePlanAndExplicitBaselineTargets()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-base",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-base",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run")));
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-2",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-2",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run"),
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var dispatchPort = new RecordingDispatchPort();
+        var resolver = new DefaultServiceServingTargetResolver(
+            new RecordingDeploymentQueryReader
+            {
+                GetResult = new ServiceDeploymentCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    [
+                        new ServiceDeploymentSnapshot("dep-base", "rev-base", "actor-base", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        new ServiceDeploymentSnapshot("dep-2", "rev-2", "actor-2", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            artifactStore);
+        var agent = CreateRolloutAgent(new InMemoryEventStore(), dispatchPort, identity, resolver);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            BaselineTargets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    RevisionId = "rev-base",
+                },
+            },
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-explicit",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-1",
+                        Targets =
+                        {
+                            new ServiceServingTargetSpec
+                            {
+                                RevisionId = "rev-2",
+                                AllocationWeight = 35,
+                                ServingState = ServiceServingState.Draining,
+                                EnabledEndpointIds = { "chat" },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        dispatchPort.Commands.Should().ContainSingle();
+        dispatchPort.Commands[0].command.Targets.Should().ContainSingle();
+        dispatchPort.Commands[0].command.Targets[0].DeploymentId.Should().Be("dep-2");
+        dispatchPort.Commands[0].command.Targets[0].PrimaryActorId.Should().Be("actor-2");
+        dispatchPort.Commands[0].command.Targets[0].AllocationWeight.Should().Be(35);
+        dispatchPort.Commands[0].command.Targets[0].ServingState.Should().Be(ServiceServingState.Draining);
+        dispatchPort.Commands[0].command.Targets[0].EnabledEndpointIds.Should().Equal("chat");
+        agent.State.BaselineTargets.Should().ContainSingle();
+        agent.State.BaselineTargets[0].DeploymentId.Should().Be("dep-base");
+        agent.State.BaselineTargets[0].PrimaryActorId.Should().Be("actor-base");
+        agent.State.BaselineTargets[0].EnabledEndpointIds.Should().ContainSingle("run");
+        agent.State.Plan.Stages[0].Targets[0].DeploymentId.Should().Be("dep-2");
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldUseServingSnapshotBaselineWhenExplicitBaselineMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-2",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-2",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run")));
+        var servingSetQueryReader = new RecordingServingSetQueryReader
+        {
+            GetResult = new ServiceServingSetSnapshot(
+                ServiceKeys.Build(identity),
+                3,
+                string.Empty,
+                [
+                    new ServiceServingTargetSnapshot("dep-base", "rev-base", "actor-base", 100, "not-a-state", ["run"]),
+                ],
+                DateTimeOffset.UtcNow),
+        };
+        var agent = CreateRolloutAgent(
+            new InMemoryEventStore(),
+            new RecordingDispatchPort(),
+            identity,
+            new DefaultServiceServingTargetResolver(
+                new RecordingDeploymentQueryReader
+                {
+                    GetResult = new ServiceDeploymentCatalogSnapshot(
+                        ServiceKeys.Build(identity),
+                        [
+                            new ServiceDeploymentSnapshot("dep-2", "rev-2", "actor-2", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        ],
+                        DateTimeOffset.UtcNow),
+                },
+                artifactStore),
+            servingSetQueryReader);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-baseline",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-1",
+                        Targets =
+                        {
+                            new ServiceServingTargetSpec
+                            {
+                                RevisionId = "rev-2",
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        servingSetQueryReader.Identities.Should().ContainSingle(x => x.ServiceId == identity.ServiceId);
+        agent.State.BaselineTargets.Should().ContainSingle();
+        agent.State.BaselineTargets[0].DeploymentId.Should().Be("dep-base");
+        agent.State.BaselineTargets[0].ServingState.Should().Be(ServiceServingState.Unspecified);
+        agent.State.Plan.Stages[0].Targets[0].DeploymentId.Should().Be("dep-2");
+        agent.State.Plan.Stages[0].Targets[0].EnabledEndpointIds.Should().ContainSingle("run");
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldUseEmptyBaselineWhenServingSnapshotMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "rev-2",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "rev-2",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "run")));
+        var servingSetQueryReader = new RecordingServingSetQueryReader();
+        var agent = CreateRolloutAgent(
+            new InMemoryEventStore(),
+            new RecordingDispatchPort(),
+            identity,
+            new DefaultServiceServingTargetResolver(
+                new RecordingDeploymentQueryReader
+                {
+                    GetResult = new ServiceDeploymentCatalogSnapshot(
+                        ServiceKeys.Build(identity),
+                        [
+                            new ServiceDeploymentSnapshot("dep-2", "rev-2", "actor-2", ServiceDeploymentStatus.Active.ToString(), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+                        ],
+                        DateTimeOffset.UtcNow),
+                },
+                artifactStore),
+            servingSetQueryReader);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-empty-baseline",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-1",
+                        Targets =
+                        {
+                            new ServiceServingTargetSpec
+                            {
+                                RevisionId = "rev-2",
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        servingSetQueryReader.Identities.Should().ContainSingle(x => x.ServiceId == identity.ServiceId);
+        agent.State.BaselineTargets.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldPersistGenerationAndReplay()
     {
         var eventStore = new InMemoryEventStore();
@@ -564,20 +986,28 @@ public sealed class ServiceServingRolloutGAgentTests
     private static ServiceRolloutManagerGAgent CreateRolloutAgent(
         InMemoryEventStore eventStore,
         RecordingDispatchPort dispatchPort,
-        ServiceIdentity identity)
+        ServiceIdentity identity,
+        IServiceServingTargetResolver? targetResolver = null,
+        RecordingServingSetQueryReader? servingSetQueryReader = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceRolloutManagerGAgent, ServiceRolloutExecutionState>(
             eventStore,
             ServiceActorIds.Rollout(identity),
-            () => new ServiceRolloutManagerGAgent(dispatchPort));
+            () => new ServiceRolloutManagerGAgent(
+                dispatchPort,
+                targetResolver ?? new PassthroughServingTargetResolver(),
+                servingSetQueryReader ?? new RecordingServingSetQueryReader()));
     }
 
-    private static ServiceServingSetManagerGAgent CreateServingSetAgent(InMemoryEventStore eventStore, string actorId)
+    private static ServiceServingSetManagerGAgent CreateServingSetAgent(
+        InMemoryEventStore eventStore,
+        string actorId,
+        IServiceServingTargetResolver? targetResolver = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceServingSetManagerGAgent, ServiceServingSetState>(
             eventStore,
             actorId,
-            () => new ServiceServingSetManagerGAgent());
+            () => new ServiceServingSetManagerGAgent(targetResolver ?? new PassthroughServingTargetResolver()));
     }
 
     private static ServiceRolloutPlanSpec CreateRolloutPlan(string rolloutId, params ServiceRolloutStageSpec[] stages)
@@ -638,5 +1068,48 @@ public sealed class ServiceServingRolloutGAgentTests
             Commands.Add((actorId, envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>()));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingDeploymentQueryReader : IServiceDeploymentCatalogQueryReader
+    {
+        public ServiceDeploymentCatalogSnapshot? GetResult { get; init; }
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
+    private sealed class RecordingServingSetQueryReader : IServiceServingSetQueryReader
+    {
+        public ServiceServingSetSnapshot? GetResult { get; init; }
+
+        public List<ServiceIdentity> Identities { get; } = [];
+
+        public Task<ServiceServingSetSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            Identities.Add(identity.Clone());
+            return Task.FromResult(GetResult);
+        }
+    }
+
+    private sealed class PassthroughServingTargetResolver : IServiceServingTargetResolver
+    {
+        public Task<IReadOnlyList<ServiceServingTargetSpec>> ResolveTargetsAsync(
+            ServiceIdentity identity,
+            IEnumerable<ServiceServingTargetSpec> targets,
+            CancellationToken ct = default)
+        {
+            return Task.FromResult<IReadOnlyList<ServiceServingTargetSpec>>(targets.Select(CloneTarget).ToList());
+        }
+
+        private static ServiceServingTargetSpec CloneTarget(ServiceServingTargetSpec source) =>
+            new()
+            {
+                DeploymentId = source.DeploymentId ?? string.Empty,
+                RevisionId = source.RevisionId ?? string.Empty,
+                PrimaryActorId = source.PrimaryActorId ?? string.Empty,
+                AllocationWeight = source.AllocationWeight,
+                ServingState = source.ServingState,
+                EnabledEndpointIds = { source.EnabledEndpointIds },
+            };
     }
 }

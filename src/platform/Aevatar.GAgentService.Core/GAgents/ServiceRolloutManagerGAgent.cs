@@ -3,7 +3,9 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Ports;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -12,10 +14,17 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecutionState>
 {
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IServiceServingTargetResolver _targetResolver;
+    private readonly IServiceServingSetQueryReader _servingSetQueryReader;
 
-    public ServiceRolloutManagerGAgent(IActorDispatchPort dispatchPort)
+    public ServiceRolloutManagerGAgent(
+        IActorDispatchPort dispatchPort,
+        IServiceServingTargetResolver targetResolver,
+        IServiceServingSetQueryReader servingSetQueryReader)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
+        _servingSetQueryReader = servingSetQueryReader ?? throw new ArgumentNullException(nameof(servingSetQueryReader));
         InitializeId();
     }
 
@@ -28,16 +37,21 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
         if (HasActiveRollout())
             throw new InvalidOperationException("An active rollout already exists for this service.");
 
+        var identity = command.Identity!;
+        var resolvedPlan = await ResolvePlanAsync(identity, command.Plan!, CancellationToken.None);
+        var baselineTargets = command.BaselineTargets.Count > 0
+            ? await _targetResolver.ResolveTargetsAsync(identity, command.BaselineTargets, CancellationToken.None)
+            : await ResolveBaselineTargetsAsync(identity, CancellationToken.None);
         var startedAt = Timestamp.FromDateTime(DateTime.UtcNow);
         await PersistDomainEventAsync(new ServiceRolloutStartedEvent
         {
-            Identity = command.Identity?.Clone(),
-            Plan = ClonePlan(command.Plan),
-            BaselineTargets = { command.BaselineTargets.Select(CloneTarget) },
+            Identity = identity.Clone(),
+            Plan = ClonePlan(resolvedPlan),
+            BaselineTargets = { baselineTargets.Select(CloneTarget) },
             StartedAt = startedAt,
         });
 
-        await ApplyStageAsync(command.Identity!, command.Plan, 0, command.Plan.Stages[0], CancellationToken.None);
+        await ApplyStageAsync(identity, resolvedPlan, 0, resolvedPlan.Stages[0], CancellationToken.None);
     }
 
     [EventHandler]
@@ -200,6 +214,47 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
             ct);
     }
 
+    private async Task<IReadOnlyList<ServiceServingTargetSpec>> ResolveBaselineTargetsAsync(
+        ServiceIdentity identity,
+        CancellationToken ct)
+    {
+        var baseline = await _servingSetQueryReader.GetAsync(identity, ct);
+        if (baseline == null)
+            return [];
+
+        return baseline.Targets.Select(x => new ServiceServingTargetSpec
+        {
+            DeploymentId = x.DeploymentId,
+            RevisionId = x.RevisionId,
+            PrimaryActorId = x.PrimaryActorId,
+            AllocationWeight = x.AllocationWeight,
+            ServingState = ParseServingState(x.ServingState),
+            EnabledEndpointIds = { x.EnabledEndpointIds },
+        }).ToList();
+    }
+
+    private async Task<ServiceRolloutPlanSpec> ResolvePlanAsync(
+        ServiceIdentity identity,
+        ServiceRolloutPlanSpec plan,
+        CancellationToken ct)
+    {
+        var resolved = new ServiceRolloutPlanSpec
+        {
+            RolloutId = plan.RolloutId ?? string.Empty,
+            DisplayName = plan.DisplayName ?? string.Empty,
+        };
+        foreach (var stage in plan.Stages)
+        {
+            resolved.Stages.Add(new ServiceRolloutStageSpec
+            {
+                StageId = stage.StageId ?? string.Empty,
+                Targets = { (await _targetResolver.ResolveTargetsAsync(identity, stage.Targets, ct)).Select(CloneTarget) },
+            });
+        }
+
+        return resolved;
+    }
+
     private bool HasActiveRollout() =>
         !string.IsNullOrWhiteSpace(State.RolloutId) &&
         State.Status is ServiceRolloutStatus.InProgress or ServiceRolloutStatus.Paused;
@@ -247,6 +302,11 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
                 throw new InvalidOperationException("rollout stage targets are required.");
         }
     }
+
+    private static ServiceServingState ParseServingState(string value) =>
+        System.Enum.TryParse<ServiceServingState>(value, out var parsed)
+            ? parsed
+            : ServiceServingState.Unspecified;
 
     private static ServiceRolloutExecutionState ApplyStarted(ServiceRolloutExecutionState state, ServiceRolloutStartedEvent evt)
     {

@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -14,18 +13,15 @@ namespace Aevatar.GAgentService.Governance.Application.Services;
 public sealed class ServiceGovernanceCommandApplicationService : IServiceGovernanceCommandPort
 {
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceGovernanceCommandTargetProvisioner _targetProvisioner;
     private readonly IServiceConfigurationProjectionPort _configurationProjectionPort;
 
     public ServiceGovernanceCommandApplicationService(
         IActorDispatchPort dispatchPort,
-        IServiceCatalogQueryReader catalogQueryReader,
         IServiceGovernanceCommandTargetProvisioner targetProvisioner,
         IServiceConfigurationProjectionPort configurationProjectionPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _targetProvisioner = targetProvisioner ?? throw new ArgumentNullException(nameof(targetProvisioner));
         _configurationProjectionPort = configurationProjectionPort ?? throw new ArgumentNullException(nameof(configurationProjectionPort));
     }
@@ -34,7 +30,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CreateServiceBindingCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
@@ -44,7 +39,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         UpdateServiceBindingCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Spec.Identity, command.Spec.BindingId), ct);
@@ -54,7 +48,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         RetireServiceBindingCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForBinding(command.Identity, command.BindingId), ct);
@@ -64,7 +57,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CreateServiceEndpointCatalogCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
@@ -74,7 +66,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         UpdateServiceEndpointCatalogCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForService(command.Spec.Identity), ct);
@@ -84,7 +75,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         CreateServicePolicyCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
@@ -94,7 +84,6 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         UpdateServicePolicyCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Spec.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Spec.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Spec.Identity, command.Spec.PolicyId), ct);
@@ -104,16 +93,9 @@ public sealed class ServiceGovernanceCommandApplicationService : IServiceGoverna
         RetireServicePolicyCommand command,
         CancellationToken ct = default)
     {
-        await EnsureDefinitionExistsAsync(command.Identity, ct);
         var actorId = await _targetProvisioner.EnsureConfigurationTargetAsync(command.Identity, ct);
         await _configurationProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForPolicy(command.Identity, command.PolicyId), ct);
-    }
-
-    private async Task EnsureDefinitionExistsAsync(ServiceIdentity identity, CancellationToken ct)
-    {
-        if (await _catalogQueryReader.GetAsync(identity, ct) == null)
-            throw new InvalidOperationException($"Service definition '{ServiceKeys.Build(identity)}' was not found.");
     }
 
     private async Task<ServiceCommandAcceptedReceipt> DispatchAsync(

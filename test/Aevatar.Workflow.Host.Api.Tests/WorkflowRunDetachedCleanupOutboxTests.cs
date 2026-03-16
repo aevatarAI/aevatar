@@ -897,6 +897,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
     private sealed class RecordingProjectionControlHub : IProjectionSessionEventHub<WorkflowProjectionControlEvent>
     {
+        private readonly object _gate = new();
         private readonly Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> _handlers = new();
 
         public TaskCompletionSource<bool> SubscriptionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -918,10 +919,16 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 throw new InvalidOperationException("release completed publish failed");
             }
 
-            if (!_handlers.TryGetValue((scopeId, sessionId), out var handlers))
-                return;
+            List<Func<WorkflowProjectionControlEvent, ValueTask>> handlers;
+            lock (_gate)
+            {
+                if (!_handlers.TryGetValue((scopeId, sessionId), out var registered))
+                    return;
 
-            foreach (var handler in handlers.ToArray())
+                handlers = [.. registered];
+            }
+
+            foreach (var handler in handlers)
                 await handler(evt);
         }
 
@@ -935,29 +942,36 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             ArgumentNullException.ThrowIfNull(handler);
 
             var key = (scopeId, sessionId);
-            if (!_handlers.TryGetValue(key, out var handlers))
+            lock (_gate)
             {
-                handlers = [];
-                _handlers[key] = handlers;
-            }
+                if (!_handlers.TryGetValue(key, out var handlers))
+                {
+                    handlers = [];
+                    _handlers[key] = handlers;
+                }
 
-            handlers.Add(handler);
+                handlers.Add(handler);
+            }
             SubscriptionStarted.TrySetResult(true);
-            return Task.FromResult<IAsyncDisposable>(new Subscription(_handlers, key, handler));
+            return Task.FromResult<IAsyncDisposable>(new Subscription(_gate, _handlers, key, handler));
         }
 
         private sealed class Subscription(
+            object gate,
             Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> handlers,
             (string ScopeId, string SessionId) key,
             Func<WorkflowProjectionControlEvent, ValueTask> handler) : IAsyncDisposable
         {
             public ValueTask DisposeAsync()
             {
-                if (handlers.TryGetValue(key, out var registered))
+                lock (gate)
                 {
-                    registered.Remove(handler);
-                    if (registered.Count == 0)
-                        handlers.Remove(key);
+                    if (handlers.TryGetValue(key, out var registered))
+                    {
+                        registered.Remove(handler);
+                        if (registered.Count == 0)
+                            handlers.Remove(key);
+                    }
                 }
 
                 return ValueTask.CompletedTask;
