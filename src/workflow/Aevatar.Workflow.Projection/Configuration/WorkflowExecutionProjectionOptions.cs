@@ -28,7 +28,7 @@ public sealed class WorkflowExecutionProjectionOptions
     }
 
     /// <summary>
-    /// Writes run report artifacts (json/html).
+    /// Writes run report documents/export outputs (json/html).
     /// </summary>
     public bool EnableRunReportDocuments { get; set; } = true;
 
