@@ -104,6 +104,7 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         SetDefaultServingRevisionCommand command,
         CancellationToken ct = default)
     {
+        await EnsureDefinitionExistsAsync(command.Identity, ct);
         var actorId = await _targetProvisioner.EnsureDefinitionTargetAsync(command.Identity, ct);
         await _catalogProjectionPort.EnsureProjectionAsync(actorId, ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);

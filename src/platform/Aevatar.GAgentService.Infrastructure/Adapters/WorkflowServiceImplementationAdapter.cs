@@ -60,6 +60,7 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     WorkflowName = resolvedWorkflowName,
                     WorkflowYaml = spec.WorkflowYaml,
                     DefinitionActorId = spec.DefinitionActorId ?? string.Empty,
+                    InlineWorkflowYamls = { spec.InlineWorkflowYamls },
                 },
             },
         };

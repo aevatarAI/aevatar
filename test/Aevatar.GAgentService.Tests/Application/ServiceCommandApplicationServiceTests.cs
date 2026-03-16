@@ -24,7 +24,10 @@ public sealed class ServiceCommandApplicationServiceTests
         var service = CreateService(
             provisioner,
             dispatchPort,
-            new RecordingCatalogQueryReader(),
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
             catalogProjectionPort,
             new RecordingRevisionProjectionPort());
 
@@ -51,6 +54,33 @@ public sealed class ServiceCommandApplicationServiceTests
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
+    }
+
+    [Fact]
+    public async Task SetDefaultServingRevisionAsync_ShouldRequireDefinition_AndSkipProvisioningWhenMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var catalogProjectionPort = new RecordingCatalogProjectionPort();
+        var service = CreateService(
+            provisioner,
+            dispatchPort,
+            new RecordingCatalogQueryReader(),
+            catalogProjectionPort,
+            new RecordingRevisionProjectionPort());
+
+        var act = () => service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "rev-1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Service definition*was not found*");
+        provisioner.DefinitionRequests.Should().BeEmpty();
+        catalogProjectionPort.ActorIds.Should().BeEmpty();
+        dispatchPort.Calls.Should().BeEmpty();
     }
 
     [Fact]

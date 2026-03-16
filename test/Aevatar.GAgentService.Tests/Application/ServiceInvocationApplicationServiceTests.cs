@@ -87,6 +87,84 @@ public sealed class ServiceInvocationApplicationServiceTests
         receipt.EndpointId.Should().Be("chat");
     }
 
+    [Fact]
+    public async Task InvokeAsync_ShouldGenerateIds_WhenBothCommandAndCorrelationAreMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
+            identity,
+            "r1",
+            GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
+        await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", artifact);
+
+        var resolutionService = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = new ServiceCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    "Orders",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    ServiceDeploymentStatus.Unspecified.ToString(),
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    1,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "chat",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    50,
+                                    ServiceServingState.Active.ToString()),
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-2",
+                                    "r1",
+                                    "actor-2",
+                                    50,
+                                    ServiceServingState.Active.ToString()),
+                            ]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            artifactStore);
+        var authorizer = new RecordingAuthorizer();
+        var dispatcher = new RecordingDispatcher();
+        var service = new ServiceInvocationApplicationService(resolutionService, authorizer, dispatcher);
+
+        var receipt = await service.InvokeAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        authorizer.Calls.Should().ContainSingle();
+        authorizer.Calls[0].request.CommandId.Should().NotBeNullOrWhiteSpace();
+        authorizer.Calls[0].request.CorrelationId.Should().Be(authorizer.Calls[0].request.CommandId);
+        dispatcher.Calls.Should().ContainSingle();
+        dispatcher.Calls[0].request.CommandId.Should().NotBeNullOrWhiteSpace();
+        dispatcher.Calls[0].request.CorrelationId.Should().Be(dispatcher.Calls[0].request.CommandId);
+        receipt.CommandId.Should().Be(dispatcher.Calls[0].request.CommandId);
+        receipt.CorrelationId.Should().Be(dispatcher.Calls[0].request.CorrelationId);
+    }
+
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {
         public ServiceCatalogSnapshot? GetResult { get; init; }

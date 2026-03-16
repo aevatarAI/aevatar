@@ -25,7 +25,7 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
         ArgumentNullException.ThrowIfNull(command);
         EnsureIdentity(command.Identity, allowInitialize: true);
         ValidatePlan(command.Plan);
-        if (!string.IsNullOrWhiteSpace(State.Plan?.RolloutId))
+        if (HasActiveRollout())
             throw new InvalidOperationException("An active rollout already exists for this service.");
 
         var startedAt = Timestamp.FromDateTime(DateTime.UtcNow);
@@ -199,6 +199,10 @@ public sealed class ServiceRolloutManagerGAgent : GAgentBase<ServiceRolloutExecu
                 }),
             ct);
     }
+
+    private bool HasActiveRollout() =>
+        !string.IsNullOrWhiteSpace(State.RolloutId) &&
+        State.Status is ServiceRolloutStatus.InProgress or ServiceRolloutStatus.Paused;
 
     private void EnsureIdentity(ServiceIdentity? identity, bool allowInitialize)
     {

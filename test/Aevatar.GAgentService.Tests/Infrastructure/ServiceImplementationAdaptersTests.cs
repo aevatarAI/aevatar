@@ -328,11 +328,13 @@ public sealed class ServiceImplementationAdaptersTests
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: ignored",
                     DefinitionActorId = "workflow-definition-1",
+                    InlineWorkflowYamls = { ["child.yaml"] = "name: child" },
                 },
             },
         });
 
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("provided-workflow");
+        artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().ContainKey("child.yaml");
         workflowPort.ParseCalls.Should().BeEmpty();
     }
 

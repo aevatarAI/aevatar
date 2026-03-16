@@ -148,7 +148,8 @@ public sealed class ServiceServingRolloutGAgentTests
             Identity = identity.Clone(),
             Plan = CreateRolloutPlan(
                 "rollout-d",
-                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run"))),
+                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run")),
+                CreateStage("stage-b", CreateTarget("dep-b", "r2", "actor-b", 100, "chat"))),
             BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
         });
 
@@ -161,6 +162,100 @@ public sealed class ServiceServingRolloutGAgentTests
         }))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*active rollout already exists*");
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldAllowRestartAfterCompletedAndRolledBackRollouts()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateRolloutAgent(new InMemoryEventStore(), dispatchPort, identity);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-complete",
+                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        agent.State.Status.Should().Be(ServiceRolloutStatus.Completed);
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-rollback",
+                CreateStage("stage-a", CreateTarget("dep-b", "r2", "actor-b", 100, "run")),
+                CreateStage("stage-b", CreateTarget("dep-c", "r3", "actor-c", 100, "chat"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+        await agent.HandleRollbackAsync(new RollbackServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-rollback",
+            Reason = "rollback",
+        });
+
+        agent.State.Status.Should().Be(ServiceRolloutStatus.RolledBack);
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-after-rollback",
+                CreateStage("stage-a", CreateTarget("dep-d", "r4", "actor-d", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        dispatchPort.Commands.Select(x => x.command.RolloutId).Should().Equal(
+            "rollout-complete",
+            "rollout-rollback",
+            "rollout-rollback",
+            "rollout-after-rollback");
+        agent.State.RolloutId.Should().Be("rollout-after-rollback");
+        agent.State.Status.Should().Be(ServiceRolloutStatus.Completed);
+    }
+
+    [Fact]
+    public async Task ServiceRolloutManager_ShouldAllowRestartAfterFailedRollout()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingDispatchPort
+        {
+            ThrowOnCallIndex = 1,
+            ExceptionToThrow = new InvalidOperationException("serving unavailable"),
+        };
+        var agent = CreateRolloutAgent(new InMemoryEventStore(), dispatchPort, identity);
+        await agent.ActivateAsync();
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-failed",
+                CreateStage("stage-a", CreateTarget("dep-a", "r1", "actor-a", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        agent.State.Status.Should().Be(ServiceRolloutStatus.Failed);
+
+        await agent.HandleStartAsync(new StartServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            Plan = CreateRolloutPlan(
+                "rollout-retry",
+                CreateStage("stage-a", CreateTarget("dep-b", "r2", "actor-b", 100, "run"))),
+            BaselineTargets = { CreateTarget("dep-base", "r0", "actor-base", 100, "run") },
+        });
+
+        dispatchPort.Commands.Should().ContainSingle();
+        dispatchPort.Commands[0].command.RolloutId.Should().Be("rollout-retry");
+        agent.State.RolloutId.Should().Be("rollout-retry");
+        agent.State.Status.Should().Be(ServiceRolloutStatus.Completed);
+        agent.State.FailureReason.Should().BeEmpty();
     }
 
     [Fact]
@@ -526,6 +621,8 @@ public sealed class ServiceServingRolloutGAgentTests
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
+        private int _attemptCount;
+
         public List<(string actorId, ReplaceServiceServingTargetsCommand command)> Commands { get; } = [];
 
         public int? ThrowOnCallIndex { get; init; }
@@ -534,7 +631,7 @@ public sealed class ServiceServingRolloutGAgentTests
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            var callIndex = Commands.Count + 1;
+            var callIndex = ++_attemptCount;
             if (ThrowOnCallIndex == callIndex && ExceptionToThrow != null)
                 throw ExceptionToThrow;
 

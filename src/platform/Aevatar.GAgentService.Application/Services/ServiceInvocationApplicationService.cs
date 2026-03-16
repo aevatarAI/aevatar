@@ -24,14 +24,27 @@ public sealed class ServiceInvocationApplicationService : IServiceInvocationPort
         ServiceInvocationRequest request,
         CancellationToken ct = default)
     {
-        var target = await _resolutionService.ResolveAsync(request, ct);
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeRequest(request);
+        var target = await _resolutionService.ResolveAsync(normalizedRequest, ct);
         await _admissionAuthorizer.AuthorizeAsync(
             target.Service.ServiceKey,
             target.Service.DeploymentId,
             target.Artifact,
             target.Endpoint,
-            request,
+            normalizedRequest,
             ct);
-        return await _dispatcher.DispatchAsync(target, request, ct);
+        return await _dispatcher.DispatchAsync(target, normalizedRequest, ct);
+    }
+
+    private static ServiceInvocationRequest NormalizeRequest(ServiceInvocationRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.CommandId) || !string.IsNullOrWhiteSpace(request.CorrelationId))
+            return request;
+
+        var normalized = request.Clone();
+        normalized.CommandId = Guid.NewGuid().ToString("N");
+        normalized.CorrelationId = normalized.CommandId;
+        return normalized;
     }
 }
