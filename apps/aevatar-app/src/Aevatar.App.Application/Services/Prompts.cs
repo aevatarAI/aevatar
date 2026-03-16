@@ -25,7 +25,7 @@ public static class Prompts
         """;
 
     public const string ImageStyle =
-        "SOLID MAGENTA #FF00FF BACKGROUND ONLY. Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. BACKGROUND MUST BE FLAT SOLID MAGENTA #FF00FF, NO GRADIENTS, NO VIGNETTE, NO SHADOWS ON BACKGROUND.";
+        "SOLID GREEN #00FF00 BACKGROUND ONLY. Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. BACKGROUND MUST BE FLAT SOLID GREEN #00FF00, NO GRADIENTS, NO VIGNETTE, NO SHADOWS ON BACKGROUND. The plant/subject itself must NOT contain any pure or near-pure green (#00FF00). Use desaturated, muted, yellow-green, teal, or olive tones for any foliage — never vivid chroma-key green.";
         
     public static string PlantImage(string plantName, string plantDescription, string stage) => stage switch
     {
