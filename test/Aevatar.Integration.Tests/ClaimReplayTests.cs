@@ -185,9 +185,8 @@ public class ClaimReplayTests
             })
             .ToArray();
 
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "projection-claim-readmodel",
             RootActorId = runtimeActorId,
             ProjectionKind = "script-execution-read-model",
         };

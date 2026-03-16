@@ -50,9 +50,8 @@ public sealed class ScriptReadModelProjectorNeutralityTests
             ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-1",
             RootActorId = "runtime-1",
             ProjectionKind = "script-execution-read-model",
         };

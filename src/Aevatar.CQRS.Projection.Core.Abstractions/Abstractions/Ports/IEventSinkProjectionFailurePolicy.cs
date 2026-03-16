@@ -6,6 +6,8 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Failure policy contract for projection runtime forwarding to event sinks.
 /// </summary>
 public interface IEventSinkProjectionFailurePolicy<TLease, TEvent>
+    where TLease : class, IProjectionRuntimeLease
+    where TEvent : class
 {
     ValueTask<bool> TryHandleAsync(
         TLease lease,

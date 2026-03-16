@@ -21,9 +21,8 @@ public sealed class ScriptReadModelProjectorTests
         var projector = new ScriptReadModelProjector(
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-1",
             RootActorId = "runtime-1",
             ProjectionKind = "script-execution-read-model",
         };
@@ -88,9 +87,8 @@ public sealed class ScriptReadModelProjectorTests
         var projector = new ScriptReadModelProjector(
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-2",
             RootActorId = "runtime-2",
             ProjectionKind = "script-execution-read-model",
         };
@@ -120,9 +118,8 @@ public sealed class ScriptReadModelProjectorTests
         var projector = new ScriptReadModelProjector(
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-3",
             RootActorId = "runtime-3",
             ProjectionKind = "script-execution-read-model",
         };

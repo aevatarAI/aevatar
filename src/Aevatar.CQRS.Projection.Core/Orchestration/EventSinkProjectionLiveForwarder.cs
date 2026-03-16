@@ -8,6 +8,8 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public class EventSinkProjectionLiveForwarder<TLease, TEvent>
     : IEventSinkProjectionLiveForwarder<TLease, TEvent>
+    where TLease : class, IProjectionRuntimeLease
+    where TEvent : class
 {
     private readonly IEventSinkProjectionFailurePolicy<TLease, TEvent> _sinkFailurePolicy;
 

@@ -4,6 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Publishes and subscribes projection session events by scope/session key.
 /// </summary>
 public interface IProjectionSessionEventHub<TEvent>
+    where TEvent : class
 {
     Task PublishAsync(
         string scopeId,

@@ -25,9 +25,8 @@ public sealed class ScriptNativeDocumentProjectorTests
         var projector = new ScriptNativeDocumentProjector(
             dispatcher,
             new ScriptNativeDocumentMaterializer());
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-1",
             RootActorId = "runtime-1",
             ProjectionKind = "script-execution-read-model",
         };

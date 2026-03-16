@@ -5,12 +5,4 @@ public sealed class WorkflowExecutionMaterializationContext
 {
     public required string RootActorId { get; init; }
     public required string ProjectionKind { get; init; }
-
-    public static implicit operator WorkflowExecutionMaterializationContext(
-        WorkflowExecutionProjectionContext context) =>
-        new()
-        {
-            RootActorId = context.RootActorId,
-            ProjectionKind = context.ProjectionKind,
-        };
 }

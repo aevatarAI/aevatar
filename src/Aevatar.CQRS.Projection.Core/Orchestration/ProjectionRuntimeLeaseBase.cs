@@ -19,6 +19,7 @@ public abstract class ProjectionRuntimeLeaseBase : IProjectionRuntimeLease, IPro
 
 public abstract class EventSinkProjectionRuntimeLeaseBase<TEvent>
     : ProjectionRuntimeLeaseBase
+    where TEvent : class
 {
     private readonly object _liveSinkGate = new();
     private readonly List<LiveSinkSubscription> _liveSinkSubscriptions = [];

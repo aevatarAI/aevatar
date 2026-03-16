@@ -130,10 +130,9 @@ public sealed class ClaimReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
 
-    private static ScriptExecutionProjectionContext CreateContext(string rootActorId) =>
+    private static ScriptExecutionMaterializationContext CreateContext(string rootActorId) =>
         new()
         {
-            SessionId = rootActorId,
             RootActorId = rootActorId,
             ProjectionKind = "script-execution-read-model",
         };

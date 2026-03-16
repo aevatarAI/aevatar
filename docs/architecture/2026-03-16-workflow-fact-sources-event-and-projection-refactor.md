@@ -149,7 +149,7 @@ workflow 当前 artifact 主体仍以 root committed facts 为主，没有再引
 - session release 不会停止 durable materialization
 - workflow session activation 只接受 `rootActorId + commandId`，不再传 `workflowName/input`
 
-## 剩余观察
+## 收尾说明
 
 - `WorkflowExecutionArtifactProjectionSupport` 当前仍直接解释一组 root committed event type，这属于 artifact 语义而不是 authority 混淆。
 - 如果后续 child actor 需要直接驱动 durable artifact，必须先补足 typed durable fact 与稳定归属键，不能回到 runtime bridge 或 state side-read。

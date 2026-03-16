@@ -4,6 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Activation contract for one durable materialization scope.
 /// </summary>
 public interface IProjectionMaterializationActivationService<TLease>
+    where TLease : class, IProjectionRuntimeLease
 {
     Task<TLease> EnsureAsync(
         ProjectionMaterializationStartRequest request,

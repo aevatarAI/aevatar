@@ -3,7 +3,7 @@ namespace Aevatar.Scripting.Projection.Orchestration;
 public sealed class ScriptEvolutionSessionProjectionContext
     : IProjectionSessionContext
 {
-    public string SessionId { get; set; } = string.Empty;
-    public string RootActorId { get; set; } = string.Empty;
-    public string ProjectionKind { get; set; } = string.Empty;
+    public required string SessionId { get; init; }
+    public required string RootActorId { get; init; }
+    public required string ProjectionKind { get; init; }
 }

@@ -4,6 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Release contract for one externally observable projection session lease.
 /// </summary>
 public interface IProjectionSessionReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
 {
     Task ReleaseIfIdleAsync(
         TLease lease,

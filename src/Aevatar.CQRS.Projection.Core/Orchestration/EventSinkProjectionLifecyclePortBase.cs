@@ -9,7 +9,8 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
-    where TRuntimeLease : class, TLeaseContract
+    where TRuntimeLease : class, IProjectionRuntimeLease, TLeaseContract
+    where TEvent : class
 {
     private readonly Func<bool> _projectionEnabledAccessor;
     private readonly IProjectionSessionActivationService<TRuntimeLease> _activationService;

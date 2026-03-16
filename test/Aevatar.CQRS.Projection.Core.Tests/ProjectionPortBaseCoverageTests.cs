@@ -305,12 +305,16 @@ internal class TestLeaseContract
     public string LeaseId { get; }
 }
 
-internal sealed class TestPortRuntimeLease : TestLeaseContract
+internal sealed class TestPortRuntimeLease : TestLeaseContract, IProjectionRuntimeLease
 {
     public TestPortRuntimeLease(string leaseId)
         : base(leaseId)
     {
     }
+
+    public string RootEntityId => LeaseId;
+
+    public int GetLiveSinkSubscriptionCount() => 0;
 }
 
 internal sealed class TestActivationService : IProjectionSessionActivationService<TestPortRuntimeLease>

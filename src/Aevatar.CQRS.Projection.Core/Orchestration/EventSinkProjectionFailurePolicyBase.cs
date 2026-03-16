@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public abstract class EventSinkProjectionFailurePolicyBase<TLease, TEvent>
     : IEventSinkProjectionFailurePolicy<TLease, TEvent>
-    where TLease : class
+    where TLease : class, IProjectionRuntimeLease
     where TEvent : class
 {
     private readonly IEventSinkProjectionSubscriptionManager<TLease, TEvent> _sinkSubscriptionManager;

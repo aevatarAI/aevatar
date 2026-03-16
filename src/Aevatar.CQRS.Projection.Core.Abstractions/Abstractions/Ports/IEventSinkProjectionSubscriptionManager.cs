@@ -6,6 +6,8 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Subscription manager for projection live-stream delivery to event sinks.
 /// </summary>
 public interface IEventSinkProjectionSubscriptionManager<TLease, TEvent>
+    where TLease : class, IProjectionRuntimeLease
+    where TEvent : class
 {
     Task AttachOrReplaceAsync(
         TLease lease,

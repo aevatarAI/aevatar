@@ -6,6 +6,8 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Live forwarder for projection runtime events to event sinks.
 /// </summary>
 public interface IEventSinkProjectionLiveForwarder<TLease, TEvent>
+    where TLease : class, IProjectionRuntimeLease
+    where TEvent : class
 {
     ValueTask ForwardAsync(
         TLease lease,

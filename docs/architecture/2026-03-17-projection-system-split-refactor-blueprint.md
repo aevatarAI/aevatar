@@ -67,7 +67,7 @@ flowchart TD
 ### 当前核心契约
 
 - [IProjectionMaterializer.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializer.cs)
-- [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionSessionContext.cs)
+- [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionMaterializationContext.cs)
 - [ProjectionMaterializationStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionMaterializationStartRequest.cs)
 - [IProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationActivationService.cs)
 - [IProjectionMaterializationReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationReleaseService.cs)
@@ -175,7 +175,7 @@ flowchart TD
 - 已统一走 materialization activation/release
 - 不再用 session request 承载 durable service catalog/readmodel 物化
 
-## 剩余观察
+## 收尾说明
 
 - durable materialization 仍然通过 feature command/application 层显式 activation；这已经是清晰的 orchestration policy，不再是类型系统混淆，但仍可继续评估是否要默认常驻。
 - workflow artifact projector 仍会解释一组 root committed event type 来构建 report/timeline/graph；这是 artifact 语义，不再是 secondary authority。

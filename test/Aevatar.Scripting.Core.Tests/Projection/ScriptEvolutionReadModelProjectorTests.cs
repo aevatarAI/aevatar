@@ -22,9 +22,8 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            SessionId = "proposal-1",
             RootActorId = "evolution-manager-1",
             ProjectionKind = "script-evolution-session",
         };
@@ -134,9 +133,8 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            SessionId = "proposal-2",
             RootActorId = "evolution-manager-2",
             ProjectionKind = "script-evolution-session",
         };
@@ -236,9 +234,8 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            SessionId = "proposal-3",
             RootActorId = "evolution-manager-3",
             ProjectionKind = "script-evolution-session",
         };

@@ -4,6 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Release contract for one durable materialization scope lease.
 /// </summary>
 public interface IProjectionMaterializationReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
 {
     Task ReleaseIfIdleAsync(
         TLease lease,

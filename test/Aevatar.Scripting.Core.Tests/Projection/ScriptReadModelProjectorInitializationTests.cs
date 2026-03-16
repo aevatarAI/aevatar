@@ -17,9 +17,8 @@ public sealed class ScriptReadModelProjectorInitializationTests
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-1",
             RootActorId = "runtime-1",
             ProjectionKind = "script-execution-read-model",
         };
@@ -33,9 +32,8 @@ public sealed class ScriptReadModelProjectorInitializationTests
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            SessionId = "runtime-2",
             RootActorId = "runtime-2",
             ProjectionKind = "script-execution-read-model",
         };

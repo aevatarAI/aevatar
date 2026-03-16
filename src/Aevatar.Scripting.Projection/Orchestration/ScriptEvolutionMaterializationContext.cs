@@ -5,12 +5,4 @@ public sealed class ScriptEvolutionMaterializationContext
 {
     public required string RootActorId { get; init; }
     public required string ProjectionKind { get; init; }
-
-    public static implicit operator ScriptEvolutionMaterializationContext(
-        ScriptEvolutionSessionProjectionContext context) =>
-        new()
-        {
-            RootActorId = context.RootActorId,
-            ProjectionKind = context.ProjectionKind,
-        };
 }

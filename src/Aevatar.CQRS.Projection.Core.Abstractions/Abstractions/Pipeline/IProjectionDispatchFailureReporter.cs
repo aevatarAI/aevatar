@@ -4,6 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Reports projection dispatch failures to an upstream channel.
 /// </summary>
 public interface IProjectionDispatchFailureReporter<in TContext>
+    where TContext : IProjectionMaterializationContext
 {
     ValueTask ReportAsync(
         TContext context,

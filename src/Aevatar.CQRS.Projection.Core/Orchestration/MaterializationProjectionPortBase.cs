@@ -4,7 +4,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Durable materialization port base with activation and optional release only.
 /// </summary>
 public abstract class MaterializationProjectionPortBase<TRuntimeLease>
-    where TRuntimeLease : class
+    where TRuntimeLease : class, IProjectionRuntimeLease
 {
     private readonly Func<bool> _projectionEnabledAccessor;
     private readonly IProjectionMaterializationActivationService<TRuntimeLease> _activationService;
