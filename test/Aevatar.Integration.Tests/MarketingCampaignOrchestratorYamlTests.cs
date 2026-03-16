@@ -25,7 +25,7 @@ public class MarketingCampaignOrchestratorYamlTests
             "content_exporter",
             "web_researcher");
         workflow.Roles.Single(role => role.Id == "web_researcher")
-            .Connectors.Should().Equal("marketing_search_mcp", "marketing_extract_mcp");
+            .Connectors.Should().Equal("marketing_search_mcp", "marketing_extract_mcp", "marketing_social_extract_mcp");
         workflow.Roles.Single(role => role.Id == "content_exporter")
             .Connectors.Should().Equal("marketing_markdown_export");
 
@@ -46,6 +46,8 @@ public class MarketingCampaignOrchestratorYamlTests
             "build_competitor_search_query",
             "search_competitors",
             "search_competitor_social_signals",
+            "extract_competitor_social_evidence",
+            "save_competitor_social_evidence",
             "search_competitor_content_examples",
             "search_engagement_benchmarks",
             "competitor_landscape_report",
@@ -81,6 +83,12 @@ public class MarketingCampaignOrchestratorYamlTests
             "save_competitor_social_query",
             "search_competitor_social_signals",
             "save_competitor_social_signals",
+            "search_competitor_social_profiles",
+            "save_competitor_social_profiles",
+            "search_competitor_recent_activity",
+            "save_competitor_recent_activity",
+            "extract_competitor_social_evidence",
+            "save_competitor_social_evidence",
             "build_competitor_content_examples_query",
             "save_competitor_content_examples_query",
             "search_competitor_content_examples",

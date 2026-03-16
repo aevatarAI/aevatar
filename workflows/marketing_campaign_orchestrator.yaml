@@ -60,6 +60,7 @@ roles:
     connectors:
       - marketing_search_mcp
       - marketing_extract_mcp
+      - marketing_social_extract_mcp
 
 steps:
   - id: capture_raw_input
@@ -827,54 +828,27 @@ steps:
       target: "competitor_social_signals"
       value: "$input"
 
-  - id: build_competitor_social_profiles_query
-    type: llm_call
-    role: request_parser
-    parameters:
-      prompt_prefix: |
-        Build a short search-engine query to find official competitor social profile pages.
-        Keep it under 18 words.
-        Prefer platform names such as LinkedIn, Instagram, TikTok, YouTube, X, or Threads.
-        Prefer official profile pages, company pages, channels, or handles over generic articles.
-        Use the stable shortlist below rather than introducing new competitor names.
-        Prefer query wording that surfaces URL patterns like `linkedin.com/company`, `youtube.com/@`, `instagram.com/`, `tiktok.com/@`, or `x.com/`.
-        Avoid wording that is likely to surface thought-leadership posts, personal posts, or generic comparison articles.
-        Return only the query text.
-
-        Brand evidence:
-        ${variables.research_bundle_normalized}
-
-        Stable competitor shortlist:
-        ${variables.competitor_shortlist}
-
-        Competitor search results:
-        ${variables.competitor_search_results}
-
-  - id: save_competitor_social_profiles_query
-    type: assign
-    parameters:
-      target: "competitor_social_profiles_query"
-      value: "$input"
-
   - id: search_competitor_social_profiles
-    type: connector_call
-    role: web_researcher
+    type: foreach
     parameters:
-      connector: marketing_search_mcp
-      method: POST
-      operation: /search
-      content_type: application/json
-      stdin_mode: template
-      payload_template: |
+      items: "${variables.competitor_shortlist}"
+      sub_step_type: connector_call
+      sub_target_role: web_researcher
+      sub_param_connector: marketing_search_mcp
+      sub_param_method: POST
+      sub_param_operation: /search
+      sub_param_content_type: application/json
+      sub_param_stdin_mode: template
+      sub_param_payload_template: |
         {
-          "query": "${json(variables.competitor_social_profiles_query)}",
+          "query": "${json(concat(input, ' official LinkedIn company page Instagram TikTok YouTube channel X handle'))}",
           "search_depth": "advanced",
           "topic": "general",
-          "max_results": 8,
+          "max_results": 6,
           "include_answer": false,
           "include_raw_content": false
         }
-      timeout_ms: "45000"
+      sub_param_timeout_ms: "45000"
 
   - id: save_competitor_social_profiles
     type: assign
@@ -882,57 +856,57 @@ steps:
       target: "competitor_social_profiles"
       value: "$input"
 
-  - id: build_competitor_recent_activity_query
-    type: llm_call
-    role: request_parser
-    parameters:
-      prompt_prefix: |
-        Build a short search-engine query to find recent public social activity or recent post examples for the direct competitors.
-        Keep it under 18 words.
-        Prefer queries likely to surface recent posts, channels, reels, shorts, company page updates, or creator/account activity.
-        Use the stable shortlist below rather than introducing new competitor names.
-        Prefer official company-page posts, channel uploads, or official account activity over third-party commentary.
-        Return only the query text.
-
-        Stable competitor shortlist:
-        ${variables.competitor_shortlist}
-
-        Competitor search results:
-        ${variables.competitor_search_results}
-
-        Competitor social/profile signals:
-        ${variables.competitor_social_profiles}
-
-  - id: save_competitor_recent_activity_query
-    type: assign
-    parameters:
-      target: "competitor_recent_activity_query"
-      value: "$input"
-
   - id: search_competitor_recent_activity
-    type: connector_call
-    role: web_researcher
+    type: foreach
     parameters:
-      connector: marketing_search_mcp
-      method: POST
-      operation: /search
-      content_type: application/json
-      stdin_mode: template
-      payload_template: |
+      items: "${variables.competitor_shortlist}"
+      sub_step_type: connector_call
+      sub_target_role: web_researcher
+      sub_param_connector: marketing_search_mcp
+      sub_param_method: POST
+      sub_param_operation: /search
+      sub_param_content_type: application/json
+      sub_param_stdin_mode: template
+      sub_param_payload_template: |
         {
-          "query": "${json(variables.competitor_recent_activity_query)}",
+          "query": "${json(concat(input, ' recent LinkedIn posts YouTube Shorts Instagram reels TikTok official account updates'))}",
           "search_depth": "advanced",
           "topic": "general",
-          "max_results": 8,
+          "max_results": 6,
           "include_answer": false,
           "include_raw_content": false
         }
-      timeout_ms: "45000"
+      sub_param_timeout_ms: "45000"
 
   - id: save_competitor_recent_activity
     type: assign
     parameters:
       target: "competitor_recent_activity"
+      value: "$input"
+
+  - id: extract_competitor_social_evidence
+    type: connector_call
+    role: web_researcher
+    parameters:
+      connector: marketing_social_extract_mcp
+      stdin_mode: template
+      payload_template: |
+        {
+          "competitorShortlist": "${json(variables.competitor_shortlist)}",
+          "competitorSearchResults": "${json(variables.competitor_search_results)}",
+          "socialProfilesSearch": "${json(variables.competitor_social_profiles)}",
+          "recentActivitySearch": "${json(variables.competitor_recent_activity)}",
+          "serviceBaseUrl": "http://127.0.0.1:3011",
+          "maxUrlsPerCompetitor": 4
+        }
+      timeout_ms: "45000"
+      retry: "1"
+      on_error: continue
+
+  - id: save_competitor_social_evidence
+    type: assign
+    parameters:
+      target: "competitor_social_evidence"
       value: "$input"
 
   - id: build_competitor_content_examples_query
@@ -1152,6 +1126,9 @@ steps:
         Competitor social profiles:
         ${variables.competitor_social_profiles}
 
+        Competitor social extraction evidence:
+        ${variables.competitor_social_evidence}
+
         Competitor content examples:
         ${variables.competitor_content_examples}
 
@@ -1241,6 +1218,9 @@ steps:
         Competitor social profiles:
         ${variables.competitor_social_profiles}
 
+        Competitor social extraction evidence:
+        ${variables.competitor_social_evidence}
+
         Competitor content examples:
         ${variables.competitor_content_examples}
 
@@ -1302,6 +1282,9 @@ steps:
         Competitor social profiles:
         ${variables.competitor_social_profiles}
 
+        Competitor social extraction evidence:
+        ${variables.competitor_social_evidence}
+
         Competitor native social examples:
         ${variables.competitor_native_social_examples}
 
@@ -1362,6 +1345,9 @@ steps:
 
         Competitor social profiles:
         ${variables.competitor_social_profiles}
+
+        Competitor social extraction evidence:
+        ${variables.competitor_social_evidence}
 
         Competitor native social examples:
         ${variables.competitor_native_social_examples}
