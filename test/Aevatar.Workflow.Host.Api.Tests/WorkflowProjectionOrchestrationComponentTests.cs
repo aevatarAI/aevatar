@@ -314,7 +314,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             LastEventId = "evt-3",
             UpdatedAt = new DateTimeOffset(2026, 2, 21, 10, 5, 0, TimeSpan.Zero),
         });
+        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -402,7 +404,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             UpdatedAt = now.AddMinutes(1),
         });
 
+        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -456,7 +460,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
         var graphStore = new InMemoryProjectionGraphStore();
+        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -531,7 +537,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             UpdatedAt = now,
         });
 
+        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),

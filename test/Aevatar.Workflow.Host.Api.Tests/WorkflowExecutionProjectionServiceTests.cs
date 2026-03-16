@@ -646,6 +646,7 @@ public class WorkflowExecutionProjectionServiceTests
             sinkManager,
             liveSinkForwarder);
         var queryPort = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             mapper,
@@ -693,6 +694,7 @@ public class WorkflowExecutionProjectionServiceTests
             sinkManager,
             liveSinkForwarder);
         var queryPort = new WorkflowProjectionQueryReader(
+            reportStore,
             currentStateStore,
             timelineStore,
             mapper,

@@ -78,8 +78,9 @@ public sealed class DefaultServiceInvocationDispatcherTests
     public async Task DispatchAsync_ShouldCreateWorkflowRun_AndSendEnvelope()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
-            new RecordingDispatchPort(),
+            dispatchPort,
             new RecordingScriptRuntimeCommandPort(),
             workflowPort);
         var target = CreateTarget(
@@ -104,8 +105,10 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         receipt.TargetActorId.Should().Be("workflow-run");
         workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.RunActor.Envelopes.Should().ContainSingle();
-        workflowPort.RunActor.Envelopes[0].Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("hello");
+        workflowPort.RunActor.Envelopes.Should().BeEmpty();
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].actorId.Should().Be("workflow-run");
+        dispatchPort.Calls[0].envelope.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("hello");
     }
 
     [Fact]
