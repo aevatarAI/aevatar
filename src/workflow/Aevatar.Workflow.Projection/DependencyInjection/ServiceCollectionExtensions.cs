@@ -39,21 +39,24 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
+        services.TryAddSingleton<IProjectionDispatchCompensationOptions>(sp =>
+            sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
-        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowExecutionReport>, WorkflowProjectionDurableOutboxCompensator>();
+        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowRunInsightReportDocument>, DurableProjectionDispatchCompensator<WorkflowRunInsightReportDocument>>();
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunDetachedCleanupScheduler, ActorWorkflowRunDetachedCleanupOutbox>());
         services.TryAddSingleton<IWorkflowRunDetachedCleanupOutbox>(sp =>
             (ActorWorkflowRunDetachedCleanupOutbox)sp.GetRequiredService<IWorkflowRunDetachedCleanupScheduler>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>, WorkflowRunInsightReportDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>, WorkflowRunTimelineDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddSingleton<IWorkflowRunInsightActorPort, ActorWorkflowRunInsightPort>();
-        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowExecutionReport>, WorkflowExecutionGraphMaterializer>();
+        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunGraphMirrorReadModel>, WorkflowRunGraphMirrorMaterializer>();
         RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
         services.TryAddSingleton<IProjectionSessionEventCodec<EventEnvelope>, WorkflowBindingSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<EventEnvelope>, ProjectionSessionEventHub<EventEnvelope>>();
@@ -150,7 +153,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
         services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
             sp.GetRequiredService<WorkflowProjectionQueryReader>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowProjectionDispatchCompensationReplayHostedService>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ProjectionDispatchCompensationReplayHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowRunDetachedCleanupReplayHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -161,7 +164,13 @@ public static class ServiceCollectionExtensions
             WorkflowExecutionCurrentStateProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
-            WorkflowRunInsightReadModelProjector>());
+            WorkflowRunInsightReportDocumentProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
+            WorkflowRunTimelineReadModelProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
+            WorkflowRunGraphMirrorProjector>());
         return services;
     }
 

@@ -5,7 +5,7 @@
 ## 目录结构
 
 - `Abstractions/Core`：`IProjectionContext`、`IProjectionRuntimeOptions`、`IProjectionClock`、`IProjectionStreamSubscriptionContext`
-- `Abstractions/Pipeline`：投影编排主链路契约（`Coordinator/Dispatcher/Reducer/Projector/Lifecycle`）
+- `Abstractions/Pipeline`：投影编排主链路契约（`Coordinator/Dispatcher/Applier/Projector/Lifecycle`）
 - `Abstractions/Ports`：投影端口协作接口（activation/release/sink 管理）
 - `Abstractions/Streaming`：会话事件与 actor stream 订阅抽象
 

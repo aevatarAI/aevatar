@@ -59,8 +59,7 @@ internal static class ClaimScriptSources
                                     OwnerActorId = fact.ActorId,
                                 },
                                 TraceSteps = { state.TraceSteps },
-                            })
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                            });
             }
 
             private static async Task HandleAsync(
@@ -203,8 +202,7 @@ internal static class ClaimScriptSources
                                     OwnerActorId = fact.ActorId,
                                 },
                                 TraceSteps = { state.TraceSteps },
-                            })
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                            });
             }
 
             private static async Task HandleAsync(

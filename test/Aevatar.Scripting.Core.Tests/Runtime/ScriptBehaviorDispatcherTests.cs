@@ -99,6 +99,8 @@ public sealed class ScriptBehaviorDispatcherTests
         fact.ReadModelTypeUrl.Should().Be(SimpleTextReadModelTypeUrl);
         fact.DomainEventPayload.Should().NotBeNull();
         fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
+        fact.ReadModelPayload.Should().NotBeNull();
+        fact.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
     }
 
     [Fact]
@@ -701,8 +703,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    project: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleAsync(
@@ -745,8 +746,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    project: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleAsync(
@@ -780,8 +780,7 @@ public sealed class ScriptBehaviorDispatcherTests
                 .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    project: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleSignalAsync(

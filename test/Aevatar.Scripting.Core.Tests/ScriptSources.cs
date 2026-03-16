@@ -28,8 +28,7 @@ internal static class ScriptSources
                         {
                             HasValue = !string.IsNullOrWhiteSpace(state?.Value),
                             Value = state?.Value ?? string.Empty,
-                        })
-                    .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                        });
             }
 
             private static Task HandleCommandAsync(
@@ -89,8 +88,7 @@ internal static class ScriptSources
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleCommandAsync(

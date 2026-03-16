@@ -24,17 +24,6 @@ public static class ScriptBehaviorRuntimeSemanticsCompiler
         ValidateRegistrations(descriptor.Signals.Keys, semantics, ScriptMessageKind.InternalSignal, "internal signal");
         ValidateRegistrations(descriptor.DomainEvents.Keys, semantics, ScriptMessageKind.DomainEvent, "domain event");
 
-        foreach (var registration in descriptor.Queries.Values)
-        {
-            ValidateQueryRegistration(registration, semantics);
-            ValidateMessageIdentityFields(
-                ScriptMessageTypes.GetDescriptor(registration.QueryClrType),
-                semantics.GetRequiredMessageSemantics(registration.TypeUrl, ScriptMessageKind.QueryRequest));
-            ValidateMessageIdentityFields(
-                ScriptMessageTypes.GetDescriptor(registration.ResultClrType),
-                semantics.GetRequiredMessageSemantics(ScriptMessageTypes.GetTypeUrl(registration.ResultClrType), ScriptMessageKind.QueryResult));
-        }
-
         foreach (var registration in descriptor.Commands.Values)
             ValidateMessageIdentityFields(ScriptMessageTypes.GetDescriptor(registration.MessageClrType), semantics.GetRequiredMessageSemantics(registration.TypeUrl, ScriptMessageKind.Command));
         foreach (var registration in descriptor.Signals.Values)
@@ -53,15 +42,6 @@ public static class ScriptBehaviorRuntimeSemanticsCompiler
             semantics.Messages.Add(ExtractMessageSemantics(registration.TypeUrl, registration.MessageClrType, ScriptMessageKind.InternalSignal));
         foreach (var registration in descriptor.DomainEvents.Values.OrderBy(static x => x.TypeUrl, StringComparer.Ordinal))
             semantics.Messages.Add(ExtractMessageSemantics(registration.TypeUrl, registration.MessageClrType, ScriptMessageKind.DomainEvent));
-
-        foreach (var registration in descriptor.Queries.Values.OrderBy(static x => x.TypeUrl, StringComparer.Ordinal))
-        {
-            var queryDescriptor = ScriptMessageTypes.GetDescriptor(registration.QueryClrType);
-            var resultDescriptor = ScriptMessageTypes.GetDescriptor(registration.ResultClrType);
-            semantics.Messages.Add(ExtractMessageSemantics(registration.TypeUrl, registration.QueryClrType, ScriptMessageKind.QueryRequest));
-            semantics.Messages.Add(ExtractMessageSemantics(ScriptMessageTypes.GetTypeUrl(registration.ResultClrType), registration.ResultClrType, ScriptMessageKind.QueryResult));
-            semantics.Queries.Add(ExtractQuerySemantics(registration, queryDescriptor, resultDescriptor));
-        }
 
         return semantics;
     }
@@ -101,38 +81,6 @@ public static class ScriptBehaviorRuntimeSemanticsCompiler
             TypeUrl = typeUrl,
             DescriptorFullName = descriptor.FullName ?? string.Empty,
             Kind = ScriptMessageKind.Unspecified,
-        };
-    }
-
-    private static ScriptQuerySemanticsSpec ExtractQuerySemantics(
-        ScriptQueryRegistration registration,
-        MessageDescriptor queryDescriptor,
-        MessageDescriptor resultDescriptor)
-    {
-        var resultFullName = string.Empty;
-        var readModelScope = string.Empty;
-        var queryOptions = queryDescriptor.GetOptions();
-        if (queryOptions != null &&
-            queryOptions.HasExtension(ScriptingRuntimeOptionsExtensions.ScriptingQuery))
-        {
-            var options = queryOptions.GetExtension(ScriptingRuntimeOptionsExtensions.ScriptingQuery);
-            resultFullName = options?.ResultFullName ?? string.Empty;
-        }
-
-        if (queryOptions != null &&
-            queryOptions.HasExtension(ScriptingRuntimeOptionsExtensions.ScriptingRuntime))
-        {
-            var runtimeOptions = queryOptions.GetExtension(ScriptingRuntimeOptionsExtensions.ScriptingRuntime);
-            readModelScope = runtimeOptions?.ReadModelScope ?? string.Empty;
-        }
-
-        return new ScriptQuerySemanticsSpec
-        {
-            QueryTypeUrl = registration.TypeUrl,
-            QueryDescriptorFullName = queryDescriptor.FullName ?? string.Empty,
-            ResultTypeUrl = ScriptMessageTypes.GetTypeUrl(resultDescriptor),
-            ResultDescriptorFullName = resultFullName,
-            ReadModelScope = readModelScope,
         };
     }
 
@@ -207,8 +155,6 @@ public static class ScriptBehaviorRuntimeSemanticsCompiler
             ScriptingMessageKind.Command => ScriptMessageKind.Command,
             ScriptingMessageKind.InternalSignal => ScriptMessageKind.InternalSignal,
             ScriptingMessageKind.DomainEvent => ScriptMessageKind.DomainEvent,
-            ScriptingMessageKind.QueryRequest => ScriptMessageKind.QueryRequest,
-            ScriptingMessageKind.QueryResult => ScriptMessageKind.QueryResult,
             _ => ScriptMessageKind.Unspecified,
         };
 
@@ -236,58 +182,6 @@ public static class ScriptBehaviorRuntimeSemanticsCompiler
 
             ValidateSemanticFlags(messageSemantics);
         }
-    }
-
-    private static void ValidateQueryRegistration(
-        ScriptQueryRegistration registration,
-        ScriptRuntimeSemanticsSpec semantics)
-    {
-        var querySemantics = semantics.GetRequiredQuerySemantics(registration.TypeUrl);
-        var queryMessage = semantics.GetRequiredMessageSemantics(registration.TypeUrl, ScriptMessageKind.QueryRequest);
-        var resultTypeUrl = ScriptMessageTypes.GetTypeUrl(registration.ResultClrType);
-        var resultMessage = semantics.GetRequiredMessageSemantics(resultTypeUrl, ScriptMessageKind.QueryResult);
-        var expectedResultFullName = ScriptMessageTypes.GetDescriptor(registration.ResultClrType).FullName ?? string.Empty;
-
-        if (queryMessage.Kind == ScriptMessageKind.Unspecified)
-        {
-            throw new InvalidOperationException(
-                $"Registered query `{registration.TypeUrl}` must declare `(aevatar.scripting.runtime.scripting_runtime)` " +
-                $"with kind `{ScriptMessageKind.QueryRequest}`.");
-        }
-
-        if (queryMessage.Kind != ScriptMessageKind.QueryRequest)
-        {
-            throw new InvalidOperationException(
-                $"Registered query `{registration.TypeUrl}` declares runtime kind `{queryMessage.Kind}`, expected `{ScriptMessageKind.QueryRequest}`.");
-        }
-
-        if (resultMessage.Kind == ScriptMessageKind.Unspecified)
-        {
-            throw new InvalidOperationException(
-                $"Registered query result `{resultTypeUrl}` must declare `(aevatar.scripting.runtime.scripting_runtime)` " +
-                $"with kind `{ScriptMessageKind.QueryResult}`.");
-        }
-
-        if (resultMessage.Kind != ScriptMessageKind.QueryResult)
-        {
-            throw new InvalidOperationException(
-                $"Registered query result `{resultTypeUrl}` declares runtime kind `{resultMessage.Kind}`, expected `{ScriptMessageKind.QueryResult}`.");
-        }
-
-        if (!string.Equals(querySemantics.ResultTypeUrl, resultTypeUrl, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Query `{registration.TypeUrl}` declares result type url `{querySemantics.ResultTypeUrl}`, expected `{resultTypeUrl}`.");
-        }
-
-        if (!string.Equals(querySemantics.ResultDescriptorFullName, expectedResultFullName, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Query `{registration.TypeUrl}` declares result descriptor `{querySemantics.ResultDescriptorFullName}`, expected `{expectedResultFullName}`.");
-        }
-
-        ValidateSemanticFlags(queryMessage);
-        ValidateSemanticFlags(resultMessage);
     }
 
     private static void ValidateSemanticFlags(ScriptMessageSemanticsSpec semantics)

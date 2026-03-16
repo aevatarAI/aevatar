@@ -34,7 +34,7 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             options.DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override;
         });
         services.AddWorkflowInfrastructure(options =>
-            configuration.GetSection("WorkflowExecutionReportArtifacts").Bind(options));
+            configuration.GetSection("WorkflowRunReportExport").Bind(options));
         return services;
     }
 }

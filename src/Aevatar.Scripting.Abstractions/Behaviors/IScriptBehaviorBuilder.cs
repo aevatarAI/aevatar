@@ -16,9 +16,4 @@ public interface IScriptBehaviorBuilder<TState, TReadModel>
         Func<TState?, TEvent, ScriptFactContext, TState?>? apply = null,
         Func<TState?, TEvent, ScriptFactContext, TReadModel?>? project = null)
         where TEvent : class, IMessage<TEvent>, new();
-
-    IScriptBehaviorBuilder<TState, TReadModel> OnQuery<TQuery, TResult>(
-        Func<TQuery, ScriptQueryContext<TReadModel>, CancellationToken, Task<TResult?>> handler)
-        where TQuery : class, IMessage<TQuery>, new()
-        where TResult : class, IMessage<TResult>, new();
 }

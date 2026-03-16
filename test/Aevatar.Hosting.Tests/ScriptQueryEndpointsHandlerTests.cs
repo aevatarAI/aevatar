@@ -4,7 +4,6 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
@@ -57,87 +56,46 @@ public sealed class ScriptQueryEndpointsHandlerTests
     [Fact]
     public async Task HandleGetSnapshot_ShouldReturnNotFound_WhenSnapshotMissing()
     {
-        var result = await InvokeAsync<IResult>("HandleGetSnapshot", "runtime-missing", new RecordingQueryService(), CancellationToken.None);
+        var result = await InvokeAsync<IResult>(
+            "HandleGetSnapshot",
+            "runtime-missing",
+            new RecordingQueryService(),
+            CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
     }
 
     [Fact]
-    public async Task HandleExecuteDeclaredQuery_ShouldReturnBadRequest_WhenActorIdMissing()
-    {
-        var result = await InvokeAsync<IResult>(
-            "HandleExecuteDeclaredQuery",
-            string.Empty,
-            new ScriptDeclaredQueryHttpRequest("{}"),
-            new RecordingQueryService(),
-            CancellationToken.None);
-
-        var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        response.Json.GetProperty("code").GetString().Should().Be("ACTOR_ID_REQUIRED");
-    }
-
-    [Fact]
-    public async Task HandleExecuteDeclaredQuery_ShouldReturnBadRequest_WhenJsonPayloadIsInvalid()
-    {
-        var result = await InvokeAsync<IResult>(
-            "HandleExecuteDeclaredQuery",
-            "runtime-1",
-            new ScriptDeclaredQueryHttpRequest("{invalid-json"),
-            new RecordingQueryService(),
-            CancellationToken.None);
-
-        var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        response.Json.GetProperty("code").GetString().Should().Be("INVALID_QUERY_PAYLOAD");
-    }
-
-    [Fact]
-    public async Task HandleExecuteDeclaredQuery_ShouldMapReadModelMissing_ToNotFound()
+    public async Task HandleGetSnapshot_ShouldSerializeSnapshotPayload()
     {
         var service = new RecordingQueryService
         {
-            QueryException = new InvalidOperationException("read model missing"),
+            SnapshotResult = new ScriptReadModelSnapshot(
+                ActorId: "runtime-2",
+                ScriptId: "script-2",
+                DefinitionActorId: "definition-2",
+                Revision: "rev-2",
+                ReadModelTypeUrl: Any.Pack(new Struct()).TypeUrl,
+                ReadModelPayload: Any.Pack(new Struct
+                {
+                    Fields = { ["answer"] = Google.Protobuf.WellKnownTypes.Value.ForString("ok") },
+                }),
+                StateVersion: 9,
+                LastEventId: "evt-9",
+                UpdatedAt: new DateTimeOffset(2026, 3, 15, 0, 0, 0, TimeSpan.Zero)),
         };
 
         var result = await InvokeAsync<IResult>(
-            "HandleExecuteDeclaredQuery",
-            "runtime-1",
-            new ScriptDeclaredQueryHttpRequest("{}"),
-            service,
-            CancellationToken.None);
-
-        var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        response.Json.GetProperty("code").GetString().Should().Be("READ_MODEL_NOT_FOUND");
-    }
-
-    [Fact]
-    public async Task HandleExecuteDeclaredQuery_ShouldSerializeQueryResult()
-    {
-        var service = new RecordingQueryService
-        {
-            QueryResult = Any.Pack(new Struct
-            {
-                Fields = { ["answer"] = Google.Protobuf.WellKnownTypes.Value.ForString("ok") },
-            }),
-        };
-
-        var result = await InvokeAsync<IResult>(
-            "HandleExecuteDeclaredQuery",
-            "runtime-1",
-            new ScriptDeclaredQueryHttpRequest("{\"q\":\"hello\"}"),
+            "HandleGetSnapshot",
+            "runtime-2",
             service,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        service.LastQueryActorId.Should().Be("runtime-1");
-        service.LastQueryPayload.Should().NotBeNull();
-        service.LastQueryPayload!.Is(Struct.Descriptor).Should().BeTrue();
-        response.Json.GetProperty("actorId").GetString().Should().Be("runtime-1");
-        response.Json.GetProperty("queryResultJson").GetString().Should().Contain("\"answer\": \"ok\"");
+        response.Json.GetProperty("actorId").GetString().Should().Be("runtime-2");
+        response.Json.GetProperty("readModelPayloadJson").GetString().Should().Contain("\"answer\": \"ok\"");
     }
 
     private static async Task<T> InvokeAsync<T>(string methodName, params object[] args)
@@ -169,12 +127,8 @@ public sealed class ScriptQueryEndpointsHandlerTests
     private sealed class RecordingQueryService : IScriptReadModelQueryApplicationService
     {
         public int LastListTake { get; private set; }
-        public string? LastQueryActorId { get; private set; }
-        public Any? LastQueryPayload { get; private set; }
         public IReadOnlyList<ScriptReadModelSnapshot> ListResult { get; init; } = [];
         public ScriptReadModelSnapshot? SnapshotResult { get; init; }
-        public Any? QueryResult { get; init; }
-        public InvalidOperationException? QueryException { get; init; }
 
         public Task<ScriptReadModelSnapshot?> GetSnapshotAsync(string actorId, CancellationToken ct = default)
         {
@@ -188,17 +142,6 @@ public sealed class ScriptQueryEndpointsHandlerTests
             ct.ThrowIfCancellationRequested();
             LastListTake = take;
             return Task.FromResult(ListResult);
-        }
-
-        public Task<Any?> ExecuteDeclaredQueryAsync(string actorId, Any queryPayload, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            LastQueryActorId = actorId;
-            LastQueryPayload = queryPayload;
-            if (QueryException != null)
-                throw QueryException;
-
-            return Task.FromResult(QueryResult);
         }
     }
 }

@@ -2,9 +2,6 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -61,35 +58,10 @@ public sealed class ScriptReadModelProjectorInitializationTests
         InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher) =>
         new(
             dispatcher,
-            new ThrowingDefinitionSnapshotPort(),
-            new ThrowingArtifactResolver(),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
         public DateTimeOffset UtcNow => now;
-    }
-
-    private sealed class ThrowingDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            _ = definitionActorId;
-            _ = requestedRevision;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("Definition snapshot should not be requested in this test.");
-        }
-    }
-
-    private sealed class ThrowingArtifactResolver : IScriptBehaviorArtifactResolver
-    {
-        public ScriptBehaviorArtifact Resolve(ScriptBehaviorArtifactRequest request)
-        {
-            throw new InvalidOperationException($"Artifact resolution should not be reached in this test. request={request}");
-        }
     }
 }

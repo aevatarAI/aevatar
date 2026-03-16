@@ -5,12 +5,12 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
-public sealed class WorkflowExecutionGraphMaterializer
-    : IProjectionGraphMaterializer<WorkflowExecutionReport>
+public sealed class WorkflowRunGraphMirrorMaterializer
+    : IProjectionGraphMaterializer<WorkflowRunGraphMirrorReadModel>
 {
     private const string UnknownToken = "unknown";
 
-    public ProjectionGraphMaterialization Materialize(WorkflowExecutionReport readModel)
+    public ProjectionGraphMaterialization Materialize(WorkflowRunGraphMirrorReadModel readModel)
     {
         ArgumentNullException.ThrowIfNull(readModel);
 
@@ -22,14 +22,14 @@ public sealed class WorkflowExecutionGraphMaterializer
         };
     }
 
-    private static IReadOnlyList<ProjectionGraphNode> BuildGraphNodes(WorkflowExecutionReport report)
+    private static IReadOnlyList<ProjectionGraphNode> BuildGraphNodes(WorkflowRunGraphMirrorReadModel readModel)
     {
-        var updatedAt = report.UpdatedAt == default ? DateTimeOffset.UtcNow : report.UpdatedAt;
-        var rootActorId = NormalizeToken(report.RootActorId);
-        var runNodeId = BuildRunNodeId(rootActorId, report.CommandId);
+        var updatedAt = readModel.UpdatedAt == default ? DateTimeOffset.UtcNow : readModel.UpdatedAt;
+        var rootActorId = NormalizeToken(readModel.RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, readModel.CommandId);
         var nodes = new Dictionary<string, ProjectionGraphNode>(StringComparer.Ordinal);
 
-        nodes[rootActorId] = CreateActorNode(rootActorId, report.WorkflowName, updatedAt);
+        nodes[rootActorId] = CreateActorNode(rootActorId, readModel.WorkflowName, updatedAt);
         nodes[runNodeId] = new ProjectionGraphNode
         {
             Scope = WorkflowExecutionGraphConstants.Scope,
@@ -38,16 +38,16 @@ public sealed class WorkflowExecutionGraphMaterializer
             Properties = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rootActorId"] = rootActorId,
-                ["workflowName"] = report.WorkflowName ?? string.Empty,
-                ["commandId"] = NormalizeToken(report.CommandId),
-                ["input"] = report.Input ?? string.Empty,
+                ["workflowName"] = readModel.WorkflowName ?? string.Empty,
+                ["commandId"] = NormalizeToken(readModel.CommandId),
+                ["input"] = readModel.Input ?? string.Empty,
             },
             UpdatedAt = updatedAt,
         };
 
-        foreach (var step in report.Steps)
+        foreach (var step in readModel.Steps)
         {
-            var stepNodeId = BuildStepNodeId(rootActorId, report.CommandId, step.StepId);
+            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, step.StepId);
             nodes[stepNodeId] = new ProjectionGraphNode
             {
                 Scope = WorkflowExecutionGraphConstants.Scope,
@@ -56,7 +56,7 @@ public sealed class WorkflowExecutionGraphMaterializer
                 Properties = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["rootActorId"] = rootActorId,
-                    ["commandId"] = NormalizeToken(report.CommandId),
+                    ["commandId"] = NormalizeToken(readModel.CommandId),
                     ["stepId"] = NormalizeToken(step.StepId),
                     ["stepType"] = step.StepType ?? string.Empty,
                     ["targetRole"] = step.TargetRole ?? string.Empty,
@@ -67,25 +67,25 @@ public sealed class WorkflowExecutionGraphMaterializer
             };
         }
 
-        foreach (var topologyEdge in report.Topology)
+        foreach (var topologyEdge in readModel.Topology)
         {
             var parentId = NormalizeToken(topologyEdge.Parent);
             var childId = NormalizeToken(topologyEdge.Child);
             if (!nodes.ContainsKey(parentId))
-                nodes[parentId] = CreateActorNode(parentId, report.WorkflowName, updatedAt);
+                nodes[parentId] = CreateActorNode(parentId, readModel.WorkflowName, updatedAt);
 
             if (!nodes.ContainsKey(childId))
-                nodes[childId] = CreateActorNode(childId, report.WorkflowName, updatedAt);
+                nodes[childId] = CreateActorNode(childId, readModel.WorkflowName, updatedAt);
         }
 
         return nodes.Values.ToList();
     }
 
-    private static IReadOnlyList<ProjectionGraphEdge> BuildGraphEdges(WorkflowExecutionReport report)
+    private static IReadOnlyList<ProjectionGraphEdge> BuildGraphEdges(WorkflowRunGraphMirrorReadModel readModel)
     {
-        var updatedAt = report.UpdatedAt == default ? DateTimeOffset.UtcNow : report.UpdatedAt;
-        var rootActorId = NormalizeToken(report.RootActorId);
-        var runNodeId = BuildRunNodeId(rootActorId, report.CommandId);
+        var updatedAt = readModel.UpdatedAt == default ? DateTimeOffset.UtcNow : readModel.UpdatedAt;
+        var rootActorId = NormalizeToken(readModel.RootActorId);
+        var runNodeId = BuildRunNodeId(rootActorId, readModel.CommandId);
         var edges = new Dictionary<string, ProjectionGraphEdge>(StringComparer.Ordinal);
 
         var ownsEdge = CreateEdge(
@@ -96,9 +96,9 @@ public sealed class WorkflowExecutionGraphMaterializer
             updatedAt);
         edges[ownsEdge.EdgeId] = ownsEdge;
 
-        foreach (var step in report.Steps)
+        foreach (var step in readModel.Steps)
         {
-            var stepNodeId = BuildStepNodeId(rootActorId, report.CommandId, step.StepId);
+            var stepNodeId = BuildStepNodeId(rootActorId, readModel.CommandId, step.StepId);
             var containsEdge = CreateEdge(
                 WorkflowExecutionGraphConstants.EdgeTypeContainsStep,
                 runNodeId,
@@ -112,7 +112,7 @@ public sealed class WorkflowExecutionGraphMaterializer
             edges[containsEdge.EdgeId] = containsEdge;
         }
 
-        foreach (var topologyEdge in report.Topology)
+        foreach (var topologyEdge in readModel.Topology)
         {
             var parentId = NormalizeToken(topologyEdge.Parent);
             var childId = NormalizeToken(topologyEdge.Child);

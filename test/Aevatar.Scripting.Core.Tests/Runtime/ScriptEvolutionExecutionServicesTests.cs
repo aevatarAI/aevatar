@@ -190,8 +190,7 @@ public class ScriptEvolutionExecutionServicesTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    project: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleAsync(

@@ -1,6 +1,6 @@
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
-public sealed class WorkflowExecutionReportArtifactOptions
+public sealed class WorkflowRunReportExportOptions
 {
     public bool Enabled { get; set; } = true;
 

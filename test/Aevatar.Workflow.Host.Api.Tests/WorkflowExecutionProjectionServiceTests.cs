@@ -37,7 +37,7 @@ public sealed class WorkflowExecutionProjectionServiceSerialCollection;
 [Collection(nameof(WorkflowExecutionProjectionServiceSerialCollection))]
 public class WorkflowExecutionProjectionServiceTests
 {
-    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+    private static readonly WorkflowRunGraphMirrorMaterializer GraphMaterializer = new();
 
     [Fact]
     public async Task EnsureActorProjectionAsync_WhenEnabled_ShouldExposeActorSnapshotAndTimeline()
@@ -196,20 +196,22 @@ public class WorkflowExecutionProjectionServiceTests
                 EnableActorQueryEndpoints = true,
             },
             out _,
-            out var store,
+            out var reportStore,
+            out _,
+            out _,
             clock);
 
         var lease = await service.EnsureActorProjectionAsync("root", "wf", "original-input", "cmd-1");
         lease.Should().NotBeNull();
 
-        var beforeAttach = await store.GetAsync("root");
+        var beforeAttach = await reportStore.GetAsync("root");
         beforeAttach.Should().BeNull();
 
         clock.UtcNow = initialStartedAt.AddMinutes(10);
         var sink = new EventChannel<WorkflowRunEventEnvelope>();
         await service.AttachLiveSinkAsync(lease!, sink);
 
-        var afterAttach = await store.GetAsync("root");
+        var afterAttach = await reportStore.GetAsync("root");
         afterAttach.Should().BeNull();
         await service.DetachLiveSinkAsync(lease!, sink);
         await sink.DisposeAsync();
@@ -297,6 +299,7 @@ public class WorkflowExecutionProjectionServiceTests
             },
             out _,
             out _,
+            out _,
             out var runEventHub);
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
@@ -348,6 +351,7 @@ public class WorkflowExecutionProjectionServiceTests
             },
             out _,
             out _,
+            out _,
             out var runEventHub);
 
         var lease = await service.EnsureActorProjectionAsync("root", "direct", "hello", "cmd-1");
@@ -390,6 +394,7 @@ public class WorkflowExecutionProjectionServiceTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
+            out _,
             out _,
             out _,
             out var runEventHub);
@@ -435,6 +440,7 @@ public class WorkflowExecutionProjectionServiceTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
+            out _,
             out _,
             out _,
             out var runEventHub);
@@ -511,13 +517,14 @@ public class WorkflowExecutionProjectionServiceTests
     private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out ObservableWorkflowExecutionDocumentStore store,
+        out ObservableWorkflowRunTimelineDocumentStore timelineStore,
         IProjectionClock? clock = null)
     {
         return CreateService(
             options,
             out streams,
-            out store,
+            out _,
+            out timelineStore,
             out _,
             clock);
     }
@@ -525,7 +532,8 @@ public class WorkflowExecutionProjectionServiceTests
     private static ProjectionPortsHarness CreateService(
         WorkflowExecutionProjectionOptions options,
         out InMemoryStreamProvider streams,
-        out ObservableWorkflowExecutionDocumentStore store,
+        out ObservableWorkflowExecutionDocumentStore reportStore,
+        out ObservableWorkflowRunTimelineDocumentStore timelineStore,
         out IProjectionSessionEventHub<WorkflowRunEventEnvelope> runEventStreamHub,
         IProjectionClock? clock = null)
     {
@@ -535,16 +543,20 @@ public class WorkflowExecutionProjectionServiceTests
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             forwardingRegistry);
         var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
-        store = new ObservableWorkflowExecutionDocumentStore();
+        reportStore = new ObservableWorkflowExecutionDocumentStore();
+        timelineStore = new ObservableWorkflowRunTimelineDocumentStore();
         var currentStateStore = CreateCurrentStateStore();
         var resolvedClock = clock ?? new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
+        var reportBindings = new IProjectionWriteSink<WorkflowRunInsightReportDocument>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
+            new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
         };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
+        var reportStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(reportBindings);
+        var timelineStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunTimelineDocument>(
+            [new ProjectionDocumentStoreBinding<WorkflowRunTimelineDocument>(timelineStore)]);
+        var graphStoreDispatcher = new ProjectionStoreDispatcher<WorkflowRunGraphMirrorReadModel>(
+            [new ProjectionGraphStoreBinding<WorkflowRunGraphMirrorReadModel>(relationStore, GraphMaterializer)]);
         var currentStateDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionCurrentStateDocument>(
             [new ProjectionDocumentStoreBinding<WorkflowExecutionCurrentStateDocument>(currentStateStore)]);
         var currentStateProjector = new WorkflowExecutionCurrentStateProjector(
@@ -575,7 +587,11 @@ public class WorkflowExecutionProjectionServiceTests
             ownershipTypeVerifier,
             runtimeProvider.GetRequiredService<IEventStore>());
         var insightCoordinator = new ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>(
-            [new WorkflowRunInsightReadModelProjector(storeDispatcher)]);
+            [
+                new WorkflowRunInsightReportDocumentProjector(reportStoreDispatcher),
+                new WorkflowRunTimelineReadModelProjector(timelineStoreDispatcher),
+                new WorkflowRunGraphMirrorProjector(graphStoreDispatcher),
+            ]);
         var insightDispatcher = new ProjectionDispatcher<WorkflowRunInsightProjectionContext, bool>(insightCoordinator);
         var insightRegistry = new ProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>(
             insightDispatcher,
@@ -631,7 +647,7 @@ public class WorkflowExecutionProjectionServiceTests
             liveSinkForwarder);
         var queryPort = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             mapper,
             relationStore,
             options);
@@ -642,16 +658,16 @@ public class WorkflowExecutionProjectionServiceTests
         IProjectionOwnershipCoordinator ownershipCoordinator,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle)
     {
-        var store = CreateStore();
+        var reportStore = CreateStore();
+        var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
         var clock = new SystemProjectionClock();
         var relationStore = new InMemoryProjectionGraphStore();
-        var bindings = new IProjectionWriteSink<WorkflowExecutionReport>[]
+        var reportBindings = new IProjectionWriteSink<WorkflowRunInsightReportDocument>[]
         {
-            new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(store),
-            new ProjectionGraphStoreBinding<WorkflowExecutionReport>(relationStore, GraphMaterializer),
+            new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
         };
-        var storeDispatcher = new ProjectionStoreDispatcher<WorkflowExecutionReport>(bindings);
+        _ = new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(reportBindings);
         var runEventHub = new NoOpWorkflowRunEventHub();
         var mapper = new WorkflowExecutionReadModelMapper();
         var sinkManager = new EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>(runEventHub);
@@ -678,7 +694,7 @@ public class WorkflowExecutionProjectionServiceTests
             liveSinkForwarder);
         var queryPort = new WorkflowProjectionQueryReader(
             currentStateStore,
-            store,
+            timelineStore,
             mapper,
             relationStore,
             options);
@@ -733,10 +749,15 @@ public class WorkflowExecutionProjectionServiceTests
                 }
             });
 
-    private static InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> CreateStore() => new(
+    private static InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> CreateStore() => new(
         keySelector: report => report.RootActorId,
         keyFormatter: key => key,
         defaultSortSelector: report => report.StartedAt);
+
+    private static InMemoryProjectionDocumentStore<WorkflowRunTimelineDocument, string> CreateTimelineStore() => new(
+        keySelector: document => document.RootActorId,
+        keyFormatter: key => key,
+        defaultSortSelector: document => document.UpdatedAt);
 
     private static InMemoryProjectionDocumentStore<WorkflowExecutionCurrentStateDocument, string> CreateCurrentStateStore() => new(
         keySelector: document => document.RootActorId,
@@ -920,14 +941,14 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     private sealed class ObservableWorkflowExecutionDocumentStore
-        : IProjectionDocumentReader<WorkflowExecutionReport, string>,
-          IProjectionDocumentWriter<WorkflowExecutionReport>
+        : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
+          IProjectionDocumentWriter<WorkflowRunInsightReportDocument>
     {
-        private readonly InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> _inner = CreateStore();
+        private readonly InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> _inner = CreateStore();
         private readonly object _gate = new();
         private readonly List<StoreWaiter> _waiters = [];
 
-        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowExecutionReport report, CancellationToken ct = default)
+        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowRunInsightReportDocument report, CancellationToken ct = default)
         {
             var result = await _inner.UpsertAsync(report, ct);
             if (result.IsApplied)
@@ -935,47 +956,13 @@ public class WorkflowExecutionProjectionServiceTests
             return result;
         }
 
-        public Task<WorkflowExecutionReport?> GetAsync(string actorId, CancellationToken ct = default) =>
+        public Task<WorkflowRunInsightReportDocument?> GetAsync(string actorId, CancellationToken ct = default) =>
             _inner.GetAsync(actorId, ct);
 
-        public Task<ProjectionDocumentQueryResult<WorkflowExecutionReport>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<WorkflowRunInsightReportDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             _inner.QueryAsync(query, ct);
-
-        public async Task WaitForTimelineStageAsync(string actorId, string stage, TimeSpan timeout)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-            ArgumentException.ThrowIfNullOrWhiteSpace(stage);
-
-            if (await HasTimelineStageAsync(actorId, stage))
-                return;
-
-            var waiter = new StoreWaiter(
-                actorId,
-                report => report?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true);
-            Register(waiter);
-
-            try
-            {
-                if (await HasTimelineStageAsync(actorId, stage))
-                {
-                    waiter.Signal.TrySetResult(true);
-                }
-
-                await waiter.Signal.Task.WaitAsync(timeout);
-            }
-            finally
-            {
-                Unregister(waiter);
-            }
-        }
-
-        private async Task<bool> HasTimelineStageAsync(string actorId, string stage)
-        {
-            var report = await _inner.GetAsync(actorId);
-            return report?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true;
-        }
 
         private void Register(StoreWaiter waiter)
         {
@@ -1009,7 +996,102 @@ public class WorkflowExecutionProjectionServiceTests
 
         private sealed record StoreWaiter(
             string ActorId,
-            Func<WorkflowExecutionReport?, bool> Predicate)
+            Func<WorkflowRunInsightReportDocument?, bool> Predicate)
+        {
+            public TaskCompletionSource<bool> Signal { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    private sealed class ObservableWorkflowRunTimelineDocumentStore
+        : IProjectionDocumentReader<WorkflowRunTimelineDocument, string>,
+          IProjectionDocumentWriter<WorkflowRunTimelineDocument>
+    {
+        private readonly InMemoryProjectionDocumentStore<WorkflowRunTimelineDocument, string> _inner = CreateTimelineStore();
+        private readonly object _gate = new();
+        private readonly List<StoreWaiter> _waiters = [];
+
+        public async Task<ProjectionWriteResult> UpsertAsync(WorkflowRunTimelineDocument document, CancellationToken ct = default)
+        {
+            var result = await _inner.UpsertAsync(document, ct);
+            if (result.IsApplied)
+                await NotifyWaitersAsync(document.RootActorId, ct);
+            return result;
+        }
+
+        public Task<WorkflowRunTimelineDocument?> GetAsync(string actorId, CancellationToken ct = default) =>
+            _inner.GetAsync(actorId, ct);
+
+        public Task<ProjectionDocumentQueryResult<WorkflowRunTimelineDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            _inner.QueryAsync(query, ct);
+
+        public async Task WaitForTimelineStageAsync(string actorId, string stage, TimeSpan timeout)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stage);
+
+            if (await HasTimelineStageAsync(actorId, stage))
+                return;
+
+            var waiter = new StoreWaiter(
+                actorId,
+                document => document?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true);
+            Register(waiter);
+
+            try
+            {
+                if (await HasTimelineStageAsync(actorId, stage))
+                    waiter.Signal.TrySetResult(true);
+
+                await waiter.Signal.Task.WaitAsync(timeout);
+            }
+            finally
+            {
+                Unregister(waiter);
+            }
+        }
+
+        private async Task<bool> HasTimelineStageAsync(string actorId, string stage)
+        {
+            var document = await _inner.GetAsync(actorId);
+            return document?.Timeline.Any(x => string.Equals(x.Stage, stage, StringComparison.Ordinal)) == true;
+        }
+
+        private void Register(StoreWaiter waiter)
+        {
+            lock (_gate)
+                _waiters.Add(waiter);
+        }
+
+        private void Unregister(StoreWaiter waiter)
+        {
+            lock (_gate)
+                _waiters.Remove(waiter);
+        }
+
+        private async Task NotifyWaitersAsync(string actorId, CancellationToken ct)
+        {
+            var document = await _inner.GetAsync(actorId, ct);
+            List<StoreWaiter> ready;
+            lock (_gate)
+            {
+                ready = _waiters
+                    .Where(x => string.Equals(x.ActorId, actorId, StringComparison.Ordinal) && x.Predicate(document))
+                    .ToList();
+
+                foreach (var waiter in ready)
+                    _waiters.Remove(waiter);
+            }
+
+            foreach (var waiter in ready)
+                waiter.Signal.TrySetResult(true);
+        }
+
+        private sealed record StoreWaiter(
+            string ActorId,
+            Func<WorkflowRunTimelineDocument?, bool> Predicate)
         {
             public TaskCompletionSource<bool> Signal { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -4,7 +4,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
@@ -27,7 +26,6 @@ public sealed class ScriptNativeGraphProjectorTests
         IProjectionGraphMaterializer<ScriptNativeGraphReadModel> graphMaterializer = new ScriptNativeGraphMaterializer();
         var projector = new ScriptNativeGraphProjector(
             dispatcher,
-            new StaticClaimDefinitionSnapshotPort(),
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
             new ScriptReadModelMaterializationCompiler(),
             new ScriptNativeGraphMaterializer(),
@@ -51,6 +49,8 @@ public sealed class ScriptNativeGraphProjectorTests
                     RunId = "run-claim-1",
                     EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = readModel.Clone() }),
+                    ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+                    ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 3,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
                 },
@@ -71,7 +71,12 @@ public sealed class ScriptNativeGraphProjectorTests
                         TraceSteps = { readModel.TraceSteps },
                     },
                     3,
-                    Any.Pack(readModel).TypeUrl)),
+                    Any.Pack(readModel).TypeUrl,
+                    ClaimScriptSources.DecisionBehavior,
+                    ClaimScriptSources.DecisionBehaviorHash,
+                    ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+                    "3",
+                    "claim-schema")),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -118,32 +123,6 @@ public sealed class ScriptNativeGraphProjectorTests
             state,
             "evt-graph-1",
             DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
-
-    private sealed class StaticClaimDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-claim-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "claim_orchestrator",
-                Revision: "rev-claim-1",
-                SourceText: ClaimScriptSources.DecisionBehavior,
-                SourceHash: ClaimScriptSources.DecisionBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
-                StateTypeUrl: Any.Pack(new ClaimState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new ClaimReadModel()).TypeUrl,
-                ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "claim-schema",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: ClaimState.Descriptor.FullName,
-                ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
-        }
-    }
 
     private sealed class RecordingNativeGraphDispatcher : IProjectionWriteDispatcher<ScriptNativeGraphReadModel>
     {

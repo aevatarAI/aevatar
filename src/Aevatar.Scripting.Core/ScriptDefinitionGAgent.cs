@@ -94,7 +94,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ReadModelTypeUrl = compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
                 CommandTypeUrls = { compilation.Artifact.Contract.CommandTypeUrls },
                 DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
-                QueryTypeUrls = { compilation.Artifact.Contract.QueryTypeUrls },
                 InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
                 ScriptPackage = scriptPackage,
                 ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
@@ -186,8 +185,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.CommandTypeUrls.Add(evt.CommandTypeUrls);
         next.DomainEventTypeUrls.Clear();
         next.DomainEventTypeUrls.Add(evt.DomainEventTypeUrls);
-        next.QueryTypeUrls.Clear();
-        next.QueryTypeUrls.Add(evt.QueryTypeUrls);
         next.InternalSignalTypeUrls.Clear();
         next.InternalSignalTypeUrls.Add(evt.InternalSignalTypeUrls);
         next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();

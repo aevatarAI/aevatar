@@ -21,7 +21,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IAICapability _aiCapability;
     private readonly IActorRuntime _runtime;
     private readonly IScriptExecutionProjectionPort _executionProjectionPort;
-    private readonly IScriptReadModelQueryPort _readModelQueryPort;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
@@ -45,7 +44,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IAICapability aiCapability,
         IActorRuntime runtime,
         IScriptExecutionProjectionPort executionProjectionPort,
-        IScriptReadModelQueryPort readModelQueryPort,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
@@ -64,7 +62,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
-        _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
@@ -116,12 +113,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
 
     public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
         _runtime.UnlinkAsync(childActorId, ct);
-
-    public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) =>
-        _readModelQueryPort.GetSnapshotAsync(actorId, ct);
-
-    public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) =>
-        _readModelQueryPort.ExecuteDeclaredQueryAsync(actorId, queryPayload, ct);
 
     public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
         ScriptEvolutionProposal proposal,

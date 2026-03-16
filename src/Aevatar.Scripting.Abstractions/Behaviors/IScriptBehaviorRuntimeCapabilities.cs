@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Abstractions.Queries;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
@@ -31,10 +30,6 @@ public interface IScriptBehaviorRuntimeCapabilities
     Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct);
 
     Task UnlinkAgentAsync(string childActorId, CancellationToken ct);
-
-    Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct);
-
-    Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct);
 
     Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct);
 

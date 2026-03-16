@@ -15,16 +15,14 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowInfrastructure(
         this IServiceCollection services,
-        Action<WorkflowExecutionReportArtifactOptions>? configureReports = null)
+        Action<WorkflowRunReportExportOptions>? configureReportExport = null)
     {
-        services.AddOptions<WorkflowExecutionReportArtifactOptions>();
-        if (configureReports != null)
-            services.Configure(configureReports);
+        services.AddOptions<WorkflowRunReportExportOptions>();
+        if (configureReportExport != null)
+            services.Configure(configureReportExport);
 
-        // Replace the Noop fallback from Application layer with the real FileSystem sink.
-        // Application registers NoopWorkflowExecutionReportArtifactSink via TryAddSingleton;
-        // Infrastructure must use Replace to override it.
-        services.Replace(ServiceDescriptor.Singleton<IWorkflowExecutionReportArtifactSink, FileSystemWorkflowExecutionReportArtifactSink>());
+        // Replace the Noop fallback from Application layer with the real file export adapter.
+        services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
         services.TryAddSingleton<IWorkflowRunActorPort, WorkflowRunActorPort>();
         services.TryAddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
         return services;

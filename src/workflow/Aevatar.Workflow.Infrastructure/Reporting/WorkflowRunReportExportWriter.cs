@@ -5,8 +5,8 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
-/// <summary>Writes WorkflowExecutionReport to JSON and HTML files.</summary>
-public static class WorkflowExecutionReportWriter
+/// <summary>Writes WorkflowRunReport export files to JSON and HTML.</summary>
+public static class WorkflowRunReportExportWriter
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

@@ -7,8 +7,6 @@ public sealed record ScriptGAgentContract(
     string ReadModelTypeUrl,
     IReadOnlyList<string> CommandTypeUrls,
     IReadOnlyList<string> DomainEventTypeUrls,
-    IReadOnlyList<string> QueryTypeUrls,
-    IReadOnlyDictionary<string, string> QueryResultTypeUrls,
     IReadOnlyList<string> InternalSignalTypeUrls,
     string StateDescriptorFullName,
     string ReadModelDescriptorFullName,
@@ -20,8 +18,6 @@ public sealed record ScriptGAgentContract(
         ReadModelTypeUrl: string.Empty,
         CommandTypeUrls: Array.Empty<string>(),
         DomainEventTypeUrls: Array.Empty<string>(),
-        QueryTypeUrls: Array.Empty<string>(),
-        QueryResultTypeUrls: new Dictionary<string, string>(StringComparer.Ordinal),
         InternalSignalTypeUrls: Array.Empty<string>(),
         StateDescriptorFullName: string.Empty,
         ReadModelDescriptorFullName: string.Empty,
@@ -31,10 +27,6 @@ public sealed record ScriptGAgentContract(
     public IReadOnlyList<string> CommandTypes => CommandTypeUrls;
 
     public IReadOnlyList<string> DomainEventTypes => DomainEventTypeUrls;
-
-    public IReadOnlyList<string> QueryTypes => QueryTypeUrls;
-
-    public IReadOnlyDictionary<string, string> QueryResultTypes => QueryResultTypeUrls;
 
     public IReadOnlyList<string> InternalSignalTypes => InternalSignalTypeUrls;
 }

@@ -23,8 +23,7 @@ internal static class ScriptEvolutionIntegrationSources
                     .OnCommand<TextNormalizationRequested>(HandleAsync)
                     .OnEvent<TextNormalizationCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleAsync(

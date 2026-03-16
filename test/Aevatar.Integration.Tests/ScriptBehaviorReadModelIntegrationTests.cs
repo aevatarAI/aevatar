@@ -16,7 +16,7 @@ namespace Aevatar.Integration.Tests;
 public sealed class ScriptBehaviorReadModelIntegrationTests
 {
     [Fact]
-    public async Task ProvisionRunAndQuery_ShouldProduceProjectedReadModel()
+    public async Task ProvisionRunAndReadSnapshot_ShouldProduceProjectedReadModel()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -86,17 +86,6 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
 
             var listed = await queryService.ListSnapshotsAsync(10, CancellationToken.None);
             listed.Should().Contain(x => x.ActorId == runtimeActorId);
-
-            var queryResult = await queryService.ExecuteDeclaredQueryAsync(
-                runtimeActorId,
-                Any.Pack(new TextNormalizationQueryRequested
-                {
-                    RequestId = "request-1",
-                    ReplyStreamId = "reply-stream",
-                }),
-                CancellationToken.None);
-            queryResult.Should().NotBeNull();
-            queryResult!.Unpack<TextNormalizationQueryResponded>().Current.NormalizedText.Should().Be("HELLO");
         }
         finally
         {

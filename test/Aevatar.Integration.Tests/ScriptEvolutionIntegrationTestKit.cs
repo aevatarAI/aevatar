@@ -169,25 +169,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryPayload = Any.Pack(new TextNormalizationQueryRequested
-        {
-            RequestId = requestId,
-            ReplyStreamId = $"reply-{requestId}",
-        });
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-        try
-        {
-            var immediateResult = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-            if (immediateResult != null)
-                return immediateResult.Unpack<TextNormalizationQueryResponded>().Current;
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
-
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
@@ -220,12 +202,7 @@ internal static class ScriptEvolutionIntegrationTestKit
                 }
             }
 
-            var result = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-
-            if (result == null)
-                throw new InvalidOperationException($"Script query returned null. actor_id={runtimeActorId}");
-
-            return result.Unpack<TextNormalizationQueryResponded>().Current;
+            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {

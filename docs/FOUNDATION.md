@@ -173,10 +173,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 live sink attach/detach
   - `EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 run-event 推送与失败策略桥接
   - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
-  - `WorkflowProjectionReadModelUpdater` 负责 read model 元信息更新
   - `WorkflowProjectionQueryReader` 负责 read model 查询映射
-  - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
-  - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
+  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 负责 committed state 到多个 readmodel 的物化
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
   - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径（detach live sink 后按 durable completion 收敛）
@@ -190,14 +188,14 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
-  - `WorkflowExecutionReadModelProjector` 写入 read model store
+  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 写入各自消费场景的 readmodel store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
 - `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.Propagation.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
-- `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
+- 各 workflow readmodel projector 都只记录 committed `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：
   - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。

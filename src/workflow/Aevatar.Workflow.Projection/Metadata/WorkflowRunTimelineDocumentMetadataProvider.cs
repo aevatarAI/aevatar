@@ -2,11 +2,11 @@ using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Metadata;
 
-public sealed class WorkflowRunInsightReportDocumentMetadataProvider
-    : IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>
+public sealed class WorkflowRunTimelineDocumentMetadataProvider
+    : IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
-        IndexName: "workflow-execution-reports",
+        IndexName: "workflow-run-timelines",
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,

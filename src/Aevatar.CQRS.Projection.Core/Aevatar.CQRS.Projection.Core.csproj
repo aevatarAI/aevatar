@@ -9,6 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>
@@ -20,6 +22,8 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="projection_dispatch_compensation_messages.proto" GrpcServices="None" />

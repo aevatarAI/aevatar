@@ -51,8 +51,8 @@
 flowchart LR
     A["Command / Actor Turn"] --> B["PersistDomainEventAsync"]
     B --> C["EventStore Commit"]
-    C --> D["Build ProjectionPayload from committed state"]
-    D --> E["EventEnvelope<ProjectionPayload>"]
+    C --> D["Publish CommittedStateEventPublished<br/>(state_event + state_root)"]
+    D --> E["EventEnvelope<CommittedStateEventPublished>"]
     E --> F["ProjectionSubscriptionRegistry"]
     F --> G["ProjectionDispatcher"]
     G --> H["ProjectionCoordinator"]
@@ -72,11 +72,16 @@ flowchart LR
 1. CQRS read model 和 AGUI/live event 没有各自维护第二条订阅链路，它们是同一个 `ProjectionCoordinator` 下的不同 projector 分支。
 2. Projection 输入只保留 `EventEnvelope`；是否属于投影消息，只由 `payload` 的强类型契约决定。
 
-## 4. projection payload 如何进入 projection pipeline
+## 4. committed observation 如何进入 projection pipeline
 
 ### 4.1 committed fact 的发布
 
-写侧 actor 在 committed 之后，会基于 committed state 计算当前态查询需要的 `ProjectionPayload`，并把它作为 `EventEnvelope.Payload` 发布到 projection 可观察流：
+写侧 actor 在 committed 之后，会统一发布 `CommittedStateEventPublished`，其中包含：
+
+- `state_event`
+- `state_root`
+
+再由 projection runtime 从 `EventEnvelope<CommittedStateEventPublished>` 中解包并物化 readmodel：
 
 - `src/Aevatar.Foundation.Core/GAgentBase.TState.cs:168-182`
 - `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorPublisher.cs:115-137`
@@ -85,7 +90,7 @@ flowchart LR
 这里的语义是：
 
 1. 先 `EventStore` commit。
-2. 再发布 `EventEnvelope<ProjectionPayload>`。
+2. 再发布 `EventEnvelope<CommittedStateEventPublished>`。
 3. Projection 消费的是“已提交事实的可观察流”，不是未提交命令，也不是 query-time replay。
 
 ### 4.2 Projection 输入契约
@@ -93,15 +98,15 @@ flowchart LR
 当前目标架构下，Projection 输入契约只有一条：
 
 1. transport 只使用 `EventEnvelope`
-2. 当前态 readmodel 只消费 `EventEnvelope<ProjectionPayload>`
+2. 当前态 readmodel 只消费 `EventEnvelope<CommittedStateEventPublished>`
 3. 业务消息 envelope 与投影 envelope 由 payload 契约区分，不再额外包一层投影专用 envelope
-4. projector 直接解包 typed payload，并按消费场景物化 readmodel
+4. projector 直接解包 committed observation，并按消费场景物化 readmodel
 
 因此，“committed event 如何进入 projection pipeline”的准确答案是：
 
 - 不是 query 端去读 `IEventStore`。
 - 不是 projector 自己回放历史事件。
-- 而是 actor commit 后基于 committed state 计算 `ProjectionPayload`，并以 `EventEnvelope` 进入统一 projection 主链。
+- 而是 actor commit 后发布 `CommittedStateEventPublished(state_event + state_root)`，并以 `EventEnvelope` 进入统一 projection 主链。
 
 ## 5. Projection Core 的职责边界
 
@@ -127,29 +132,22 @@ flowchart LR
    - 按注册顺序依次调用所有 projector
    - 单个 projector 失败不会阻断其他 projector，当轮调用结束后聚合为 `ProjectionDispatchAggregateException`
 
-### 5.2 reducer 与 projector 的分工
+### 5.2 当前 projector 主链
 
 抽象定义：
 
-- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionEventReducer.cs:1-15`
 - `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs:1-13`
 
-分工如下：
+当前主链如下：
 
-1. `Reducer`
-   - 只负责“某一类事件是否会修改某个 read model”
-   - 不负责订阅、不负责 store fan-out、不负责 session/live sink
-2. `Projector`
+1. `Projector`
    - 负责 envelope 级 orchestration
-   - 可以读取旧 read model、执行 reducer、写回 read model、或者把事件映射到 session stream
+   - 可以直接把 committed state 物化成 readmodel，或者把 committed event 桥接给语义 actor
+2. `Applier`
+   - 只在少数通用辅助层里保留，用于复用某类事件到某个 readmodel 片段的纯映射逻辑
+   - 不负责订阅、不负责 store fan-out、不负责 session/live sink
 
-Workflow 的 reducer 路由是精确 `TypeUrl` 匹配：
-
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionEventReducerBase.cs:10-39`
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:31-37`
-- `tools/ci/projection_route_mapping_guard.sh`
-
-这保证了投影路由不是字符串包含判断，而是 protobuf `TypeUrl` 的精确键路由。
+Workflow 主链已经不再依赖 reducer 路由；事件分类使用精确 `TypeUrl` / 强类型 payload 判断，而不是字符串包含判断。
 
 ## 6. Runtime / Store 的职责边界
 
@@ -185,9 +183,10 @@ Runtime 只做“一次 read model upsert，分发到多个 store binding”：
 2. 当前只对“binding 写失败”提供 compensator/outbox。
 3. 不存在跨 document + graph 的原子事务边界。
 
-Workflow 对这类部分成功有 durable compensation：
+Workflow 对这类部分成功保留 durable compensation，但实现已经上移到 projection core：
 
-- `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDurableOutboxCompensator.cs:23-56`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/DurableProjectionDispatchCompensator.cs`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatchCompensationOutboxGAgent.cs`
 
 但它只补“store dispatch fan-out 失败”，不补 reducer/projector 级逻辑失败。
 
@@ -202,9 +201,10 @@ Workflow 查询链路：
 
 读取规则：
 
-1. `snapshot / projection state / timeline` 来自 document store
-2. `graph edges / subgraph` 来自 graph store
-3. `graph enriched snapshot` 是“先读 snapshot，再读 subgraph”的组合，不是原子读
+1. `snapshot / projection state` 来自 current-state document store
+2. `timeline` 来自 `WorkflowRunTimelineDocument`
+3. `graph edges / subgraph` 来自 graph store
+4. `graph enriched snapshot` 是“先读 snapshot，再读 subgraph”的组合，不是原子读
 
 因此 Workflow 的一致性不是单一等级，而是：
 
@@ -216,13 +216,12 @@ Workflow 查询链路：
 
 Scripting 查询链路：
 
-- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryService.cs:6-29`
-- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs:15-192`
+- `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 
 特点：
 
 1. `GetSnapshotAsync / ListSnapshotsAsync` 直接读 projection document
-2. `ExecuteDeclaredQueryAsync` 也是先读 projection snapshot，再在内存中执行 behavior query
+2. read-side 不再执行 declared query / behavior query
 3. 它不读取 `IEventStore`，也不在 query 路径里补跑 materialization
 
 这符合仓库规则里的“禁止 query-time replay / query-time materialization”。
@@ -275,9 +274,7 @@ Workflow 的 read model 里，最关键的证据字段是：
 
 来源：
 
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:7-17`
-- `src/workflow/Aevatar.Workflow.Projection/Reducers/WorkflowExecutionProjectionMutations.cs:53-71`
-- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowExecutionReadModel.Partial.cs:33-156`
+- `src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunReadModels.Partial.cs:33-156`
 
 其中：
 
@@ -454,11 +451,13 @@ DI 装配：
 2. 输出仍然走 `IProjectionWriteDispatcher<TReadModel>`
 3. 它适合结构镜像，不适合复杂业务语义
 
-### 10.4 AI Projection：通用 reducer 层
+### 10.4 AI Projection：通用 applier 层
 
-- `src/Aevatar.AI.Projection/Reducers/ProjectionEventApplierReducerBase.cs:9-43`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageStartProjectionApplier.cs`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageContentProjectionApplier.cs`
+- `src/Aevatar.AI.Projection/Appliers/AITextMessageEndProjectionApplier.cs`
 
-它本身不持有 query 语义，只提供可复用 reducer/applier，供业务 read model projector 组合。
+它本身不持有 query 语义，只提供可复用的事件到 readmodel 片段映射，供业务 projector 组合。
 
 ## 11. 当前一致性与并发风险
 
@@ -547,7 +546,7 @@ DI 装配：
 
 结果：
 
-1. `snapshot/timeline` 可能已经更新，而 `graph` 仍旧滞后
+1. `current-state/timeline` 可能已经更新，而 `graph` 仍旧滞后
 2. `GetActorGraphEnrichedSnapshotAsync` 读到的是“某个时刻的文档 + 另一个时刻的图”
 3. 如果 graph 补偿积压，偏斜会持续，不只是瞬时
 
@@ -600,7 +599,10 @@ DI 装配：
 
 ### Workflow
 
-- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:11-128`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs`
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphMirrorProjector.cs`
 - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs:14-54`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionRuntimeLease.cs:31-293`

@@ -1,31 +1,39 @@
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-internal sealed class WorkflowProjectionDurableOutboxCompensator
-    : IProjectionStoreDispatchCompensator<WorkflowExecutionReport>
+public sealed class DurableProjectionDispatchCompensator<TReadModel>
+    : IProjectionStoreDispatchCompensator<TReadModel>
+    where TReadModel : class, IProjectionReadModel
 {
     private readonly IProjectionDispatchCompensationOutbox _outbox;
-    private readonly ILogger<WorkflowProjectionDurableOutboxCompensator> _logger;
+    private readonly ILogger<DurableProjectionDispatchCompensator<TReadModel>> _logger;
 
-    public WorkflowProjectionDurableOutboxCompensator(
+    public DurableProjectionDispatchCompensator(
         IProjectionDispatchCompensationOutbox outbox,
-        ILogger<WorkflowProjectionDurableOutboxCompensator>? logger = null)
+        ILogger<DurableProjectionDispatchCompensator<TReadModel>>? logger = null)
     {
         _outbox = outbox;
-        _logger = logger ?? NullLogger<WorkflowProjectionDurableOutboxCompensator>.Instance;
+        _logger = logger ?? NullLogger<DurableProjectionDispatchCompensator<TReadModel>>.Instance;
     }
 
     public async Task CompensateAsync(
-        ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport> context,
+        ProjectionStoreDispatchCompensationContext<TReadModel> context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ct.ThrowIfCancellationRequested();
+
+        if (context.ReadModel is not IMessage protobufReadModel)
+        {
+            throw new InvalidOperationException(
+                $"Projection dispatch compensation requires protobuf read model payloads. readModelType='{typeof(TReadModel).FullName}'.");
+        }
 
         var now = DateTime.UtcNow;
         var recordId = string.IsNullOrWhiteSpace(context.DispatchId)
@@ -38,8 +46,8 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
             Operation = context.Operation,
             FailedStore = context.FailedStore,
             SucceededStores = { context.SucceededStores },
-            ReadModelType = context.ReadModelType,
-            ReadModel = Any.Pack(context.ReadModel),
+            ReadModelType = typeof(TReadModel).AssemblyQualifiedName ?? context.ReadModelType,
+            ReadModel = Any.Pack(protobufReadModel),
             Key = context.ReadModel.Id,
             EnqueuedAtUtc = Timestamp.FromDateTime(now),
             LastError = context.Exception.GetType().Name,
@@ -49,7 +57,7 @@ internal sealed class WorkflowProjectionDurableOutboxCompensator
         _logger.LogWarning(
             context.Exception,
             "Projection dispatch failure enqueued to actor-based compensation outbox. readModelType={ReadModelType} operation={Operation} failedStore={FailedStore} recordId={RecordId}",
-            context.ReadModelType,
+            evt.ReadModelType,
             context.Operation,
             context.FailedStore,
             recordId);

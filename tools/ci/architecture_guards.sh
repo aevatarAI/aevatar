@@ -61,6 +61,7 @@ fi
 
 if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadata|WorkflowRunCommandMetadataKeys\.SessionId|EventEnvelope\.CorrelationId" \
   docs src/Aevatar.Foundation.Core/README.md \
+  -g '!docs/architecture/archive/**' \
   -g '!docs/architecture/*blueprint*.md'
 then
   echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
@@ -76,8 +77,28 @@ bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 
+if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src; then
+  echo "Declared readmodel query execution is forbidden. Query must read persisted snapshots/documents only."
+  exit 1
+fi
+
+if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|ExecuteQueryAsync\(|GetReadModelSnapshotAsync\(" src/Aevatar.Scripting.*; then
+  echo "Scripting declared-query authoring/runtime contracts and runtime readmodel side-reads are forbidden on the production path."
+  exit 1
+fi
+
+if rg -n "IProjectionEventReducer|AddAIDefaultProjectionLayer|AddAllAIProjectionEventReducers|EnableWorkflowAIProjection" src; then
+  echo "Reducer-era projection abstractions and workflow AI projection toggles are forbidden on the production path."
+  exit 1
+fi
+
 if rg -n "WorkflowExecutionReadModelProjector|IWorkflowProjectionReadModelUpdater|WorkflowProjectionReadModelUpdater|WorkflowExecutionReportDocumentMetadataProvider|AddWorkflowExecutionProjectionReducer|AddWorkflowExecutionProjectionProjector|AddWorkflowExecutionProjectionExtensionsFromAssembly|WorkflowExecutionReportSnapshotMapper|WorkflowExecutionEventReducerBase|WorkflowExecutionProjectionMutations" src/workflow test/Aevatar.Workflow.Host.Api.Tests; then
   echo "Legacy workflow readmodel naming is forbidden. Use artifact-oriented workflow projection names."
+  exit 1
+fi
+
+if rg -n "IWorkflowExecutionReportArtifactSink|NoopWorkflowExecutionReportArtifactSink|FileSystemWorkflowExecutionReportArtifactSink|WorkflowExecutionReportArtifactOptions|WorkflowExecutionReportArtifacts" src test docs -g '!docs/architecture/archive/**'; then
+  echo "Legacy workflow report artifact export naming is forbidden. Use WorkflowRunReportExport terminology."
   exit 1
 fi
 

@@ -1,28 +1,28 @@
-using Aevatar.Workflow.Projection.Configuration;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Workflow.Projection.Orchestration;
+namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-internal sealed class WorkflowProjectionDispatchCompensationReplayHostedService
+public sealed class ProjectionDispatchCompensationReplayHostedService
     : IHostedService,
       IDisposable
 {
     private readonly IProjectionDispatchCompensationOutbox _outbox;
-    private readonly WorkflowExecutionProjectionOptions _options;
-    private readonly ILogger<WorkflowProjectionDispatchCompensationReplayHostedService> _logger;
+    private readonly IProjectionDispatchCompensationOptions _options;
+    private readonly ILogger<ProjectionDispatchCompensationReplayHostedService> _logger;
     private CancellationTokenSource? _stoppingCts;
     private Task? _runTask;
 
-    public WorkflowProjectionDispatchCompensationReplayHostedService(
+    public ProjectionDispatchCompensationReplayHostedService(
         IProjectionDispatchCompensationOutbox outbox,
-        WorkflowExecutionProjectionOptions options,
-        ILogger<WorkflowProjectionDispatchCompensationReplayHostedService>? logger = null)
+        IProjectionDispatchCompensationOptions options,
+        ILogger<ProjectionDispatchCompensationReplayHostedService>? logger = null)
     {
         _outbox = outbox;
         _options = options;
-        _logger = logger ?? NullLogger<WorkflowProjectionDispatchCompensationReplayHostedService>.Instance;
+        _logger = logger ?? NullLogger<ProjectionDispatchCompensationReplayHostedService>.Instance;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -55,7 +55,7 @@ internal sealed class WorkflowProjectionDispatchCompensationReplayHostedService
         _stoppingCts?.Dispose();
     }
 
-    internal async Task ReplayOnceAsync(CancellationToken ct = default)
+    public async Task ReplayOnceAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         await _outbox.TriggerReplayAsync(_options.DispatchCompensationReplayBatchSize, ct);
@@ -79,7 +79,7 @@ internal sealed class WorkflowProjectionDispatchCompensationReplayHostedService
                 _logger.LogError(
                     ex,
                     "Projection compensation replay trigger failed. worker={Worker}",
-                    nameof(WorkflowProjectionDispatchCompensationReplayHostedService));
+                    nameof(ProjectionDispatchCompensationReplayHostedService));
             }
 
             try

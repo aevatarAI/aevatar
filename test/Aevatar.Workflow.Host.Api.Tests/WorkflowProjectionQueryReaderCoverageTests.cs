@@ -23,7 +23,7 @@ public sealed class WorkflowProjectionQueryReaderCoverageTests
         (await harness.Port.GetActorGraphSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
         (await harness.Port.GetActorGraphEnrichedSnapshotAsync("actor-1")).Should().BeNull();
         harness.CurrentStateReader.GetCalls.Should().Be(0);
-        harness.ReportReader.GetCalls.Should().Be(0);
+        harness.TimelineReader.GetCalls.Should().Be(0);
         harness.GraphStore.GetNeighborsCalls.Should().Be(0);
         harness.GraphStore.GetSubgraphCalls.Should().Be(0);
     }
@@ -146,28 +146,28 @@ public sealed class WorkflowProjectionQueryReaderCoverageTests
     private static QueryPortHarness CreateHarness(
         WorkflowExecutionProjectionOptions options,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
-        RecordingDocumentReader<WorkflowExecutionReport>? reportReader = null,
+        RecordingDocumentReader<WorkflowRunTimelineDocument>? timelineReader = null,
         RecordingProjectionGraphStore? graphStore = null)
     {
         currentStateReader ??= new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
-        reportReader ??= new RecordingDocumentReader<WorkflowExecutionReport>();
+        timelineReader ??= new RecordingDocumentReader<WorkflowRunTimelineDocument>();
         graphStore ??= new RecordingProjectionGraphStore();
         return new QueryPortHarness(
             new WorkflowProjectionQueryReader(
                 currentStateReader,
-                reportReader,
+                timelineReader,
                 new WorkflowExecutionReadModelMapper(),
                 graphStore,
                 options),
             currentStateReader,
-            reportReader,
+            timelineReader,
             graphStore);
     }
 
     private sealed record QueryPortHarness(
         WorkflowProjectionQueryReader Port,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
-        RecordingDocumentReader<WorkflowExecutionReport> ReportReader,
+        RecordingDocumentReader<WorkflowRunTimelineDocument> TimelineReader,
         RecordingProjectionGraphStore GraphStore);
 
     private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>

@@ -179,23 +179,23 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
-    public async Task NoopWorkflowExecutionReportArtifactSink_ShouldHonorCancellation()
+    public async Task NoopWorkflowRunReportExporter_ShouldHonorCancellation()
     {
-        var sink = new NoopWorkflowExecutionReportArtifactSink();
+        var exporter = new NoopWorkflowRunReportExporter();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var act = async () => await sink.PersistAsync(new WorkflowRunReport(), cts.Token);
+        var act = async () => await exporter.ExportAsync(new WorkflowRunReport(), cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
-    public async Task NoopWorkflowExecutionReportArtifactSink_ShouldCompleteWithoutSideEffects()
+    public async Task NoopWorkflowRunReportExporter_ShouldCompleteWithoutSideEffects()
     {
-        IWorkflowExecutionReportArtifactSink sink = new NoopWorkflowExecutionReportArtifactSink();
+        IWorkflowRunReportExportPort exporter = new NoopWorkflowRunReportExporter();
 
-        await sink.PersistAsync(new WorkflowRunReport(), CancellationToken.None);
+        await exporter.ExportAsync(new WorkflowRunReport(), CancellationToken.None);
     }
 
     private static WorkflowRunCommandTarget CreateTarget(

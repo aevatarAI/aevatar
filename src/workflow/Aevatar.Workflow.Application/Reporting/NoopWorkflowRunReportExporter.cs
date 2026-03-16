@@ -3,9 +3,9 @@ using Aevatar.Workflow.Application.Abstractions.Reporting;
 
 namespace Aevatar.Workflow.Application.Reporting;
 
-internal sealed class NoopWorkflowExecutionReportArtifactSink : IWorkflowExecutionReportArtifactSink
+internal sealed class NoopWorkflowRunReportExporter : IWorkflowRunReportExportPort
 {
-    public Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default)
+    public Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
         return Task.CompletedTask;

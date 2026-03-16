@@ -17,8 +17,6 @@ public sealed class ScriptDefinitionContractsTests
         contract.ReadModelTypeUrl.Should().BeEmpty();
         contract.CommandTypeUrls.Should().BeEmpty();
         contract.DomainEventTypeUrls.Should().BeEmpty();
-        contract.QueryTypeUrls.Should().BeEmpty();
-        contract.QueryResultTypeUrls.Should().BeEmpty();
         contract.InternalSignalTypeUrls.Should().BeEmpty();
         contract.StateDescriptorFullName.Should().BeEmpty();
         contract.ReadModelDescriptorFullName.Should().BeEmpty();

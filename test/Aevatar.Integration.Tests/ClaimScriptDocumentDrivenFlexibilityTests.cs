@@ -92,7 +92,6 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
         await using var artifact = compilation.Artifact!;
         artifact.Contract.CommandTypeUrls.Should().Contain(Any.Pack(new ClaimSubmitted()).TypeUrl);
         artifact.Contract.DomainEventTypeUrls.Should().Contain(Any.Pack(new ClaimDecisionRecorded()).TypeUrl);
-        artifact.Contract.QueryTypeUrls.Should().Contain(Any.Pack(new ClaimQueryRequested()).TypeUrl);
         artifact.Contract.ReadModelDescriptorFullName.Should().Be(ClaimCaseReadModel.Descriptor.FullName);
         artifact.Contract.ProtocolDescriptorSet.Should().NotBeNull();
         artifact.Contract.ProtocolDescriptorSet!.IsEmpty.Should().BeFalse();

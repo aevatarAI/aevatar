@@ -70,7 +70,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
                 sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>()));
-        services.TryAddSingleton<IWorkflowExecutionReportArtifactSink, NoopWorkflowExecutionReportArtifactSink>();
+        services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         services.TryAddSingleton<IWorkflowRunDetachedCleanupScheduler, MissingWorkflowRunDetachedCleanupScheduler>();
         services.AddSingleton<WorkflowRunDetachedDispatchService>();

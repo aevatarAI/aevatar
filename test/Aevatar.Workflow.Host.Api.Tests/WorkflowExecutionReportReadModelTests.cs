@@ -4,14 +4,14 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowExecutionReportReadModelTests
+public sealed class WorkflowRunInsightReportDocumentReadModelTests
 {
-    private static readonly WorkflowExecutionGraphMaterializer GraphMaterializer = new();
+    private static readonly WorkflowRunGraphMirrorMaterializer GraphMaterializer = new();
 
     [Fact]
     public void AddTimelineAndRoleReply_ShouldCopyProjectionPayloads()
     {
-        var report = new WorkflowExecutionReport();
+        var report = new WorkflowRunInsightReportDocument();
 
         report.AddTimeline(new ProjectionTimelineEvent
         {
@@ -47,7 +47,7 @@ public sealed class WorkflowExecutionReportReadModelTests
     [Fact]
     public void GraphNodesAndEdges_ShouldIncludeRunStepAndTopologyActors()
     {
-        var report = new WorkflowExecutionReport
+        var report = new WorkflowRunGraphMirrorReadModel
         {
             RootActorId = " actor-1 ",
             CommandId = " cmd-1 ",
@@ -89,7 +89,7 @@ public sealed class WorkflowExecutionReportReadModelTests
     [Fact]
     public void GraphNodesAndEdges_ShouldNormalizeUnknownTokens_WhenIdentifiersMissing()
     {
-        var report = new WorkflowExecutionReport
+        var report = new WorkflowRunGraphMirrorReadModel
         {
             RootActorId = " ",
             CommandId = string.Empty,

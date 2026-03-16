@@ -317,8 +317,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new InvalidProfileState()
                                 : new InvalidProfileState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<InvalidProfileQueryRequested, InvalidProfileQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -460,8 +459,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new WrapperProfileState()
                                 : new WrapperProfileState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<WrapperProfileQueryRequested, WrapperProfileQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -587,8 +585,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<NoSchemaCommand>(HandleAsync)
                         .OnEvent<NoSchemaUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new NoSchemaState() : new NoSchemaState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<NoSchemaQueryRequested, NoSchemaQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(NoSchemaCommand command, ScriptCommandContext<NoSchemaState> context, CancellationToken ct)
@@ -700,8 +697,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<ProviderFilteredCommand>(HandleAsync)
                         .OnEvent<ProviderFilteredUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new ProviderFilteredState() : new ProviderFilteredState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<ProviderFilteredQueryRequested, ProviderFilteredQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -834,8 +830,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<InvalidRelationCommand>(HandleAsync)
                         .OnEvent<InvalidRelationUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new InvalidRelationState() : new InvalidRelationState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<InvalidRelationQueryRequested, InvalidRelationQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -959,8 +954,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<RepeatedNestedCommand>(HandleAsync)
                         .OnEvent<RepeatedNestedUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new RepeatedNestedState() : new RepeatedNestedState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<RepeatedNestedQueryRequested, RepeatedNestedQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -1089,8 +1083,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<FieldTypesCommand>(HandleAsync)
                         .OnEvent<FieldTypesUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new FieldTypesState() : new FieldTypesState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<FieldTypesQueryRequested, FieldTypesQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(
@@ -1238,8 +1231,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnCommand<UnsupportedFieldTypeCommand>(HandleAsync)
                         .OnEvent<UnsupportedFieldTypeUpdated>(
                             apply: static (_, evt, _) => evt.Current == null ? new UnsupportedFieldTypeState() : new UnsupportedFieldTypeState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<UnsupportedFieldTypeQueryRequested, UnsupportedFieldTypeQueryResponded>(HandleQueryAsync);
+                            project: static (_, evt, _) => evt.Current);
                 }
 
                 private static Task HandleAsync(

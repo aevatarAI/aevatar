@@ -33,7 +33,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         WorkflowExecutionProjectionOptions? options = null)
     {
         var services = new ServiceCollection();
-        var reportStore = new InMemoryProjectionDocumentStore<WorkflowExecutionReport, string>(
+        var reportStore = new InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.UpdatedAt);
@@ -46,11 +46,11 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             DetachedCleanupRetryMaxDelayMs = 0,
         });
         services.AddSingleton(reportStore);
-        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionReport, string>>(reportStore);
-        services.AddSingleton<IProjectionWriteDispatcher<WorkflowExecutionReport>>(_ =>
-            new ProjectionStoreDispatcher<WorkflowExecutionReport>(
+        services.AddSingleton<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>(reportStore);
+        services.AddSingleton<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>(_ =>
+            new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(
                 [
-                    new ProjectionDocumentStoreBinding<WorkflowExecutionReport>(reportStore),
+                    new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
                 ]));
         services.AddSingleton<IWorkflowExecutionProjectionQueryPort>(queryPort ?? new RecordingQueryPort());
         services.AddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>(
@@ -71,10 +71,10 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowRunDetachedCleanupOutboxState>>(),
         };
 
-    private static Task<WorkflowExecutionReport?> GetReportAsync(
+    private static Task<WorkflowRunInsightReportDocument?> GetReportAsync(
         WorkflowRunDetachedCleanupOutboxGAgent agent,
         string actorId) =>
-        agent.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>()
+        agent.Services.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>()
             .GetAsync(actorId, CancellationToken.None);
 
     [Fact]
@@ -818,7 +818,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     }
 
     private sealed class RecordingWorkflowRunInsightActorPort(
-        InMemoryProjectionDocumentStore<WorkflowExecutionReport, string> store)
+        InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> store)
         : IWorkflowRunInsightActorPort
     {
         public Task EnsureActorAsync(string rootActorId, CancellationToken ct = default) => Task.CompletedTask;
@@ -844,7 +844,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             DateTimeOffset stoppedAt,
             CancellationToken ct = default)
         {
-            var report = await store.GetAsync(rootActorId, ct) ?? new WorkflowExecutionReport
+            var report = await store.GetAsync(rootActorId, ct) ?? new WorkflowRunInsightReportDocument
             {
                 Id = rootActorId,
                 RootActorId = rootActorId,
