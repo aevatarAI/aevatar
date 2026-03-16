@@ -6,7 +6,7 @@ using Aevatar.Foundation.Abstractions;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptAuthorityRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<ScriptAuthorityProjectionContext>
 {

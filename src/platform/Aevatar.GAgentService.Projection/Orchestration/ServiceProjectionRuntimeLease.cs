@@ -5,7 +5,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
 public sealed class ServiceProjectionRuntimeLease<TContext>
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<TContext>
     where TContext : class, IProjectionContext

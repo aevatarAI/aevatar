@@ -4,7 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowBindingRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<WorkflowBindingProjectionContext>
 {

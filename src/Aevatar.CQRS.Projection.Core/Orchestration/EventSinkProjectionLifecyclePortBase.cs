@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -6,42 +7,100 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// Event-sink specialized lifecycle port base with runtime lease resolution hook.
 /// </summary>
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
-    : ProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>,
-      IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
+    : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
 {
+    private readonly Func<bool> _projectionEnabledAccessor;
+    private readonly IProjectionPortActivationService<TRuntimeLease> _activationService;
+    private readonly IProjectionPortReleaseService<TRuntimeLease> _releaseService;
+    private readonly IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> _sinkSubscriptionManager;
+    private readonly IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> _liveSinkForwarder;
+
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TRuntimeLease> activationService,
         IProjectionPortReleaseService<TRuntimeLease> releaseService,
         IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> sinkSubscriptionManager,
         IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> liveSinkForwarder)
-        : base(
-            projectionEnabledAccessor,
-            activationService,
-            releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
     {
+        _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
+        _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
+        _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
+        _sinkSubscriptionManager = sinkSubscriptionManager ?? throw new ArgumentNullException(nameof(sinkSubscriptionManager));
+        _liveSinkForwarder = liveSinkForwarder ?? throw new ArgumentNullException(nameof(liveSinkForwarder));
     }
 
-    public bool ProjectionEnabled => ProjectionEnabledCore;
+    public bool ProjectionEnabled => _projectionEnabledAccessor();
+
+    protected async Task<TLeaseContract?> EnsureProjectionAsync(
+        string rootEntityId,
+        string projectionName,
+        string input,
+        string commandId,
+        CancellationToken ct = default)
+    {
+        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootEntityId))
+            return null;
+
+        return await _activationService.EnsureAsync(
+            rootEntityId,
+            projectionName,
+            input,
+            commandId,
+            ct);
+    }
 
     public Task AttachLiveSinkAsync(
         TLeaseContract lease,
         IEventSink<TEvent> sink,
-        CancellationToken ct = default) =>
-        AttachSinkAsync(lease, sink, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled)
+            return Task.CompletedTask;
+
+        var runtimeLease = ResolveRuntimeLease(lease);
+        return _sinkSubscriptionManager.AttachOrReplaceAsync(
+            runtimeLease,
+            sink,
+            evt => _liveSinkForwarder.ForwardAsync(runtimeLease, sink, evt, CancellationToken.None),
+            ct);
+    }
 
     public Task DetachLiveSinkAsync(
         TLeaseContract lease,
         IEventSink<TEvent> sink,
-        CancellationToken ct = default) =>
-        DetachSinkAsync(lease, sink, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled)
+            return Task.CompletedTask;
+
+        return _sinkSubscriptionManager.DetachAsync(ResolveRuntimeLease(lease), sink, ct);
+    }
 
     public Task ReleaseActorProjectionAsync(
         TLeaseContract lease,
-        CancellationToken ct = default) =>
-        ReleaseProjectionAsync(lease, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled)
+            return Task.CompletedTask;
+
+        return _releaseService.ReleaseIfIdleAsync(ResolveRuntimeLease(lease), ct);
+    }
+
+    protected virtual TRuntimeLease ResolveRuntimeLease(TLeaseContract lease) =>
+        lease as TRuntimeLease
+        ?? throw new InvalidOperationException(
+            $"Unsupported projection lease type `{lease.GetType().FullName}`; expected `{typeof(TRuntimeLease).FullName}`.");
 }

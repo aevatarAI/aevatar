@@ -3,9 +3,13 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
-/// Event-sink specialization of projection live sink forwarder.
+/// Live forwarder for projection runtime events to event sinks.
 /// </summary>
 public interface IEventSinkProjectionLiveForwarder<TLease, TEvent>
-    : IProjectionPortLiveSinkForwarder<TLease, IEventSink<TEvent>, TEvent>
 {
+    ValueTask ForwardAsync(
+        TLease lease,
+        IEventSink<TEvent> sink,
+        TEvent evt,
+        CancellationToken ct = default);
 }

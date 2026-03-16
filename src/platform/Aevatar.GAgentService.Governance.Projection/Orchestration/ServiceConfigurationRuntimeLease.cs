@@ -7,7 +7,7 @@ using Aevatar.GAgentService.Governance.Projection.Contexts;
 namespace Aevatar.GAgentService.Governance.Projection.Orchestration;
 
 public sealed class ServiceConfigurationRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<ServiceConfigurationProjectionContext>
 {

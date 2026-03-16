@@ -7,7 +7,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptExecutionRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IScriptExecutionProjectionLease,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<ScriptExecutionProjectionContext>

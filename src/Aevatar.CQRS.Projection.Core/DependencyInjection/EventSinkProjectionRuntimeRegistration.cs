@@ -13,7 +13,7 @@ public static class EventSinkProjectionRuntimeRegistration
     public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TTopology, TRuntimeLease, TEvent>(
         this IServiceCollection services)
         where TContext : class, IProjectionContext, IProjectionStreamSubscriptionContext
-        where TRuntimeLease : ProjectionRuntimeLeaseBase<IEventSink<TEvent>>, IProjectionPortSessionLease
+        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease
         where TEvent : class
     {
         return services.AddEventSinkProjectionRuntimeCore<
@@ -27,7 +27,7 @@ public static class EventSinkProjectionRuntimeRegistration
     public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TTopology, TRuntimeLease, TEvent, TSinkFailurePolicy>(
         this IServiceCollection services)
         where TContext : class, IProjectionContext, IProjectionStreamSubscriptionContext
-        where TRuntimeLease : ProjectionRuntimeLeaseBase<IEventSink<TEvent>>, IProjectionPortSessionLease
+        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease
         where TEvent : class
         where TSinkFailurePolicy : class, IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>
     {
@@ -42,12 +42,6 @@ public static class EventSinkProjectionRuntimeRegistration
         services.TryAddSingleton<IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>, TSinkFailurePolicy>();
         services.TryAddSingleton<IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent>,
             EventSinkProjectionLiveForwarder<TRuntimeLease, TEvent>>();
-        services.TryAddSingleton<IProjectionPortSinkSubscriptionManager<TRuntimeLease, IEventSink<TEvent>, TEvent>>(sp =>
-            sp.GetRequiredService<IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent>>());
-        services.TryAddSingleton<IProjectionPortSinkFailurePolicy<TRuntimeLease, IEventSink<TEvent>, TEvent>>(sp =>
-            sp.GetRequiredService<IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>>());
-        services.TryAddSingleton<IProjectionPortLiveSinkForwarder<TRuntimeLease, IEventSink<TEvent>, TEvent>>(sp =>
-            sp.GetRequiredService<IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent>>());
 
         return services;
     }

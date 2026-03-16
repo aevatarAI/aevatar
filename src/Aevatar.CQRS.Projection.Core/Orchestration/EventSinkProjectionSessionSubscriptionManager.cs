@@ -8,7 +8,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// </summary>
 public class EventSinkProjectionSessionSubscriptionManager<TLease, TEvent>
     : IEventSinkProjectionSubscriptionManager<TLease, TEvent>
-    where TLease : ProjectionRuntimeLeaseBase<IEventSink<TEvent>>, IProjectionPortSessionLease
+    where TLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease
 {
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
 

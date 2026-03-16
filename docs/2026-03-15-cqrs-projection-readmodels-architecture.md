@@ -347,9 +347,10 @@ sequenceDiagram
 
 ### 9.3 session live sink 并发
 
-live sink 的 attach/detach 由 `ProjectionRuntimeLeaseBase` 内部维护：
+ live sink 的 attach/detach 由 `EventSinkProjectionRuntimeLeaseBase<TEvent>` 内部维护；
+ 不需要 live sink 的 projection（例如 workflow insight bridge 目标侧）只保留无 sink 的 `ProjectionRuntimeLeaseBase`：
 
-- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionRuntimeLeaseBase.cs:18-60`
+- `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionRuntimeLeaseBase.cs`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionSessionSubscriptionManager.cs:20-54`
 - `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:26-113`
 

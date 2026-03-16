@@ -208,7 +208,6 @@ sequenceDiagram
 
 - lifecycle
   - `ProjectionLifecycleService<TContext, TCompletion>`
-  - `ProjectionLifecyclePortBase<...>`
   - `EventSinkProjectionLifecyclePortBase<...>`
 - activation / release
   - `ContextProjectionActivationService<...>`

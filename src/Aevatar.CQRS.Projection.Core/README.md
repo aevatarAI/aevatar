@@ -12,7 +12,7 @@
     - `ProjectionDispatcher<TContext, TTopology>`
     - `ProjectionSubscriptionRegistry<TContext>`
     - `ProjectionLifecycleService<TContext, TCompletion>`
-    - `ProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TSink, TEvent>`
+    - `EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>`
     - `ActorStreamSubscriptionHub<TMessage>`
     - `ProjectionAssemblyRegistration`
     - `SystemProjectionClock`

@@ -4,7 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowRunInsightRuntimeLease
-    : ProjectionRuntimeLeaseBase<IProjectionNoopLiveSink>,
+    : ProjectionRuntimeLeaseBase,
       IProjectionContextRuntimeLease<WorkflowRunInsightProjectionContext>
 {
     public WorkflowRunInsightRuntimeLease(WorkflowRunInsightProjectionContext context)
@@ -15,5 +15,3 @@ public sealed class WorkflowRunInsightRuntimeLease
 
     public WorkflowRunInsightProjectionContext Context { get; }
 }
-
-public interface IProjectionNoopLiveSink;

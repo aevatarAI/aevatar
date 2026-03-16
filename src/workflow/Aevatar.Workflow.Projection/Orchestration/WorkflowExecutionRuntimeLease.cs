@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<WorkflowRunEventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionOwnershipLease,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<WorkflowExecutionProjectionContext>,
