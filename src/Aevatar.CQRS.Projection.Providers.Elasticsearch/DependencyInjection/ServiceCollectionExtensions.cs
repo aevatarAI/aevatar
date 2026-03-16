@@ -12,20 +12,26 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
         Func<IServiceProvider, ElasticsearchProjectionDocumentStoreOptions> optionsFactory,
         Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
-        Func<TKey, string>? keyFormatter = null)
+        Func<TKey, string>? keyFormatter = null,
+        Func<TReadModel, string?>? indexScopeSelector = null)
         where TReadModel : class, IProjectionReadModel
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(metadataFactory);
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+        services.AddSingleton<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>(provider =>
             new ElasticsearchProjectionDocumentStore<TReadModel, TKey>(
                 optionsFactory(provider),
                 metadataFactory(provider),
                 keySelector,
                 keyFormatter,
+                indexScopeSelector,
                 provider.GetService<ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>>()));
+        services.AddSingleton<IProjectionDocumentWriter<TReadModel>>(provider =>
+            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
+        services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }

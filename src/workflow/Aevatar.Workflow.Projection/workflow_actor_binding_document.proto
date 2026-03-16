@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package aevatar.workflow.projection.readmodels;
+
+option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
+
+import "google/protobuf/timestamp.proto";
+
+message WorkflowActorBindingDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp created_at_utc_value = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string actor_id = 6;
+  int32 actor_kind_value = 7;
+  string definition_actor_id = 8;
+  string run_id = 9;
+  string workflow_name = 10;
+  string workflow_yaml = 11;
+  map<string, string> inline_workflow_yaml_entries = 12;
+}

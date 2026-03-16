@@ -4,12 +4,14 @@ using FluentAssertions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowExecutionReportReadModelTests
+public sealed class WorkflowRunInsightReportDocumentReadModelTests
 {
+    private static readonly WorkflowRunGraphMirrorMaterializer GraphMaterializer = new();
+
     [Fact]
     public void AddTimelineAndRoleReply_ShouldCopyProjectionPayloads()
     {
-        var report = new WorkflowExecutionReport();
+        var report = new WorkflowRunInsightReportDocument();
 
         report.AddTimeline(new ProjectionTimelineEvent
         {
@@ -45,7 +47,7 @@ public sealed class WorkflowExecutionReportReadModelTests
     [Fact]
     public void GraphNodesAndEdges_ShouldIncludeRunStepAndTopologyActors()
     {
-        var report = new WorkflowExecutionReport
+        var report = new WorkflowRunGraphMirrorReadModel
         {
             RootActorId = " actor-1 ",
             CommandId = " cmd-1 ",
@@ -69,8 +71,9 @@ public sealed class WorkflowExecutionReportReadModelTests
             ],
         };
 
-        var nodes = report.GraphNodes;
-        var edges = report.GraphEdges;
+        var graph = GraphMaterializer.Materialize(report);
+        var nodes = graph.Nodes;
+        var edges = graph.Edges;
 
         nodes.Should().Contain(x => x.NodeId == "actor-1" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType && x.Properties["input"] == "hello");
@@ -86,11 +89,11 @@ public sealed class WorkflowExecutionReportReadModelTests
     [Fact]
     public void GraphNodesAndEdges_ShouldNormalizeUnknownTokens_WhenIdentifiersMissing()
     {
-        var report = new WorkflowExecutionReport
+        var report = new WorkflowRunGraphMirrorReadModel
         {
             RootActorId = " ",
-            CommandId = null!,
-            WorkflowName = null!,
+            CommandId = string.Empty,
+            WorkflowName = string.Empty,
             UpdatedAt = default,
             Steps =
             [
@@ -105,8 +108,9 @@ public sealed class WorkflowExecutionReportReadModelTests
             ],
         };
 
-        var nodes = report.GraphNodes;
-        var edges = report.GraphEdges;
+        var graph = GraphMaterializer.Materialize(report);
+        var nodes = graph.Nodes;
+        var edges = graph.Edges;
 
         nodes.Should().Contain(x => x.NodeId == "unknown");
         nodes.Should().Contain(x => x.NodeType == WorkflowExecutionGraphConstants.RunNodeType);

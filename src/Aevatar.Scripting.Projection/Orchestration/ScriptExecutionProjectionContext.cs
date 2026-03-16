@@ -9,8 +9,6 @@ public sealed class ScriptExecutionProjectionContext
 
     public required string RootActorId { get; init; }
 
-    public ScriptReadModelDocument? CurrentSemanticReadModelDocument { get; set; }
-
     string IProjectionContext.ProjectionId => ProjectionId;
 
     public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }

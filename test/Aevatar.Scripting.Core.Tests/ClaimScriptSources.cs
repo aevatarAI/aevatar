@@ -33,9 +33,33 @@ internal static class ClaimScriptSources
                                 RiskScore = evt.Current.RiskScore,
                                 CompliancePassed = evt.Current.CompliancePassed,
                                 LastCommandId = evt.CommandId ?? string.Empty,
+                                TraceSteps = { evt.Current.TraceSteps },
                             },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                        project: static (state, _, fact) => state == null
+                            ? new ClaimReadModel()
+                            : new ClaimReadModel
+                            {
+                                HasValue = true,
+                                CaseId = state.CaseId,
+                                PolicyId = state.PolicyId,
+                                DecisionStatus = state.DecisionStatus,
+                                ManualReviewRequired = state.ManualReviewRequired,
+                                AiSummary = state.AiSummary,
+                                RiskScore = state.RiskScore,
+                                CompliancePassed = state.CompliancePassed,
+                                LastCommandId = state.LastCommandId,
+                                Search = new ClaimSearchIndex
+                                {
+                                    LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
+                                    DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
+                                },
+                                Refs = new ClaimRefs
+                                {
+                                    PolicyId = state.PolicyId ?? string.Empty,
+                                    OwnerActorId = fact.ActorId,
+                                },
+                                TraceSteps = { state.TraceSteps },
+                            });
             }
 
             private static async Task HandleAsync(
@@ -152,9 +176,33 @@ internal static class ClaimScriptSources
                                 RiskScore = evt.Current.RiskScore,
                                 CompliancePassed = evt.Current.CompliancePassed,
                                 LastCommandId = evt.CommandId ?? string.Empty,
+                                TraceSteps = { evt.Current.TraceSteps },
                             },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                        project: static (state, _, fact) => state == null
+                            ? new ClaimReadModel()
+                            : new ClaimReadModel
+                            {
+                                HasValue = true,
+                                CaseId = state.CaseId,
+                                PolicyId = state.PolicyId,
+                                DecisionStatus = state.DecisionStatus,
+                                ManualReviewRequired = state.ManualReviewRequired,
+                                AiSummary = state.AiSummary,
+                                RiskScore = state.RiskScore,
+                                CompliancePassed = state.CompliancePassed,
+                                LastCommandId = state.LastCommandId,
+                                Search = new ClaimSearchIndex
+                                {
+                                    LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
+                                    DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
+                                },
+                                Refs = new ClaimRefs
+                                {
+                                    PolicyId = state.PolicyId ?? string.Empty,
+                                    OwnerActorId = fact.ActorId,
+                                },
+                                TraceSteps = { state.TraceSteps },
+                            });
             }
 
             private static async Task HandleAsync(

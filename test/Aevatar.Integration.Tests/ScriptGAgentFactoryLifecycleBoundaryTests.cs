@@ -26,7 +26,7 @@ public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
         const string runtimeActorId = "factory-runtime";
         const string revision = "rev-1";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "factory-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
@@ -34,8 +34,8 @@ public sealed class ScriptGAgentFactoryLifecycleBoundaryTests
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
 
-        var first = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
-        var second = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        var first = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
+        var second = await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
 
         first.Should().Be(runtimeActorId);
         second.Should().Be(runtimeActorId);

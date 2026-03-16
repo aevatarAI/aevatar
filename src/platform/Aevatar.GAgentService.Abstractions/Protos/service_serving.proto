@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+import "service_endpoint.proto";
+
+enum ServiceServingState {
+  SERVICE_SERVING_STATE_UNSPECIFIED = 0;
+  SERVICE_SERVING_STATE_ACTIVE = 1;
+  SERVICE_SERVING_STATE_PAUSED = 2;
+  SERVICE_SERVING_STATE_DRAINING = 3;
+  SERVICE_SERVING_STATE_DISABLED = 4;
+}
+
+enum ServiceRolloutStatus {
+  SERVICE_ROLLOUT_STATUS_UNSPECIFIED = 0;
+  SERVICE_ROLLOUT_STATUS_IN_PROGRESS = 1;
+  SERVICE_ROLLOUT_STATUS_PAUSED = 2;
+  SERVICE_ROLLOUT_STATUS_COMPLETED = 3;
+  SERVICE_ROLLOUT_STATUS_ROLLED_BACK = 4;
+  SERVICE_ROLLOUT_STATUS_FAILED = 5;
+}
+
+message ServiceServingTargetSpec {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  int32 allocation_weight = 4;
+  ServiceServingState serving_state = 5;
+  repeated string enabled_endpoint_ids = 6;
+}
+
+message ServiceServingSetState {
+  ServiceIdentity identity = 1;
+  int64 generation = 2;
+  repeated ServiceServingTargetSpec targets = 3;
+  string active_rollout_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  int64 last_applied_event_version = 6;
+  string last_event_id = 7;
+}
+
+message ReplaceServiceServingTargetsCommand {
+  ServiceIdentity identity = 1;
+  repeated ServiceServingTargetSpec targets = 2;
+  string rollout_id = 3;
+  string reason = 4;
+}
+
+message ServiceServingSetUpdatedEvent {
+  ServiceIdentity identity = 1;
+  int64 generation = 2;
+  repeated ServiceServingTargetSpec targets = 3;
+  string rollout_id = 4;
+  string reason = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message ServiceRolloutStageSpec {
+  string stage_id = 1;
+  repeated ServiceServingTargetSpec targets = 2;
+}
+
+message ServiceRolloutPlanSpec {
+  string rollout_id = 1;
+  string display_name = 2;
+  repeated ServiceRolloutStageSpec stages = 3;
+}
+
+message ServiceRolloutExecutionState {
+  ServiceIdentity identity = 1;
+  ServiceRolloutPlanSpec plan = 2;
+  string rollout_id = 3;
+  ServiceRolloutStatus status = 4;
+  int32 current_stage_index = 5;
+  repeated ServiceServingTargetSpec baseline_targets = 6;
+  string failure_reason = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  int64 last_applied_event_version = 10;
+  string last_event_id = 11;
+}
+
+message StartServiceRolloutCommand {
+  ServiceIdentity identity = 1;
+  ServiceRolloutPlanSpec plan = 2;
+  repeated ServiceServingTargetSpec baseline_targets = 3;
+}
+
+message AdvanceServiceRolloutCommand {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+}
+
+message PauseServiceRolloutCommand {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  string reason = 3;
+}
+
+message ResumeServiceRolloutCommand {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+}
+
+message RollbackServiceRolloutCommand {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  string reason = 3;
+}
+
+message ServiceRolloutStartedEvent {
+  ServiceIdentity identity = 1;
+  ServiceRolloutPlanSpec plan = 2;
+  repeated ServiceServingTargetSpec baseline_targets = 3;
+  google.protobuf.Timestamp started_at = 4;
+}
+
+message ServiceRolloutStageAdvancedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  int32 stage_index = 3;
+  string stage_id = 4;
+  repeated ServiceServingTargetSpec targets = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+message ServiceRolloutPausedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  string reason = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message ServiceRolloutResumedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+}
+
+message ServiceRolloutCompletedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+}
+
+message ServiceRolloutRolledBackEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  repeated ServiceServingTargetSpec targets = 3;
+  string reason = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+}
+
+message ServiceRolloutFailedEvent {
+  ServiceIdentity identity = 1;
+  string rollout_id = 2;
+  string failure_reason = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}

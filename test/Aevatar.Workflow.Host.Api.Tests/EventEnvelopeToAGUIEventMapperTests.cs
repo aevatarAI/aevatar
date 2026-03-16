@@ -11,7 +11,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class EventEnvelopeToAGUIEventMapperTests
 {
-    private static EventEnvelope Wrap<T>(T evt) where T : IMessage => new()
+    private static EventEnvelope WrapObserved<T>(T evt) where T : IMessage => new()
     {
         Id = Guid.NewGuid().ToString("N"),
         Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
@@ -23,10 +23,48 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         },
     };
 
+    private static EventEnvelope WrapCommitted<T>(
+        T evt,
+        long version = 1,
+        bool includeEnvelopeTimestamp = true,
+        bool includeStateEventTimestamp = true)
+        where T : IMessage
+    {
+        var eventId = Guid.NewGuid().ToString("N");
+        var envelopeTimestamp = includeEnvelopeTimestamp
+            ? Timestamp.FromDateTime(DateTime.UtcNow)
+            : null;
+        var stateEventTimestamp = includeStateEventTimestamp
+            ? envelopeTimestamp?.Clone()
+            : null;
+
+        return new EventEnvelope
+        {
+            Id = eventId,
+            Timestamp = envelopeTimestamp,
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("test"),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "cmd-1",
+            },
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                    Timestamp = stateEventTimestamp,
+                    EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(new WorkflowRunState()),
+            }),
+        };
+    }
+
     [Fact]
     public void StartWorkflowEvent_ShouldMapToRunStartedEnvelope()
     {
-        var events = CreateMapper().Map(Wrap(new StartWorkflowEvent
+        var events = CreateMapper().Map(WrapCommitted(new StartWorkflowEvent
         {
             WorkflowName = "review",
             Input = "hello",
@@ -40,7 +78,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void StartWorkflowEvent_WhenPublisherMissing_ShouldFallbackToWorkflowName()
     {
-        var envelope = Wrap(new StartWorkflowEvent
+        var envelope = WrapCommitted(new StartWorkflowEvent
         {
             WorkflowName = "fallback-workflow",
             Input = "hello",
@@ -56,7 +94,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void StepRequestEvent_ShouldMapToStepStartedAndCustomPayload()
     {
-        var events = CreateMapper().Map(Wrap(new StepRequestEvent
+        var events = CreateMapper().Map(WrapCommitted(new StepRequestEvent
         {
             RunId = "run-1",
             StepId = "analyze",
@@ -78,7 +116,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void StepCompletedEvent_ShouldMapStepFinishedAndExposeTypedFields()
     {
-        var events = CreateMapper().Map(Wrap(new StepCompletedEvent
+        var events = CreateMapper().Map(WrapCommitted(new StepCompletedEvent
         {
             RunId = "run-2",
             StepId = "evaluate",
@@ -116,7 +154,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void ChatResponseEvent_ShouldMapToFullTextSequence()
     {
-        var envelope = Wrap(new ChatResponseEvent
+        var envelope = WrapCommitted(new ChatResponseEvent
         {
             Content = "分析结果如下...",
             SessionId = "session-1",
@@ -136,12 +174,12 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     public void TextStreamEvents_ShouldMapStartContentAndEnd_WithEnvelopeIdFallback()
     {
         var mapper = CreateMapper();
-        var startEnvelope = Wrap(new TextMessageStartEvent());
-        var contentEnvelope = Wrap(new TextMessageContentEvent
+        var startEnvelope = WrapCommitted(new TextMessageStartEvent());
+        var contentEnvelope = WrapCommitted(new TextMessageContentEvent
         {
             Delta = "chunk",
         });
-        var endEnvelope = Wrap(new TextMessageEndEvent());
+        var endEnvelope = WrapCommitted(new TextMessageEndEvent());
 
         var startEvents = mapper.Map(startEnvelope);
         var contentEvents = mapper.Map(contentEnvelope);
@@ -165,7 +203,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void TextMessageReasoningEvent_ShouldMapToCustomReasoningPayload()
     {
-        var envelope = Wrap(new TextMessageReasoningEvent
+        var envelope = WrapCommitted(new TextMessageReasoningEvent
         {
             SessionId = "reasoning-session",
             Delta = "thinking chunk",
@@ -186,7 +224,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void TextMessageReasoningEvent_WhenPublisherMissing_ShouldFallbackToAssistant()
     {
-        var envelope = Wrap(new TextMessageReasoningEvent
+        var envelope = WrapCommitted(new TextMessageReasoningEvent
         {
             SessionId = "reasoning-session",
             Delta = "thinking chunk",
@@ -202,13 +240,13 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void WorkflowCompletedEvent_ShouldMapSuccessAndFailureCases()
     {
-        var success = CreateMapper().Map(Wrap(new WorkflowCompletedEvent
+        var success = CreateMapper().Map(WrapCommitted(new WorkflowCompletedEvent
         {
             WorkflowName = "review",
             Success = true,
             Output = "完成",
         }));
-        var failure = CreateMapper().Map(Wrap(new WorkflowCompletedEvent
+        var failure = CreateMapper().Map(WrapCommitted(new WorkflowCompletedEvent
         {
             WorkflowName = "review",
             Success = false,
@@ -229,7 +267,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void WorkflowSuspendedAndWaitingSignal_ShouldMapToCustomPayloads()
     {
-        var suspended = CreateMapper().Map(Wrap(new WorkflowSuspendedEvent
+        var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
         {
             RunId = "run-1",
             StepId = "get_context",
@@ -238,7 +276,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             TimeoutSeconds = 1800,
             VariableName = "user_context",
         }));
-        var waiting = CreateMapper().Map(Wrap(new WaitingForSignalEvent
+        var waiting = CreateMapper().Map(WrapCommitted(new WaitingForSignalEvent
         {
             RunId = "run-expected",
             StepId = "wait_gate",
@@ -261,7 +299,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void WaitingForSignalEvent_WhenRunIdMissing_ShouldFallbackToCorrelationId()
     {
-        var envelope = Wrap(new WaitingForSignalEvent
+        var envelope = WrapCommitted(new WaitingForSignalEvent
         {
             StepId = "wait_gate",
             SignalName = "ops_window_open",
@@ -280,7 +318,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void WorkflowSignalBufferedEvent_ProjectsTo_CustomBufferedSignalEvent()
     {
-        var envelope = Wrap(new WorkflowSignalBufferedEvent
+        var envelope = WrapCommitted(new WorkflowSignalBufferedEvent
         {
             RunId = "run-b",
             StepId = "wait-b",
@@ -306,12 +344,12 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     public void ToolCallAndResultEvents_ShouldMapToToolLifecycle()
     {
         var mapper = CreateMapper();
-        var startEvents = mapper.Map(Wrap(new ToolCallEvent
+        var startEvents = mapper.Map(WrapCommitted(new ToolCallEvent
         {
             CallId = "call-1",
             ToolName = "search",
         }));
-        var endEvents = mapper.Map(Wrap(new ToolResultEvent
+        var endEvents = mapper.Map(WrapCommitted(new ToolResultEvent
         {
             CallId = "call-1",
             ResultJson = "{\"ok\":true}",
@@ -331,7 +369,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void IndividualHandlers_ShouldReturnFalse_ForUnsupportedEnvelopes()
     {
-        var unsupported = Wrap(new ParentChangedEvent
+        var unsupported = WrapObserved(new ParentChangedEvent
         {
             OldParent = "a",
             NewParent = "b",
@@ -379,10 +417,13 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         var startEnvelope = new EventEnvelope
         {
             Id = "start-no-ts",
-            Payload = Any.Pack(new StartWorkflowEvent
-            {
-                WorkflowName = "fallback-thread",
-            }),
+            Payload = WrapCommitted(
+                new StartWorkflowEvent
+                {
+                    WorkflowName = "fallback-thread",
+                },
+                includeEnvelopeTimestamp: false,
+                includeStateEventTimestamp: false).Payload,
         };
         var startEvents = CreateMapper().Map(startEnvelope);
         startEvents.Should().ContainSingle();
@@ -392,17 +433,20 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         var waitingEnvelope = new EventEnvelope
         {
             Id = "wait-no-corr",
-            Payload = Any.Pack(new WaitingForSignalEvent
-            {
-                StepId = "wait_gate",
-                SignalName = "ops_window_open",
-            }),
+            Payload = WrapCommitted(
+                new WaitingForSignalEvent
+                {
+                    StepId = "wait_gate",
+                    SignalName = "ops_window_open",
+                },
+                includeEnvelopeTimestamp: false,
+                includeStateEventTimestamp: false).Payload,
         };
         var waitingEvents = CreateMapper().Map(waitingEnvelope);
         waitingEvents.Should().ContainSingle();
         waitingEvents[0].Custom.Payload.Unpack<WorkflowWaitingSignalCustomPayload>().RunId.Should().BeEmpty();
 
-        var reasoningEnvelope = Wrap(new TextMessageReasoningEvent
+        var reasoningEnvelope = WrapCommitted(new TextMessageReasoningEvent
         {
             SessionId = "reasoning-session",
             Delta = "thinking chunk",
@@ -416,7 +460,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     [Fact]
     public void UnknownOrNullPayload_ShouldReturnEmpty()
     {
-        var unknown = CreateMapper().Map(Wrap(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
+        var unknown = CreateMapper().Map(WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",

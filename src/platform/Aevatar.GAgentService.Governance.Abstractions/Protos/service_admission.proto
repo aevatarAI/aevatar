@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Abstractions";
+
+import "service_binding.proto";
+import "service_endpoint_catalog.proto";
+import "service_endpoint.proto";
+import "service_policy.proto";
+
+message AdmissionViolation {
+  string code = 1;
+  string message = 2;
+  string subject_id = 3;
+}
+
+message ActivationCapabilityView {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  repeated ServiceBindingSpec bindings = 3;
+  repeated ServiceEndpointExposureSpec endpoints = 4;
+  repeated ServicePolicySpec policies = 5;
+  repeated string missing_policy_ids = 6;
+}
+
+message ActivationAdmissionRequest {
+  ActivationCapabilityView capability_view = 1;
+}
+
+message ActivationAdmissionDecision {
+  bool allowed = 1;
+  repeated AdmissionViolation violations = 2;
+}
+
+message InvokeAdmissionRequest {
+  ServiceIdentity identity = 1;
+  string service_key = 2;
+  string endpoint_id = 3;
+  ServiceEndpointExposureSpec endpoint = 4;
+  repeated ServicePolicySpec policies = 5;
+  repeated string missing_policy_ids = 6;
+  bool has_active_deployment = 7;
+  ServiceInvocationCaller caller = 8;
+}
+
+message InvokeAdmissionDecision {
+  bool allowed = 1;
+  repeated AdmissionViolation violations = 2;
+}

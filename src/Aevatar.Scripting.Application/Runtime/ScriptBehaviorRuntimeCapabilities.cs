@@ -21,13 +21,13 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IAICapability _aiCapability;
     private readonly IActorRuntime _runtime;
     private readonly IScriptExecutionProjectionPort _executionProjectionPort;
-    private readonly IScriptReadModelQueryPort _readModelQueryPort;
+    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
+    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
         new(StringComparer.Ordinal);
     private readonly string _runId;
@@ -44,13 +44,13 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IAICapability aiCapability,
         IActorRuntime runtime,
         IScriptExecutionProjectionPort executionProjectionPort,
-        IScriptReadModelQueryPort readModelQueryPort,
+        IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort)
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
     {
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
@@ -62,13 +62,13 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
-        _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
+        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
@@ -114,12 +114,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
         _runtime.UnlinkAsync(childActorId, ct);
 
-    public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) =>
-        _readModelQueryPort.GetSnapshotAsync(actorId, ct);
-
-    public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) =>
-        _readModelQueryPort.ExecuteDeclaredQueryAsync(actorId, queryPayload, ct);
-
     public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct) =>
@@ -140,12 +134,13 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string? runtimeActorId,
         CancellationToken ct)
     {
+        var definitionSnapshot = await ResolveDefinitionSnapshotAsync(definitionActorId, scriptRevision, ct);
         var resolvedRuntimeActorId = await _runtimeProvisioningPort.EnsureRuntimeAsync(
             definitionActorId,
             scriptRevision,
             runtimeActorId,
-            ct,
-            ResolveDefinitionSnapshot(definitionActorId, scriptRevision));
+            definitionSnapshot,
+            ct);
         await EnsureProjectedRuntimeAsync(resolvedRuntimeActorId, ct);
         return resolvedRuntimeActorId;
     }
@@ -275,6 +270,20 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             "::",
             string.IsNullOrWhiteSpace(scriptRevision) ? "latest" : scriptRevision);
 
+    private async Task<ScriptDefinitionSnapshot> ResolveDefinitionSnapshotAsync(
+        string definitionActorId,
+        string scriptRevision,
+        CancellationToken ct)
+    {
+        var snapshot = ResolveDefinitionSnapshot(definitionActorId, scriptRevision);
+        if (snapshot != null)
+            return snapshot;
+
+        snapshot = await _definitionSnapshotPort.GetRequiredAsync(definitionActorId, scriptRevision, ct);
+        RememberDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
+        return snapshot;
+    }
+
     private async Task PrimeAuthorityProjectionIfNeededAsync(
         System.Type agentType,
         string actorId,
@@ -283,7 +292,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         if (agentType.IsAssignableTo(typeof(ScriptDefinitionGAgent)) ||
             agentType.IsAssignableTo(typeof(ScriptCatalogGAgent)))
         {
-            await _authorityProjectionPrimingPort.PrimeAsync(actorId, ct);
+            await _authorityReadModelActivationPort.ActivateAsync(actorId, ct);
         }
     }
 }

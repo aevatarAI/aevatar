@@ -1,5 +1,4 @@
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -7,18 +6,15 @@ namespace Aevatar.Scripting.Projection.ReadPorts;
 
 public sealed class ProjectionScriptCatalogQueryPort : IScriptCatalogQueryPort
 {
-    private readonly ScriptAuthorityProjectionPortService? _projectionPort;
-    private readonly IProjectionDocumentStore<ScriptCatalogEntryDocument, string>? _documentStore;
+    private readonly IProjectionDocumentReader<ScriptCatalogEntryDocument, string>? _documentReader;
     private readonly IScriptingActorAddressResolver? _addressResolver;
     private readonly Func<string?, string, CancellationToken, Task<ScriptCatalogEntrySnapshot?>>? _queryAsync;
 
     public ProjectionScriptCatalogQueryPort(
-        ScriptAuthorityProjectionPortService projectionPort,
-        IProjectionDocumentStore<ScriptCatalogEntryDocument, string> documentStore,
+        IProjectionDocumentReader<ScriptCatalogEntryDocument, string> documentReader,
         IScriptingActorAddressResolver addressResolver)
     {
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }
 
@@ -42,9 +38,7 @@ public sealed class ProjectionScriptCatalogQueryPort : IScriptCatalogQueryPort
         var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
             ? _addressResolver!.GetCatalogActorId()
             : catalogActorId;
-        _ = await _projectionPort!.EnsureActorProjectionAsync(resolvedCatalogActorId, ct);
-
-        var document = await _documentStore!.GetAsync(
+        var document = await _documentReader!.GetAsync(
             ScriptCatalogEntryProjector.BuildDocumentId(resolvedCatalogActorId, scriptId),
             ct);
         if (document == null || string.IsNullOrWhiteSpace(document.ActiveRevision))

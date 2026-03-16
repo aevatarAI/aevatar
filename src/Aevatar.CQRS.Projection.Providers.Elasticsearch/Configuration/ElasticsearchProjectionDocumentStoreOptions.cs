@@ -8,7 +8,7 @@ public sealed class ElasticsearchProjectionDocumentStoreOptions
 
     public int RequestTimeoutMs { get; set; } = 10000;
 
-    public int ListTakeMax { get; set; } = 200;
+    public int QueryTakeMax { get; set; } = 200;
 
     public bool AutoCreateIndex { get; set; } = true;
 
@@ -20,5 +20,5 @@ public sealed class ElasticsearchProjectionDocumentStoreOptions
 
     public string Password { get; set; } = "";
 
-    public string ListSortField { get; set; } = "";
+    public string DefaultSortField { get; set; } = "";
 }

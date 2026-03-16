@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Configuration;
@@ -6,7 +7,8 @@ namespace Aevatar.Workflow.Projection.Configuration;
 /// Feature flags for chat projection pipeline.
 /// </summary>
 public sealed class WorkflowExecutionProjectionOptions
-    : IProjectionRuntimeOptions
+    : IProjectionRuntimeOptions,
+      IProjectionDispatchCompensationOptions
 {
 
     /// <summary>

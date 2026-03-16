@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,7 +14,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Development");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -34,7 +35,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -56,7 +57,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("DOTNET_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<WorkflowExecutionReport, string>, NoOpDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, NoOpDocumentStore>();
         services.AddSingleton<IProjectionGraphStore, FailingGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -73,54 +74,34 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             .WithMessage("*graph startup probe failed*");
     }
 
-    private sealed class NoOpDocumentStore : IProjectionDocumentStore<WorkflowExecutionReport, string>
+    private sealed class NoOpDocumentStore : IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>
     {
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
+        public Task<WorkflowExecutionCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<WorkflowExecutionCurrentStateDocument?>(null);
         }
 
-        public Task MutateAsync(string key, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<WorkflowExecutionReport?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<WorkflowExecutionReport?>(null);
-        }
-
-        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowExecutionReport>>([]);
+            return Task.FromResult(ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>.Empty);
         }
     }
 
-    private sealed class FailingDocumentStore : IProjectionDocumentStore<WorkflowExecutionReport, string>
+    private sealed class FailingDocumentStore : IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>
     {
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
+        public Task<WorkflowExecutionCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<WorkflowExecutionCurrentStateDocument?>(null);
         }
 
-        public Task MutateAsync(string key, Action<WorkflowExecutionReport> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task<WorkflowExecutionReport?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<WorkflowExecutionReport?>(null);
-        }
-
-        public Task<IReadOnlyList<WorkflowExecutionReport>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             throw new InvalidOperationException("document store unavailable");

@@ -64,6 +64,8 @@ BenchmarkDotNet.Artifacts/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+!src/platform/Aevatar.GAgentService.Infrastructure/Artifacts/
+!src/platform/Aevatar.GAgentService.Infrastructure/Artifacts/**
 
 # Tye
 .tye/

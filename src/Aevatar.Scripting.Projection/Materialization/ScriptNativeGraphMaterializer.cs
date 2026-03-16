@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -6,7 +7,9 @@ using Google.Protobuf;
 
 namespace Aevatar.Scripting.Projection.Materialization;
 
-public sealed class ScriptNativeGraphMaterializer : IScriptNativeGraphMaterializer
+public sealed class ScriptNativeGraphMaterializer
+    : IScriptNativeGraphMaterializer,
+      IProjectionGraphMaterializer<ScriptNativeGraphReadModel>
 {
     public ScriptNativeGraphReadModel Materialize(
         string actorId,
@@ -14,11 +17,14 @@ public sealed class ScriptNativeGraphMaterializer : IScriptNativeGraphMaterializ
         string definitionActorId,
         string revision,
         ScriptDomainFactCommitted fact,
+        string sourceEventId,
+        DateTimeOffset updatedAt,
         IMessage? semanticReadModel,
         ScriptReadModelMaterializationPlan plan)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(fact);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceEventId);
         ArgumentNullException.ThrowIfNull(plan);
 
         var graphScope = BuildGraphScope(plan.SchemaId);
@@ -90,7 +96,7 @@ public sealed class ScriptNativeGraphMaterializer : IScriptNativeGraphMaterializ
             }
         }
 
-        return new ScriptNativeGraphReadModel
+        var readModel = new ScriptNativeGraphReadModel
         {
             Id = actorId,
             ScriptId = scriptId ?? string.Empty,
@@ -100,13 +106,28 @@ public sealed class ScriptNativeGraphMaterializer : IScriptNativeGraphMaterializ
             SchemaVersion = plan.SchemaVersion,
             SchemaHash = plan.SchemaHash,
             GraphScope = graphScope,
-            GraphNodes = nodes.Values.ToArray(),
-            GraphEdges = edges.Values.ToArray(),
             StateVersion = fact.StateVersion,
-            LastEventId = string.IsNullOrWhiteSpace(fact.EventType)
-                ? fact.DomainEventPayload?.TypeUrl ?? string.Empty
-                : fact.EventType,
-            UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs),
+            LastEventId = sourceEventId,
+            UpdatedAt = updatedAt,
+        };
+        readModel.GraphNodeEntries.Add(nodes.Values.Select(ScriptProjectionReadModelSupport.ToGraphNodeRecord));
+        readModel.GraphEdgeEntries.Add(edges.Values.Select(ScriptProjectionReadModelSupport.ToGraphEdgeRecord));
+        return readModel;
+    }
+
+    public ProjectionGraphMaterialization Materialize(ScriptNativeGraphReadModel readModel)
+    {
+        ArgumentNullException.ThrowIfNull(readModel);
+
+        return new ProjectionGraphMaterialization
+        {
+            Scope = readModel.GraphScope ?? string.Empty,
+            Nodes = readModel.GraphNodeEntries
+                .Select(ScriptProjectionReadModelSupport.ToProjectionGraphNode)
+                .ToArray(),
+            Edges = readModel.GraphEdgeEntries
+                .Select(ScriptProjectionReadModelSupport.ToProjectionGraphEdge)
+                .ToArray(),
         };
     }
 

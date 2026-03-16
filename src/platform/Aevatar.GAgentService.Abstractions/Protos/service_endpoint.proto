@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/any.proto";
+
+message ServiceIdentity {
+  string tenant_id = 1;
+  string app_id = 2;
+  string namespace = 3;
+  string service_id = 4;
+}
+
+enum ServiceEndpointKind {
+  SERVICE_ENDPOINT_KIND_UNSPECIFIED = 0;
+  SERVICE_ENDPOINT_KIND_COMMAND = 1;
+  SERVICE_ENDPOINT_KIND_CHAT = 2;
+}
+
+message ServiceEndpointSpec {
+  string endpoint_id = 1;
+  string display_name = 2;
+  ServiceEndpointKind kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+}
+
+message ServiceEndpointDescriptor {
+  string endpoint_id = 1;
+  string display_name = 2;
+  ServiceEndpointKind kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+}
+
+message ServiceInvocationRequest {
+  ServiceIdentity identity = 1;
+  string endpoint_id = 2;
+  google.protobuf.Any payload = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  ServiceInvocationCaller caller = 6;
+}
+
+message ServiceInvocationAcceptedReceipt {
+  string request_id = 1;
+  string service_key = 2;
+  string deployment_id = 3;
+  string target_actor_id = 4;
+  string endpoint_id = 5;
+  string command_id = 6;
+  string correlation_id = 7;
+}
+
+message ServiceInvocationCaller {
+  string service_key = 1;
+  string tenant_id = 2;
+  string app_id = 3;
+}

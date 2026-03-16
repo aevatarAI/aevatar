@@ -3,7 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -78,38 +78,50 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowExecutionReport>();
-            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp =>
-            {
-                var metadataResolver = sp.GetRequiredService<IProjectionDocumentMetadataResolver>();
-                return metadataResolver.Resolve<WorkflowActorBindingDocument>();
-            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>>().Metadata,
             keySelector: static document => document.Id,
             keyFormatter: static key => key);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
-        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key,
-            listSortSelector: static report => report.CreatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: static report => report.CreatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: static document => document.Id,
             keyFormatter: static key => key,
-            listSortSelector: static document => document.UpdatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)

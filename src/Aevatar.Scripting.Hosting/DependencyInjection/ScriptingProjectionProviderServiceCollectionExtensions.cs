@@ -3,7 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -62,29 +62,30 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         {
             services.AddElasticsearchDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptDefinitionSnapshotDocument>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptDefinitionSnapshotDocument>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptCatalogEntryDocument>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptCatalogEntryDocument>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ScriptReadModelDocument, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptReadModelDocument>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptReadModelDocument>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ScriptEvolutionReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptEvolutionReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
             services.AddElasticsearchDocumentProjectionStore<ScriptNativeDocumentReadModel, string>(
                 optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataResolver>().Resolve<ScriptNativeDocumentReadModel>(),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
-                keyFormatter: key => key);
+                keyFormatter: key => key,
+                indexScopeSelector: readModel => readModel.DocumentIndexScope);
         }
         else
         {
@@ -109,23 +110,23 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         services.AddInMemoryDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptEvolutionReadModel, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptNativeDocumentReadModel, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)

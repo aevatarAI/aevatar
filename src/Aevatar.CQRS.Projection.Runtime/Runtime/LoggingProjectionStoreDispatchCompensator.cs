@@ -3,20 +3,20 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
-public sealed class LoggingProjectionStoreDispatchCompensator<TReadModel, TKey>
-    : IProjectionStoreDispatchCompensator<TReadModel, TKey>
+public sealed class LoggingProjectionStoreDispatchCompensator<TReadModel>
+    : IProjectionStoreDispatchCompensator<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
-    private readonly ILogger<LoggingProjectionStoreDispatchCompensator<TReadModel, TKey>> _logger;
+    private readonly ILogger<LoggingProjectionStoreDispatchCompensator<TReadModel>> _logger;
 
     public LoggingProjectionStoreDispatchCompensator(
-        ILogger<LoggingProjectionStoreDispatchCompensator<TReadModel, TKey>>? logger = null)
+        ILogger<LoggingProjectionStoreDispatchCompensator<TReadModel>>? logger = null)
     {
-        _logger = logger ?? NullLogger<LoggingProjectionStoreDispatchCompensator<TReadModel, TKey>>.Instance;
+        _logger = logger ?? NullLogger<LoggingProjectionStoreDispatchCompensator<TReadModel>>.Instance;
     }
 
     public Task CompensateAsync(
-        ProjectionStoreDispatchCompensationContext<TReadModel, TKey> context,
+        ProjectionStoreDispatchCompensationContext<TReadModel> context,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);

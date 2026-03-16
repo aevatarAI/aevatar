@@ -33,8 +33,7 @@ internal static class TextNormalizationProtocolSampleActors
                     .OnCommand<TextNormalizationRequested>(HandleRequestedAsync)
                     .OnEvent<TextNormalizationCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleRequestedAsync(

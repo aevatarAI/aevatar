@@ -11,6 +11,12 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
     private readonly ScriptSandboxPolicy _sandboxPolicy;
     private readonly IScriptProtoCompiler _protoCompiler;
 
+    private sealed record ValidationResult(
+        bool IsSuccess,
+        ScriptSourcePackage? Package,
+        IReadOnlyList<ScriptSourceFile> CSharpSources,
+        IReadOnlyList<string> Diagnostics);
+
     public RoslynScriptBehaviorCompiler(
         ScriptSandboxPolicy sandboxPolicy,
         IScriptProtoCompiler? protoCompiler = null)
@@ -23,80 +29,150 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var validation = ValidateRequest(request);
+        if (!validation.IsSuccess)
+            return Failure(validation.Diagnostics);
+
+        var sandboxResult = ValidateSandbox(validation.CSharpSources);
+        if (sandboxResult != null)
+            return sandboxResult;
+
+        var syntaxTreeResult = BuildSourceSyntaxTrees(validation.CSharpSources);
+        if (!syntaxTreeResult.IsSuccess)
+            return Failure(syntaxTreeResult.Diagnostics);
+
+        var protoCompilation = _protoCompiler.Compile(request);
+        if (!protoCompilation.IsSuccess)
+            return Failure(protoCompilation.Diagnostics);
+
+        var syntaxTrees = AppendGeneratedSyntaxTrees(syntaxTreeResult.SyntaxTrees, protoCompilation);
+        var semanticCompilation = CreateSemanticCompilation(syntaxTrees);
+        var semanticErrors = CollectCompilationErrors(semanticCompilation);
+        if (semanticErrors.Length > 0)
+            return Failure(semanticErrors);
+
+        if (!TryEnsureBehaviorImplementation(semanticCompilation, out var behaviorDiagnostic))
+            return Failure([behaviorDiagnostic]);
+
+        var loadedBehaviorResult = TryLoadBehavior(validation.Package!, semanticCompilation, protoCompilation);
+        if (!loadedBehaviorResult.IsSuccess)
+            return Failure(loadedBehaviorResult.Diagnostics);
+
+        return Success(BuildArtifact(request, loadedBehaviorResult.LoadedBehavior!));
+    }
+
+    private static ValidationResult ValidateRequest(ScriptBehaviorCompilationRequest request)
+    {
         var diagnostics = new List<string>();
         if (string.IsNullOrWhiteSpace(request.ScriptId))
             diagnostics.Add("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(request.Revision))
             diagnostics.Add("Revision is required.");
+
         var normalizedPackage = request.Package.Normalize();
         var csharpSources = normalizedPackage.CSharpSources;
         if (csharpSources.Count == 0)
             diagnostics.Add("At least one C# source file is required in the script package.");
-        if (diagnostics.Count > 0)
-            return new ScriptBehaviorCompilationResult(false, null, diagnostics);
 
+        return diagnostics.Count > 0
+            ? new ValidationResult(false, null, Array.Empty<ScriptSourceFile>(), diagnostics)
+            : new ValidationResult(true, normalizedPackage, csharpSources, Array.Empty<string>());
+    }
+
+    private ScriptBehaviorCompilationResult? ValidateSandbox(IReadOnlyList<ScriptSourceFile> csharpSources)
+    {
         foreach (var sourceFile in csharpSources)
         {
             var sandbox = _sandboxPolicy.Validate(sourceFile.Content);
             if (!sandbox.IsValid)
             {
-                return new ScriptBehaviorCompilationResult(
-                    false,
-                    null,
-                    sandbox.Violations.Select(x => $"{sourceFile.Path}: {x}").ToArray());
+                return Failure(sandbox.Violations.Select(x => $"{sourceFile.Path}: {x}").ToArray());
             }
         }
 
+        return null;
+    }
+
+    private static (bool IsSuccess, IReadOnlyList<SyntaxTree> SyntaxTrees, IReadOnlyList<string> Diagnostics) BuildSourceSyntaxTrees(
+        IReadOnlyList<ScriptSourceFile> csharpSources)
+    {
         var syntaxTrees = new List<SyntaxTree>(csharpSources.Count);
         foreach (var sourceFile in csharpSources)
         {
             var syntaxTree = CSharpSyntaxTree.ParseText(sourceFile.Content, path: sourceFile.Path);
-            var syntaxErrors = syntaxTree
-                .GetDiagnostics()
-                .Where(x => x.Severity == DiagnosticSeverity.Error)
-                .Select(x => x.ToString())
-                .ToArray();
+            var syntaxErrors = CollectSyntaxErrors(syntaxTree);
             if (syntaxErrors.Length > 0)
-                return new ScriptBehaviorCompilationResult(false, null, syntaxErrors);
+                return (false, Array.Empty<SyntaxTree>(), syntaxErrors);
+
             syntaxTrees.Add(syntaxTree);
         }
 
-        var protoCompilation = _protoCompiler.Compile(request);
-        if (!protoCompilation.IsSuccess)
-            return new ScriptBehaviorCompilationResult(false, null, protoCompilation.Diagnostics);
-        foreach (var generatedSource in protoCompilation.GeneratedSources)
-            syntaxTrees.Add(CSharpSyntaxTree.ParseText(generatedSource.Content, path: generatedSource.Path));
+        return (true, syntaxTrees, Array.Empty<string>());
+    }
 
-        var semanticCompilation = CSharpCompilation.Create(
-            assemblyName: "Aevatar.DynamicScript.Validation." + Guid.NewGuid().ToString("N"),
-            syntaxTrees: syntaxTrees,
-            references: ScriptCompilationMetadataReferences.Build(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var semanticErrors = semanticCompilation
+    private static string[] CollectSyntaxErrors(SyntaxTree syntaxTree)
+    {
+        return syntaxTree
             .GetDiagnostics()
             .Where(x => x.Severity == DiagnosticSeverity.Error)
             .Select(x => x.ToString())
             .ToArray();
-        if (semanticErrors.Length > 0)
-            return new ScriptBehaviorCompilationResult(false, null, semanticErrors);
+    }
 
-        if (!TryEnsureBehaviorImplementation(semanticCompilation, out var behaviorDiagnostic))
-            return new ScriptBehaviorCompilationResult(false, null, [behaviorDiagnostic]);
+    private static IReadOnlyList<SyntaxTree> AppendGeneratedSyntaxTrees(
+        IReadOnlyList<SyntaxTree> syntaxTrees,
+        ScriptProtoCompilationResult protoCompilation)
+    {
+        var result = new List<SyntaxTree>(syntaxTrees.Count + protoCompilation.GeneratedSources.Count);
+        result.AddRange(syntaxTrees);
+        foreach (var generatedSource in protoCompilation.GeneratedSources)
+            result.Add(CSharpSyntaxTree.ParseText(generatedSource.Content, path: generatedSource.Path));
 
-        ScriptBehaviorLoader.LoadedScriptBehavior loadedBehavior;
+        return result;
+    }
+
+    private static CSharpCompilation CreateSemanticCompilation(IReadOnlyList<SyntaxTree> syntaxTrees)
+    {
+        return CSharpCompilation.Create(
+            assemblyName: "Aevatar.DynamicScript.Validation." + Guid.NewGuid().ToString("N"),
+            syntaxTrees: syntaxTrees,
+            references: ScriptCompilationMetadataReferences.Build(),
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    private static string[] CollectCompilationErrors(CSharpCompilation compilation)
+    {
+        return compilation
+            .GetDiagnostics()
+            .Where(x => x.Severity == DiagnosticSeverity.Error)
+            .Select(x => x.ToString())
+            .ToArray();
+    }
+
+    private static (bool IsSuccess, ScriptBehaviorLoader.LoadedScriptBehavior? LoadedBehavior, IReadOnlyList<string> Diagnostics) TryLoadBehavior(
+        ScriptSourcePackage package,
+        CSharpCompilation semanticCompilation,
+        ScriptProtoCompilationResult protoCompilation)
+    {
         try
         {
-            loadedBehavior = ScriptBehaviorLoader.LoadFromCompilation(
+            var loadedBehavior = ScriptBehaviorLoader.LoadFromCompilation(
                 semanticCompilation,
                 protoCompilation.DescriptorSet,
-                request.Package.EntryBehaviorTypeName);
+                package.EntryBehaviorTypeName);
+            return (true, loadedBehavior, Array.Empty<string>());
         }
         catch (Exception ex)
         {
-            return new ScriptBehaviorCompilationResult(false, null, [ex.Message]);
+            return (false, null, [ex.Message]);
         }
+    }
 
-        var artifact = new ScriptBehaviorArtifact(
+    private static ScriptBehaviorArtifact BuildArtifact(
+        ScriptBehaviorCompilationRequest request,
+        ScriptBehaviorLoader.LoadedScriptBehavior loadedBehavior)
+    {
+        return new ScriptBehaviorArtifact(
             request.ScriptId,
             request.Revision,
             request.ResolvedPackageHash,
@@ -104,8 +180,13 @@ public sealed class RoslynScriptBehaviorCompiler : IScriptBehaviorCompiler
             loadedBehavior.Contract ?? ScriptGAgentContract.Empty,
             loadedBehavior.CreateBehavior,
             loadedBehavior.DisposeAsync);
-        return new ScriptBehaviorCompilationResult(true, artifact, Array.Empty<string>());
     }
+
+    private static ScriptBehaviorCompilationResult Failure(IReadOnlyList<string> diagnostics) =>
+        new(false, null, diagnostics);
+
+    private static ScriptBehaviorCompilationResult Success(ScriptBehaviorArtifact artifact) =>
+        new(true, artifact, Array.Empty<string>());
 
     private static bool TryEnsureBehaviorImplementation(
         CSharpCompilation compilation,

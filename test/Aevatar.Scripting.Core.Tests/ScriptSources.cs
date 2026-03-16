@@ -24,8 +24,11 @@ internal static class ScriptSources
                     .OnCommand<SimpleTextCommand>(HandleCommandAsync)
                     .OnEvent<SimpleTextEvent>(
                         apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                        project: static (state, _, _) => new SimpleTextReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state?.Value),
+                            Value = state?.Value ?? string.Empty,
+                        });
             }
 
             private static Task HandleCommandAsync(
@@ -85,8 +88,7 @@ internal static class ScriptSources
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleCommandAsync(

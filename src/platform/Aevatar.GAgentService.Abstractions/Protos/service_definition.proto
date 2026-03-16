@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "service_endpoint.proto";
+
+message ServiceDefinitionSpec {
+  ServiceIdentity identity = 1;
+  string display_name = 2;
+  repeated ServiceEndpointSpec endpoints = 3;
+  repeated string policy_ids = 4;
+}
+
+message ServiceDefinitionState {
+  ServiceDefinitionSpec spec = 1;
+  string default_serving_revision_id = 2;
+  int64 last_applied_event_version = 3;
+  string last_event_id = 4;
+}
+
+message CreateServiceDefinitionCommand {
+  ServiceDefinitionSpec spec = 1;
+}
+
+message UpdateServiceDefinitionCommand {
+  ServiceDefinitionSpec spec = 1;
+}
+
+message SetDefaultServingRevisionCommand {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+}
+
+message ServiceDefinitionCreatedEvent {
+  ServiceDefinitionSpec spec = 1;
+}
+
+message ServiceDefinitionUpdatedEvent {
+  ServiceDefinitionSpec spec = 1;
+}
+
+message DefaultServingRevisionChangedEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+}

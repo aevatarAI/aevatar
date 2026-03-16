@@ -42,18 +42,20 @@ echo "Generating filtered coverage report..."
 dotnet tool run reportgenerator \
   "-reports:${raw_dir}/**/coverage.cobertura.xml" \
   "-targetdir:${report_dir}" \
-  "-reporttypes:JsonSummary;TextSummary" \
+  "-reporttypes:JsonSummary;TextSummary;Cobertura" \
   "-assemblyfilters:${assembly_filters}" \
   "-filefilters:${generated_file_filters}"
 
 summary_json="${report_dir}/Summary.json"
 summary_txt="${report_dir}/Summary.txt"
+filtered_cobertura="${report_dir}/Cobertura.xml"
 
 line_coverage="$(jq -r '.summary.linecoverage // 0' "${summary_json}")"
 branch_coverage="$(jq -r '.summary.branchcoverage // 0' "${summary_json}")"
 
 echo "Coverage summary (filtered): line=${line_coverage}% branch=${branch_coverage}%"
 echo "Coverage report path: ${summary_txt}"
+echo "Filtered Cobertura path: ${filtered_cobertura}"
 
 line_ok="$(awk -v actual="${line_coverage}" -v threshold="${line_threshold}" 'BEGIN { if ((actual + 0) >= (threshold + 0)) print 1; else print 0; }')"
 branch_ok="$(awk -v actual="${branch_coverage}" -v threshold="${branch_threshold}" 'BEGIN { if ((actual + 0) >= (threshold + 0)) print 1; else print 0; }')"

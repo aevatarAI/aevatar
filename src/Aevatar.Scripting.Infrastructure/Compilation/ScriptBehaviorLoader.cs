@@ -111,11 +111,6 @@ internal static class ScriptBehaviorLoader
             yield return ScriptMessageTypes.GetDescriptor(registration.MessageClrType);
         foreach (var registration in descriptor.DomainEvents.Values)
             yield return ScriptMessageTypes.GetDescriptor(registration.MessageClrType);
-        foreach (var registration in descriptor.Queries.Values)
-        {
-            yield return ScriptMessageTypes.GetDescriptor(registration.QueryClrType);
-            yield return ScriptMessageTypes.GetDescriptor(registration.ResultClrType);
-        }
     }
 
     private static Assembly? ResolveFromDefault(AssemblyLoadContext context, AssemblyName assemblyName)

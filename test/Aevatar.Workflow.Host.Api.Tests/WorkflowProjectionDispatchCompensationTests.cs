@@ -6,36 +6,37 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
+public class ProjectionDispatchCompensationOutboxGAgentTests
 {
     private static IServiceProvider CreateAgentServices(
         IEventStore? eventStore = null,
-        IEnumerable<IProjectionStoreBinding<WorkflowExecutionReport, string>>? bindings = null,
+        IEnumerable<IProjectionWriteSink<WorkflowRunInsightReportDocument>>? bindings = null,
         WorkflowExecutionProjectionOptions? options = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(eventStore ?? new InMemoryEventStore());
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
-        services.AddSingleton(options ?? new WorkflowExecutionProjectionOptions
+        var resolvedOptions = options ?? new WorkflowExecutionProjectionOptions
         {
             DispatchCompensationReplayBaseDelayMs = 0,
             DispatchCompensationReplayMaxDelayMs = 0,
-        });
+        };
+        services.AddSingleton(resolvedOptions);
+        services.AddSingleton<IProjectionDispatchCompensationOptions>(resolvedOptions);
         foreach (var binding in bindings ?? [])
             services.AddSingleton(binding);
 
         return services.BuildServiceProvider();
     }
 
-    private static WorkflowProjectionDispatchCompensationOutboxGAgent CreateAgent(IServiceProvider services) =>
+    private static ProjectionDispatchCompensationOutboxGAgent CreateAgent(IServiceProvider services) =>
         new()
         {
             Services = services,
@@ -54,7 +55,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             Operation = "mutate",
             FailedStore = "Graph",
             SucceededStores = { "Document" },
-            ReadModelType = typeof(WorkflowExecutionReport).FullName!,
+            ReadModelType = typeof(WorkflowRunInsightReportDocument).FullName!,
             ReadModel = CreateReadModelPayload("root-1"),
             Key = "root-1",
             LastError = "InvalidOperationException",
@@ -67,7 +68,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         entry.AttemptCount.Should().Be(0);
         entry.CompletedAtUtc.Should().BeNull();
         entry.ReadModel.Should().NotBeNull();
-        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
+        entry.ReadModel!.Is(WorkflowRunInsightReportDocument.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -99,10 +100,10 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     [Fact]
     public void BuildActorId_ShouldTrimScopeAndThrowForBlank()
     {
-        WorkflowProjectionDispatchCompensationOutboxGAgent.BuildActorId(" workflow ").Should()
-            .Be("projection.compensation.outbox:workflow");
+        ProjectionDispatchCompensationOutboxGAgent.BuildActorId(" default ").Should()
+            .Be("projection.compensation.outbox:default");
 
-        Action act = () => WorkflowProjectionDispatchCompensationOutboxGAgent.BuildActorId("   ");
+        Action act = () => ProjectionDispatchCompensationOutboxGAgent.BuildActorId("   ");
         act.Should().Throw<ArgumentException>();
     }
 
@@ -306,11 +307,10 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         var agent = CreateAgent(services);
 
         var outbox = new DirectOutbox(agent);
-        var compensator = new WorkflowProjectionDurableOutboxCompensator(outbox);
-        var context = new ProjectionStoreDispatchCompensationContext<WorkflowExecutionReport, string>
+        var compensator = new DurableProjectionDispatchCompensator<WorkflowRunInsightReportDocument>(outbox);
+        var context = new ProjectionStoreDispatchCompensationContext<WorkflowRunInsightReportDocument>
         {
             Operation = "mutate",
-            Key = "root-1",
             ReadModel = CreateReadModel("root-1"),
             FailedStore = "Graph",
             SucceededStores = ["Document"],
@@ -324,7 +324,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         entry.FailedStore.Should().Be("Graph");
         entry.Operation.Should().Be("mutate");
         entry.ReadModel.Should().NotBeNull();
-        entry.ReadModel!.Is(WorkflowExecutionReportSnapshot.Descriptor).Should().BeTrue();
+        entry.ReadModel!.Is(WorkflowRunInsightReportDocument.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -341,7 +341,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
         {
             DispatchCompensationReplayBatchSize = 10,
         };
-        var timer = new WorkflowProjectionDispatchCompensationReplayHostedService(outbox, options);
+        var timer = new ProjectionDispatchCompensationReplayHostedService(outbox, options);
 
         await timer.ReplayOnceAsync();
 
@@ -361,7 +361,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             Operation = "mutate",
             FailedStore = failedStore,
             SucceededStores = { "Document" },
-            ReadModelType = typeof(WorkflowExecutionReport).FullName!,
+            ReadModelType = typeof(WorkflowRunInsightReportDocument).FullName!,
             Key = recordId,
             LastError = "test",
             EnqueuedAtUtc = enqueuedAtUtc,
@@ -374,9 +374,9 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     }
 
     private static Any CreateReadModelPayload(string rootActorId) =>
-        WorkflowExecutionReportSnapshotMapper.Pack(CreateReadModel(rootActorId));
+        Any.Pack(CreateReadModel(rootActorId));
 
-    private static WorkflowExecutionReport CreateReadModel(string rootActorId) =>
+    private static WorkflowRunInsightReportDocument CreateReadModel(string rootActorId) =>
         new()
         {
             Id = rootActorId,
@@ -389,7 +389,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             UpdatedAt = DateTimeOffset.UtcNow,
         };
 
-    private sealed class FlakyGraphBinding : IProjectionStoreBinding<WorkflowExecutionReport, string>
+    private sealed class FlakyGraphBinding : IProjectionWriteSink<WorkflowRunInsightReportDocument>
     {
         private int _remainingFailures;
         private readonly string _storeName;
@@ -400,13 +400,17 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             _storeName = storeName;
         }
 
-        public string StoreName => _storeName;
+        public string SinkName => _storeName;
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int AttemptCount { get; private set; }
 
         public int SuccessCount { get; private set; }
 
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(WorkflowRunInsightReportDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ArgumentNullException.ThrowIfNull(readModel);
@@ -419,7 +423,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             }
 
             SuccessCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 
@@ -428,9 +432,9 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     /// </summary>
     private sealed class DirectOutbox : IProjectionDispatchCompensationOutbox
     {
-        private readonly WorkflowProjectionDispatchCompensationOutboxGAgent _agent;
+        private readonly ProjectionDispatchCompensationOutboxGAgent _agent;
 
-        public DirectOutbox(WorkflowProjectionDispatchCompensationOutboxGAgent agent)
+        public DirectOutbox(ProjectionDispatchCompensationOutboxGAgent agent)
         {
             _agent = agent;
         }

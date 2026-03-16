@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.GAgentService.Tests</AssemblyName>
+    <RootNamespace>Aevatar.GAgentService.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Core\Aevatar.GAgentService.Governance.Core.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Application\Aevatar.GAgentService.Governance.Application.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Infrastructure\Aevatar.GAgentService.Governance.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Projection\Aevatar.GAgentService.Governance.Projection.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+</Project>

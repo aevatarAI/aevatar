@@ -5,7 +5,12 @@ This directory keeps CI gate scripts and smoke tests.
 ## Quality Guards
 
 - `tools/ci/coverage_quality_guard.sh`: coverage collection and threshold gate (generated files are excluded by default via file filters, e.g. `obj/**`, `Generated/**`, `*.g.cs`).
+  - Produces a filtered `Cobertura.xml` under `artifacts/coverage/<timestamp>-ci-gate/report/` after applying assembly/file exclusions such as `Aevatar.Tools.*`.
 - `tools/ci/architecture_guards.sh`: architecture/static guards (includes projection route mapping guard).
+- `tools/ci/code_metrics_analyzer_guard.sh`: repository-wide code metrics analyzer gate (CA1501/CA1502/CA1505/CA1506/CA1509 via `CodeMetricsConfig.txt`).
+- `tools/ci/code_metrics_report.ps1`: Windows-only `Microsoft.CodeAnalysis.Metrics` report generation for production projects under `src/`.
+- `tools/ci/fetch_latest_code_metrics.sh`: downloads the latest available `code-metrics-reports` GitHub Actions artifact into `artifacts/code-metrics/latest/` via `gh`.
+- `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
 - `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard.
 - `tools/ci/solution_split_guards.sh`: split build guard.
 - `tools/ci/solution_split_test_guards.sh`: split test guard.
@@ -30,6 +35,13 @@ This directory keeps CI gate scripts and smoke tests.
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
   - Job `fast-gates`
     - Runs static architecture and test-stability guards.
+  - Job `code-metrics-analyzers`
+    - Runs `tools/ci/code_metrics_analyzer_guard.sh`.
+    - Treats CA1501/CA1502/CA1505/CA1506/CA1509 as errors using the shared `CodeMetricsConfig.txt`.
+  - Job `code-metrics-report`
+    - Restores `tools/Aevatar.Tools.CodeMetrics/Aevatar.Tools.CodeMetrics.csproj`.
+    - Runs `tools/ci/code_metrics_report.ps1` on `windows-latest`.
+    - Uploads `artifacts/code-metrics/**` as CI artifacts.
   - Job `split-test-guards` (matrix)
     - Runs `dotnet test` for each split solution filter (`foundation/ai/cqrs/workflow/hosting/distributed`).
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
@@ -44,5 +56,7 @@ This directory keeps CI gate scripts and smoke tests.
     - Triggered on EventSourcing/runtime related changes, `main/dev` pushes, or manual dispatch.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
+    - Uploads `artifacts/coverage/**` as CI artifacts (`coverage-quality-report`).
+    - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` to Codecov when `CODECOV_TOKEN` is available.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `distributed-3node-smoke` -> `tools/ci/distributed_3node_smoke.sh`

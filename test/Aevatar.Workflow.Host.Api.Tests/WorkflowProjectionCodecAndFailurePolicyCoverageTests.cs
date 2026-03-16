@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
-using Aevatar.Workflow.Projection.Transport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -90,8 +89,12 @@ public sealed class WorkflowRunEventSessionCodecCoverageTests
                     {
                         ActorId = "actor-1",
                         WorkflowName = "direct",
-                        LastCommandId = "cmd-1",
                         TotalSteps = 2,
+                    },
+                    ProjectionState = new WorkflowActorProjectionStatePayload
+                    {
+                        ActorId = "actor-1",
+                        LastCommandId = "cmd-1",
                     },
                 }),
             },

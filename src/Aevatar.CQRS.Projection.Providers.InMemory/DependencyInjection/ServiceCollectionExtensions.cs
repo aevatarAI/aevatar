@@ -10,19 +10,23 @@ public static class InMemoryProjectionServiceCollectionExtensions
         this IServiceCollection services,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        Func<TReadModel, object?>? listSortSelector = null,
-        int listTakeMax = 200)
+        Func<TReadModel, object?>? defaultSortSelector = null,
+        int queryTakeMax = 200)
         where TReadModel : class, IProjectionReadModel
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 
-        services.AddSingleton<IProjectionDocumentStore<TReadModel, TKey>>(provider =>
+        services.AddSingleton<InMemoryProjectionDocumentStore<TReadModel, TKey>>(provider =>
             new InMemoryProjectionDocumentStore<TReadModel, TKey>(
                 keySelector,
                 keyFormatter,
-                listSortSelector,
-                listTakeMax,
+                defaultSortSelector,
+                queryTakeMax,
                 provider.GetService<ILogger<InMemoryProjectionDocumentStore<TReadModel, TKey>>>()));
+        services.AddSingleton<IProjectionDocumentWriter<TReadModel>>(provider =>
+            provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
+        services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }

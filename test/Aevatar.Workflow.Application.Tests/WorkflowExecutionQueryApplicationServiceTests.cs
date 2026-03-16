@@ -74,8 +74,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var subgraph = new WorkflowActorGraphSubgraph
         {
             RootNodeId = "actor-1",
-            Nodes = [new WorkflowActorGraphNode { NodeId = "actor-1" }],
-            Edges = [new WorkflowActorGraphEdge { EdgeId = "edge-2" }],
+            Nodes = { new WorkflowActorGraphNode { NodeId = "actor-1" } },
+            Edges = { new WorkflowActorGraphEdge { EdgeId = "edge-2" } },
         };
         var enriched = new WorkflowActorGraphEnrichedSnapshot
         {
@@ -185,6 +185,12 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         {
             Calls.Add($"ListActorSnapshots:{take}");
             return Task.FromResult(Snapshots);
+        }
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default)
+        {
+            Calls.Add($"GetActorProjectionState:{actorId}");
+            return Task.FromResult<WorkflowActorProjectionState?>(null);
         }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)

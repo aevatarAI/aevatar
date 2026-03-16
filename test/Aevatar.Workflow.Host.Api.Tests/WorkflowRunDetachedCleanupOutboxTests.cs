@@ -1,4 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -8,6 +10,7 @@ using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -23,13 +26,17 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         IEventStore? eventStore = null,
         IWorkflowExecutionProjectionQueryPort? queryPort = null,
         IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
-        IWorkflowProjectionReadModelUpdater? readModelUpdater = null,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         IWorkflowRunActorPort? actorPort = null,
+        IWorkflowRunInsightActorPort? insightActorPort = null,
         WorkflowExecutionProjectionOptions? options = null)
     {
         var services = new ServiceCollection();
+        var reportStore = new InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string>(
+            keySelector: report => report.RootActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: report => report.UpdatedAt);
         services.AddSingleton(eventStore ?? new InMemoryEventStore());
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -38,14 +45,21 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             DetachedCleanupRetryBaseDelayMs = 0,
             DetachedCleanupRetryMaxDelayMs = 0,
         });
+        services.AddSingleton(reportStore);
+        services.AddSingleton<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>(reportStore);
+        services.AddSingleton<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>(_ =>
+            new ProjectionStoreDispatcher<WorkflowRunInsightReportDocument>(
+                [
+                    new ProjectionDocumentStoreBinding<WorkflowRunInsightReportDocument>(reportStore),
+                ]));
         services.AddSingleton<IWorkflowExecutionProjectionQueryPort>(queryPort ?? new RecordingQueryPort());
         services.AddSingleton<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>(
             lifecycle ?? new RecordingLifecycleService());
         services.AddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
-        services.AddSingleton<IWorkflowProjectionReadModelUpdater>(readModelUpdater ?? new RecordingReadModelUpdater());
         services.AddSingleton<IProjectionOwnershipCoordinator>(ownershipCoordinator ?? new RecordingOwnershipCoordinator());
         services.AddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>(projectionControlHub ?? new RecordingProjectionControlHub());
         services.AddSingleton<IWorkflowRunActorPort>(actorPort ?? new RecordingActorPort());
+        services.AddSingleton<IWorkflowRunInsightActorPort>(insightActorPort ?? new RecordingWorkflowRunInsightActorPort(reportStore));
         return services.BuildServiceProvider();
     }
 
@@ -56,6 +70,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             EventSourcingBehaviorFactory =
                 services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowRunDetachedCleanupOutboxState>>(),
         };
+
+    private static Task<WorkflowRunInsightReportDocument?> GetReportAsync(
+        WorkflowRunDetachedCleanupOutboxGAgent agent,
+        string actorId) =>
+        agent.Services.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>()
+            .GetAsync(actorId, CancellationToken.None);
 
     [Fact]
     public void BuildActorIdAndRecordId_ShouldNormalizeAndValidate()
@@ -84,18 +104,15 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
         var projectionControlHub = new RecordingProjectionControlHub();
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
             lifecycle: lifecycle,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             projectionControlHub: projectionControlHub,
             actorPort: actorPort));
@@ -114,8 +131,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             originalContext,
             ownershipCoordinator: ownershipCoordinator,
             lifecycle: lifecycle,
-            projectionControlHub: projectionControlHub,
-            readModelUpdater: readModelUpdater);
+            projectionControlHub: projectionControlHub);
         await runtimeLease.WaitForProjectionReleaseListenerReadyAsync();
         ownershipCoordinator.SeedActiveLease("actor-1", "cmd-1");
 
@@ -132,7 +148,9 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         lifecycle.StopCalls.Should().ContainSingle();
         lifecycle.StopCalls.Single().Should().BeSameAs(originalContext);
         streamSubscriptionLease.DisposeCalls.Should().Be(1);
-        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        var stoppedReport = await GetReportAsync(agent, "actor-1");
+        stoppedReport.Should().NotBeNull();
+        stoppedReport!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
 
@@ -150,17 +168,14 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Running,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
             lifecycle: lifecycle,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             actorPort: actorPort));
 
@@ -172,7 +187,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         entry.CompletedAtUtc.Should().BeNull();
         entry.AttemptCount.Should().Be(0);
         lifecycle.StopCalls.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
@@ -211,12 +226,10 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
     public async Task HandleTriggerReplay_WhenDispatchIsNotAcceptedAndSnapshotIsMissing_ShouldScheduleRetry()
     {
         var lifecycle = new RecordingLifecycleService();
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             lifecycle: lifecycle,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             actorPort: actorPort));
 
@@ -226,10 +239,10 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
         entry.DispatchAcceptedAtUtc.Should().BeNull();
         entry.AttemptCount.Should().Be(1);
-        entry.LastError.Should().Contain("waiting for a workflow snapshot");
+        entry.LastError.Should().Contain("waiting for workflow projection state");
         entry.NextVisibleAtUtc.Should().NotBeNull();
         lifecycle.StopCalls.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
@@ -244,19 +257,21 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             {
                 ActorId = "actor-1",
                 WorkflowName = "direct",
-                LastCommandId = "cmd-1",
                 CompletionStatus = WorkflowRunCompletionStatus.Unknown,
+            },
+            ProjectionState = new WorkflowActorProjectionState
+            {
+                ActorId = "actor-1",
+                LastCommandId = "cmd-1",
                 StateVersion = 0,
                 LastEventId = string.Empty,
                 LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             actorPort: actorPort));
 
@@ -267,7 +282,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         entry.DispatchAcceptedAtUtc.Should().BeNull();
         entry.AttemptCount.Should().Be(1);
         entry.LastError.Should().Contain("waiting for projected workflow events");
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
@@ -282,19 +297,21 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             {
                 ActorId = "actor-1",
                 WorkflowName = "direct",
-                LastCommandId = "cmd-1",
                 CompletionStatus = WorkflowRunCompletionStatus.Running,
+            },
+            ProjectionState = new WorkflowActorProjectionState
+            {
+                ActorId = "actor-1",
+                LastCommandId = "cmd-1",
                 StateVersion = 1,
                 LastEventId = "evt-1",
                 LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             actorPort: actorPort));
 
@@ -303,7 +320,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
         var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
         entry.DispatchAcceptedAtUtc.Should().NotBeNull();
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.AcquireCalls.Should().BeEmpty();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
@@ -319,20 +336,17 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new BlockingStopLifecycleService();
         var projectionControlHub = new ProjectionSessionEventHub<WorkflowProjectionControlEvent>(
             new InMemoryStreamProvider(),
             new WorkflowProjectionControlEventSessionCodec());
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
             lifecycle: lifecycle,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             projectionControlHub: projectionControlHub,
             actorPort: actorPort));
@@ -348,8 +362,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             },
             ownershipCoordinator: ownershipCoordinator,
             lifecycle: lifecycle,
-            projectionControlHub: projectionControlHub,
-            readModelUpdater: readModelUpdater);
+            projectionControlHub: projectionControlHub);
         await runtimeLease.WaitForProjectionReleaseListenerReadyAsync();
         ownershipCoordinator.SeedActiveLease("actor-1", "cmd-1");
 
@@ -364,14 +377,16 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         await lifecycle.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         replayTask.IsCompleted.Should().BeFalse();
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
 
         lifecycle.AllowStop.TrySetResult(true);
         await replayTask.WaitAsync(TimeSpan.FromSeconds(5));
 
-        readModelUpdater.MarkStoppedActorIds.Should().ContainSingle().Which.Should().Be("actor-1");
+        var releasedReport = await GetReportAsync(agent, "actor-1");
+        releasedReport.Should().NotBeNull();
+        releasedReport!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         ownershipCoordinator.ReleaseCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
         agent.State.Entries.Should().BeEmpty();
@@ -390,7 +405,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var lifecycle = new RecordingLifecycleService();
@@ -398,7 +412,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         {
             ReleaseCompletedPublishFailuresRemaining = 1,
         };
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         var actorPort = new RecordingActorPort();
         var options = new WorkflowExecutionProjectionOptions
@@ -410,7 +423,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
             lifecycle: lifecycle,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             projectionControlHub: projectionControlHub,
             actorPort: actorPort,
@@ -427,8 +439,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             },
             ownershipCoordinator: ownershipCoordinator,
             lifecycle: lifecycle,
-            projectionControlHub: projectionControlHub,
-            readModelUpdater: readModelUpdater);
+            projectionControlHub: projectionControlHub);
         await runtimeLease.WaitForProjectionReleaseListenerReadyAsync();
         ownershipCoordinator.SeedActiveLease("actor-1", "cmd-1");
 
@@ -442,7 +453,9 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         await agent.HandleTriggerReplayAsync(new WorkflowRunDetachedCleanupTriggerReplayEvent { BatchSize = 10 });
 
         agent.State.Entries.Should().BeEmpty();
-        readModelUpdater.MarkStoppedActorIds.Should().Contain("actor-1");
+        var fallbackReport = await GetReportAsync(agent, "actor-1");
+        fallbackReport.Should().NotBeNull();
+        fallbackReport!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         ownershipCoordinator.ReleaseCalls.Should().Contain(("actor-1", "cmd-1"));
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
 
@@ -460,10 +473,8 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Completed,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
-        var readModelUpdater = new RecordingReadModelUpdater();
         var ownershipCoordinator = new RecordingOwnershipCoordinator();
         ownershipCoordinator.SeedActiveLease("actor-1", "cmd-1");
         var actorPort = new RecordingActorPort();
@@ -475,7 +486,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         };
         var agent = CreateAgent(CreateAgentServices(
             queryPort: queryPort,
-            readModelUpdater: readModelUpdater,
             ownershipCoordinator: ownershipCoordinator,
             actorPort: actorPort,
             projectionControlHub: new RecordingProjectionControlHub(),
@@ -493,7 +503,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         var entry = agent.State.Entries.Should().ContainKey("actor-1::cmd-1").WhoseValue;
         entry.AttemptCount.Should().Be(1);
         entry.LastError.Should().Contain("timed out");
-        readModelUpdater.MarkStoppedActorIds.Should().BeEmpty();
+        (await GetReportAsync(agent, "actor-1")).Should().BeNull();
         ownershipCoordinator.ReleaseCalls.Should().BeEmpty();
         actorPort.DestroyCalls.Should().BeEmpty();
     }
@@ -507,14 +517,12 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             ActorId = "actor-1",
             WorkflowName = "direct",
             CompletionStatus = WorkflowRunCompletionStatus.Running,
-            LastUpdatedAt = DateTimeOffset.UtcNow,
         };
         queryPort.SnapshotsByActorId["actor-2"] = new WorkflowActorSnapshot
         {
             ActorId = "actor-2",
             WorkflowName = "direct",
             CompletionStatus = WorkflowRunCompletionStatus.Stopped,
-            LastUpdatedAt = DateTimeOffset.UtcNow,
         };
         var actorPort = new RecordingActorPort();
         var agent = CreateAgent(CreateAgentServices(queryPort: queryPort, actorPort: actorPort));
@@ -559,7 +567,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 ActorId = "actor-1",
                 WorkflowName = "direct",
                 CompletionStatus = WorkflowRunCompletionStatus.Stopped,
-                LastUpdatedAt = DateTimeOffset.UtcNow,
             },
         };
         var actorPort = new RecordingActorPort();
@@ -611,8 +618,10 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
         public bool EnableActorQueryEndpoints => true;
 
         public WorkflowActorSnapshot? Snapshot { get; init; }
+        public WorkflowActorProjectionState? ProjectionState { get; init; }
         public Exception? Exception { get; init; }
         public Dictionary<string, WorkflowActorSnapshot?> SnapshotsByActorId { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, WorkflowActorProjectionState?> ProjectionStatesByActorId { get; } = new(StringComparer.Ordinal);
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {
@@ -633,6 +642,20 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             _ = take;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IReadOnlyList<WorkflowActorSnapshot>>(Snapshot == null ? [] : [Snapshot]);
+        }
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+            string actorId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Exception != null)
+                return Task.FromException<WorkflowActorProjectionState?>(Exception);
+
+            if (ProjectionStatesByActorId.TryGetValue(actorId, out var projectionState))
+                return Task.FromResult(projectionState);
+
+            return Task.FromResult(ProjectionState);
         }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
@@ -739,22 +762,6 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingReadModelUpdater : IWorkflowProjectionReadModelUpdater
-    {
-        public List<string> MarkStoppedActorIds { get; } = [];
-
-        public Task RefreshMetadataAsync(
-            string actorId,
-            WorkflowExecutionProjectionContext context,
-            CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task MarkStoppedAsync(string actorId, CancellationToken ct = default)
-        {
-            MarkStoppedActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class RecordingOwnershipCoordinator : IProjectionOwnershipCoordinator
     {
         private readonly HashSet<(string ActorId, string CommandId)> _activeLeases = [];
@@ -810,6 +817,55 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             throw new NotSupportedException();
     }
 
+    private sealed class RecordingWorkflowRunInsightActorPort(
+        InMemoryProjectionDocumentStore<WorkflowRunInsightReportDocument, string> store)
+        : IWorkflowRunInsightActorPort
+    {
+        public Task EnsureActorAsync(string rootActorId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task PublishObservedAsync(
+            string rootActorId,
+            WorkflowRunInsightObservedEvent evt,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task CaptureTopologyAsync(
+            string rootActorId,
+            string workflowName,
+            string commandId,
+            IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
+            DateTimeOffset capturedAt,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public async Task MarkStoppedAsync(
+            string rootActorId,
+            string reason,
+            DateTimeOffset stoppedAt,
+            CancellationToken ct = default)
+        {
+            var report = await store.GetAsync(rootActorId, ct) ?? new WorkflowRunInsightReportDocument
+            {
+                Id = rootActorId,
+                RootActorId = rootActorId,
+                CreatedAt = stoppedAt,
+                StartedAt = stoppedAt,
+                Summary = new WorkflowExecutionSummary(),
+            };
+
+            report.Id = rootActorId;
+            report.RootActorId = rootActorId;
+            report.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+            report.UpdatedAt = stoppedAt;
+            report.EndedAt = stoppedAt;
+            report.FinalError ??= reason ?? string.Empty;
+            report.StateVersion = Math.Max(report.StateVersion, 1);
+            report.LastEventId = string.IsNullOrWhiteSpace(report.LastEventId) ? "detached-cleanup-stop" : report.LastEventId;
+
+            await store.UpsertAsync(report, ct);
+        }
+    }
+
     private sealed class DirectOutbox(WorkflowRunDetachedCleanupOutboxGAgent agent) : IWorkflowRunDetachedCleanupOutbox
     {
         public Task EnqueueAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default) =>
@@ -841,6 +897,7 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
 
     private sealed class RecordingProjectionControlHub : IProjectionSessionEventHub<WorkflowProjectionControlEvent>
     {
+        private readonly object _gate = new();
         private readonly Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> _handlers = new();
 
         public TaskCompletionSource<bool> SubscriptionStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -862,10 +919,16 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
                 throw new InvalidOperationException("release completed publish failed");
             }
 
-            if (!_handlers.TryGetValue((scopeId, sessionId), out var handlers))
-                return;
+            List<Func<WorkflowProjectionControlEvent, ValueTask>> handlers;
+            lock (_gate)
+            {
+                if (!_handlers.TryGetValue((scopeId, sessionId), out var registered))
+                    return;
 
-            foreach (var handler in handlers.ToArray())
+                handlers = [.. registered];
+            }
+
+            foreach (var handler in handlers)
                 await handler(evt);
         }
 
@@ -879,29 +942,36 @@ public sealed class WorkflowRunDetachedCleanupOutboxTests
             ArgumentNullException.ThrowIfNull(handler);
 
             var key = (scopeId, sessionId);
-            if (!_handlers.TryGetValue(key, out var handlers))
+            lock (_gate)
             {
-                handlers = [];
-                _handlers[key] = handlers;
-            }
+                if (!_handlers.TryGetValue(key, out var handlers))
+                {
+                    handlers = [];
+                    _handlers[key] = handlers;
+                }
 
-            handlers.Add(handler);
+                handlers.Add(handler);
+            }
             SubscriptionStarted.TrySetResult(true);
-            return Task.FromResult<IAsyncDisposable>(new Subscription(_handlers, key, handler));
+            return Task.FromResult<IAsyncDisposable>(new Subscription(_gate, _handlers, key, handler));
         }
 
         private sealed class Subscription(
+            object gate,
             Dictionary<(string ScopeId, string SessionId), List<Func<WorkflowProjectionControlEvent, ValueTask>>> handlers,
             (string ScopeId, string SessionId) key,
             Func<WorkflowProjectionControlEvent, ValueTask> handler) : IAsyncDisposable
         {
             public ValueTask DisposeAsync()
             {
-                if (handlers.TryGetValue(key, out var registered))
+                lock (gate)
                 {
-                    registered.Remove(handler);
-                    if (registered.Count == 0)
-                        handlers.Remove(key);
+                    if (handlers.TryGetValue(key, out var registered))
+                    {
+                        registered.Remove(handler);
+                        if (registered.Count == 0)
+                            handlers.Remove(key);
+                    }
                 }
 
                 return ValueTask.CompletedTask;

@@ -1,6 +1,8 @@
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -9,23 +11,15 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptEvolutionReadModelProjector
     : IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptEvolutionReadModel, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel> _writeDispatcher;
     private readonly IProjectionClock _clock;
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>>> _reducersByType;
 
     public ScriptEvolutionReadModelProjector(
-        IProjectionStoreDispatcher<ScriptEvolutionReadModel, string> storeDispatcher,
-        IProjectionClock clock,
-        IEnumerable<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>> reducers)
+        IProjectionWriteDispatcher<ScriptEvolutionReadModel> writeDispatcher,
+        IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher;
-        _clock = clock;
-        _reducersByType = reducers
-            .GroupBy(x => x.EventTypeUrl, StringComparer.Ordinal)
-            .ToDictionary(
-                x => x.Key,
-                x => (IReadOnlyList<IProjectionEventReducer<ScriptEvolutionReadModel, ScriptEvolutionSessionProjectionContext>>)x.ToList(),
-                StringComparer.Ordinal);
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
     public ValueTask InitializeAsync(
@@ -42,37 +36,29 @@ public sealed class ScriptEvolutionReadModelProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized == null)
+        if (!CommittedStateEventEnvelope.TryUnpackState<ScriptEvolutionSessionState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent == null ||
+            state == null)
+        {
             return;
+        }
 
-        var payload = normalized.Payload;
-        if (payload == null)
-            return;
-        var readModelId = ResolveReadModelId(context, payload);
+        var readModelId = ResolveReadModelId(state, context.ProposalId);
         if (string.IsNullOrWhiteSpace(readModelId))
             return;
 
-        var typeUrl = payload.TypeUrl;
-        if (!_reducersByType.TryGetValue(typeUrl, out var reducers))
-            return;
-
-        var now = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
-        await _storeDispatcher.MutateAsync(readModelId, readModel =>
-        {
-            if (string.IsNullOrWhiteSpace(readModel.Id))
-                readModel.Id = readModelId;
-
-            var mutated = false;
-            foreach (var reducer in reducers)
-                mutated |= reducer.Reduce(readModel, context, normalized, now);
-
-            if (!mutated)
-                return;
-
-            readModel.LastEventId = normalized.Id ?? string.Empty;
-            readModel.UpdatedAt = now;
-        }, ct);
+        var now = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        var readModel = BuildReadModel(
+            readModelId,
+            context.RootActorId,
+            state,
+            stateEvent,
+            now);
+        await _writeDispatcher.UpsertAsync(readModel, ct);
     }
 
     public ValueTask CompleteAsync(
@@ -86,27 +72,76 @@ public sealed class ScriptEvolutionReadModelProjector
         return ValueTask.CompletedTask;
     }
 
-    private static string ResolveReadModelId(
-        ScriptEvolutionSessionProjectionContext context,
-        Google.Protobuf.WellKnownTypes.Any payload)
+    private static ScriptEvolutionReadModel BuildReadModel(
+        string readModelId,
+        string actorId,
+        ScriptEvolutionSessionState state,
+        StateEvent stateEvent,
+        DateTimeOffset updatedAt)
     {
-        if (payload.Is(ScriptEvolutionProposedEvent.Descriptor))
-            return ResolveProposalId(payload.Unpack<ScriptEvolutionProposedEvent>().ProposalId, context.ProposalId);
-        if (payload.Is(ScriptEvolutionValidatedEvent.Descriptor))
-            return ResolveProposalId(payload.Unpack<ScriptEvolutionValidatedEvent>().ProposalId, context.ProposalId);
-        if (payload.Is(ScriptEvolutionRejectedEvent.Descriptor))
-            return ResolveProposalId(payload.Unpack<ScriptEvolutionRejectedEvent>().ProposalId, context.ProposalId);
-        if (payload.Is(ScriptEvolutionPromotedEvent.Descriptor))
-            return ResolveProposalId(payload.Unpack<ScriptEvolutionPromotedEvent>().ProposalId, context.ProposalId);
-        if (payload.Is(ScriptEvolutionRolledBackEvent.Descriptor))
-            return ResolveProposalId(payload.Unpack<ScriptEvolutionRolledBackEvent>().ProposalId, context.ProposalId);
-
-        return string.Empty;
+        var readModel = new ScriptEvolutionReadModel
+        {
+            Id = readModelId,
+            ActorId = actorId ?? string.Empty,
+            ProposalId = ResolveReadModelId(state, readModelId),
+            ScriptId = state.ScriptId ?? string.Empty,
+            BaseRevision = state.BaseRevision ?? string.Empty,
+            CandidateRevision = state.CandidateRevision ?? string.Empty,
+            ValidationStatus = ResolveValidationStatus(state),
+            PromotionStatus = ResolvePromotionStatus(state),
+            RollbackStatus = ResolveRollbackStatus(state),
+            FailureReason = state.FailureReason ?? string.Empty,
+            DefinitionActorId = state.DefinitionActorId ?? string.Empty,
+            CatalogActorId = state.CatalogActorId ?? string.Empty,
+            StateVersion = stateEvent.Version,
+            LastEventId = stateEvent.EventId ?? string.Empty,
+            UpdatedAt = updatedAt,
+        };
+        foreach (var diagnostic in state.Diagnostics)
+            readModel.Diagnostics.Add(diagnostic);
+        return readModel;
     }
 
-    private static string ResolveProposalId(string? proposalId, string fallbackProposalId) =>
-        string.IsNullOrWhiteSpace(proposalId)
+    private static string ResolveReadModelId(
+        ScriptEvolutionSessionState state,
+        string fallbackProposalId)
+    {
+        var proposalId = state.ProposalId ?? string.Empty;
+        return string.IsNullOrWhiteSpace(proposalId)
             ? fallbackProposalId ?? string.Empty
             : proposalId;
+    }
 
+    private static string ResolveValidationStatus(ScriptEvolutionSessionState state)
+    {
+        if (state.ValidationSucceeded)
+            return ScriptEvolutionStatuses.Validated;
+
+        return string.Equals(state.Status, ScriptEvolutionStatuses.ValidationFailed, StringComparison.Ordinal)
+            ? ScriptEvolutionStatuses.ValidationFailed
+            : ScriptEvolutionStatuses.Pending;
+    }
+
+    private static string ResolvePromotionStatus(ScriptEvolutionSessionState state)
+    {
+        return state.Status switch
+        {
+            ScriptEvolutionStatuses.Promoted => ScriptEvolutionStatuses.Promoted,
+            ScriptEvolutionStatuses.Rejected => ScriptEvolutionStatuses.Rejected,
+            ScriptEvolutionStatuses.PromotionFailed => ScriptEvolutionStatuses.PromotionFailed,
+            ScriptEvolutionStatuses.RollbackRequested => ScriptEvolutionStatuses.RollbackRequested,
+            ScriptEvolutionStatuses.RolledBack => ScriptEvolutionStatuses.RolledBack,
+            _ => ScriptEvolutionStatuses.Pending,
+        };
+    }
+
+    private static string ResolveRollbackStatus(ScriptEvolutionSessionState state)
+    {
+        return state.Status switch
+        {
+            ScriptEvolutionStatuses.RollbackRequested => ScriptEvolutionStatuses.RollbackRequested,
+            ScriptEvolutionStatuses.RolledBack => ScriptEvolutionStatuses.RolledBack,
+            _ => string.Empty,
+        };
+    }
 }

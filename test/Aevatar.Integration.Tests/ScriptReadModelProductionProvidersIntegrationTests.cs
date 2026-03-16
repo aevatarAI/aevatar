@@ -63,9 +63,9 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 $"{indexPrefix}-script-read-model-documents",
                 runtimeActorId,
                 CancellationToken.None);
-            GetRequiredStringProperty(semanticDocument, "Id").Should().Be(runtimeActorId);
-            GetRequiredStringProperty(semanticDocument, "ScriptId").Should().Be("claim_orchestrator");
-            GetRequiredStringProperty(semanticDocument, "Revision").Should().Be(revision);
+            GetRequiredStringProperty(semanticDocument, "id").Should().Be(runtimeActorId);
+            GetRequiredStringProperty(semanticDocument, "script_id").Should().Be("claim_orchestrator");
+            GetRequiredStringProperty(semanticDocument, "revision").Should().Be(revision);
 
             var nativeDocument = await FindSingleElasticsearchDocumentAsync(
                 client,

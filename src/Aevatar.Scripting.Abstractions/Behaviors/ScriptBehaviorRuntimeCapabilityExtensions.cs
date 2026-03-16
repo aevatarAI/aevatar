@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Abstractions.Queries;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
@@ -39,43 +38,6 @@ public static class ScriptBehaviorRuntimeCapabilityExtensions
         ArgumentNullException.ThrowIfNull(capabilities);
         ArgumentNullException.ThrowIfNull(signalPayload);
         return capabilities.PublishToSelfAsync(signalPayload, ct);
-    }
-
-    public static async Task<ScriptReadModelSnapshot<TReadModel>?> GetReadModelSnapshotAsync<TReadModel>(
-        this IScriptBehaviorRuntimeCapabilities capabilities,
-        string actorId,
-        CancellationToken ct)
-        where TReadModel : class, IMessage<TReadModel>, new()
-    {
-        ArgumentNullException.ThrowIfNull(capabilities);
-        var snapshot = await capabilities.GetReadModelSnapshotAsync(actorId, ct);
-        if (snapshot == null)
-            return null;
-
-        return new ScriptReadModelSnapshot<TReadModel>(
-            snapshot.ActorId,
-            snapshot.ScriptId,
-            snapshot.DefinitionActorId,
-            snapshot.Revision,
-            snapshot.ReadModelTypeUrl,
-            ScriptMessageTypes.Unpack<TReadModel>(snapshot.ReadModelPayload),
-            snapshot.StateVersion,
-            snapshot.LastEventId,
-            snapshot.UpdatedAt);
-    }
-
-    public static async Task<TResult?> ExecuteReadModelQueryAsync<TQuery, TResult>(
-        this IScriptBehaviorRuntimeCapabilities capabilities,
-        string actorId,
-        TQuery queryPayload,
-        CancellationToken ct)
-        where TQuery : class, IMessage<TQuery>, new()
-        where TResult : class, IMessage<TResult>, new()
-    {
-        ArgumentNullException.ThrowIfNull(capabilities);
-        ArgumentNullException.ThrowIfNull(queryPayload);
-        var payload = await capabilities.ExecuteReadModelQueryAsync(actorId, Any.Pack(queryPayload), ct);
-        return ScriptMessageTypes.Unpack<TResult>(payload);
     }
 
     public static Task RunScriptInstanceAsync<TCommand>(

@@ -263,8 +263,7 @@ public class ScriptBehaviorGAgentReplayContractTests
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleCommandAsync(

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
@@ -10,6 +11,7 @@ using Aevatar.Scripting.Hosting.DependencyInjection;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Concurrent;
 
 namespace Aevatar.Integration.Tests;
 
@@ -17,6 +19,7 @@ internal static class ScriptEvolutionIntegrationTestKit
 {
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ObservationPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly ConcurrentDictionary<string, ScriptDefinitionSnapshot> DefinitionSnapshots = new(StringComparer.Ordinal);
 
     public static ServiceProvider BuildProvider(Action<IServiceCollection>? configure = null)
     {
@@ -27,21 +30,40 @@ internal static class ScriptEvolutionIntegrationTestKit
         return services.BuildServiceProvider();
     }
 
-    public static Task<string> UpsertDefinitionAsync(
+    public static async Task<string> UpsertDefinitionAsync(
         IServiceProvider provider,
         string scriptId,
         string revision,
         string sourceText,
         string? definitionActorId,
         CancellationToken ct) =>
-        provider.GetRequiredService<IScriptDefinitionCommandPort>()
-            .UpsertDefinitionAsync(
+        (await UpsertDefinitionWithSnapshotAsync(
+            provider,
+            scriptId,
+            revision,
+            sourceText,
+            definitionActorId,
+            ct)).ActorId;
+
+    public static async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
+        IServiceProvider provider,
+        string scriptId,
+        string revision,
+        string sourceText,
+        string? definitionActorId,
+        CancellationToken ct)
+    {
+        var result = await provider.GetRequiredService<IScriptDefinitionCommandPort>()
+            .UpsertDefinitionWithSnapshotAsync(
                 scriptId,
                 revision,
                 sourceText,
                 ScriptingCommandEnvelopeTestKit.ComputeSourceHash(sourceText),
                 definitionActorId,
                 ct);
+        RememberDefinitionSnapshot(result.ActorId, result.Snapshot);
+        return result;
+    }
 
     public static Task<string> EnsureRuntimeAsync(
         IServiceProvider provider,
@@ -49,8 +71,55 @@ internal static class ScriptEvolutionIntegrationTestKit
         string revision,
         string runtimeActorId,
         CancellationToken ct) =>
-        provider.GetRequiredService<IScriptRuntimeProvisioningPort>()
-            .EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, ct);
+        EnsureRuntimeAsync(
+            provider,
+            definitionActorId,
+            revision,
+            runtimeActorId,
+            definitionSnapshot: null,
+            ct);
+
+    public static async Task<string> EnsureRuntimeAsync(
+        IServiceProvider provider,
+        string definitionActorId,
+        string revision,
+        string runtimeActorId,
+        ScriptDefinitionSnapshot? definitionSnapshot,
+        CancellationToken ct)
+    {
+        var resolvedSnapshot = definitionSnapshot
+            ?? ResolveDefinitionSnapshot(definitionActorId, revision)
+            ?? await provider.GetRequiredService<IScriptDefinitionSnapshotPort>()
+                .GetRequiredAsync(definitionActorId, revision, ct);
+        return await provider.GetRequiredService<IScriptRuntimeProvisioningPort>()
+            .EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, resolvedSnapshot, ct);
+    }
+
+    private static void RememberDefinitionSnapshot(
+        string definitionActorId,
+        ScriptDefinitionSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(definitionActorId))
+            return;
+
+        DefinitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, snapshot.Revision)] = snapshot;
+    }
+
+    private static ScriptDefinitionSnapshot? ResolveDefinitionSnapshot(
+        string definitionActorId,
+        string revision)
+    {
+        DefinitionSnapshots.TryGetValue(BuildDefinitionSnapshotKey(definitionActorId, revision), out var snapshot);
+        return snapshot;
+    }
+
+    private static string BuildDefinitionSnapshotKey(
+        string definitionActorId,
+        string revision) =>
+        string.Concat(
+            definitionActorId ?? string.Empty,
+            "::",
+            string.IsNullOrWhiteSpace(revision) ? "latest" : revision);
 
     public static async Task<(ScriptDomainFactCommitted Fact, ScriptReadModelSnapshot Snapshot)> RunAndReadAsync(
         IServiceProvider provider,
@@ -100,25 +169,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryPayload = Any.Pack(new TextNormalizationQueryRequested
-        {
-            RequestId = requestId,
-            ReplyStreamId = $"reply-{requestId}",
-        });
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-        try
-        {
-            var immediateResult = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-            if (immediateResult != null)
-                return immediateResult.Unpack<TextNormalizationQueryResponded>().Current;
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
-
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
@@ -151,12 +202,7 @@ internal static class ScriptEvolutionIntegrationTestKit
                 }
             }
 
-            var result = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-
-            if (result == null)
-                throw new InvalidOperationException($"Script query returned null. actor_id={runtimeActorId}");
-
-            return result.Unpack<TextNormalizationQueryResponded>().Current;
+            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {

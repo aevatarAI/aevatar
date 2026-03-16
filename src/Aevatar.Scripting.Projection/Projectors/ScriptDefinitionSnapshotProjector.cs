@@ -1,8 +1,8 @@
-using Aevatar.Scripting.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,14 +11,14 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptDefinitionSnapshotProjector
     : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
 {
-    private readonly IProjectionStoreDispatcher<ScriptDefinitionSnapshotDocument, string> _storeDispatcher;
+    private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
     public ScriptDefinitionSnapshotProjector(
-        IProjectionStoreDispatcher<ScriptDefinitionSnapshotDocument, string> storeDispatcher,
+        IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> writeDispatcher,
         IProjectionClock clock)
     {
-        _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -37,31 +37,38 @@ public sealed class ScriptDefinitionSnapshotProjector
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (envelope.Payload?.Is(ScriptDefinitionUpsertedEvent.Descriptor) != true)
+        if (!CommittedStateEventEnvelope.TryUnpackState<ScriptDefinitionState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent == null ||
+            state == null)
+        {
             return;
+        }
 
-        var evt = envelope.Payload.Unpack<ScriptDefinitionUpsertedEvent>();
-        var updatedAt = ProjectionEnvelopeTimestampResolver.Resolve(envelope, _clock.UtcNow);
-        await _storeDispatcher.UpsertAsync(
+        var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        await _writeDispatcher.UpsertAsync(
             new ScriptDefinitionSnapshotDocument
             {
                 Id = context.RootActorId,
-                ScriptId = evt.ScriptId ?? string.Empty,
+                ScriptId = state.ScriptId ?? string.Empty,
                 DefinitionActorId = context.RootActorId,
-                Revision = evt.ScriptRevision ?? string.Empty,
-                SourceText = evt.SourceText ?? string.Empty,
-                SourceHash = evt.SourceHash ?? string.Empty,
-                StateTypeUrl = evt.StateTypeUrl ?? string.Empty,
-                ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty,
-                ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty,
-                ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty,
-                ScriptPackageBase64 = (evt.ScriptPackage ?? new ScriptPackageSpec()).ToByteString().ToBase64(),
-                ProtocolDescriptorSetBase64 = (evt.ProtocolDescriptorSet ?? ByteString.Empty).ToBase64(),
-                StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
-                ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
-                RuntimeSemanticsBase64 = (evt.RuntimeSemantics ?? new ScriptRuntimeSemanticsSpec()).ToByteString().ToBase64(),
-                StateVersion = 1,
-                LastEventId = evt.ScriptRevision ?? string.Empty,
+                Revision = state.Revision ?? string.Empty,
+                SourceText = state.SourceText ?? string.Empty,
+                SourceHash = state.SourceHash ?? string.Empty,
+                StateTypeUrl = state.StateTypeUrl ?? string.Empty,
+                ReadModelTypeUrl = state.ReadModelTypeUrl ?? string.Empty,
+                ReadModelSchemaVersion = state.ReadModelSchemaVersion ?? string.Empty,
+                ReadModelSchemaHash = state.ReadModelSchemaHash ?? string.Empty,
+                ScriptPackage = state.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+                ProtocolDescriptorSetBase64 = (state.ProtocolDescriptorSet ?? ByteString.Empty).ToBase64(),
+                StateDescriptorFullName = state.StateDescriptorFullName ?? string.Empty,
+                ReadModelDescriptorFullName = state.ReadModelDescriptorFullName ?? string.Empty,
+                RuntimeSemantics = state.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+                StateVersion = stateEvent.Version,
+                LastEventId = stateEvent.EventId ?? string.Empty,
                 CreatedAt = updatedAt,
                 UpdatedAt = updatedAt,
             },

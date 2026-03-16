@@ -1,5 +1,4 @@
 using Aevatar.Scripting.Abstractions.Queries;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Application.Queries;
 
@@ -21,10 +20,4 @@ public sealed class ScriptReadModelQueryApplicationService : IScriptReadModelQue
         int take = 200,
         CancellationToken ct = default) =>
         _queryPort.ListSnapshotsAsync(take, ct);
-
-    public Task<Any?> ExecuteDeclaredQueryAsync(
-        string actorId,
-        Any queryPayload,
-        CancellationToken ct = default) =>
-        _queryPort.ExecuteDeclaredQueryAsync(actorId, queryPayload, ct);
 }

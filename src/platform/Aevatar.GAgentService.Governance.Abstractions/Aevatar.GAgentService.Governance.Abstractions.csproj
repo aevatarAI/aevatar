@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.GAgentService.Governance.Abstractions</AssemblyName>
+    <RootNamespace>Aevatar.GAgentService.Governance.Abstractions</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos/service_binding.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+    <Protobuf Include="Protos/service_endpoint_catalog.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+    <Protobuf Include="Protos/service_policy.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+    <Protobuf Include="Protos/service_admission.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+    <Protobuf Include="Protos/service_configuration.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+  </ItemGroup>
+</Project>

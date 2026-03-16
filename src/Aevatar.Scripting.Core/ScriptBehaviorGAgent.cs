@@ -129,7 +129,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 Revision: State.Revision ?? string.Empty,
                 SourceText: State.SourceText ?? string.Empty,
                 SourceHash: State.SourceHash ?? string.Empty,
-                ScriptPackage: State.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
+                ScriptPackage: ScriptPackageModel.ResolveDeclaredPackage(
+                    State.ScriptPackage,
+                    State.SourceText ?? string.Empty),
                 StateTypeUrl: State.StateTypeUrl ?? string.Empty,
                 ReadModelTypeUrl: State.ReadModelTypeUrl ?? string.Empty,
                 CurrentStateRoot: State.StateRoot?.Clone(),
@@ -158,7 +160,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.ReadModelTypeUrl = evt.ReadModelTypeUrl ?? string.Empty;
         next.ReadModelSchemaVersion = evt.ReadModelSchemaVersion ?? string.Empty;
         next.ReadModelSchemaHash = evt.ReadModelSchemaHash ?? string.Empty;
-        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(evt.SourceText ?? string.Empty);
+        next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
         next.ProtocolDescriptorSet = evt.ProtocolDescriptorSet;
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
@@ -174,7 +176,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         var next = state.Clone();
         var payload = evt.DomainEventPayload?.Clone() ?? Any.Pack(new Empty());
-        var scriptPackage = state.ScriptPackage?.Clone() ?? ScriptPackageModel.CreateSingleSourcePackage(state.SourceText ?? string.Empty);
+        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
+            state.ScriptPackage,
+            state.SourceText ?? string.Empty);
         var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
             string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
             string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
@@ -193,21 +197,22 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             var currentState = _codec.Unpack(state.StateRoot, artifact.Descriptor.StateClrType);
             var domainEvent = _codec.Unpack(payload, domainEventRegistration.MessageClrType)
                 ?? throw new InvalidOperationException($"Failed to unpack domain event payload `{eventTypeUrl}`.");
+            var factContext = new Aevatar.Scripting.Abstractions.Behaviors.ScriptFactContext(
+                evt.ActorId ?? Id,
+                evt.DefinitionActorId ?? state.DefinitionActorId ?? string.Empty,
+                string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
+                string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
+                evt.RunId ?? string.Empty,
+                evt.CommandId ?? string.Empty,
+                evt.CorrelationId ?? string.Empty,
+                evt.EventSequence,
+                evt.StateVersion,
+                evt.EventType ?? eventTypeUrl,
+                evt.OccurredAtUnixTimeMs);
             var appliedState = behavior.ApplyDomainEvent(
                 currentState,
                 domainEvent,
-                new Aevatar.Scripting.Abstractions.Behaviors.ScriptFactContext(
-                    evt.ActorId ?? Id,
-                    evt.DefinitionActorId ?? state.DefinitionActorId ?? string.Empty,
-                    string.IsNullOrWhiteSpace(evt.ScriptId) ? state.ScriptId ?? string.Empty : evt.ScriptId,
-                    string.IsNullOrWhiteSpace(evt.Revision) ? state.Revision ?? string.Empty : evt.Revision,
-                    evt.RunId ?? string.Empty,
-                    evt.CommandId ?? string.Empty,
-                    evt.CorrelationId ?? string.Empty,
-                    evt.EventSequence,
-                    evt.StateVersion,
-                    evt.EventType ?? eventTypeUrl,
-                    evt.OccurredAtUnixTimeMs));
+                factContext);
             next.StateRoot = _codec.Pack(appliedState)?.Clone();
         }
         finally

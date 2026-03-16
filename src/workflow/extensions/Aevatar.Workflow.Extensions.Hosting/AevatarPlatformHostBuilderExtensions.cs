@@ -1,6 +1,5 @@
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Scripting.Hosting.CapabilityApi;
-using Aevatar.Workflow.Extensions.AIProjection;
 using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -15,8 +14,6 @@ public sealed class AevatarPlatformCompositionOptions
     public bool EnableWorkflowCapability { get; set; } = true;
 
     public bool EnableScriptingCapability { get; set; } = true;
-
-    public bool EnableWorkflowAIProjection { get; set; } = true;
 
     public bool EnableMakerExtensions { get; set; }
 
@@ -56,9 +53,6 @@ public static class AevatarPlatformHostBuilderExtensions
         if (options.EnableScriptingCapability)
             builder.AddScriptingCapabilityBundle();
 
-        if (options.EnableWorkflowCapability && options.EnableWorkflowAIProjection)
-            builder.Services.AddWorkflowAIProjectionExtensions();
-
         if (options.EnableMakerExtensions)
             builder.Services.AddWorkflowMakerExtensions();
 
@@ -73,12 +67,6 @@ public static class AevatarPlatformHostBuilderExtensions
         {
             throw new InvalidOperationException(
                 "Maker extensions require workflow capability to be enabled.");
-        }
-
-        if (options.EnableWorkflowAIProjection && !options.EnableWorkflowCapability)
-        {
-            throw new InvalidOperationException(
-                "Workflow AI projection requires workflow capability to be enabled.");
         }
     }
 }

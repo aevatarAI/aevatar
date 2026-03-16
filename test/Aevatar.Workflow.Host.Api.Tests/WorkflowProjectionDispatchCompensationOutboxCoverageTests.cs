@@ -9,12 +9,12 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
+public sealed class ProjectionDispatchCompensationActorOutboxCoverageTests
 {
     [Fact]
     public async Task EnqueueAsync_WhenExistingActorAndTypeMatches_ShouldDispatchCompensationEvent()
     {
-        var actor = new RecordingActor("projection.compensation.outbox:workflow");
+        var actor = new RecordingActor("projection.compensation.outbox:default");
         var runtime = new RecordingActorRuntime();
         runtime.EnqueueGetResult(actor);
         var verifier = new RecordingAgentTypeVerifier { Result = true };
@@ -24,7 +24,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
             RecordId = "record-1",
             Operation = "upsert",
             FailedStore = "Graph",
-            ReadModel = WorkflowExecutionReportSnapshotMapper.Pack(new WorkflowExecutionReport
+            ReadModel = Any.Pack(new WorkflowRunInsightReportDocument
             {
                 Id = "record-1",
                 RootActorId = "record-1",
@@ -40,8 +40,8 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         runtime.GetCalls.Should().Be(1);
         runtime.CreateCalls.Should().Be(0);
         verifier.Calls.Should().ContainSingle(x =>
-            x.ActorId == "projection.compensation.outbox:workflow" &&
-            x.ExpectedType == typeof(WorkflowProjectionDispatchCompensationOutboxGAgent));
+            x.ActorId == "projection.compensation.outbox:default" &&
+            x.ExpectedType == typeof(ProjectionDispatchCompensationOutboxGAgent));
 
         actor.HandledEnvelopes.Should().ContainSingle();
         var envelope = actor.HandledEnvelopes.Single();
@@ -54,7 +54,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
     [Fact]
     public async Task TriggerReplayAsync_WhenActorMissing_ShouldCreateAndDispatchReplayEvent()
     {
-        var actor = new RecordingActor("projection.compensation.outbox:workflow");
+        var actor = new RecordingActor("projection.compensation.outbox:default");
         var runtime = new RecordingActorRuntime
         {
             CreatedActor = actor,
@@ -66,7 +66,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         await outbox.TriggerReplayAsync(17);
 
         runtime.CreateCalls.Should().Be(1);
-        runtime.LastCreatedId.Should().Be("projection.compensation.outbox:workflow");
+        runtime.LastCreatedId.Should().Be("projection.compensation.outbox:default");
         actor.HandledEnvelopes.Should().ContainSingle();
         var replay = actor.HandledEnvelopes.Single().Payload.Unpack<ProjectionCompensationTriggerReplayEvent>();
         replay.BatchSize.Should().Be(17);
@@ -76,7 +76,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
     [Fact]
     public async Task TriggerReplayAsync_WhenCreateRaces_ShouldUseRacedActorFromSecondLookup()
     {
-        var racedActor = new RecordingActor("projection.compensation.outbox:workflow");
+        var racedActor = new RecordingActor("projection.compensation.outbox:default");
         var runtime = new RecordingActorRuntime
         {
             CreateException = new InvalidOperationException("create raced"),
@@ -99,7 +99,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
     [Fact]
     public async Task TriggerReplayAsync_WhenActorTypeMismatch_ShouldThrow()
     {
-        var actor = new RecordingActor("projection.compensation.outbox:workflow");
+        var actor = new RecordingActor("projection.compensation.outbox:default");
         var runtime = new RecordingActorRuntime();
         runtime.EnqueueGetResult(actor);
         var outbox = new ActorProjectionDispatchCompensationOutbox(
@@ -110,7 +110,7 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
         Func<Task> act = () => outbox.TriggerReplayAsync(1);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*projection.compensation.outbox:workflow*");
+            .WithMessage("*projection.compensation.outbox:default*");
         actor.HandledEnvelopes.Should().BeEmpty();
     }
 
@@ -275,13 +275,13 @@ public sealed class ActorProjectionDispatchCompensationOutboxCoverageTests
     }
 }
 
-public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCoverageTests
+public sealed class ProjectionDispatchCompensationReplayHostedServiceCoverageTests
 {
     [Fact]
     public async Task StartAsync_WhenDisabled_ShouldNotStartWorker()
     {
         var outbox = new RecordingReplayOutbox();
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {
@@ -299,7 +299,7 @@ public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCov
     public async Task ReplayOnceAsync_ShouldForwardConfiguredBatchSize()
     {
         var outbox = new RecordingReplayOutbox();
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {
@@ -318,7 +318,7 @@ public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCov
     public async Task ReplayOnceAsync_WhenCanceled_ShouldThrowOperationCanceledException()
     {
         var outbox = new RecordingReplayOutbox();
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {
@@ -347,7 +347,7 @@ public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCov
                 return Task.CompletedTask;
             },
         };
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {
@@ -376,7 +376,7 @@ public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCov
                 await release.Task;
             },
         };
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {
@@ -410,7 +410,7 @@ public sealed class WorkflowProjectionDispatchCompensationReplayHostedServiceCov
                 throw new InvalidOperationException("boom");
             },
         };
-        using var service = new WorkflowProjectionDispatchCompensationReplayHostedService(
+        using var service = new ProjectionDispatchCompensationReplayHostedService(
             outbox,
             new WorkflowExecutionProjectionOptions
             {

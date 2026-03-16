@@ -1,9 +1,9 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
@@ -25,7 +25,6 @@ public sealed class ScriptNativeDocumentProjectorTests
         var dispatcher = new RecordingNativeDocumentDispatcher();
         var projector = new ScriptNativeDocumentProjector(
             dispatcher,
-            new StaticStructuredDefinitionSnapshotPort(),
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
             new ScriptReadModelMaterializationCompiler(),
             new ScriptNativeDocumentMaterializer(),
@@ -34,32 +33,43 @@ public sealed class ScriptNativeDocumentProjectorTests
         {
             ProjectionId = "runtime-1:native-document",
             RootActorId = "runtime-1",
-            CurrentSemanticReadModelDocument = new ScriptReadModelDocument
-            {
-                Id = "runtime-1",
-                ScriptId = "script-1",
-                DefinitionActorId = "definition-1",
-                Revision = "rev-1",
-                ReadModelTypeUrl = Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                ReadModelPayload = Any.Pack(BuildProfileReadModel()),
-                StateVersion = 7,
-            },
         };
+        var readModel = BuildProfileReadModel();
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ScriptDomainFactCommitted
-            {
-                ActorId = "runtime-1",
-                DefinitionActorId = "definition-1",
-                ScriptId = "script-1",
-                Revision = "rev-1",
-                RunId = "run-1",
-                EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
-                DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = BuildProfileReadModel() }),
-                StateVersion = 7,
-                OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
-            }),
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "runtime-1",
+                    DefinitionActorId = "definition-1",
+                    ScriptId = "script-1",
+                    Revision = "rev-1",
+                    RunId = "run-1",
+                    EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
+                    DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = readModel.Clone() }),
+                    ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+                    ReadModelPayload = Any.Pack(readModel),
+                    StateVersion = 7,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+                },
+                ScriptCommittedEnvelopeFactory.CreateState(
+                    "definition-1",
+                    "script-1",
+                    "rev-1",
+                    new ScriptProfileState
+                    {
+                        CommandCount = 1,
+                        LastCommandId = readModel.LastCommandId,
+                        NormalizedText = readModel.NormalizedText,
+                    },
+                    7,
+                    Any.Pack(readModel).TypeUrl,
+                    ScriptSources.StructuredProfileBehavior,
+                    ScriptSources.StructuredProfileBehaviorHash,
+                    ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
+                    "3",
+                    "structured-schema")),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -67,13 +77,14 @@ public sealed class ScriptNativeDocumentProjectorTests
         nativeDocument.Id.Should().Be("runtime-1");
         nativeDocument.SchemaId.Should().Be("script_profile");
         nativeDocument.DocumentIndexScope.Should().StartWith("script-native-script-profile-");
+        nativeDocument.StateVersion.Should().Be(7);
+        nativeDocument.LastEventId.Should().Be("evt-1");
         nativeDocument.Fields["actor_id"].Should().Be("actor-1");
         nativeDocument.Fields["policy_id"].Should().Be("policy-1");
         nativeDocument.Fields["tags"].Should().BeAssignableTo<IReadOnlyList<object?>>();
         nativeDocument.Fields["tags"].As<IReadOnlyList<object?>>().Should().BeEquivalentTo(["gold", "vip"]);
         nativeDocument.Fields["search"].Should().BeAssignableTo<IDictionary<string, object?>>();
         nativeDocument.Fields["search"].As<IDictionary<string, object?>>()["lookup_key"].Should().Be("actor-1:policy-1");
-        nativeDocument.DocumentMetadata.IndexName.Should().Be(nativeDocument.DocumentIndexScope);
     }
 
     private static ScriptProfileReadModel BuildProfileReadModel()
@@ -101,61 +112,22 @@ public sealed class ScriptNativeDocumentProjectorTests
         return readModel;
     }
 
-    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact)
-    {
-        return new EventEnvelope
-        {
-            Id = "evt-1",
-            Payload = Any.Pack(fact),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
-        };
-    }
+    private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact, ScriptBehaviorState state) =>
+        ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
+            fact,
+            state,
+            "evt-1",
+            DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
 
-    private sealed class StaticStructuredDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: ScriptSources.StructuredProfileBehavior,
-                SourceHash: ScriptSources.StructuredProfileBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
-                StateTypeUrl: Any.Pack(new ScriptProfileState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "structured-schema",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: ScriptProfileState.Descriptor.FullName,
-                ReadModelDescriptorFullName: ScriptProfileReadModel.Descriptor.FullName));
-        }
-    }
-
-    private sealed class RecordingNativeDocumentDispatcher : IProjectionStoreDispatcher<ScriptNativeDocumentReadModel, string>
+    private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel>
     {
         public ScriptNativeDocumentReadModel? LastUpsert { get; private set; }
 
-        public Task UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.DeepClone();
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
-
-        public Task MutateAsync(string key, Action<ScriptNativeDocumentReadModel> mutate, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<ScriptNativeDocumentReadModel?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<ScriptNativeDocumentReadModel?>(null);
-
-        public Task<IReadOnlyList<ScriptNativeDocumentReadModel>> ListAsync(int take = 50, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScriptNativeDocumentReadModel>>([]);
     }
 }

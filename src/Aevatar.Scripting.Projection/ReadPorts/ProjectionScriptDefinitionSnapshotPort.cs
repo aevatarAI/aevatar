@@ -1,6 +1,5 @@
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
 using Google.Protobuf;
 
@@ -8,16 +7,13 @@ namespace Aevatar.Scripting.Projection.ReadPorts;
 
 public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
 {
-    private readonly ScriptAuthorityProjectionPortService? _projectionPort;
-    private readonly IProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string>? _documentStore;
+    private readonly IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>? _documentReader;
     private readonly Func<string, string, CancellationToken, Task<ScriptDefinitionSnapshot?>>? _queryAsync;
 
     public ProjectionScriptDefinitionSnapshotPort(
-        ScriptAuthorityProjectionPortService projectionPort,
-        IProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string> documentStore)
+        IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string> documentReader)
     {
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
     internal ProjectionScriptDefinitionSnapshotPort(
@@ -36,8 +32,7 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
         if (_queryAsync != null)
             return await _queryAsync(definitionActorId, requestedRevision, ct);
 
-        _ = await _projectionPort!.EnsureActorProjectionAsync(definitionActorId, ct);
-        var document = await _documentStore!.GetAsync(definitionActorId, ct);
+        var document = await _documentReader!.GetAsync(definitionActorId, ct);
         if (document == null || string.IsNullOrWhiteSpace(document.Revision))
             return null;
 
@@ -47,12 +42,6 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
             return null;
         }
 
-        var scriptPackage = string.IsNullOrWhiteSpace(document.ScriptPackageBase64)
-            ? new ScriptPackageSpec()
-            : ScriptPackageSpec.Parser.ParseFrom(ByteString.FromBase64(document.ScriptPackageBase64));
-        var runtimeSemantics = string.IsNullOrWhiteSpace(document.RuntimeSemanticsBase64)
-            ? new ScriptRuntimeSemanticsSpec()
-            : ScriptRuntimeSemanticsSpec.Parser.ParseFrom(ByteString.FromBase64(document.RuntimeSemanticsBase64));
         var protocolDescriptorSet = string.IsNullOrWhiteSpace(document.ProtocolDescriptorSetBase64)
             ? ByteString.Empty
             : ByteString.FromBase64(document.ProtocolDescriptorSetBase64);
@@ -62,7 +51,7 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
             document.Revision,
             document.SourceText,
             document.SourceHash,
-            scriptPackage,
+            document.ScriptPackage?.Clone() ?? new ScriptPackageSpec(),
             document.StateTypeUrl,
             document.ReadModelTypeUrl,
             document.ReadModelSchemaVersion,
@@ -70,7 +59,7 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
             protocolDescriptorSet,
             document.StateDescriptorFullName,
             document.ReadModelDescriptorFullName,
-            runtimeSemantics);
+            document.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec());
     }
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(

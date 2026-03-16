@@ -14,6 +14,10 @@ public interface IWorkflowExecutionProjectionQueryPort
         int take = 200,
         CancellationToken ct = default);
 
+    Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+        string actorId,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

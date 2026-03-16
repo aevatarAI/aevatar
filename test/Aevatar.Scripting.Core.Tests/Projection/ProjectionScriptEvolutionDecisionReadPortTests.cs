@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Scripting.Projection.ReadPorts;
@@ -13,7 +14,8 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     public async Task TryGetAsync_ShouldReturnNull_WhenReadModelIsMissing()
     {
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(new InMemoryStoreDispatcher())
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(
+                new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>())
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
@@ -25,10 +27,11 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     [Fact]
     public async Task TryGetAsync_ShouldReturnNull_WhenReadModelIsNotTerminal()
     {
-        var dispatcher = new InMemoryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>();
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-pending",
+            ActorId = "session-pending",
             ProposalId = "proposal-pending",
             ScriptId = "script-1",
             BaseRevision = "rev-1",
@@ -38,7 +41,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
             Diagnostics = ["compile-ok"],
         });
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(dispatcher)
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(dispatcher)
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
@@ -50,10 +53,11 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     [Fact]
     public async Task TryGetAsync_ShouldMapPromotedReadModel()
     {
-        var dispatcher = new InMemoryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>();
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-promoted",
+            ActorId = "session-promoted",
             ProposalId = "proposal-promoted",
             ScriptId = "script-1",
             BaseRevision = "rev-1",
@@ -65,7 +69,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
             Diagnostics = ["compile-ok"],
         });
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(dispatcher)
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(dispatcher)
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
@@ -81,10 +85,11 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     [Fact]
     public async Task TryGetAsync_ShouldMapRejectedReadModel()
     {
-        var dispatcher = new InMemoryStoreDispatcher();
+        var dispatcher = new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>();
         await dispatcher.UpsertAsync(new ScriptEvolutionReadModel
         {
             Id = "proposal-rejected",
+            ActorId = "session-rejected",
             ProposalId = "proposal-rejected",
             ScriptId = "script-1",
             BaseRevision = "rev-1",
@@ -97,7 +102,7 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
             Diagnostics = ["compile-error"],
         });
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(dispatcher)
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(dispatcher)
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
@@ -115,7 +120,8 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     public async Task TryGetAsync_ShouldThrow_WhenProposalIdIsMissing()
     {
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(new InMemoryStoreDispatcher())
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(
+                new InMemoryProjectionDocumentStore<ScriptEvolutionReadModel>())
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
@@ -128,81 +134,13 @@ public class ProjectionScriptEvolutionDecisionReadPortTests
     public async Task TryGetAsync_ShouldReturnNull_WhenProjectionDispatcherCannotBeActivated()
     {
         var services = new ServiceCollection()
-            .AddSingleton<IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>>(_ => throw new InvalidOperationException("store-missing"))
+            .AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(
+                _ => throw new InvalidOperationException("store-missing"))
             .BuildServiceProvider();
         var port = new ProjectionScriptEvolutionDecisionReadPort(services);
 
         var decision = await port.TryGetAsync("proposal-missing-store", CancellationToken.None);
 
         decision.Should().BeNull();
-    }
-
-    private sealed class InMemoryStoreDispatcher : IProjectionStoreDispatcher<ScriptEvolutionReadModel, string>
-    {
-        private readonly Dictionary<string, ScriptEvolutionReadModel> _store = new(StringComparer.Ordinal);
-
-        public Task UpsertAsync(ScriptEvolutionReadModel readModel, CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(readModel);
-            ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = Clone(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptEvolutionReadModel> mutate, CancellationToken ct = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(key);
-            ArgumentNullException.ThrowIfNull(mutate);
-            ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptEvolutionReadModel { Id = key };
-                _store[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task<ScriptEvolutionReadModel?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(key);
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(
-                _store.TryGetValue(key, out var readModel)
-                    ? Clone(readModel)
-                    : null);
-        }
-
-        public Task<IReadOnlyList<ScriptEvolutionReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptEvolutionReadModel>>(
-                _store.Values
-                    .Take(take)
-                    .Select(Clone)
-                    .ToList());
-        }
-
-        private static ScriptEvolutionReadModel Clone(ScriptEvolutionReadModel readModel)
-        {
-            return new ScriptEvolutionReadModel
-            {
-                Id = readModel.Id,
-                ProposalId = readModel.ProposalId,
-                ScriptId = readModel.ScriptId,
-                BaseRevision = readModel.BaseRevision,
-                CandidateRevision = readModel.CandidateRevision,
-                ValidationStatus = readModel.ValidationStatus,
-                PromotionStatus = readModel.PromotionStatus,
-                RollbackStatus = readModel.RollbackStatus,
-                FailureReason = readModel.FailureReason,
-                DefinitionActorId = readModel.DefinitionActorId,
-                CatalogActorId = readModel.CatalogActorId,
-                Diagnostics = [.. readModel.Diagnostics],
-                LastEventId = readModel.LastEventId,
-                UpdatedAt = readModel.UpdatedAt,
-            };
-        }
     }
 }

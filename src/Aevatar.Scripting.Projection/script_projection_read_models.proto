@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package aevatar.scripting.projection.readmodels;
+
+option csharp_namespace = "Aevatar.Scripting.Projection.ReadModels";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "script_host_messages.proto";
+
+message ScriptReadModelDocument {
+  string id = 1;
+  string script_id = 2;
+  string definition_actor_id = 3;
+  string revision = 4;
+  string read_model_type_url = 5;
+  google.protobuf.Any read_model_payload = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc_value = 9;
+}
+
+message ScriptDefinitionSnapshotDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp created_at_utc_value = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string script_id = 6;
+  string definition_actor_id = 7;
+  string revision = 8;
+  string source_text = 9;
+  string source_hash = 10;
+  string state_type_url = 11;
+  string read_model_type_url = 12;
+  string read_model_schema_version = 13;
+  string read_model_schema_hash = 14;
+  aevatar.scripting.ScriptPackageSpec script_package = 15;
+  string protocol_descriptor_set_base64 = 16;
+  string state_descriptor_full_name = 17;
+  string read_model_descriptor_full_name = 18;
+  aevatar.scripting.ScriptRuntimeSemanticsSpec runtime_semantics = 19;
+}
+
+message ScriptCatalogEntryDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp created_at_utc_value = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string catalog_actor_id = 6;
+  string script_id = 7;
+  string active_revision = 8;
+  string active_definition_actor_id = 9;
+  string active_source_hash = 10;
+  string previous_revision = 11;
+  repeated string revision_history_entries = 12;
+  string last_proposal_id = 13;
+}
+
+message ScriptEvolutionReadModel {
+  string id = 1;
+  string proposal_id = 2;
+  string script_id = 3;
+  string base_revision = 4;
+  string candidate_revision = 5;
+  string validation_status = 6;
+  string promotion_status = 7;
+  string rollback_status = 8;
+  string failure_reason = 9;
+  string definition_actor_id = 10;
+  string catalog_actor_id = 11;
+  repeated string diagnostics_entries = 12;
+  string last_event_id = 13;
+  google.protobuf.Timestamp updated_at_utc_value = 14;
+  int64 state_version = 15;
+  string actor_id = 16;
+}
+
+message ScriptNativeDocumentReadModel {
+  string id = 1;
+  string script_id = 2;
+  string definition_actor_id = 3;
+  string revision = 4;
+  string schema_id = 5;
+  string schema_version = 6;
+  string schema_hash = 7;
+  string document_index_scope = 8;
+  google.protobuf.Struct fields_value = 9;
+  int64 state_version = 10;
+  string last_event_id = 11;
+  google.protobuf.Timestamp updated_at_utc_value = 12;
+}
+
+message ScriptNativeGraphNodeRecord {
+  string scope = 1;
+  string node_id = 2;
+  string node_type = 3;
+  map<string, string> properties = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+}
+
+message ScriptNativeGraphEdgeRecord {
+  string scope = 1;
+  string edge_id = 2;
+  string from_node_id = 3;
+  string to_node_id = 4;
+  string edge_type = 5;
+  map<string, string> properties = 6;
+  google.protobuf.Timestamp updated_at_utc_value = 7;
+}
+
+message ScriptNativeGraphReadModel {
+  string id = 1;
+  string script_id = 2;
+  string definition_actor_id = 3;
+  string revision = 4;
+  string schema_id = 5;
+  string schema_version = 6;
+  string schema_hash = 7;
+  string graph_scope = 8;
+  repeated ScriptNativeGraphNodeRecord graph_node_entries = 9;
+  repeated ScriptNativeGraphEdgeRecord graph_edge_entries = 10;
+  int64 state_version = 11;
+  string last_event_id = 12;
+  google.protobuf.Timestamp updated_at_utc_value = 13;
+}

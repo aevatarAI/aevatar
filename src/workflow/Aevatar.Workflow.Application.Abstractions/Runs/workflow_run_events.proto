@@ -113,6 +113,14 @@ message WorkflowActorSnapshotPayload {
   int32 role_reply_count = 13;
 }
 
+message WorkflowActorProjectionStatePayload {
+  string actor_id = 1;
+  string last_command_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp last_updated_at_utc = 5;
+}
+
 message WorkflowProjectionStateSnapshotPayload {
   string actor_id = 1;
   string workflow_name = 2;
@@ -121,6 +129,7 @@ message WorkflowProjectionStateSnapshotPayload {
   bool projection_completed = 5;
   bool snapshot_available = 6;
   WorkflowActorSnapshotPayload snapshot = 7;
+  WorkflowActorProjectionStatePayload projection_state = 8;
 }
 
 message WorkflowRunContextPayload {

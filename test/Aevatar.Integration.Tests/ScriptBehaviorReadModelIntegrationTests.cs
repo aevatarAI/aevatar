@@ -16,7 +16,7 @@ namespace Aevatar.Integration.Tests;
 public sealed class ScriptBehaviorReadModelIntegrationTests
 {
     [Fact]
-    public async Task ProvisionRunAndQuery_ShouldProduceProjectedReadModel()
+    public async Task ProvisionRunAndReadSnapshot_ShouldProduceProjectedReadModel()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -34,19 +34,20 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         const string revision = "rev-1";
         const string runId = "run-1";
 
-        var resolvedDefinitionActorId = await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "integration-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
             sourceHash: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorHash,
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
-        resolvedDefinitionActorId.Should().Be(definitionActorId);
+        definition.ActorId.Should().Be(definitionActorId);
 
         var resolvedRuntimeActorId = await provisioningPort.EnsureRuntimeAsync(
             definitionActorId,
             revision,
             runtimeActorId,
+            definition.Snapshot,
             CancellationToken.None);
         resolvedRuntimeActorId.Should().Be(runtimeActorId);
 
@@ -70,7 +71,10 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
                 requestedEventType: "integration.requested",
                 ct: CancellationToken.None);
 
-            var committed = await WaitForCommittedFactAsync(sink, runId, CancellationToken.None);
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                runId,
+                CancellationToken.None);
             committed.ActorId.Should().Be(runtimeActorId);
             committed.DomainEventPayload.Should().NotBeNull();
             committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current.NormalizedText.Should().Be("HELLO");
@@ -82,17 +86,6 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
 
             var listed = await queryService.ListSnapshotsAsync(10, CancellationToken.None);
             listed.Should().Contain(x => x.ActorId == runtimeActorId);
-
-            var queryResult = await queryService.ExecuteDeclaredQueryAsync(
-                runtimeActorId,
-                Any.Pack(new TextNormalizationQueryRequested
-                {
-                    RequestId = "request-1",
-                    ReplyStreamId = "reply-stream",
-                }),
-                CancellationToken.None);
-            queryResult.Should().NotBeNull();
-            queryResult!.Unpack<TextNormalizationQueryResponded>().Current.NormalizedText.Should().Be("HELLO");
         }
         finally
         {
@@ -101,24 +94,4 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
         }
     }
 
-    private static async Task<ScriptDomainFactCommitted> WaitForCommittedFactAsync(
-        IEventSink<EventEnvelope> sink,
-        string runId,
-        CancellationToken ct)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
-
-        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
-        {
-            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
-                continue;
-
-            var fact = envelope.Payload.Unpack<ScriptDomainFactCommitted>();
-            if (string.Equals(fact.RunId, runId, StringComparison.Ordinal))
-                return fact;
-        }
-
-        throw new InvalidOperationException($"Timed out waiting for committed script fact. run_id={runId}");
-    }
 }

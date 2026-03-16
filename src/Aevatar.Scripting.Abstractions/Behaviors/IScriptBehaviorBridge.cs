@@ -1,5 +1,3 @@
-using Aevatar.Scripting.Abstractions.Queries;
-
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
 public interface IScriptBehaviorBridge
@@ -16,13 +14,8 @@ public interface IScriptBehaviorBridge
         IMessage domainEvent,
         ScriptFactContext context);
 
-    IMessage? ReduceReadModel(
-        IMessage? currentReadModel,
+    IMessage? ProjectReadModel(
+        IMessage? currentState,
         IMessage domainEvent,
         ScriptFactContext context);
-
-    Task<IMessage?> ExecuteQueryAsync(
-        IMessage query,
-        ScriptTypedReadModelSnapshot snapshot,
-        CancellationToken ct);
 }

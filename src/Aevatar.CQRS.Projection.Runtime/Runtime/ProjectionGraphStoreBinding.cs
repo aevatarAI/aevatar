@@ -1,62 +1,66 @@
 namespace Aevatar.CQRS.Projection.Runtime.Runtime;
 
-public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
-    : IProjectionStoreBinding<TReadModel, TKey>,
-      IProjectionStoreBindingAvailability
+public sealed class ProjectionGraphStoreBinding<TReadModel>
+    : IProjectionWriteSink<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
     private const int CleanupPageSize = 1000;
     private const int CleanupMaxItems = 1_000_000;
 
     private readonly IProjectionGraphStore? _graphStore;
+    private readonly IProjectionGraphMaterializer<TReadModel>? _materializer;
 
-    public ProjectionGraphStoreBinding(IProjectionGraphStore? graphStore = null)
+    public ProjectionGraphStoreBinding(
+        IProjectionGraphStore? graphStore = null,
+        IProjectionGraphMaterializer<TReadModel>? materializer = null)
     {
         _graphStore = graphStore;
+        _materializer = materializer;
     }
 
-    public bool IsConfigured =>
+    public bool IsEnabled =>
         _graphStore is not null &&
-        typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel));
+        _materializer is not null;
 
-    public string AvailabilityReason
+    public string DisabledReason
     {
         get
         {
             if (_graphStore is null)
                 return "Graph projection store service is not registered.";
 
-            if (!typeof(IGraphReadModel).IsAssignableFrom(typeof(TReadModel)))
+            if (_materializer is null)
             {
-                return $"Read model '{typeof(TReadModel).FullName}' does not implement '{typeof(IGraphReadModel).FullName}'.";
+                return $"Graph materializer is not registered for read model '{typeof(TReadModel).FullName}'.";
             }
 
             return "Graph binding is active.";
         }
     }
 
-    public string StoreName => IsConfigured ? "Graph" : "Graph(Unconfigured)";
+    public string SinkName => IsEnabled ? "Graph" : "Graph(Unconfigured)";
 
-    public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public async Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
-        if (_graphStore is null || readModel is not IGraphReadModel graphReadModel)
-            return;
+        if (_graphStore is null || _materializer is null)
+            return ProjectionWriteResult.Applied();
 
-        var scope = NormalizeToken(graphReadModel.GraphScope);
+        var graphMaterialization = _materializer.Materialize(readModel);
+        var scope = NormalizeToken(graphMaterialization.Scope);
         if (scope.Length == 0)
         {
             throw new InvalidOperationException(
                 $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
         }
 
-        var ownerId = BuildManagedOwnerId(graphReadModel);
-        var normalizedNodes = NormalizeNodes(graphReadModel.GraphNodes, scope, ownerId);
+        var ownerId = BuildManagedOwnerId(readModel);
+        var normalizedNodes = NormalizeNodes(graphMaterialization.Nodes, scope, ownerId);
         foreach (var node in normalizedNodes)
             await GraphStore.UpsertNodeAsync(node, ct);
 
-        var normalizedEdges = NormalizeEdges(graphReadModel.GraphEdges, scope, ownerId);
+        var normalizedEdges = NormalizeEdges(graphMaterialization.Edges, scope, ownerId);
         foreach (var edge in normalizedEdges)
             await GraphStore.UpsertEdgeAsync(edge, ct);
 
@@ -86,6 +90,8 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
 
             await GraphStore.DeleteNodeAsync(scope, node.NodeId, ct);
         }
+
+        return ProjectionWriteResult.Applied();
     }
 
     private async Task<IReadOnlyList<ProjectionGraphEdge>> ListManagedEdgesByOwnerAsync(
@@ -158,7 +164,7 @@ public sealed class ProjectionGraphStoreBinding<TReadModel, TKey>
         return result;
     }
 
-    private static string BuildManagedOwnerId(IGraphReadModel readModel)
+    private static string BuildManagedOwnerId(TReadModel readModel)
     {
         var readModelId = NormalizeToken(readModel.Id);
         if (readModelId.Length == 0)

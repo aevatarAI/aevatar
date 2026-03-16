@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.StateMirror.Abstractions;
 using Aevatar.CQRS.Projection.StateMirror.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -86,8 +87,11 @@ public class StateMirrorProjectionTests
     public async Task AddJsonStateMirrorReadModelProjector_ShouldProjectAndDispatchToStore()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentStore<ProjectionReadModel, string>, InMemoryProjectionReadModelStore>();
-        services.AddProjectionReadModelRuntime();
+        services.AddSingleton<InMemoryProjectionReadModelStore>();
+        services.AddSingleton<IProjectionDocumentReader<ProjectionReadModel, string>>(sp =>
+            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
+        services.AddSingleton<IProjectionWriteDispatcher<ProjectionReadModel>>(sp =>
+            sp.GetRequiredService<InMemoryProjectionReadModelStore>());
         services.AddJsonStateMirrorReadModelProjector<SampleState, ProjectionReadModel>(options =>
         {
             options.RenamedFields[nameof(SampleState.ActorId)] = nameof(ProjectionReadModel.Id);
@@ -109,13 +113,11 @@ public class StateMirrorProjectionTests
         stored!.Count.Should().Be(8);
         stored.InternalNote.Should().Be("memo");
 
-        await projector.MutateAsync("actor-4", model => model.Count = 10);
-        var mutated = await projector.GetAsync("actor-4");
-        mutated.Should().NotBeNull();
-        mutated!.Count.Should().Be(10);
-
-        var items = await projector.ListAsync();
-        items.Should().ContainSingle(x => x.Id == "actor-4" && x.Count == 10);
+        var items = await projector.QueryAsync(new ProjectionDocumentQuery
+        {
+            Take = 10,
+        });
+        items.Items.Should().ContainSingle(x => x.Id == "actor-4" && x.Count == 8);
     }
 
     public sealed class SampleState
@@ -149,31 +151,30 @@ public class StateMirrorProjectionTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
+
         public int Count { get; set; }
 
         public string InternalNote { get; set; } = "";
     }
 
     private sealed class InMemoryProjectionReadModelStore
-        : IProjectionDocumentStore<ProjectionReadModel, string>
+        : IProjectionDocumentReader<ProjectionReadModel, string>,
+          IProjectionWriteDispatcher<ProjectionReadModel>
     {
         private readonly Dictionary<string, ProjectionReadModel> _items = new(StringComparer.Ordinal);
 
-        public Task UpsertAsync(ProjectionReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ProjectionReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _items[readModel.Id] = Clone(readModel);
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ProjectionReadModel> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var model))
-                throw new InvalidOperationException($"Read model '{key}' was not found.");
-
-            mutate(model);
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<ProjectionReadModel?> GetAsync(string key, CancellationToken ct = default)
@@ -184,15 +185,20 @@ public class StateMirrorProjectionTests
                 : null);
         }
 
-        public Task<IReadOnlyList<ProjectionReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<ProjectionReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            var normalizedTake = Math.Clamp(take, 1, 500);
+            var normalizedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, 500);
             var items = _items.Values
                 .Take(normalizedTake)
                 .Select(Clone)
                 .ToList();
-            return Task.FromResult<IReadOnlyList<ProjectionReadModel>>(items);
+            return Task.FromResult(new ProjectionDocumentQueryResult<ProjectionReadModel>
+            {
+                Items = items,
+            });
         }
 
         private static ProjectionReadModel Clone(ProjectionReadModel source)
@@ -200,6 +206,9 @@ public class StateMirrorProjectionTests
             return new ProjectionReadModel
             {
                 Id = source.Id,
+                StateVersion = source.StateVersion,
+                LastEventId = source.LastEventId,
+                UpdatedAt = source.UpdatedAt,
                 Count = source.Count,
                 InternalNote = source.InternalNote,
             };

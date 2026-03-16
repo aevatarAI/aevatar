@@ -10,18 +10,18 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
 {
     private readonly ICommandDispatchService<UpsertScriptDefinitionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
     private readonly IScriptingActorAddressResolver _addressResolver;
-    private readonly IScriptAuthorityProjectionPrimingPort _authorityProjectionPrimingPort;
+    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly IScriptBehaviorCompiler _compiler;
 
     public RuntimeScriptDefinitionCommandService(
         ICommandDispatchService<UpsertScriptDefinitionCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
         IScriptingActorAddressResolver addressResolver,
-        IScriptAuthorityProjectionPrimingPort authorityProjectionPrimingPort,
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort,
         IScriptBehaviorCompiler compiler)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
-        _authorityProjectionPrimingPort = authorityProjectionPrimingPort ?? throw new ArgumentNullException(nameof(authorityProjectionPrimingPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
     }
 
@@ -41,7 +41,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
             scriptRevision,
             sourceText,
             sourceHash);
-        await _authorityProjectionPrimingPort.PrimeAsync(actorId, ct);
+        await _authorityReadModelActivationPort.ActivateAsync(actorId, ct);
 
         var result = await _dispatchService.DispatchAsync(
             new UpsertScriptDefinitionCommand(

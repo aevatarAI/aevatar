@@ -18,9 +18,12 @@ public sealed class ScriptEvolutionSessionCompletedEventProjector
         ScriptEvolutionSessionProjectionContext context,
         EventEnvelope envelope)
     {
-        var payload = envelope.Payload;
-        if (payload == null || !payload.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+            payload == null ||
+            !payload.Is(ScriptEvolutionSessionCompletedEvent.Descriptor))
+        {
             return EmptyEntries;
+        }
 
         var completed = payload.Unpack<ScriptEvolutionSessionCompletedEvent>();
         var proposalId = string.IsNullOrWhiteSpace(completed.ProposalId)

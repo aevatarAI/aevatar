@@ -159,12 +159,12 @@ public sealed class ScriptAutonomousEvolutionComprehensiveE2ETests
             provider,
             "worker-a-script",
             CancellationToken.None,
-            expectedRevision: "rev-a-2");
+            expectedRevision: "rev-a-3");
         var catalogEntryB = await ScriptEvolutionIntegrationTestKit.GetCatalogEntryAsync(
             provider,
             "worker-b-script",
             CancellationToken.None,
-            expectedRevision: "rev-b-2");
+            expectedRevision: "rev-b-3");
         catalogEntryA.Should().NotBeNull();
         catalogEntryB.Should().NotBeNull();
         catalogEntryA!.ActiveRevision.Should().Be("rev-a-3");

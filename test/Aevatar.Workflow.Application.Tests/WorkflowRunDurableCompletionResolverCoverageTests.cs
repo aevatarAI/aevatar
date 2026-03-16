@@ -142,6 +142,9 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
             throw new NotSupportedException();
 

@@ -61,6 +61,7 @@ fi
 
 if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadata|WorkflowRunCommandMetadataKeys\.SessionId|EventEnvelope\.CorrelationId" \
   docs src/Aevatar.Foundation.Core/README.md \
+  -g '!docs/architecture/archive/**' \
   -g '!docs/architecture/*blueprint*.md'
 then
   echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
@@ -72,8 +73,51 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
   exit 1
 fi
 
+bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
+bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
+
+if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src; then
+  echo "Declared readmodel query execution is forbidden. Query must read persisted snapshots/documents only."
+  exit 1
+fi
+
+if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|ExecuteQueryAsync\(|GetReadModelSnapshotAsync\(" src/Aevatar.Scripting.*; then
+  echo "Scripting declared-query authoring/runtime contracts and runtime readmodel side-reads are forbidden on the production path."
+  exit 1
+fi
+
+if rg -n "IProjectionEventReducer|AddAIDefaultProjectionLayer|AddAllAIProjectionEventReducers|EnableWorkflowAIProjection" src; then
+  echo "Reducer-era projection abstractions and workflow AI projection toggles are forbidden on the production path."
+  exit 1
+fi
+
+if rg -n "WorkflowExecutionReadModelProjector|IWorkflowProjectionReadModelUpdater|WorkflowProjectionReadModelUpdater|WorkflowExecutionReportDocumentMetadataProvider|AddWorkflowExecutionProjectionReducer|AddWorkflowExecutionProjectionProjector|AddWorkflowExecutionProjectionExtensionsFromAssembly|WorkflowExecutionReportSnapshotMapper|WorkflowExecutionEventReducerBase|WorkflowExecutionProjectionMutations" src/workflow test/Aevatar.Workflow.Host.Api.Tests; then
+  echo "Legacy workflow readmodel naming is forbidden. Use artifact-oriented workflow projection names."
+  exit 1
+fi
+
+if rg -n "IWorkflowExecutionReportArtifactSink|NoopWorkflowExecutionReportArtifactSink|FileSystemWorkflowExecutionReportArtifactSink|WorkflowExecutionReportArtifactOptions|WorkflowExecutionReportArtifacts" src test docs -g '!docs/architecture/archive/**'; then
+  echo "Legacy workflow report artifact export naming is forbidden. Use WorkflowRunReportExport terminology."
+  exit 1
+fi
+
 if rg -n "Projection:ReadModel:Bindings" src test; then
   echo "Projection:ReadModel:Bindings is forbidden. Use Projection:Document:* and Projection:Graph:* options."
+  exit 1
+fi
+
+set +e
+projection_document_reader_list_report="$(
+  rg -l "IProjectionDocumentReader<" src test demos \
+    | xargs -r rg -n "ListAsync\("
+)"
+projection_document_reader_list_status=$?
+set -e
+
+if [[ ${projection_document_reader_list_status} -eq 0 && -n "${projection_document_reader_list_report}" ]]; then
+  echo "${projection_document_reader_list_report}"
+  echo "IProjectionDocumentReader-based document querying must use QueryAsync. Legacy ListAsync is forbidden."
   exit 1
 fi
 
@@ -614,8 +658,8 @@ if rg -n "TryGetContext\(" src; then
   exit 1
 fi
 
-if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPortService.cs; then
-  echo "WorkflowExecutionProjectionPortService must not use process-local SemaphoreSlim for projection start arbitration."
+if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPort.cs; then
+  echo "WorkflowExecutionProjectionPort must not use process-local SemaphoreSlim for projection start arbitration."
   exit 1
 fi
 
@@ -834,6 +878,12 @@ check_orchestration_class_guard \
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
+
+echo "Running committed-state projection guard..."
+bash tools/ci/committed_state_projection_guard.sh
+
+echo "Running scripting runtime snapshot guard..."
+bash tools/ci/scripting_runtime_snapshot_guard.sh
 
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh

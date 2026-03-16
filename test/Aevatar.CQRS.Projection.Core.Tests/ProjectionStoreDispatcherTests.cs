@@ -8,10 +8,10 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public async Task UpsertAsync_ShouldWriteToAllBindings()
     {
-        var queryBinding = new TestQueryableBinding();
+        var documentBinding = new RecordingBinding("document");
         var graphBinding = new RecordingBinding("graph");
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
-            [queryBinding, graphBinding]);
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
+            [documentBinding, graphBinding]);
 
         var readModel = new TestReadModel
         {
@@ -21,38 +21,15 @@ public class ProjectionStoreDispatcherTests
 
         await dispatcher.UpsertAsync(readModel);
 
-        queryBinding.UpsertCount.Should().Be(1);
+        documentBinding.UpsertCount.Should().Be(1);
         graphBinding.UpsertCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task MutateAsync_ShouldMutateQueryableStore_AndRefreshWriteOnlyBindings()
-    {
-        var queryBinding = new TestQueryableBinding();
-        var graphBinding = new RecordingBinding("graph");
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
-            [queryBinding, graphBinding]);
-
-        await dispatcher.UpsertAsync(new TestReadModel
-        {
-            Id = "id-1",
-            Value = "before",
-        });
-
-        await dispatcher.MutateAsync("id-1", model => model.Value = "after");
-
-        var fetched = await dispatcher.GetAsync("id-1");
-        fetched.Should().NotBeNull();
-        fetched!.Value.Should().Be("after");
-        graphBinding.UpsertCount.Should().Be(2);
-        graphBinding.LastValue.Should().Be("after");
-    }
-
-    [Fact]
-    public async Task UpsertAsync_WhenQueryableBindingMissing_ShouldWriteWriteOnlyBindings()
+    public async Task UpsertAsync_WhenOnlyWriteBindingsAreRegistered_ShouldStillWrite()
     {
         var writeOnly = new RecordingBinding("write-only");
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [writeOnly]);
 
         await dispatcher.UpsertAsync(new TestReadModel
@@ -65,38 +42,29 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
-    public async Task MutateAsync_WhenQueryableBindingMissing_ShouldThrow()
+    public async Task UpsertAsync_ShouldPreserveRegisteredBindingOrder()
     {
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
-            [new RecordingBinding("write-only")]);
+        var writes = new List<string>();
+        var graphBinding = new RecordingBinding("graph", writes);
+        var documentBinding = new RecordingBinding("document", writes);
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
+            [graphBinding, documentBinding]);
 
-        Func<Task> act = () => dispatcher.MutateAsync("id-1", model => model.Value = "v2");
+        await dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Queryable projection store binding is not configured*");
-    }
-
-    [Fact]
-    public async Task GetAndList_WhenQueryableBindingMissing_ShouldThrow()
-    {
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
-            [new RecordingBinding("write-only")]);
-
-        Func<Task> getAct = async () => _ = await dispatcher.GetAsync("id-1");
-        Func<Task> listAct = async () => _ = await dispatcher.ListAsync();
-
-        await getAct.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Queryable projection store binding is not configured*");
-        await listAct.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Queryable projection store binding is not configured*");
+        writes.Should().Equal("graph", "document");
     }
 
     [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldThrow()
     {
-        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>(
             [unconfiguredDocumentBinding]);
 
         act.Should().Throw<InvalidOperationException>()
@@ -106,9 +74,9 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldIncludeAvailabilityReason()
     {
-        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>(
             [unconfiguredDocumentBinding]);
 
         act.Should().Throw<InvalidOperationException>()
@@ -116,30 +84,20 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
-    public void Ctor_WhenMultipleQueryableBindings_ShouldThrow()
-    {
-        Action act = () => new ProjectionStoreDispatcher<TestReadModel, string>(
-            [new TestQueryableBinding(), new TestQueryableBinding()]);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*At most one queryable projection store binding is allowed*");
-    }
-
-    [Fact]
     public void ProjectionDocumentBinding_WhenStoreMissing_ShouldExposeAvailabilityReason()
     {
-        var binding = new ProjectionDocumentStoreBinding<TestReadModel, string>();
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>();
 
-        binding.IsConfigured.Should().BeFalse();
-        binding.AvailabilityReason.Should().Contain("not registered");
+        binding.IsEnabled.Should().BeFalse();
+        binding.DisabledReason.Should().Contain("not registered");
     }
 
     [Fact]
     public async Task UpsertAsync_WhenBindingFailsInitially_ShouldRetry()
     {
-        var queryBinding = new TestQueryableBinding();
+        var queryBinding = new RecordingBinding("document");
         var flakyGraphBinding = new FlakyBinding("graph", failCountBeforeSuccess: 1);
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [queryBinding, flakyGraphBinding],
             options: new ProjectionStoreDispatchOptions
             {
@@ -159,10 +117,10 @@ public class ProjectionStoreDispatcherTests
     [Fact]
     public async Task UpsertAsync_WhenBindingFailsAfterRetries_ShouldInvokeCompensator()
     {
-        var queryBinding = new TestQueryableBinding();
+        var queryBinding = new RecordingBinding("document");
         var failingBinding = new FlakyBinding("graph", failCountBeforeSuccess: int.MaxValue);
         var compensator = new RecordingCompensator();
-        var dispatcher = new ProjectionStoreDispatcher<TestReadModel, string>(
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
             [queryBinding, failingBinding],
             compensator: compensator,
             options: new ProjectionStoreDispatchOptions
@@ -188,50 +146,70 @@ public class ProjectionStoreDispatcherTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
+
         public string Value { get; set; } = "";
     }
 
-    private sealed class RecordingBinding : IProjectionStoreBinding<TestReadModel, string>
+    private sealed class RecordingBinding : IProjectionWriteSink<TestReadModel>
     {
-        public RecordingBinding(string name)
+        private readonly ICollection<string>? _writes;
+
+        public RecordingBinding(string name, ICollection<string>? writes = null)
         {
-            StoreName = name;
+            SinkName = name;
+            _writes = writes;
         }
 
-        public string StoreName { get; }
+        public string SinkName { get; }
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int UpsertCount { get; private set; }
 
         public string LastValue { get; private set; } = "";
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             UpsertCount++;
             LastValue = readModel.Value;
-            return Task.CompletedTask;
+            _writes?.Add(SinkName);
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 
-    private sealed class FlakyBinding : IProjectionStoreBinding<TestReadModel, string>
+    private sealed class FlakyBinding : IProjectionWriteSink<TestReadModel>
     {
         private readonly int _failCountBeforeSuccess;
         private int _remainingFailures;
 
         public FlakyBinding(string storeName, int failCountBeforeSuccess)
         {
-            StoreName = storeName;
+            SinkName = storeName;
             _failCountBeforeSuccess = failCountBeforeSuccess;
             _remainingFailures = failCountBeforeSuccess;
         }
 
-        public string StoreName { get; }
+        public string SinkName { get; }
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
 
         public int AttemptCount { get; private set; }
 
         public int UpsertCount { get; private set; }
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             AttemptCount++;
@@ -239,20 +217,20 @@ public class ProjectionStoreDispatcherTests
             {
                 _remainingFailures--;
                 throw new InvalidOperationException(
-                    $"Binding '{StoreName}' failed. remainingFailures={_remainingFailures} failCountBeforeSuccess={_failCountBeforeSuccess}");
+                    $"Binding '{SinkName}' failed. remainingFailures={_remainingFailures} failCountBeforeSuccess={_failCountBeforeSuccess}");
             }
 
             UpsertCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 
-    private sealed class RecordingCompensator : IProjectionStoreDispatchCompensator<TestReadModel, string>
+    private sealed class RecordingCompensator : IProjectionStoreDispatchCompensator<TestReadModel>
     {
-        public ProjectionStoreDispatchCompensationContext<TestReadModel, string>? LastContext { get; private set; }
+        public ProjectionStoreDispatchCompensationContext<TestReadModel>? LastContext { get; private set; }
 
         public Task CompensateAsync(
-            ProjectionStoreDispatchCompensationContext<TestReadModel, string> context,
+            ProjectionStoreDispatchCompensationContext<TestReadModel> context,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -261,58 +239,4 @@ public class ProjectionStoreDispatcherTests
         }
     }
 
-    private sealed class TestQueryableBinding : IProjectionQueryableStoreBinding<TestReadModel, string>
-    {
-        private readonly Dictionary<string, TestReadModel> _items = new(StringComparer.Ordinal);
-
-        public string StoreName => "document";
-
-        public int UpsertCount { get; private set; }
-
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _items[readModel.Id] = Clone(readModel);
-            UpsertCount++;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<TestReadModel> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var model))
-                throw new InvalidOperationException($"Missing read model '{key}'.");
-
-            mutate(model);
-            return Task.CompletedTask;
-        }
-
-        public Task<TestReadModel?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_items.TryGetValue(key, out var model))
-                return Task.FromResult<TestReadModel?>(null);
-
-            return Task.FromResult<TestReadModel?>(Clone(model));
-        }
-
-        public Task<IReadOnlyList<TestReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            var items = _items.Values
-                .Take(Math.Clamp(take, 1, 200))
-                .Select(Clone)
-                .ToList();
-            return Task.FromResult<IReadOnlyList<TestReadModel>>(items);
-        }
-
-        private static TestReadModel Clone(TestReadModel source)
-        {
-            return new TestReadModel
-            {
-                Id = source.Id,
-                Value = source.Value,
-            };
-        }
-    }
 }

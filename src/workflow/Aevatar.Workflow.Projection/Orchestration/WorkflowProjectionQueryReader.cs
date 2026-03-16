@@ -1,41 +1,87 @@
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.ReadModels;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryReader
+public sealed class WorkflowProjectionQueryReader : IWorkflowExecutionProjectionQueryPort
 {
-    private readonly IProjectionDocumentStore<WorkflowExecutionReport, string> _documentStore;
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
+    private readonly IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> _currentStateReader;
+    private readonly IProjectionDocumentReader<WorkflowRunTimelineDocument, string> _timelineReader;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
+    private readonly bool _enableActorQueryEndpoints;
 
     public WorkflowProjectionQueryReader(
-        IProjectionDocumentStore<WorkflowExecutionReport, string> documentStore,
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
+        IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> currentStateReader,
+        IProjectionDocumentReader<WorkflowRunTimelineDocument, string> timelineReader,
         WorkflowExecutionReadModelMapper mapper,
-        IProjectionGraphStore graphStore)
+        IProjectionGraphStore graphStore,
+        WorkflowExecutionProjectionOptions? options = null)
     {
-        _documentStore = documentStore;
-        _mapper = mapper;
-        _graphStore = graphStore;
+        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
+        _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
+        _timelineReader = timelineReader ?? throw new ArgumentNullException(nameof(timelineReader));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
+        _enableActorQueryEndpoints = options == null || (options.Enabled && options.EnableActorQueryEndpoints);
     }
+
+    public bool EnableActorQueryEndpoints => _enableActorQueryEndpoints;
 
     public async Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(
         string actorId,
         CancellationToken ct = default)
     {
-        var report = await _documentStore.GetAsync(actorId, ct);
-        return report == null ? null : _mapper.ToActorSnapshot(report);
+        if (!_enableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        var report = await _reportReader.GetAsync(actorId, ct);
+        if (report != null)
+            return _mapper.ToActorSnapshot(report);
+
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
+        return currentState == null ? null : _mapper.ToActorSnapshot(currentState);
     }
 
     public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
         int take = 200,
         CancellationToken ct = default)
     {
+        if (!_enableActorQueryEndpoints)
+            return [];
+
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var reports = await _documentStore.ListAsync(boundedTake, ct);
-        return reports
-            .Select(_mapper.ToActorSnapshot)
-            .ToList();
+        var reports = await _reportReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+            },
+            ct);
+        if (reports.Items.Count > 0)
+            return reports.Items.Select(_mapper.ToActorSnapshot).ToList();
+
+        var currentStates = await _currentStateReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+            },
+            ct);
+        return currentStates.Items.Select(_mapper.ToActorSnapshot).ToList();
+    }
+
+    public async Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        if (!_enableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        var currentState = await _currentStateReader.GetAsync(actorId, ct);
+        return currentState == null ? null : _mapper.ToActorProjectionState(currentState);
     }
 
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
@@ -43,8 +89,21 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         int take = 200,
         CancellationToken ct = default)
     {
+        if (!_enableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return [];
+
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var report = await _documentStore.GetAsync(actorId, ct);
+        var timelineDocument = await _timelineReader.GetAsync(actorId, ct);
+        if (timelineDocument != null)
+        {
+            return timelineDocument.Timeline
+                .OrderByDescending(x => x.Timestamp)
+                .Take(boundedTake)
+                .Select(_mapper.ToActorTimelineItem)
+                .ToList();
+        }
+
+        var report = await _reportReader.GetAsync(actorId, ct);
         if (report == null)
             return [];
 
@@ -61,6 +120,9 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
+        if (!_enableActorQueryEndpoints)
+            return [];
+
         var actorIdValue = actorId?.Trim() ?? "";
         if (actorIdValue.Length == 0)
             return [];
@@ -88,6 +150,12 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
+        if (!_enableActorQueryEndpoints)
+            return new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = actorId ?? string.Empty,
+            };
+
         var actorIdValue = actorId?.Trim() ?? "";
         if (actorIdValue.Length == 0)
             return new WorkflowActorGraphSubgraph();
@@ -117,6 +185,9 @@ public sealed class WorkflowProjectionQueryReader : IWorkflowProjectionQueryRead
         WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
+        if (!_enableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
         var snapshot = await GetActorSnapshotAsync(actorId, ct);
         if (snapshot == null)
             return null;

@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Integration.Tests.Fixtures.ScriptDocuments;
@@ -32,7 +33,7 @@ public class ClaimReplayTests
         const string runtimeActorId2 = "claim-recompile-runtime-2";
 
         var persistedDefinitionSource = BuildPersistedSource("definition-source-v1");
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "claim-recompile-script",
             revision,
             persistedDefinitionSource,
@@ -40,7 +41,7 @@ public class ClaimReplayTests
             definitionActorId,
             CancellationToken.None);
 
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId1, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId1, definition.Snapshot, CancellationToken.None);
         var first = await ClaimIntegrationTestKit.RunClaimAsync(
             provider,
             definitionActorId,
@@ -61,7 +62,7 @@ public class ClaimReplayTests
         var externalUpdatedSourceButNotPersisted = BuildPersistedSource("definition-source-v2");
         externalUpdatedSourceButNotPersisted.Should().Contain("definition-source-v2");
 
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId2, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId2, definition.Snapshot, CancellationToken.None);
         var second = await ClaimIntegrationTestKit.RunClaimAsync(
             provider,
             definitionActorId,
@@ -133,6 +134,7 @@ public class ClaimReplayTests
     {
         await using var provider = ClaimIntegrationTestKit.BuildProvider();
         var eventStore = provider.GetRequiredService<IEventStore>();
+        var runtime = provider.GetRequiredService<IActorRuntime>();
         var definitionSnapshotPort = provider.GetRequiredService<IScriptDefinitionSnapshotPort>();
         var artifactResolver = provider.GetRequiredService<Aevatar.Scripting.Core.Runtime.IScriptBehaviorArtifactResolver>();
         var codec = provider.GetRequiredService<IProtobufMessageCodec>();
@@ -160,6 +162,9 @@ public class ClaimReplayTests
             },
             CancellationToken.None);
 
+        var runtimeActor = await runtime.GetAsync(runtimeActorId);
+        var runtimeAgent = runtimeActor!.Agent.Should().BeOfType<ScriptBehaviorGAgent>().Subject;
+        var committedState = runtimeAgent.State.Clone();
         var persisted = await eventStore.GetEventsAsync(runtimeActorId, ct: CancellationToken.None);
         var committedEvents = persisted
             .Where(x => x.EventData?.Is(ScriptDomainFactCommitted.Descriptor) == true)
@@ -167,7 +172,11 @@ public class ClaimReplayTests
             {
                 Id = x.EventId,
                 Timestamp = x.Timestamp,
-                Payload = x.EventData,
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = x.Clone(),
+                    StateRoot = Any.Pack(committedState),
+                }),
                 Route = EnvelopeRouteSemantics.CreateObserverPublication(runtimeActorId),
                 Propagation = new EnvelopePropagation
                 {
@@ -186,10 +195,7 @@ public class ClaimReplayTests
         var dispatcher1 = new InMemoryReadModelDispatcher();
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
-            new FixedProjectionClock(projectionNow),
-            definitionSnapshotPort,
-            artifactResolver,
-            codec);
+            new FixedProjectionClock(projectionNow));
         await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
@@ -198,10 +204,7 @@ public class ClaimReplayTests
         var dispatcher2 = new InMemoryReadModelDispatcher();
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
-            new FixedProjectionClock(projectionNow),
-            definitionSnapshotPort,
-            artifactResolver,
-            codec);
+            new FixedProjectionClock(projectionNow));
         await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);
@@ -232,8 +235,7 @@ public class ClaimReplayTests
                             AiSummary = evt.Current.AiSummary,
                             LastCommandId = evt.CommandId ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
-                    .OnQuery<ClaimQueryRequested, ClaimQueryResponded>(HandleQueryAsync);
+                        project: static (_, evt, _) => evt.Current);
             }
 
             private static Task HandleAsync(
@@ -273,41 +275,38 @@ public class ClaimReplayTests
         }
         """;
 
-    private sealed class InMemoryReadModelDispatcher : IProjectionStoreDispatcher<ScriptReadModelDocument, string>
+    private sealed class InMemoryReadModelDispatcher
+        : IProjectionDocumentReader<ScriptReadModelDocument, string>,
+          IProjectionWriteDispatcher<ScriptReadModelDocument>
     {
         private readonly Dictionary<string, ScriptReadModelDocument> _store = new(StringComparer.Ordinal);
 
-        public Task UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel;
-            return Task.CompletedTask;
-        }
-
-        public Task MutateAsync(string key, Action<ScriptReadModelDocument> mutate, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_store.TryGetValue(key, out var readModel))
-            {
-                readModel = new ScriptReadModelDocument { Id = key };
-                _store[key] = readModel;
-            }
-
-            mutate(readModel);
-            return Task.CompletedTask;
+            _store[readModel.Id] = readModel.DeepClone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<ScriptReadModelDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _store.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel);
+            return Task.FromResult(readModel?.DeepClone());
         }
 
-        public Task<IReadOnlyList<ScriptReadModelDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<ScriptReadModelDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<ScriptReadModelDocument>>(_store.Values.Take(take).ToArray());
+            return Task.FromResult(new ProjectionDocumentQueryResult<ScriptReadModelDocument>
+            {
+                Items = _store.Values
+                    .Take(query.Take <= 0 ? 50 : query.Take)
+                    .Select(static x => x.DeepClone())
+                    .ToArray(),
+            });
         }
     }
 

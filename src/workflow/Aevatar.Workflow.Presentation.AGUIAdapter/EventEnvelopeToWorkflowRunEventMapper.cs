@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -28,19 +29,31 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
 
     public IReadOnlyList<WorkflowRunEventEnvelope> Map(EventEnvelope envelope)
     {
-        if (envelope.Payload == null)
+        var mappedEnvelope = ResolveMappedEnvelope(envelope);
+        if (mappedEnvelope?.Payload == null)
             return [];
 
         var output = new List<WorkflowRunEventEnvelope>();
         foreach (var handler in _handlers)
         {
-            if (!handler.TryMap(envelope, out var mapped) || mapped.Count == 0)
+            if (!handler.TryMap(mappedEnvelope, out var mapped) || mapped.Count == 0)
                 continue;
 
             output.AddRange(mapped);
         }
 
         return output;
+    }
+
+    private static EventEnvelope? ResolveMappedEnvelope(EventEnvelope envelope)
+    {
+        if (CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) &&
+            observed?.Payload != null)
+        {
+            return observed;
+        }
+
+        return envelope.Payload == null ? null : envelope;
     }
 }
 

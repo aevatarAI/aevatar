@@ -15,7 +15,7 @@ Aevatar.Workflow.Application.Abstractions/
 ├── Workflows/
 │   └── IWorkflowDefinitionRegistry.cs         # workflow 名称注册表
 ├── Reporting/
-│   └── IWorkflowExecutionReportArtifactSink.cs # 报告工件落盘端口
+│   └── IWorkflowRunReportExportPort.cs         # 报告导出端口
 └── Projections/
     └── IWorkflowExecutionProjectionPort.cs     # 投影生命周期端口 + ProjectionSession
 ```

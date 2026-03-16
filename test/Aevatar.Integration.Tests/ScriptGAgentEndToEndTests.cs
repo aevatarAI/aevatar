@@ -16,7 +16,7 @@ namespace Aevatar.Integration.Tests;
 public sealed class ScriptGAgentEndToEndTests
 {
     [Fact]
-    public async Task ProvisionRunAndQuery_ShouldProduceCommittedFactAndReadModel()
+    public async Task ProvisionRunAndReadSnapshot_ShouldProduceCommittedFactAndReadModel()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -34,7 +34,7 @@ public sealed class ScriptGAgentEndToEndTests
         const string revision = "rev-1";
         const string runId = "run-1";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "e2e-script",
             scriptRevision: revision,
             sourceText: ScriptingCommandEnvelopeTestKit.UppercaseBehaviorSource,
@@ -46,6 +46,7 @@ public sealed class ScriptGAgentEndToEndTests
             definitionActorId,
             revision,
             runtimeActorId,
+            definition.Snapshot,
             CancellationToken.None);
 
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
@@ -80,17 +81,6 @@ public sealed class ScriptGAgentEndToEndTests
             snapshot.Should().NotBeNull();
             snapshot!.ReadModelPayload.Should().NotBeNull();
             snapshot.ReadModelPayload.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("HELLO");
-
-            var queryResult = await queryService.ExecuteDeclaredQueryAsync(
-                runtimeActorId,
-                Any.Pack(new TextNormalizationQueryRequested
-                {
-                    RequestId = "request-1",
-                    ReplyStreamId = "reply-stream",
-                }),
-                CancellationToken.None);
-            queryResult.Should().NotBeNull();
-            queryResult!.Unpack<TextNormalizationQueryResponded>().Current.NormalizedText.Should().Be("HELLO");
         }
         finally
         {

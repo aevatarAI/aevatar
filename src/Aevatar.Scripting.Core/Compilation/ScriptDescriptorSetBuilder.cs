@@ -20,8 +20,6 @@ public static class ScriptDescriptorSetBuilder
         messageDescriptors.AddRange(descriptor.Commands.Values.Select(static x => ScriptMessageTypes.GetDescriptor(x.MessageClrType)));
         messageDescriptors.AddRange(descriptor.Signals.Values.Select(static x => ScriptMessageTypes.GetDescriptor(x.MessageClrType)));
         messageDescriptors.AddRange(descriptor.DomainEvents.Values.Select(static x => ScriptMessageTypes.GetDescriptor(x.MessageClrType)));
-        messageDescriptors.AddRange(descriptor.Queries.Values.Select(static x => ScriptMessageTypes.GetDescriptor(x.QueryClrType)));
-        messageDescriptors.AddRange(descriptor.Queries.Values.Select(static x => ScriptMessageTypes.GetDescriptor(x.ResultClrType)));
         return Build(messageDescriptors);
     }
 

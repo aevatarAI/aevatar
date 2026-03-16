@@ -30,13 +30,7 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     [Fact]
     public async Task GetAsync_ShouldReturnUnsupportedBinding_WhenActorIsNotWorkflowCapable()
     {
-        var ensureProjectionCalls = 0;
-        var reader = CreateReader(
-            ensureProjectionAsync: (_, _) =>
-            {
-                ensureProjectionCalls += 1;
-                return Task.CompletedTask;
-            });
+        var reader = CreateReader();
 
         var result = await reader.GetAsync("actor-1", CancellationToken.None);
 
@@ -45,7 +39,6 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
         result.ActorId.Should().Be("actor-1");
         result.WorkflowName.Should().BeEmpty();
         result.WorkflowYaml.Should().BeEmpty();
-        ensureProjectionCalls.Should().Be(0);
     }
 
     [Fact]
@@ -130,13 +123,11 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     }
 
     private static ProjectionWorkflowActorBindingReader CreateReader(
-        Func<string, CancellationToken, Task>? ensureProjectionAsync = null,
         Func<string, CancellationToken, Task<WorkflowActorBindingDocument?>>? getDocumentAsync = null,
         Func<string, Task<bool>>? existsAsync = null,
         Func<string, Type, CancellationToken, Task<bool>>? isExpectedAsync = null)
     {
         return new ProjectionWorkflowActorBindingReader(
-            ensureProjectionAsync ?? ((_, _) => Task.CompletedTask),
             getDocumentAsync ?? ((_, _) => Task.FromResult<WorkflowActorBindingDocument?>(null)),
             existsAsync ?? (_ => Task.FromResult(true)),
             isExpectedAsync ?? ((_, _, _) => Task.FromResult(false)));

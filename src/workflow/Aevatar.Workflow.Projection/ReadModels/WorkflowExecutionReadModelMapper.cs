@@ -4,8 +4,9 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
-    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionReport source)
+    public WorkflowActorSnapshot ToActorSnapshot(WorkflowRunInsightReportDocument source)
     {
+        var summary = source.Summary;
         return new WorkflowActorSnapshot
         {
             ActorId = source.RootActorId,
@@ -18,16 +19,49 @@ public sealed class WorkflowExecutionReadModelMapper
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
-            TotalSteps = source.Summary.TotalSteps,
-            RequestedSteps = source.Summary.RequestedSteps,
-            CompletedSteps = source.Summary.CompletedSteps,
-            RoleReplyCount = source.Summary.RoleReplyCount,
+            TotalSteps = summary.TotalSteps,
+            RequestedSteps = summary.RequestedSteps,
+            CompletedSteps = summary.CompletedSteps,
+            RoleReplyCount = summary.RoleReplyCount,
+        };
+    }
+
+    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
+    {
+        return new WorkflowActorSnapshot
+        {
+            ActorId = source.RootActorId,
+            WorkflowName = source.WorkflowName,
+            LastCommandId = source.CommandId,
+            CompletionStatus = MapCompletionStatus(source.Status),
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
+            LastSuccess = source.Success,
+            LastOutput = source.FinalOutput,
+            LastError = source.FinalError,
+            TotalSteps = 0,
+            RequestedSteps = 0,
+            CompletedSteps = 0,
+            RoleReplyCount = 0,
+        };
+    }
+
+    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
+    {
+        return new WorkflowActorProjectionState
+        {
+            ActorId = source.RootActorId,
+            LastCommandId = source.CommandId,
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
         };
     }
 
     public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
     {
-        return new WorkflowActorTimelineItem
+        var item = new WorkflowActorTimelineItem
         {
             Timestamp = source.Timestamp,
             Stage = source.Stage,
@@ -36,48 +70,65 @@ public sealed class WorkflowExecutionReadModelMapper
             StepId = source.StepId,
             StepType = source.StepType,
             EventType = source.EventType,
-            Data = new Dictionary<string, string>(source.Data, StringComparer.Ordinal),
         };
+        item.Data.Add(source.Data);
+        return item;
     }
 
     public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
     {
-        return new WorkflowActorGraphNode
+        var node = new WorkflowActorGraphNode
         {
             NodeId = source.NodeId,
             NodeType = source.NodeType,
             UpdatedAt = source.UpdatedAt,
-            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
         };
+        node.Properties.Add(source.Properties);
+        return node;
     }
 
     public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
     {
-        return new WorkflowActorGraphEdge
+        var edge = new WorkflowActorGraphEdge
         {
             EdgeId = source.EdgeId,
             FromNodeId = source.FromNodeId,
             ToNodeId = source.ToNodeId,
             EdgeType = source.EdgeType,
             UpdatedAt = source.UpdatedAt,
-            Properties = new Dictionary<string, string>(source.Properties, StringComparer.Ordinal),
         };
+        edge.Properties.Add(source.Properties);
+        return edge;
     }
 
     public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
         string rootNodeId,
         ProjectionGraphSubgraph source)
     {
-        return new WorkflowActorGraphSubgraph
+        var subgraph = new WorkflowActorGraphSubgraph
         {
             RootNodeId = rootNodeId,
-            Nodes = source.Nodes.Select(ToActorGraphNode).ToList(),
-            Edges = source.Edges.Select(ToActorGraphEdge).ToList(),
+        };
+        subgraph.Nodes.Add(source.Nodes.Select(ToActorGraphNode));
+        subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
+        return subgraph;
+    }
+
+    private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
+        {
+            "running" => WorkflowRunCompletionStatus.Running,
+            "completed" => WorkflowRunCompletionStatus.Completed,
+            "failed" => WorkflowRunCompletionStatus.Failed,
+            "stopped" => WorkflowRunCompletionStatus.Stopped,
+            "not_found" => WorkflowRunCompletionStatus.NotFound,
+            "disabled" => WorkflowRunCompletionStatus.Disabled,
+            _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
 
-    private static WorkflowRunCompletionStatus MapCompletionStatus(
-        WorkflowExecutionCompletionStatus status) =>
+    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus status) =>
         status switch
         {
             WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
@@ -87,6 +138,7 @@ public sealed class WorkflowExecutionReadModelMapper
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
             WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
+            WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.Running,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
 }

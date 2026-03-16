@@ -217,7 +217,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     └── 无下一步 → 发布 WorkflowCompletedEvent
   │
   ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
-  │     ├── WorkflowExecutionReadModelProjector: reducer 链更新 ReadModel
+  │     ├── WorkflowExecutionCurrentStateProjector / WorkflowRunInsightReportDocumentProjector / WorkflowRunTimelineReadModelProjector / WorkflowRunGraphMirrorProjector: 按消费场景物化多个 readmodel
   │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
   │
   ├── DefaultEventOutputStream + IdentityEventFrameMapper: 从 sink 读事件 → 透传 WorkflowRunEventEnvelope → emitAsync

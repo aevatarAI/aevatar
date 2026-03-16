@@ -1,5 +1,7 @@
 root = true
 
+dotnet_diagnostic.CA1509.severity = warning
+
 [*.cs]
 charset = utf-8
 end_of_line = lf
@@ -19,3 +21,9 @@ dotnet_style_qualification_for_field = false:suggestion
 dotnet_style_qualification_for_property = false:suggestion
 dotnet_style_qualification_for_method = false:suggestion
 dotnet_style_qualification_for_event = false:suggestion
+
+[src/**/*.cs]
+dotnet_diagnostic.CA1501.severity = warning
+dotnet_diagnostic.CA1502.severity = warning
+dotnet_diagnostic.CA1505.severity = warning
+dotnet_diagnostic.CA1506.severity = warning
