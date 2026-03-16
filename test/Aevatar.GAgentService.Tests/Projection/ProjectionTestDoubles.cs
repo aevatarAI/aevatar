@@ -17,6 +17,29 @@ internal sealed class FixedProjectionClock : IProjectionClock
     public DateTimeOffset UtcNow { get; }
 }
 
+internal static class ProjectionTestFactory
+{
+    public static ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>> CreateActivationService<TContext>(
+        ServiceProjectionDescriptor<TContext> descriptor,
+        IProjectionLifecycleService<TContext, IReadOnlyList<string>> lifecycle)
+        where TContext : class, IProjectionContext
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(lifecycle);
+
+        return new ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>(
+            lifecycle,
+            (rootActorId, projectionName, input, commandId, ct) =>
+            {
+                _ = input;
+                _ = commandId;
+                _ = ct;
+                return descriptor.CreateContext(rootActorId, projectionName);
+            },
+            context => new ServiceProjectionRuntimeLease<TContext>(descriptor.GetRootActorId(context), context));
+    }
+}
+
 internal sealed class RecordingDocumentStore<TReadModel> :
     IProjectionDocumentReader<TReadModel, string>,
     IProjectionWriteDispatcher<TReadModel>

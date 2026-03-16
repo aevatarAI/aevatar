@@ -30,10 +30,24 @@ public static class ServiceCollectionExtensions
             ServiceConfigurationRuntimeLease,
             EventEnvelope>();
 
-        services.TryAddSingleton<IProjectionPortActivationService<ServiceConfigurationRuntimeLease>, ServiceConfigurationProjectionActivationService>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ServiceConfigurationRuntimeLease>, ServiceConfigurationProjectionReleaseService>();
-        services.TryAddSingleton<ServiceConfigurationProjectionPortService>();
-        services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPortService>());
+        services.TryAddSingleton<IProjectionPortActivationService<ServiceConfigurationRuntimeLease>>(sp =>
+            new ContextProjectionActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(
+                sp.GetRequiredService<IProjectionLifecycleService<ServiceConfigurationProjectionContext, IReadOnlyList<string>>>(),
+                static (rootActorId, projectionName, input, commandId, ct) =>
+                {
+                    _ = input;
+                    _ = commandId;
+                    _ = ct;
+                    return new ServiceConfigurationProjectionContext
+                    {
+                        ProjectionId = $"{projectionName}:{rootActorId}",
+                        RootActorId = rootActorId,
+                    };
+                },
+                static context => new ServiceConfigurationRuntimeLease(context)));
+        services.TryAddSingleton<IProjectionPortReleaseService<ServiceConfigurationRuntimeLease>, ContextProjectionReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>>();
+        services.TryAddSingleton<ServiceConfigurationProjectionPort>();
+        services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceConfigurationQueryReader, ServiceConfigurationQueryReader>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<

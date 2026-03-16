@@ -516,8 +516,8 @@ DI 装配：
 
 这个结论是基于代码推断：
 
-- `ProjectionActivationServiceBase.EnsureAsync` 每次都会新建 context、启动 lifecycle
-  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionActivationServiceBase.cs:19-67`
+- `ContextProjectionActivationService.EnsureAsync` 每次都会新建 context、启动 lifecycle
+  - `src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs`
 - `ProjectionSubscriptionRegistry` 只检查“当前 context 是否已注册”，不检查全局同 actor/session 是否已注册
   - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs:34-47`
 - Workflow ownership 只禁止“不同 session 抢同一 scope”，对“相同 session 重复 acquire”视为续租

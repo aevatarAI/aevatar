@@ -32,7 +32,7 @@
 1. `ServiceConfigurationGAgent` 取代了三套治理长期 actor。
 2. `ServiceConfigurationReadModel` 成为唯一治理读侧。
 3. `IServiceLifecycleQueryPort / IServiceServingQueryPort` 取代了膨胀的 `IServiceQueryPort`。
-4. `ServiceProjectionDescriptor + ServiceProjectionPortServices` 取代了 Phase 3 一视图一套投影运行时外壳。
+4. `ServiceProjectionDescriptor + ContextProjectionActivationService + dedicated projection ports` 取代了 Phase 3 一视图一套投影运行时外壳。
 5. 旧治理事实的升级导入路径已经补齐。
 
 ## 3. 问题定义
@@ -245,9 +245,9 @@ flowchart TB
 
 1. `ProjectionContext`
 2. `RuntimeLease`
-3. `ActivationService`
-4. `ReleaseService`
-5. `PortService`
+3. `ContextProjectionActivationService`
+4. `ContextProjectionReleaseService`
+5. `ProjectionPort`
 
 目标是形成一套内部模板：
 
@@ -256,11 +256,11 @@ internal sealed class ServiceProjectionRuntimeRegistration<TReadModel, TProjecto
 {
 }
 
-internal sealed class ServiceProjectionActivationService<TContext, TLease>
+internal sealed class ContextProjectionActivationService<TLease, TContext, TTopology>
 {
 }
 
-internal sealed class ServiceProjectionPortService<TLease>
+internal sealed class ServiceCatalogProjectionPort
 {
 }
 ```
@@ -315,8 +315,8 @@ Host endpoint 只依赖自己所需的窄 port。
 | 模式 | 目标态落点 | 用途 |
 |---|---|---|
 | Aggregate Actor | `ServiceConfigurationGAgent` | 聚合 service 级配置事实 |
-| Template Method | `ServiceProjectionActivationService<TContext, TLease>` | 收敛投影运行时激活样板 |
-| Generic Helper | `ServiceProjectionPortService<TLease>` | 收敛投影端口样板 |
+| Template Method | `ContextProjectionActivationService<TLease, TContext, TTopology>` | 收敛投影运行时激活样板 |
+| Generic Helper | `ServiceProjectionPortBase<TContext>` | 收敛平台投影端口样板 |
 | Facade | 各能力域 query port | 对 Host 暴露窄能力面 |
 | Builder / Assembler | `ActivationCapabilityViewBuilder` | 只做 `configuration + artifact` 组合，不再 join 三套治理 snapshot |
 
@@ -325,7 +325,7 @@ Host endpoint 只依赖自己所需的窄 port。
 允许：
 
 1. `ServiceConfigurationGAgent : GAgentBase<ServiceConfigurationState>`
-2. `ServiceProjectionActivationService<TContext, TLease> : ProjectionActivationServiceBase<TLease, TContext, IReadOnlyList<string>>`
+2. `ContextProjectionActivationService<TLease, TContext, TTopology> : IProjectionPortActivationService<TLease>`
 
 不允许：
 
@@ -417,9 +417,9 @@ Host endpoint 只依赖自己所需的窄 port。
 
 新增模板化投影运行时：
 
-1. `src/platform/Aevatar.GAgentService.Projection/Internal/ServiceProjectionActivationService.cs`
-2. `src/platform/Aevatar.GAgentService.Projection/Internal/ServiceProjectionReleaseService.cs`
-3. `src/platform/Aevatar.GAgentService.Projection/Internal/ServiceProjectionPortService.cs`
+1. `src/platform/Aevatar.GAgentService.Projection/DependencyInjection/ServiceCollectionExtensions.cs`
+2. `src/platform/Aevatar.GAgentService.Projection/Orchestration/ServiceProjectionPortBase.cs`
+3. `src/platform/Aevatar.GAgentService.Governance.Projection/Orchestration/ServiceConfigurationProjectionPort.cs`
 4. `src/platform/Aevatar.GAgentService.Projection/Internal/ServiceProjectionRuntimeLease.cs`
 5. `src/platform/Aevatar.GAgentService.Projection/Internal/ServiceProjectionRegistration.cs`
 

@@ -23,7 +23,7 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceProjectionInfrastructureTests
 {
     [Fact]
-    public async Task CatalogProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task CatalogProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
@@ -31,13 +31,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
             });
-        IServiceCatalogProjectionPort service = new ServiceProjectionPortServices(
-            activationService,
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("actor-1");
@@ -47,7 +41,7 @@ public sealed class ServiceProjectionInfrastructureTests
     }
 
     [Fact]
-    public async Task RevisionProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task RevisionProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
@@ -55,13 +49,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
             });
-        IServiceRevisionCatalogProjectionPort service = new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            activationService,
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(" ");
         await service.EnsureProjectionAsync("actor-2");
@@ -74,7 +62,7 @@ public sealed class ServiceProjectionInfrastructureTests
     public async Task ActivationAndReleaseServices_ShouldCreateContext_AndStopWhenIdle()
     {
         var catalogLifecycle = new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>();
-        var activation = new ServiceProjectionActivationService<ServiceCatalogProjectionContext>(
+        var activation = ProjectionTestFactory.CreateActivationService(
             new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
                 static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
                 {
@@ -83,7 +71,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 },
                 static context => context.RootActorId),
             catalogLifecycle);
-        var release = new ServiceProjectionReleaseService<ServiceCatalogProjectionContext>(catalogLifecycle);
+        var release = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>, ServiceCatalogProjectionContext, IReadOnlyList<string>>(catalogLifecycle);
 
         var lease = await activation.EnsureAsync("actor-1", "service-catalog", string.Empty, "cmd-1");
         await release.ReleaseIfIdleAsync(lease);
@@ -96,7 +84,7 @@ public sealed class ServiceProjectionInfrastructureTests
         catalogLifecycle.StoppedContexts[0].RootActorId.Should().Be("actor-1");
 
         var revisionLifecycle = new RecordingProjectionLifecycle<ServiceRevisionCatalogProjectionContext>();
-        var revisionActivation = new ServiceProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
+        var revisionActivation = ProjectionTestFactory.CreateActivationService(
             new ServiceProjectionDescriptor<ServiceRevisionCatalogProjectionContext>(
                 static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
                 {
@@ -105,7 +93,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 },
                 static context => context.RootActorId),
             revisionLifecycle);
-        var revisionRelease = new ServiceProjectionReleaseService<ServiceRevisionCatalogProjectionContext>(revisionLifecycle);
+        var revisionRelease = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>, ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>(revisionLifecycle);
         var revisionLease = await revisionActivation.EnsureAsync("actor-2", "service-revisions", string.Empty, "cmd-2");
         await revisionRelease.ReleaseIfIdleAsync(revisionLease);
 
@@ -148,10 +136,10 @@ public sealed class ServiceProjectionInfrastructureTests
             x.ImplementationType == typeof(ServiceRevisionCatalogQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceCatalogProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceCatalogProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceRevisionCatalogProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceRevisionCatalogProjectionPort));
     }
 
     [Fact]

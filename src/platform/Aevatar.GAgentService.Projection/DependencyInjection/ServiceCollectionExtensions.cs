@@ -73,13 +73,12 @@ public static class ServiceCollectionExtensions
                 },
                 static context => context.RootActorId));
 
-        services.TryAddSingleton<ServiceProjectionPortServices>();
-        services.TryAddSingleton<IServiceCatalogProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
-        services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
-        services.TryAddSingleton<IServiceServingSetProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
-        services.TryAddSingleton<IServiceRolloutProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
-        services.TryAddSingleton<IServiceTrafficViewProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
-        services.TryAddSingleton<IServiceRevisionCatalogProjectionPort>(sp => sp.GetRequiredService<ServiceProjectionPortServices>());
+        services.TryAddSingleton<IServiceCatalogProjectionPort, ServiceCatalogProjectionPort>();
+        services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort, ServiceDeploymentCatalogProjectionPort>();
+        services.TryAddSingleton<IServiceServingSetProjectionPort, ServiceServingSetProjectionPort>();
+        services.TryAddSingleton<IServiceRolloutProjectionPort, ServiceRolloutProjectionPort>();
+        services.TryAddSingleton<IServiceTrafficViewProjectionPort, ServiceTrafficViewProjectionPort>();
+        services.TryAddSingleton<IServiceRevisionCatalogProjectionPort, ServiceRevisionCatalogProjectionPort>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>, ServiceCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>, ServiceDeploymentCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>, ServiceServingSetReadModelMetadataProvider>();
@@ -128,8 +127,21 @@ public static class ServiceCollectionExtensions
             ServiceProjectionRuntimeLease<TContext>,
             EventEnvelope>();
         services.TryAddSingleton(descriptor);
-        services.TryAddSingleton<IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>, ServiceProjectionActivationService<TContext>>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ServiceProjectionRuntimeLease<TContext>>, ServiceProjectionReleaseService<TContext>>();
+        services.TryAddSingleton<IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>>(sp =>
+        {
+            var projectionDescriptor = sp.GetRequiredService<ServiceProjectionDescriptor<TContext>>();
+            return new ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>(
+                sp.GetRequiredService<IProjectionLifecycleService<TContext, IReadOnlyList<string>>>(),
+                (rootActorId, projectionName, input, commandId, ct) =>
+                {
+                    _ = input;
+                    _ = commandId;
+                    _ = ct;
+                    return projectionDescriptor.CreateContext(rootActorId, projectionName);
+                },
+                context => new ServiceProjectionRuntimeLease<TContext>(projectionDescriptor.GetRootActorId(context), context));
+        });
+        services.TryAddSingleton<IProjectionPortReleaseService<ServiceProjectionRuntimeLease<TContext>>, ContextProjectionReleaseService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>>();
 
         return services;
     }

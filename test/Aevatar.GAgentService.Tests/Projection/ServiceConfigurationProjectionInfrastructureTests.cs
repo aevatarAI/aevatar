@@ -20,10 +20,10 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceConfigurationProjectionInfrastructureTests
 {
     [Fact]
-    public async Task ConfigurationProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPortService(activationService);
+        var service = new ServiceConfigurationProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("config-actor");
@@ -36,8 +36,21 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
     public async Task ActivationAndReleaseServices_ShouldCreateContextLeaseAndStopWhenIdle()
     {
         var lifecycle = new RecordingConfigurationLifecycle();
-        var activation = new ServiceConfigurationProjectionActivationService(lifecycle);
-        var release = new ServiceConfigurationProjectionReleaseService(lifecycle);
+        var activation = new ContextProjectionActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(
+            lifecycle,
+            (rootActorId, projectionName, input, commandId, ct) =>
+            {
+                _ = input;
+                _ = commandId;
+                _ = ct;
+                return new ServiceConfigurationProjectionContext
+                {
+                    ProjectionId = $"{projectionName}:{rootActorId}",
+                    RootActorId = rootActorId,
+                };
+            },
+            static context => new ServiceConfigurationRuntimeLease(context));
+        var release = new ContextProjectionReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(lifecycle);
         var lease = await activation.EnsureAsync("config-actor", "service-configuration", string.Empty, "cmd-config");
         await release.ReleaseIfIdleAsync(lease);
 

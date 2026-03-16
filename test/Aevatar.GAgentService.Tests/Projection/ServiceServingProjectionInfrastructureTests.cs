@@ -18,7 +18,7 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceServingProjectionInfrastructureTests
 {
     [Fact]
-    public async Task ServingProjectionPortServices_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task ServingProjectionPorts_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var deploymentActivation = new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
             (root, projectionName) => new ServiceDeploymentCatalogProjectionContext
@@ -45,20 +45,17 @@ public sealed class ServiceServingProjectionInfrastructureTests
                 RootActorId = root,
             });
 
-        var portServices = new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            deploymentActivation,
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            servingActivation,
-            rolloutActivation,
-            trafficActivation);
+        IServiceDeploymentCatalogProjectionPort deploymentPort = new ServiceDeploymentCatalogProjectionPort(deploymentActivation);
+        IServiceServingSetProjectionPort servingPort = new ServiceServingSetProjectionPort(servingActivation);
+        IServiceRolloutProjectionPort rolloutPort = new ServiceRolloutProjectionPort(rolloutActivation);
+        IServiceTrafficViewProjectionPort trafficPort = new ServiceTrafficViewProjectionPort(trafficActivation);
 
-        await ((IServiceDeploymentCatalogProjectionPort)portServices).EnsureProjectionAsync("");
-        await ((IServiceDeploymentCatalogProjectionPort)portServices).EnsureProjectionAsync("actor-deploy");
-        await ((IServiceServingSetProjectionPort)portServices).EnsureProjectionAsync(" ");
-        await ((IServiceServingSetProjectionPort)portServices).EnsureProjectionAsync("actor-serving");
-        await ((IServiceRolloutProjectionPort)portServices).EnsureProjectionAsync("actor-rollout");
-        await ((IServiceTrafficViewProjectionPort)portServices).EnsureProjectionAsync("actor-traffic");
+        await deploymentPort.EnsureProjectionAsync("");
+        await deploymentPort.EnsureProjectionAsync("actor-deploy");
+        await servingPort.EnsureProjectionAsync(" ");
+        await servingPort.EnsureProjectionAsync("actor-serving");
+        await rolloutPort.EnsureProjectionAsync("actor-rollout");
+        await trafficPort.EnsureProjectionAsync("actor-traffic");
 
         deploymentActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-deploy", "service-deployments", string.Empty, "actor-deploy"));
         servingActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-serving", "service-serving", string.Empty, "actor-serving"));
@@ -70,7 +67,7 @@ public sealed class ServiceServingProjectionInfrastructureTests
     public async Task ServingActivationAndReleaseServices_ShouldCreateContext_AndStopWhenIdle()
     {
         var deploymentLifecycle = new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>();
-        var deploymentLease = await new ServiceProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
+        var deploymentLease = await ProjectionTestFactory.CreateActivationService(
                 new ServiceProjectionDescriptor<ServiceDeploymentCatalogProjectionContext>(
                     static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
                     {
@@ -80,10 +77,10 @@ public sealed class ServiceServingProjectionInfrastructureTests
                     static context => context.RootActorId),
                 deploymentLifecycle)
             .EnsureAsync("actor-deploy", "service-deployments", string.Empty, "cmd-deploy");
-        await new ServiceProjectionReleaseService<ServiceDeploymentCatalogProjectionContext>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
+        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>, ServiceDeploymentCatalogProjectionContext, IReadOnlyList<string>>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
 
         var servingLifecycle = new RecordingProjectionLifecycle<ServiceServingSetProjectionContext>();
-        var servingLease = await new ServiceProjectionActivationService<ServiceServingSetProjectionContext>(
+        var servingLease = await ProjectionTestFactory.CreateActivationService(
                 new ServiceProjectionDescriptor<ServiceServingSetProjectionContext>(
                     static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
                     {
@@ -93,10 +90,10 @@ public sealed class ServiceServingProjectionInfrastructureTests
                     static context => context.RootActorId),
                 servingLifecycle)
             .EnsureAsync("actor-serving", "service-serving", string.Empty, "cmd-serving");
-        await new ServiceProjectionReleaseService<ServiceServingSetProjectionContext>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
+        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>, ServiceServingSetProjectionContext, IReadOnlyList<string>>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
 
         var rolloutLifecycle = new RecordingProjectionLifecycle<ServiceRolloutProjectionContext>();
-        var rolloutLease = await new ServiceProjectionActivationService<ServiceRolloutProjectionContext>(
+        var rolloutLease = await ProjectionTestFactory.CreateActivationService(
                 new ServiceProjectionDescriptor<ServiceRolloutProjectionContext>(
                     static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
                     {
@@ -106,10 +103,10 @@ public sealed class ServiceServingProjectionInfrastructureTests
                     static context => context.RootActorId),
                 rolloutLifecycle)
             .EnsureAsync("actor-rollout", "service-rollouts", string.Empty, "cmd-rollout");
-        await new ServiceProjectionReleaseService<ServiceRolloutProjectionContext>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
+        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>, ServiceRolloutProjectionContext, IReadOnlyList<string>>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
 
         var trafficLifecycle = new RecordingProjectionLifecycle<ServiceTrafficViewProjectionContext>();
-        var trafficLease = await new ServiceProjectionActivationService<ServiceTrafficViewProjectionContext>(
+        var trafficLease = await ProjectionTestFactory.CreateActivationService(
                 new ServiceProjectionDescriptor<ServiceTrafficViewProjectionContext>(
                     static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
                     {
@@ -119,7 +116,7 @@ public sealed class ServiceServingProjectionInfrastructureTests
                     static context => context.RootActorId),
                 trafficLifecycle)
             .EnsureAsync("actor-traffic", "service-traffic", string.Empty, "cmd-traffic");
-        await new ServiceProjectionReleaseService<ServiceTrafficViewProjectionContext>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
+        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>, ServiceTrafficViewProjectionContext, IReadOnlyList<string>>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
 
         deploymentLease.ScopeId.Should().Be("actor-deploy");
         deploymentLifecycle.StartedContexts.Single().ProjectionId.Should().Be("service-deployments:actor-deploy");
@@ -172,63 +169,27 @@ public sealed class ServiceServingProjectionInfrastructureTests
             x.ImplementationType == typeof(ServiceTrafficViewQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceDeploymentCatalogProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceDeploymentCatalogProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceServingSetProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceServingSetProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceRolloutProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceRolloutProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceTrafficViewProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceTrafficViewProjectionPort));
     }
 
     [Fact]
-    public void ServiceProjectionPortServices_ShouldValidateConstructorArguments()
+    public void DedicatedServiceProjectionEndpoints_ShouldValidateConstructorArguments()
     {
-        Action nullCatalog = () => new ServiceProjectionPortServices(
-            null!,
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
-        Action nullDeployment = () => new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            null!,
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
-        Action nullRevision = () => new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            null!,
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
-        Action nullServing = () => new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            null!,
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
-        Action nullRollout = () => new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            null!,
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
-        Action nullTraffic = () => new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            null!);
+        Action nullCatalog = () => new ServiceCatalogProjectionPort(null!);
+        Action nullDeployment = () => new ServiceDeploymentCatalogProjectionPort(null!);
+        Action nullRevision = () => new ServiceRevisionCatalogProjectionPort(null!);
+        Action nullServing = () => new ServiceServingSetProjectionPort(null!);
+        Action nullRollout = () => new ServiceRolloutProjectionPort(null!);
+        Action nullTraffic = () => new ServiceTrafficViewProjectionPort(null!);
 
         nullCatalog.Should().Throw<ArgumentNullException>();
         nullDeployment.Should().Throw<ArgumentNullException>();
@@ -239,9 +200,9 @@ public sealed class ServiceServingProjectionInfrastructureTests
     }
 
     [Fact]
-    public void ServiceProjectionActivationService_ShouldValidateDescriptor()
+    public void ServiceProjectionActivationFactory_ShouldValidateDescriptor()
     {
-        Action act = () => new ServiceProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
+        Action act = () => ProjectionTestFactory.CreateActivationService<ServiceDeploymentCatalogProjectionContext>(
             null!,
             new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>());
 

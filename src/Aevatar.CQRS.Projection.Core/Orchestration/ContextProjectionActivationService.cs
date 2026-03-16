@@ -1,10 +1,11 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 public sealed class ContextProjectionActivationService<TRuntimeLease, TContext, TTopology>
-    : ProjectionActivationServiceBase<TRuntimeLease, TContext, TTopology>
+    : IProjectionPortActivationService<TRuntimeLease>
     where TRuntimeLease : class
     where TContext : class, IProjectionContext
 {
+    private readonly IProjectionLifecycleService<TContext, TTopology> _lifecycle;
     private readonly Func<string, string, string, string, CancellationToken, TContext> _contextFactory;
     private readonly Func<TContext, TRuntimeLease> _runtimeLeaseFactory;
     private readonly Func<string, string, string, string, CancellationToken, Task>? _acquireBeforeStart;
@@ -18,8 +19,8 @@ public sealed class ContextProjectionActivationService<TRuntimeLease, TContext, 
         Func<string, string, string, string, CancellationToken, Task>? acquireBeforeStart = null,
         Func<string, string, TContext, TRuntimeLease, CancellationToken, Task>? onRuntimeLeaseCreated = null,
         Func<string, string, Task>? cleanupOnStartFailure = null)
-        : base(lifecycle)
     {
+        _lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _runtimeLeaseFactory = runtimeLeaseFactory ?? throw new ArgumentNullException(nameof(runtimeLeaseFactory));
         _acquireBeforeStart = acquireBeforeStart;
@@ -27,35 +28,45 @@ public sealed class ContextProjectionActivationService<TRuntimeLease, TContext, 
         _cleanupOnStartFailure = cleanupOnStartFailure;
     }
 
-    protected override Task AcquireBeforeStartAsync(
+    public async Task<TRuntimeLease> EnsureAsync(
         string rootEntityId,
         string projectionName,
         string input,
         string commandId,
-        CancellationToken ct) =>
-        _acquireBeforeStart?.Invoke(rootEntityId, projectionName, input, commandId, ct) ?? Task.CompletedTask;
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootEntityId);
+        ct.ThrowIfCancellationRequested();
 
-    protected override TContext CreateContext(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
-        CancellationToken ct) =>
-        _contextFactory(rootEntityId, projectionName, input, commandId, ct);
+        await (_acquireBeforeStart?.Invoke(rootEntityId, projectionName, input, commandId, ct) ?? Task.CompletedTask);
 
-    protected override TRuntimeLease CreateRuntimeLease(TContext context) =>
-        _runtimeLeaseFactory(context);
+        TContext? context = null;
+        var started = false;
+        try
+        {
+            context = _contextFactory(rootEntityId, projectionName, input, commandId, ct);
+            await _lifecycle.StartAsync(context, ct);
+            started = true;
 
-    protected override Task OnRuntimeLeaseCreatedAsync(
-        string rootEntityId,
-        string commandId,
-        TContext context,
-        TRuntimeLease runtimeLease,
-        CancellationToken ct) =>
-        _onRuntimeLeaseCreated?.Invoke(rootEntityId, commandId, context, runtimeLease, ct) ?? Task.CompletedTask;
+            var runtimeLease = _runtimeLeaseFactory(context);
+            await (_onRuntimeLeaseCreated?.Invoke(rootEntityId, commandId, context, runtimeLease, ct) ?? Task.CompletedTask);
+            return runtimeLease;
+        }
+        catch
+        {
+            if (started && context != null)
+            {
+                try
+                {
+                    await _lifecycle.StopAsync(context, CancellationToken.None);
+                }
+                catch
+                {
+                }
+            }
 
-    protected override Task CleanupOnStartFailureAsync(
-        string rootEntityId,
-        string commandId) =>
-        _cleanupOnStartFailure?.Invoke(rootEntityId, commandId) ?? Task.CompletedTask;
+            await (_cleanupOnStartFailure?.Invoke(rootEntityId, commandId) ?? Task.CompletedTask);
+            throw;
+        }
+    }
 }

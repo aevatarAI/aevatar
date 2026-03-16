@@ -2,11 +2,11 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 
 namespace Aevatar.GAgentService.Governance.Projection.Orchestration;
 
-public sealed class ServiceConfigurationProjectionPortService : IServiceConfigurationProjectionPort
+public sealed class ServiceConfigurationProjectionPort : IServiceConfigurationProjectionPort
 {
     private readonly IProjectionPortActivationService<ServiceConfigurationRuntimeLease> _activationService;
 
-    public ServiceConfigurationProjectionPortService(
+    public ServiceConfigurationProjectionPort(
         IProjectionPortActivationService<ServiceConfigurationRuntimeLease> activationService)
     {
         _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
