@@ -79,6 +79,7 @@
     <Project Path="src/platform/Aevatar.GAgentService.Governance.Projection/Aevatar.GAgentService.Governance.Projection.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
+    <File Path="src\workflow\README.md" />
     <Project Path="src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
@@ -93,6 +94,7 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.AIProjection/Aevatar.Workflow.Extensions.AIProjection.csproj" />
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/Aevatar.Workflow.Extensions.Hosting.csproj" />
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Aevatar.Workflow.Extensions.Maker.csproj" />
+    <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
