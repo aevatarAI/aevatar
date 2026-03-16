@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.Core;
@@ -175,6 +176,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
                 new CommittedStateEventPublished
                 {
                     StateEvent = commitResult.CommittedEvents[i].Clone(),
+                    StateRoot = Any.Pack(_state),
                 },
                 ObserverAudience.CommittedFacts,
                 ct,

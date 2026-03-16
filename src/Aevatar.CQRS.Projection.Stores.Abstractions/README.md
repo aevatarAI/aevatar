@@ -5,8 +5,9 @@
 ## 契约清单
 
 - ReadModel 基础：`IProjectionReadModel`
-- Graph ReadModel：`IGraphReadModel`
-- Document Store：`IProjectionDocumentStore<TReadModel, TKey>`
+- Document Reader：`IProjectionDocumentReader<TReadModel, TKey>`
+- Document Writer：`IProjectionDocumentWriter<TReadModel>`
+- Document Query：`ProjectionDocumentQuery`、`ProjectionDocumentFilter`、`ProjectionDocumentSort`、`ProjectionDocumentQueryResult<TReadModel>`
 - Graph Store：`IProjectionGraphStore`
 - Document 索引元数据：`DocumentIndexMetadata`、`IProjectionDocumentMetadataProvider<TReadModel>`
 - Graph 数据结构：`ProjectionGraphNode`、`ProjectionGraphEdge`、`ProjectionGraphQuery`、`ProjectionGraphSubgraph`

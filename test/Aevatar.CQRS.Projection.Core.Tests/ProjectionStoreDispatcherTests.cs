@@ -42,6 +42,24 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldPreserveRegisteredBindingOrder()
+    {
+        var writes = new List<string>();
+        var graphBinding = new RecordingBinding("graph", writes);
+        var documentBinding = new RecordingBinding("document", writes);
+        var dispatcher = new ProjectionStoreDispatcher<TestReadModel>(
+            [graphBinding, documentBinding]);
+
+        await dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        });
+
+        writes.Should().Equal("graph", "document");
+    }
+
+    [Fact]
     public void Ctor_WhenNoConfiguredBindings_ShouldThrow()
     {
         var unconfiguredDocumentBinding = new ProjectionDocumentStoreBinding<TestReadModel>();
@@ -128,14 +146,25 @@ public class ProjectionStoreDispatcherTests
     {
         public string Id { get; set; } = "";
 
+        public string ActorId => Id;
+
+        public long StateVersion { get; set; }
+
+        public string LastEventId { get; set; } = "";
+
+        public DateTimeOffset UpdatedAt { get; set; }
+
         public string Value { get; set; } = "";
     }
 
     private sealed class RecordingBinding : IProjectionWriteSink<TestReadModel>
     {
-        public RecordingBinding(string name)
+        private readonly ICollection<string>? _writes;
+
+        public RecordingBinding(string name, ICollection<string>? writes = null)
         {
             SinkName = name;
+            _writes = writes;
         }
 
         public string SinkName { get; }
@@ -148,12 +177,13 @@ public class ProjectionStoreDispatcherTests
 
         public string LastValue { get; private set; } = "";
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             UpsertCount++;
             LastValue = readModel.Value;
-            return Task.CompletedTask;
+            _writes?.Add(SinkName);
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 
@@ -179,7 +209,7 @@ public class ProjectionStoreDispatcherTests
 
         public int UpsertCount { get; private set; }
 
-        public Task UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             AttemptCount++;
@@ -191,7 +221,7 @@ public class ProjectionStoreDispatcherTests
             }
 
             UpsertCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 

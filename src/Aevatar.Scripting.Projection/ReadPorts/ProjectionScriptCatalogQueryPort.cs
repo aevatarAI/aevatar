@@ -1,5 +1,4 @@
 using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
 
@@ -12,11 +11,9 @@ public sealed class ProjectionScriptCatalogQueryPort : IScriptCatalogQueryPort
     private readonly Func<string?, string, CancellationToken, Task<ScriptCatalogEntrySnapshot?>>? _queryAsync;
 
     public ProjectionScriptCatalogQueryPort(
-        ScriptAuthorityProjectionPortService projectionPort,
         IProjectionDocumentReader<ScriptCatalogEntryDocument, string> documentReader,
         IScriptingActorAddressResolver addressResolver)
     {
-        _ = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _addressResolver = addressResolver ?? throw new ArgumentNullException(nameof(addressResolver));
     }

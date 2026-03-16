@@ -137,14 +137,14 @@ public class WorkflowYamlScriptParityTests
         const string runtimeActorId = "yaml-script-parity-runtime";
         const string revision = "rev-1";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             scriptId: "yaml-script-parity",
             scriptRevision: revision,
             sourceText: TextNormalizationProtocolSampleActors.Source,
             sourceHash: TextNormalizationProtocolSampleActors.SourceHash,
             definitionActorId: definitionActorId,
             ct: CancellationToken.None);
-        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, CancellationToken.None);
+        await provisioningPort.EnsureRuntimeAsync(definitionActorId, revision, runtimeActorId, definition.Snapshot, CancellationToken.None);
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 16);

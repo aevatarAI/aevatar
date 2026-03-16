@@ -245,10 +245,10 @@ public sealed class ServiceInvocationResolutionServiceTests
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(int take = 1000, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
-        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
             string tenantId,
             string appId,
             string @namespace,

@@ -116,7 +116,7 @@ public sealed class HybridServiceUpgradeContinuityTests
         var definitionActorId = $"{scriptingActorId}:script-definition";
         var runtimeActorId = $"{scriptingActorId}:script-runtime";
 
-        await definitionPort.UpsertDefinitionAsync(
+        var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
             "text-normalization-protocol-script",
             "rev-1",
             TextNormalizationProtocolSampleActors.Source,
@@ -127,6 +127,7 @@ public sealed class HybridServiceUpgradeContinuityTests
             definitionActorId,
             "rev-1",
             runtimeActorId,
+            definition.Snapshot,
             ct);
     }
 

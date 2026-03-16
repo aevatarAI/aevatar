@@ -22,7 +22,7 @@ internal static class ScriptingCommandEnvelopeTestKit
                     .OnCommand<TextNormalizationRequested>(HandleAsync)
                     .OnEvent<TextNormalizationCompleted>(
                         apply: static (_, evt, _) => evt.Current,
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
             }
 

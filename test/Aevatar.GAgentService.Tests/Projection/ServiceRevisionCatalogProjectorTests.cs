@@ -112,7 +112,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
             context,
             BuildEnvelope(new StringValue { Value = "noop" }));
 
-        (await store.ListAsync()).Should().BeEmpty();
+        (await store.ReadItemsAsync()).Should().BeEmpty();
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -142,7 +142,7 @@ public sealed class ServiceRevisionCatalogProjectorTests
                 Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             });
 
-        (await store.ListAsync()).Should().BeEmpty();
+        (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
     [Fact]
@@ -182,6 +182,69 @@ public sealed class ServiceRevisionCatalogProjectorTests
         readModel.Revisions.Should().Contain(x => x.RevisionId == "r2" && x.Status == ServiceRevisionStatus.Prepared.ToString());
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldStampReadModel_WhenUsingCommittedEnvelope()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-03-14T12:00:00+00:00");
+        var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceRevisionCatalogProjectionContext
+        {
+            ProjectionId = "service-revisions:tenant:app:default:svc",
+            RootActorId = "tenant:app:default:svc",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceRevisionCreatedEvent
+                {
+                    Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                    CreatedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-5)),
+                },
+                eventId: "evt-revision-created",
+                stateVersion: 13,
+                observedAt: observedAt));
+
+        var readModel = await store.GetAsync("tenant:app:default:svc");
+        readModel.Should().NotBeNull();
+        readModel!.ActorId.Should().Be("tenant:app:default:svc");
+        readModel.StateVersion.Should().Be(13);
+        readModel.LastEventId.Should().Be("evt-revision-created");
+        readModel.UpdatedAt.Should().Be(observedAt);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCommittedEnvelope_WhenEventDataIsMissing()
+    {
+        var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
+        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var context = new ServiceRevisionCatalogProjectionContext
+        {
+            ProjectionId = "service-revisions:tenant:app:default:svc",
+            RootActorId = "tenant:app:default:svc",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "outer-missing",
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-missing",
+                        Version = 2,
+                    },
+                }),
+            });
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
     private static EventEnvelope BuildEnvelope<T>(T evt)
         where T : Google.Protobuf.IMessage =>
         new()
@@ -189,5 +252,27 @@ public sealed class ServiceRevisionCatalogProjectorTests
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
+        };
+
+    private static EventEnvelope BuildCommittedEnvelope<T>(
+        T evt,
+        string eventId,
+        long stateVersion,
+        DateTimeOffset observedAt)
+        where T : Google.Protobuf.IMessage =>
+        new()
+        {
+            Id = $"outer-{eventId}",
+            Timestamp = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = stateVersion,
+                    Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+                    EventData = Any.Pack(evt),
+                },
+            }),
         };
 }

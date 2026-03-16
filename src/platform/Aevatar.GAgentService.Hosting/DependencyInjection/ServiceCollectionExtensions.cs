@@ -111,27 +111,27 @@ public static class ServiceCollectionExtensions
             services.AddInMemoryDocumentProjectionStore<ServiceCatalogReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceRevisionCatalogReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceDeploymentCatalogReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceServingSetReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceRolloutReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
             services.AddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
-                listSortSelector: readModel => readModel.UpdatedAt);
+                defaultSortSelector: readModel => readModel.UpdatedAt);
         }
 
         return services;

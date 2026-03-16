@@ -16,15 +16,16 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     where TReadModel : class, IProjectionReadModel
 {
     private const string ProviderName = "Elasticsearch";
+    private const int MaxOptimisticWriteAttempts = 3;
 
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
     private readonly Func<TKey, string> _keyFormatter;
     private readonly string _indexPrefix;
     private readonly string _indexName;
-    private readonly int _listTakeMax;
+    private readonly int _queryTakeMax;
     private readonly bool _autoCreateIndex;
-    private readonly string _listSortField;
+    private readonly string _defaultSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
@@ -70,7 +71,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
         _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
-        _listTakeMax = options.ListTakeMax > 0 ? options.ListTakeMax : 200;
+        _queryTakeMax = options.QueryTakeMax > 0 ? options.QueryTakeMax : 200;
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _supportsDynamicIndexing = indexScopeSelector is not null;
@@ -78,11 +79,11 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _indexScopeSelector = indexScopeSelector;
-        _listSortField = options.ListSortField?.Trim() ?? "";
+        _defaultSortField = options.DefaultSortField?.Trim() ?? "";
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
     }
 
-    public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default) =>
         UpsertCoreAsync(readModel, allowCreateIndex: true, ct);
 
     public async Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default)
@@ -113,18 +114,22 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return DeserializeOrNull(sourceNode.GetRawText());
     }
 
-    public async Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default)
+    public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(query);
         ct.ThrowIfCancellationRequested();
-        ThrowIfDynamicReadModelQueriesUnsupported("list");
+        ThrowIfDynamicReadModelQueriesUnsupported("query");
         await EnsureIndexAsync(_indexName, _indexMetadata, ct);
-        var boundedTake = Math.Clamp(take, 1, _listTakeMax);
+        var boundedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, _queryTakeMax);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
         {
                 Content = new StringContent(
-                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildListPayloadJson(
-                        _listSortField,
+                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildQueryPayloadJson(
+                        query,
+                        _defaultSortField,
                         boundedTake),
                     Encoding.UTF8,
                     "application/json"),
@@ -133,19 +138,22 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             var payload = await response.Content.ReadAsStringAsync(ct);
-            if (TryHandleMissingIndexForRead("list", payload))
-                return [];
-            return [];
+            if (TryHandleMissingIndexForRead("query", payload))
+                return ProjectionDocumentQueryResult<TReadModel>.Empty;
+            return ProjectionDocumentQueryResult<TReadModel>.Empty;
         }
 
-        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "list", ct);
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "query", ct);
         var successfulPayload = await response.Content.ReadAsStringAsync(ct);
         using var jsonDoc = JsonDocument.Parse(successfulPayload);
         if (!jsonDoc.RootElement.TryGetProperty("hits", out var hitsNode) ||
             !hitsNode.TryGetProperty("hits", out var hitItems))
-            return [];
+        {
+            return ProjectionDocumentQueryResult<TReadModel>.Empty;
+        }
 
         var items = new List<TReadModel>();
+        string? nextCursor = null;
         foreach (var hit in hitItems.EnumerateArray())
         {
             if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -154,12 +162,26 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             var item = DeserializeOrNull(sourceNode.GetRawText());
             if (item != null)
                 items.Add(item);
+
+            nextCursor = ElasticsearchProjectionDocumentStorePayloadSupport.BuildNextCursor(hit);
         }
 
-        return items;
+        long? totalCount = null;
+        if (query.IncludeTotalCount &&
+            ElasticsearchProjectionDocumentStorePayloadSupport.TryReadTotalCount(jsonDoc.RootElement, out var total))
+        {
+            totalCount = total;
+        }
+
+        return new ProjectionDocumentQueryResult<TReadModel>
+        {
+            Items = items,
+            NextCursor = items.Count == boundedTake ? nextCursor : null,
+            TotalCount = totalCount,
+        };
     }
 
-    private async Task UpsertCoreAsync(
+    private async Task<ProjectionWriteResult> UpsertCoreAsync(
         TReadModel readModel,
         bool allowCreateIndex,
         CancellationToken ct)
@@ -175,29 +197,104 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
-            using var request = new HttpRequestMessage(
-                HttpMethod.Put,
-                $"{indexTarget.IndexName}/_doc/{Uri.EscapeDataString(keyValue)}")
+            for (var attempt = 1; attempt <= MaxOptimisticWriteAttempts; attempt++)
             {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
-            };
-            using var response = await _httpClient.SendAsync(request, ct);
-            await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "upsert", ct);
+                var existing = await TryGetExistingStateAsync(indexTarget.IndexName, keyValue, ct);
+                var result = ProjectionWriteResultEvaluator.Evaluate(existing.ReadModel, readModel);
+                if (!result.IsApplied)
+                {
+                    var skippedElapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+                    _logger.LogInformation(
+                        "Projection read-model write skipped. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                        ProviderName,
+                        typeof(TReadModel).FullName,
+                        keyValue,
+                        skippedElapsedMs,
+                        result.Disposition);
+                    return result;
+                }
 
-            var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
-            _logger.LogInformation(
-                "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
-                ProviderName,
-                typeof(TReadModel).FullName,
-                keyValue,
-                elapsedMs,
-                "ok");
+                using var request = BuildConditionalUpsertRequest(indexTarget.IndexName, keyValue, payload, existing);
+                using var response = await _httpClient.SendAsync(request, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    var elapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+                    _logger.LogInformation(
+                        "Projection read-model write completed. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                        ProviderName,
+                        typeof(TReadModel).FullName,
+                        keyValue,
+                        elapsedMs,
+                        ProjectionWriteDisposition.Applied);
+                    return ProjectionWriteResult.Applied();
+                }
+
+                if (response.StatusCode != HttpStatusCode.Conflict)
+                    await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "upsert", ct);
+
+                _logger.LogInformation(
+                    "Projection read-model write hit optimistic concurrency conflict and will re-evaluate. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
+                    ProviderName,
+                    typeof(TReadModel).FullName,
+                    keyValue,
+                    attempt,
+                    MaxOptimisticWriteAttempts);
+            }
+
+            var reconciled = await TryGetExistingStateAsync(indexTarget.IndexName, keyValue, ct);
+            var reconciledResult = ProjectionWriteResultEvaluator.Evaluate(reconciled.ReadModel, readModel);
+            if (!reconciledResult.IsApplied)
+            {
+                var skippedElapsedMs = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+                _logger.LogInformation(
+                    "Projection read-model write reconciled after optimistic concurrency conflict. provider={Provider} readModelType={ReadModelType} key={Key} elapsedMs={ElapsedMs} result={Result}",
+                    ProviderName,
+                    typeof(TReadModel).FullName,
+                    keyValue,
+                    skippedElapsedMs,
+                    reconciledResult.Disposition);
+                return reconciledResult;
+            }
+
+            throw new InvalidOperationException(
+                $"Elasticsearch optimistic concurrency write could not be reconciled for read-model '{typeof(TReadModel).FullName}' key '{keyValue}'.");
         }
         catch (Exception ex)
         {
             LogWriteFailure(keyValue, startedAt, ex);
             throw;
         }
+    }
+
+    private async Task<ExistingReadModelState> TryGetExistingStateAsync(
+        string indexName,
+        string keyValue,
+        CancellationToken ct)
+    {
+        using var response = await _httpClient.GetAsync($"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (ElasticsearchProjectionDocumentStoreHttpSupport.IsIndexNotFoundPayload(payload))
+            {
+                if (_autoCreateIndex || _missingIndexBehavior == ElasticsearchMissingIndexBehavior.Throw)
+                    throw BuildMissingIndexException("get", payload);
+
+                return ExistingReadModelState.Missing;
+            }
+
+            return ExistingReadModelState.Missing;
+        }
+
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "get", ct);
+        var successfulPayload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(successfulPayload);
+        var seqNo = TryReadLong(jsonDoc.RootElement, "_seq_no");
+        var primaryTerm = TryReadLong(jsonDoc.RootElement, "_primary_term");
+        if (!jsonDoc.RootElement.TryGetProperty("_source", out var sourceNode))
+            return new ExistingReadModelState(null, seqNo, primaryTerm);
+
+        return new ExistingReadModelState(DeserializeOrNull(sourceNode.GetRawText()), seqNo, primaryTerm);
     }
 
     private bool TryHandleMissingIndexForRead(string operation, string payload)
@@ -253,6 +350,34 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return keyValue;
     }
 
+    private static HttpRequestMessage BuildConditionalUpsertRequest(
+        string indexName,
+        string keyValue,
+        string payload,
+        ExistingReadModelState existing)
+    {
+        var requestPath = existing.ReadModel == null
+            ? $"{indexName}/_create/{Uri.EscapeDataString(keyValue)}"
+            : $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}?if_seq_no={existing.SeqNo}&if_primary_term={existing.PrimaryTerm}";
+        return new HttpRequestMessage(HttpMethod.Put, requestPath)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private static long TryReadLong(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+            return -1;
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetInt64(out var number) => number,
+            JsonValueKind.String when long.TryParse(property.GetString(), out var parsed) => parsed,
+            _ => -1,
+        };
+    }
+
     private string FormatKey(TKey key)
     {
         var keyValue = _keyFormatter(key)?.Trim() ?? "";
@@ -304,4 +429,12 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     }
 
     private sealed record ResolvedIndexTarget(string IndexName, DocumentIndexMetadata Metadata);
+
+    private sealed record ExistingReadModelState(
+        TReadModel? ReadModel,
+        long SeqNo,
+        long PrimaryTerm)
+    {
+        public static ExistingReadModelState Missing { get; } = new(null, -1, -1);
+    }
 }

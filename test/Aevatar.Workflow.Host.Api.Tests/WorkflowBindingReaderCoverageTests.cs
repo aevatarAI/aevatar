@@ -1,11 +1,13 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -28,11 +30,8 @@ public sealed class WorkflowActorBindingProjectorTests
 
         await projector.ProjectAsync(
             context,
-            new EventEnvelope
-            {
-                Id = "evt-definition",
-                Timestamp = Timestamp.FromDateTime(DateTime.SpecifyKind(new DateTime(2026, 3, 14, 12, 0, 0), DateTimeKind.Utc)),
-                Payload = Any.Pack(new BindWorkflowDefinitionEvent
+            WrapCommitted(
+                new BindWorkflowDefinitionEvent
                 {
                     WorkflowName = " direct ",
                     WorkflowYaml = "name: direct",
@@ -40,8 +39,10 @@ public sealed class WorkflowActorBindingProjectorTests
                     {
                         [" child "] = "yaml-child",
                     },
-                }),
-            },
+                },
+                version: 1,
+                id: "evt-definition",
+                utcTimestamp: new DateTime(2026, 3, 14, 12, 0, 0, DateTimeKind.Utc)),
             CancellationToken.None);
 
         var document = dispatcher.Documents["actor-1"];
@@ -67,10 +68,8 @@ public sealed class WorkflowActorBindingProjectorTests
 
         await projector.ProjectAsync(
             context,
-            new EventEnvelope
-            {
-                Id = "evt-run",
-                Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            WrapCommitted(
+                new BindWorkflowRunDefinitionEvent
                 {
                     DefinitionActorId = "definition-2",
                     RunId = " run-2 ",
@@ -80,8 +79,9 @@ public sealed class WorkflowActorBindingProjectorTests
                     {
                         [" child "] = "yaml-child",
                     },
-                }),
-            },
+                },
+                version: 2,
+                id: "evt-run"),
             CancellationToken.None);
 
         var document = dispatcher.Documents["actor-2"];
@@ -105,15 +105,14 @@ public sealed class WorkflowActorBindingProjectorTests
 
         await projector.ProjectAsync(
             context,
-            new EventEnvelope
-            {
-                Id = "evt-ignored",
-                Payload = Any.Pack(new WorkflowCompletedEvent
+            WrapCommitted(
+                new WorkflowCompletedEvent
                 {
                     WorkflowName = "ignored",
                     Success = true,
-                }),
-            },
+                },
+                version: 3,
+                id: "evt-ignored"),
             CancellationToken.None);
 
         dispatcher.Documents.Should().BeEmpty();
@@ -125,11 +124,11 @@ public sealed class WorkflowActorBindingProjectorTests
     {
         public Dictionary<string, WorkflowActorBindingDocument> Documents { get; } = new(StringComparer.Ordinal);
 
-        public Task UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Documents[readModel.Id] = readModel.DeepClone();
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
@@ -138,16 +137,49 @@ public sealed class WorkflowActorBindingProjectorTests
             return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.DeepClone() : null);
         }
 
-        public Task<IReadOnlyList<WorkflowActorBindingDocument>> ListAsync(int take = 50, CancellationToken ct = default)
+        public Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<WorkflowActorBindingDocument>>(
-                Documents.Values.Take(take).Select(static x => x.DeepClone()).ToList());
+            return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
+            {
+                Items = Documents.Values
+                    .Take(query.Take <= 0 ? 50 : query.Take)
+                    .Select(static x => x.DeepClone())
+                    .ToList(),
+            });
         }
     }
 
     private sealed class StaticClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private static EventEnvelope WrapCommitted(
+        IMessage evt,
+        long version,
+        string id,
+        DateTime? utcTimestamp = null)
+    {
+        var occurredAt = Timestamp.FromDateTime((utcTimestamp ?? DateTime.UtcNow).ToUniversalTime());
+        return new EventEnvelope
+        {
+            Id = id,
+            Timestamp = occurredAt.Clone(),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("binding-test"),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = id,
+                    Version = version,
+                    Timestamp = occurredAt,
+                    EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(new Empty()),
+            }),
+        };
     }
 }

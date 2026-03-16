@@ -43,17 +43,38 @@ public sealed class ServiceCatalogQueryReaderTests
     }
 
     [Fact]
-    public async Task ListAsync_ShouldFilterByServiceKeyPrefix_AndClampTake()
+    public async Task QueryByScopeAsync_ShouldFilterByIdentityFields_AndClampTake()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        await store.UpsertAsync(new ServiceCatalogReadModel { Id = "tenant:app:default:svc-a" });
-        await store.UpsertAsync(new ServiceCatalogReadModel { Id = "tenant:app:default:svc-b" });
-        await store.UpsertAsync(new ServiceCatalogReadModel { Id = "tenant:other:default:svc-c" });
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc-a",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc-a",
+        });
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc-b",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc-b",
+        });
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:other:default:svc-c",
+            TenantId = "tenant",
+            AppId = "other",
+            Namespace = "default",
+            ServiceId = "svc-c",
+        });
         var reader = new ServiceCatalogQueryReader(store);
 
-        var snapshots = await reader.ListAsync("tenant", "app", "default", take: 0);
+        var snapshots = await reader.QueryByScopeAsync("tenant", "app", "default", take: 0);
 
-        store.LastListTake.Should().Be(5);
+        store.LastQueryTake.Should().Be(1);
         snapshots.Should().HaveCount(1);
         snapshots[0].ServiceKey.Should().Be("tenant:app:default:svc-a");
     }
@@ -69,14 +90,14 @@ public sealed class ServiceCatalogQueryReaderTests
     }
 
     [Fact]
-    public async Task ListAsync_ShouldClampTakeToUpperBound()
+    public async Task QueryByScopeAsync_ShouldClampTakeToUpperBound()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
         await store.UpsertAsync(new ServiceCatalogReadModel { Id = "tenant:app:default:svc-a" });
         var reader = new ServiceCatalogQueryReader(store);
 
-        _ = await reader.ListAsync("tenant", "app", "default", take: 5000);
+        _ = await reader.QueryByScopeAsync("tenant", "app", "default", take: 5000);
 
-        store.LastListTake.Should().Be(5000);
+        store.LastQueryTake.Should().Be(1000);
     }
 }

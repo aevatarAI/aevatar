@@ -78,6 +78,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
@@ -92,16 +97,21 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key,
-            listSortSelector: static report => report.CreatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: static report => report.CreatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: static document => document.Id,
             keyFormatter: static key => key,
-            listSortSelector: static document => document.UpdatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: static document => document.UpdatedAt,
+            queryTakeMax: 200);
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)

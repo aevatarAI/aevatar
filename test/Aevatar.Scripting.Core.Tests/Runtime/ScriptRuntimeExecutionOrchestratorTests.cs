@@ -98,7 +98,7 @@ public sealed class ScriptRuntimeExecutionOrchestratorTests
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    reduce: static (_, evt, _) => evt.Current);
+                    project: static (_, evt, _) => evt.Current);
         }
 
         private static Task HandleAsync(

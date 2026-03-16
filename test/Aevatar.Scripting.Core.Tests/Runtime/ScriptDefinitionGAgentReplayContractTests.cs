@@ -249,7 +249,7 @@ public class ScriptDefinitionGAgentReplayContractTests
                         .OnCommand<InvalidProfileCommand>(HandleAsync)
                         .OnEvent<InvalidProfileUpdated>(
                             apply: static (_, evt, _) => new InvalidProfileState { CommandCount = 1 },
-                            reduce: static (_, evt, _) => evt.Current)
+                            project: static (_, evt, _) => evt.Current)
                         .OnQuery<InvalidProfileQueryRequested, InvalidProfileQueryResponded>(HandleQueryAsync);
                 }
 
@@ -410,7 +410,7 @@ public class ScriptDefinitionGAgentReplayContractTests
                             LastCommandId = evt.CommandId ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
                         },
-                        reduce: static (_, evt, _) => evt.Current)
+                        project: static (_, evt, _) => evt.Current)
                     .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
             }
 

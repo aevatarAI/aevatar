@@ -37,14 +37,14 @@ public sealed class WorkflowActorBindingProjector
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null)
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out var eventId, out var stateVersion) ||
+            payload == null)
             return;
 
-        var updatedAt = ProjectionEnvelopeTimestampResolver.Resolve(normalized, _clock.UtcNow);
-        if (normalized.Payload.Is(BindWorkflowDefinitionEvent.Descriptor))
+        var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        if (payload.Is(BindWorkflowDefinitionEvent.Descriptor))
         {
-            var evt = normalized.Payload.Unpack<BindWorkflowDefinitionEvent>();
+            var evt = payload.Unpack<BindWorkflowDefinitionEvent>();
             var document = await GetOrCreateAsync(context.RootActorId, ct);
             document.Id = context.RootActorId;
             document.ActorId = context.RootActorId;
@@ -54,15 +54,15 @@ public sealed class WorkflowActorBindingProjector
             document.WorkflowName = NormalizeWorkflowName(evt.WorkflowName);
             document.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
             ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
-            ApplyProjectionMetadata(document, normalized.Id, updatedAt);
+            ApplyProjectionMetadata(document, eventId, stateVersion, updatedAt);
             await _writeDispatcher.UpsertAsync(document, ct);
             return;
         }
 
-        if (!normalized.Payload.Is(BindWorkflowRunDefinitionEvent.Descriptor))
+        if (!payload.Is(BindWorkflowRunDefinitionEvent.Descriptor))
             return;
 
-        var bindRun = normalized.Payload.Unpack<BindWorkflowRunDefinitionEvent>();
+        var bindRun = payload.Unpack<BindWorkflowRunDefinitionEvent>();
         var runDocument = await GetOrCreateAsync(context.RootActorId, ct);
         runDocument.Id = context.RootActorId;
         runDocument.ActorId = context.RootActorId;
@@ -72,7 +72,7 @@ public sealed class WorkflowActorBindingProjector
         runDocument.WorkflowName = NormalizeWorkflowName(bindRun.WorkflowName);
         runDocument.WorkflowYaml = bindRun.WorkflowYaml ?? string.Empty;
         ReplaceInlineWorkflowYamls(runDocument.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
-        ApplyProjectionMetadata(runDocument, normalized.Id, updatedAt);
+        ApplyProjectionMetadata(runDocument, eventId, stateVersion, updatedAt);
         await _writeDispatcher.UpsertAsync(runDocument, ct);
     }
 
@@ -90,12 +90,14 @@ public sealed class WorkflowActorBindingProjector
     private static void ApplyProjectionMetadata(
         WorkflowActorBindingDocument document,
         string? eventId,
+        long stateVersion,
         DateTimeOffset updatedAt)
     {
         if (document.CreatedAt == default)
             document.CreatedAt = updatedAt;
         document.UpdatedAt = updatedAt;
-        document.StateVersion += 1;
+        if (stateVersion > 0)
+            document.StateVersion = stateVersion;
         document.LastEventId = eventId ?? string.Empty;
     }
 

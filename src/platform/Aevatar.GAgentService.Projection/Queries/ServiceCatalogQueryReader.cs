@@ -24,16 +24,21 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
         return readModel == null ? null : Map(readModel);
     }
 
-    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAllAsync(
+    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(
         int take = 1000,
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 10_000);
-        var items = await _documentStore.ListAsync(boundedTake, ct);
-        return items.Select(Map).ToList();
+        var result = await _documentStore.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+            },
+            ct);
+        return result.Items.Select(Map).ToList();
     }
 
-    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> ListAsync(
+    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
         string tenantId,
         string appId,
         string @namespace,
@@ -41,10 +46,34 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take, 1, 1000);
-        var serviceKeyPrefix = $"{tenantId}:{appId}:{@namespace}:";
-        var items = await _documentStore.ListAsync(boundedTake * 5, ct);
-        return items
-            .Where(x => x.Id.StartsWith(serviceKeyPrefix, StringComparison.Ordinal))
+        var result = await _documentStore.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+                Filters = new ProjectionDocumentFilter[]
+                {
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ServiceCatalogReadModel.TenantId),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(tenantId),
+                    },
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ServiceCatalogReadModel.AppId),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(appId),
+                    },
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ServiceCatalogReadModel.Namespace),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(@namespace),
+                    },
+                },
+            },
+            ct);
+        return result.Items
             .Take(boundedTake)
             .Select(Map)
             .ToList();

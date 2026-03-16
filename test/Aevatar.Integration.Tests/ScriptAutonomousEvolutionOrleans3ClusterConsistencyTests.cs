@@ -137,7 +137,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     "1")),
                 workerBDefinitionActorId,
                 CancellationToken.None);
-            await definitionPortNode1.UpsertDefinitionAsync(
+            var orchestratorDefinition = await definitionPortNode1.UpsertDefinitionWithSnapshotAsync(
                 $"orleans-orchestrator-script-{scopeId}",
                 "rev-orchestrator-1",
                 ScriptEvolutionIntegrationSources.OrleansClusterOrchestratorSource,
@@ -162,6 +162,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 orchestratorDefinitionActorId,
                 "rev-orchestrator-1",
                 orchestratorRuntimeActorId,
+                orchestratorDefinition.Snapshot,
                 CancellationToken.None);
 
             var lease = await executionProjectionNode1.EnsureActorProjectionAsync(

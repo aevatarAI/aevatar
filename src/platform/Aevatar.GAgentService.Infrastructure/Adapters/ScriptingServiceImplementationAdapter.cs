@@ -32,14 +32,20 @@ public sealed class ScriptingServiceImplementationAdapter : IServiceImplementati
             ct);
         var endpoints = snapshot.RuntimeSemantics?.Messages
             .Where(x => x.Kind == ScriptMessageKind.Command)
-            .Select(x => new ServiceEndpointDescriptor
+            .Select(x =>
             {
-                EndpointId = x.DescriptorFullName ?? x.TypeUrl,
-                DisplayName = x.DescriptorFullName ?? x.TypeUrl,
-                Kind = ServiceEndpointKind.Command,
-                RequestTypeUrl = x.TypeUrl ?? string.Empty,
-                ResponseTypeUrl = string.Empty,
-                Description = $"Scripting command endpoint for {x.DescriptorFullName ?? x.TypeUrl}.",
+                var endpointId = string.IsNullOrWhiteSpace(x.DescriptorFullName)
+                    ? x.TypeUrl ?? string.Empty
+                    : x.DescriptorFullName;
+                return new ServiceEndpointDescriptor
+                {
+                    EndpointId = endpointId,
+                    DisplayName = endpointId,
+                    Kind = ServiceEndpointKind.Command,
+                    RequestTypeUrl = x.TypeUrl ?? string.Empty,
+                    ResponseTypeUrl = string.Empty,
+                    Description = $"Scripting command endpoint for {endpointId}.",
+                };
             })
             .ToArray()
             ?? [];

@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -17,6 +18,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var runtime = new RecordingActorRuntime();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(revisionId: "r2");
@@ -41,6 +43,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var workflowPort = new RecordingWorkflowRunActorPort();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             workflowPort);
         var artifact = new PreparedServiceRevisionArtifact
@@ -80,6 +83,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         };
         var activator = new DefaultServiceRuntimeActivator(
             new RecordingActorRuntime(),
+            new RecordingScriptDefinitionSnapshotPort(),
             runtimePort,
             new RecordingWorkflowRunActorPort());
         var artifact = new PreparedServiceRevisionArtifact
@@ -117,6 +121,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     {
         var activator = new DefaultServiceRuntimeActivator(
             new RecordingActorRuntime(),
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
 
@@ -143,6 +148,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         runtime.MarkExisting("gagent-service:static-runtime:deployment-actor:r2");
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(revisionId: "r2");
@@ -166,6 +172,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var workflowPort = new RecordingWorkflowRunActorPort();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             workflowPort);
         var artifact = new PreparedServiceRevisionArtifact
@@ -203,6 +210,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         runtime.MarkExistsWithoutActor("workflow-definition-1:deployment-actor:r1");
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
         var artifact = new PreparedServiceRevisionArtifact
@@ -239,6 +247,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         runtime.MarkExisting("actor-1");
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             new RecordingWorkflowRunActorPort());
 
@@ -314,17 +323,47 @@ public sealed class DefaultServiceRuntimeActivatorTests
     {
         public string RuntimeActorId { get; init; } = "script-runtime";
 
-        public List<(string definitionActorId, string revision, string? runtimeActorId, ScriptDefinitionSnapshot? definitionSnapshot)> Calls { get; } = [];
+        public List<(string definitionActorId, string revision, string? runtimeActorId, ScriptDefinitionSnapshot definitionSnapshot)> Calls { get; } = [];
 
         public Task<string> EnsureRuntimeAsync(
             string definitionActorId,
             string scriptRevision,
             string? runtimeActorId,
-            CancellationToken ct,
-            ScriptDefinitionSnapshot? definitionSnapshot = null)
+            ScriptDefinitionSnapshot definitionSnapshot,
+            CancellationToken ct)
         {
             Calls.Add((definitionActorId, scriptRevision, runtimeActorId, definitionSnapshot));
             return Task.FromResult(RuntimeActorId);
+        }
+    }
+
+    private sealed class RecordingScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    {
+        private readonly ScriptDefinitionSnapshot _snapshot;
+
+        public RecordingScriptDefinitionSnapshotPort(
+            ScriptDefinitionSnapshot? snapshot = null)
+        {
+            _snapshot = snapshot ?? new ScriptDefinitionSnapshot(
+                ScriptId: "script-1",
+                Revision: "script-r1",
+                SourceText: "// source",
+                SourceHash: "hash-1",
+                StateTypeUrl: "type.googleapis.com/test.State",
+                ReadModelTypeUrl: "type.googleapis.com/test.ReadModel",
+                ReadModelSchemaVersion: "1",
+                ReadModelSchemaHash: "rm-hash");
+        }
+
+        public List<(string definitionActorId, string requestedRevision)> Calls { get; } = [];
+
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            Calls.Add((definitionActorId, requestedRevision));
+            return Task.FromResult(_snapshot.Clone());
         }
     }
 

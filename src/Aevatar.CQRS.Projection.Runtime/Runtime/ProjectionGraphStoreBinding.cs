@@ -40,12 +40,12 @@ public sealed class ProjectionGraphStoreBinding<TReadModel>
 
     public string SinkName => IsEnabled ? "Graph" : "Graph(Unconfigured)";
 
-    public async Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public async Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
         if (_graphStore is null || _materializer is null)
-            return;
+            return ProjectionWriteResult.Applied();
 
         var graphMaterialization = _materializer.Materialize(readModel);
         var scope = NormalizeToken(graphMaterialization.Scope);
@@ -90,6 +90,8 @@ public sealed class ProjectionGraphStoreBinding<TReadModel>
 
             await GraphStore.DeleteNodeAsync(scope, node.NodeId, ct);
         }
+
+        return ProjectionWriteResult.Applied();
     }
 
     private async Task<IReadOnlyList<ProjectionGraphEdge>> ListManagedEdgesByOwnerAsync(

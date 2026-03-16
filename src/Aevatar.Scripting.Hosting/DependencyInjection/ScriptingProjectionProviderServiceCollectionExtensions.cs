@@ -110,23 +110,23 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         services.AddInMemoryDocumentProjectionStore<ScriptDefinitionSnapshotDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptCatalogEntryDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptReadModelDocument, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptEvolutionReadModel, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
         services.AddInMemoryDocumentProjectionStore<ScriptNativeDocumentReadModel, string>(
             keySelector: static readModel => readModel.Id,
             keyFormatter: static key => key,
-            listSortSelector: static readModel => readModel.UpdatedAt);
+            defaultSortSelector: static readModel => readModel.UpdatedAt);
     }
 
     private static void EnsureLegacyProviderOptionsNotUsed(IConfiguration configuration)

@@ -5,6 +5,7 @@ This directory keeps CI gate scripts and smoke tests.
 ## Quality Guards
 
 - `tools/ci/coverage_quality_guard.sh`: coverage collection and threshold gate (generated files are excluded by default via file filters, e.g. `obj/**`, `Generated/**`, `*.g.cs`).
+  - Produces a filtered `Cobertura.xml` under `artifacts/coverage/<timestamp>-ci-gate/report/` after applying assembly/file exclusions such as `Aevatar.Tools.*`.
 - `tools/ci/architecture_guards.sh`: architecture/static guards (includes projection route mapping guard).
 - `tools/ci/code_metrics_analyzer_guard.sh`: repository-wide code metrics analyzer gate (CA1501/CA1502/CA1505/CA1506/CA1509 via `CodeMetricsConfig.txt`).
 - `tools/ci/code_metrics_report.ps1`: Windows-only `Microsoft.CodeAnalysis.Metrics` report generation for production projects under `src/`.
@@ -56,6 +57,6 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `coverage-quality`
     - Runs restore/build + `tools/ci/coverage_quality_guard.sh`.
     - Uploads `artifacts/coverage/**` as CI artifacts (`coverage-quality-report`).
-    - Uploads coverage results to Codecov when `CODECOV_TOKEN` is available.
+    - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` to Codecov when `CODECOV_TOKEN` is available.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `distributed-3node-smoke` -> `tools/ci/distributed_3node_smoke.sh`

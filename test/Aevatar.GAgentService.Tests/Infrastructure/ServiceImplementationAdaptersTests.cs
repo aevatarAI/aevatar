@@ -14,6 +14,38 @@ namespace Aevatar.GAgentService.Tests.Infrastructure;
 public sealed class ServiceImplementationAdaptersTests
 {
     [Fact]
+    public async Task ScriptingAdapter_ShouldValidateConstructorAndRequest()
+    {
+        Action nullPort = () => new ScriptingServiceImplementationAdapter(null!);
+        var adapter = new ScriptingServiceImplementationAdapter(
+            new RecordingScriptDefinitionSnapshotPort(new ScriptDefinitionSnapshot(
+                ScriptId: "script-1",
+                Revision: "r1",
+                SourceText: "// source",
+                SourceHash: "hash-1",
+                StateTypeUrl: "type.googleapis.com/test.State",
+                ReadModelTypeUrl: "type.googleapis.com/test.ReadModel",
+                ReadModelSchemaVersion: "1",
+                ReadModelSchemaHash: "rm-hash",
+                RuntimeSemantics: new ScriptRuntimeSemanticsSpec
+                {
+                    Messages =
+                    {
+                        new ScriptMessageSemanticsSpec
+                        {
+                            TypeUrl = "type.googleapis.com/test.Command",
+                            DescriptorFullName = "test.Command",
+                            Kind = ScriptMessageKind.Command,
+                        },
+                    },
+                })));
+        var nullRequest = () => adapter.PrepareRevisionAsync(null!);
+
+        nullPort.Should().Throw<ArgumentNullException>();
+        await nullRequest.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
     public async Task StaticAdapter_ShouldPrepareRevisionArtifact()
     {
         var adapter = new StaticServiceImplementationAdapter();
@@ -256,6 +288,206 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
+    public async Task ScriptingAdapter_ShouldFallbackToTypeUrlAndNormalizePackageFields()
+    {
+        var snapshotPort = new RecordingScriptDefinitionSnapshotPort(new ScriptDefinitionSnapshot(
+            ScriptId: "script-2",
+            Revision: "r2",
+            SourceText: "// source",
+            SourceHash: "hash-2",
+            StateTypeUrl: "type.googleapis.com/test.State",
+            ReadModelTypeUrl: "type.googleapis.com/test.ReadModel",
+            ReadModelSchemaVersion: "2",
+            ReadModelSchemaHash: "rm-hash-2",
+            ProtocolDescriptorSet: ByteString.CopyFromUtf8("descriptor-2"),
+            RuntimeSemantics: new ScriptRuntimeSemanticsSpec
+            {
+                Messages =
+                {
+                    new ScriptMessageSemanticsSpec
+                    {
+                        TypeUrl = "type.googleapis.com/test.CommandOnlyTypeUrl",
+                        Kind = ScriptMessageKind.Command,
+                    },
+                    new ScriptMessageSemanticsSpec
+                    {
+                        TypeUrl = "type.googleapis.com/test.Signal",
+                        DescriptorFullName = "test.Signal",
+                        Kind = ScriptMessageKind.InternalSignal,
+                    },
+                },
+            },
+            ScriptPackage: new ScriptPackageSpec
+            {
+                CsharpSources =
+                {
+                    new ScriptPackageFile(),
+                },
+                ProtoFiles =
+                {
+                    new ScriptPackageFile(),
+                },
+            }));
+        var adapter = new ScriptingServiceImplementationAdapter(snapshotPort);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "service-r2",
+                ImplementationKind = ServiceImplementationKind.Scripting,
+                ScriptingSpec = new ScriptingServiceRevisionSpec
+                {
+                    ScriptId = "script-2",
+                    Revision = "r2",
+                    DefinitionActorId = "script-definition-2",
+                },
+            },
+        });
+
+        artifact.Endpoints.Should().ContainSingle();
+        artifact.Endpoints[0].EndpointId.Should().Be("type.googleapis.com/test.CommandOnlyTypeUrl");
+        artifact.Endpoints[0].DisplayName.Should().Be("type.googleapis.com/test.CommandOnlyTypeUrl");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.EntryBehaviorTypeName.Should().BeEmpty();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.EntrySourcePath.Should().BeEmpty();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.CsharpSources.Should().ContainSingle();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.CsharpSources[0].Path.Should().BeEmpty();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.ProtoFiles.Should().ContainSingle();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.ProtoFiles[0].Content.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScriptingAdapter_ShouldUseDescriptorFullName_AndPreservePackagePayloads()
+    {
+        var snapshotPort = new RecordingScriptDefinitionSnapshotPort(new ScriptDefinitionSnapshot(
+            ScriptId: "script-3",
+            Revision: "r3",
+            SourceText: "// source",
+            SourceHash: "hash-3",
+            StateTypeUrl: "type.googleapis.com/test.State",
+            ReadModelTypeUrl: "type.googleapis.com/test.ReadModel",
+            ReadModelSchemaVersion: "3",
+            ReadModelSchemaHash: "rm-hash-3",
+            ProtocolDescriptorSet: ByteString.CopyFromUtf8("descriptor-3"),
+            RuntimeSemantics: new ScriptRuntimeSemanticsSpec
+            {
+                Messages =
+                {
+                    new ScriptMessageSemanticsSpec
+                    {
+                        TypeUrl = "type.googleapis.com/test.Command",
+                        DescriptorFullName = "test.Command",
+                        Kind = ScriptMessageKind.Command,
+                    },
+                    new ScriptMessageSemanticsSpec
+                    {
+                        TypeUrl = "type.googleapis.com/test.Query",
+                        DescriptorFullName = "test.Query",
+                        Kind = ScriptMessageKind.QueryRequest,
+                    },
+                },
+            },
+            ScriptPackage: new ScriptPackageSpec
+            {
+                EntryBehaviorTypeName = "Demo.Behavior",
+                EntrySourcePath = "src/Behavior.cs",
+                CsharpSources =
+                {
+                    new ScriptPackageFile
+                    {
+                        Path = "src/Behavior.cs",
+                        Content = "public sealed class Behavior {}",
+                    },
+                },
+                ProtoFiles =
+                {
+                    new ScriptPackageFile
+                    {
+                        Path = "protos/demo.proto",
+                        Content = "syntax = \"proto3\";",
+                    },
+                },
+            }));
+        var adapter = new ScriptingServiceImplementationAdapter(snapshotPort);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "service-r3",
+                ImplementationKind = ServiceImplementationKind.Scripting,
+                ScriptingSpec = new ScriptingServiceRevisionSpec
+                {
+                    ScriptId = "script-3",
+                    Revision = "r3",
+                    DefinitionActorId = "script-definition-3",
+                },
+            },
+        });
+
+        artifact.Endpoints.Should().ContainSingle();
+        artifact.Endpoints[0].EndpointId.Should().Be("test.Command");
+        artifact.Endpoints[0].DisplayName.Should().Be("test.Command");
+        artifact.Endpoints[0].RequestTypeUrl.Should().Be("type.googleapis.com/test.Command");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.EntryBehaviorTypeName.Should().Be("Demo.Behavior");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.EntrySourcePath.Should().Be("src/Behavior.cs");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.CsharpSources.Should().ContainSingle();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.CsharpSources[0].Path.Should().Be("src/Behavior.cs");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.CsharpSources[0].Content.Should().Contain("Behavior");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.ProtoFiles.Should().ContainSingle();
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.ProtoFiles[0].Path.Should().Be("protos/demo.proto");
+        artifact.DeploymentPlan.ScriptingPlan.PackageSpec.ProtoFiles[0].Content.Should().Contain("proto3");
+    }
+
+    [Fact]
+    public async Task ScriptingAdapter_ShouldKeepEmptyEndpointId_WhenNoDescriptorOrTypeUrlExists()
+    {
+        var snapshotPort = new RecordingScriptDefinitionSnapshotPort(new ScriptDefinitionSnapshot(
+            ScriptId: "script-4",
+            Revision: "r4",
+            SourceText: "// source",
+            SourceHash: "hash-4",
+            StateTypeUrl: "type.googleapis.com/test.State",
+            ReadModelTypeUrl: "type.googleapis.com/test.ReadModel",
+            ReadModelSchemaVersion: "4",
+            ReadModelSchemaHash: "rm-hash-4",
+            RuntimeSemantics: new ScriptRuntimeSemanticsSpec
+            {
+                Messages =
+                {
+                    new ScriptMessageSemanticsSpec
+                    {
+                        Kind = ScriptMessageKind.Command,
+                    },
+                },
+            }));
+        var adapter = new ScriptingServiceImplementationAdapter(snapshotPort);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "service-r4",
+                ImplementationKind = ServiceImplementationKind.Scripting,
+                ScriptingSpec = new ScriptingServiceRevisionSpec
+                {
+                    ScriptId = "script-4",
+                    Revision = "r4",
+                    DefinitionActorId = "script-definition-4",
+                },
+            },
+        });
+
+        artifact.Endpoints.Should().ContainSingle();
+        artifact.Endpoints[0].EndpointId.Should().BeEmpty();
+        artifact.Endpoints[0].RequestTypeUrl.Should().BeEmpty();
+        artifact.Endpoints[0].Description.Should().Be("Scripting command endpoint for .");
+    }
+
+    [Fact]
     public async Task WorkflowAdapter_ShouldInferWorkflowName_WhenNotProvided()
     {
         var workflowPort = new RecordingWorkflowRunActorPort
@@ -360,6 +592,26 @@ public sealed class ServiceImplementationAdaptersTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("workflow_yaml is required.");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_ShouldValidateConstructorAndMissingWorkflowSpec()
+    {
+        Action nullPort = () => new WorkflowServiceImplementationAdapter(null!);
+        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort());
+        var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+            },
+        });
+
+        nullPort.Should().Throw<ArgumentNullException>();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow implementation_spec is required.");
     }
 
     private sealed class RecordingScriptDefinitionSnapshotPort : IScriptDefinitionSnapshotPort

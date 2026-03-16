@@ -8,6 +8,12 @@ public sealed class ServiceRolloutReadModel
 {
     public string Id { get; set; } = string.Empty;
 
+    public string ActorId { get; set; } = string.Empty;
+
+    public long StateVersion { get; set; }
+
+    public string LastEventId { get; set; } = string.Empty;
+
     public string RolloutId { get; set; } = string.Empty;
 
     public string DisplayName { get; set; } = string.Empty;
@@ -31,6 +37,9 @@ public sealed class ServiceRolloutReadModel
         return new ServiceRolloutReadModel
         {
             Id = Id,
+            ActorId = ActorId,
+            StateVersion = StateVersion,
+            LastEventId = LastEventId,
             RolloutId = RolloutId,
             DisplayName = DisplayName,
             Status = Status,

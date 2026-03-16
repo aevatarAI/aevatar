@@ -8,7 +8,8 @@ namespace Aevatar.Scripting.Projection.Orchestration;
 public sealed class ScriptEvolutionRuntimeLease
     : ProjectionRuntimeLeaseBase<IEventSink<ScriptEvolutionSessionCompletedEvent>>,
       IScriptEvolutionProjectionLease,
-      IProjectionPortSessionLease
+      IProjectionPortSessionLease,
+      IProjectionContextRuntimeLease<ScriptEvolutionSessionProjectionContext>
 {
     public ScriptEvolutionRuntimeLease(ScriptEvolutionSessionProjectionContext context)
         : base(context.RootActorId)

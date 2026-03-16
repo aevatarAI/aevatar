@@ -12,5 +12,7 @@ public interface IStateMirrorReadModelProjector<TState, TReadModel, in TKey>
 
     Task<TReadModel?> GetAsync(TKey key, CancellationToken ct = default);
 
-    Task<IReadOnlyList<TReadModel>> ListAsync(int take = 50, CancellationToken ct = default);
+    Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+        ProjectionDocumentQuery query,
+        CancellationToken ct = default);
 }

@@ -46,12 +46,12 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void ReduceReadModel_ShouldReturnCurrentReadModel_WhenReduceHandlerIsMissing()
+    public void ProjectReadModel_ShouldReturnNull_WhenProjectHandlerIsMissing()
     {
         var behavior = new ApplyOnlyBehavior();
-        var current = new SimpleTextReadModel { Value = "current", HasValue = true };
+        var current = new SimpleTextState { Value = "current" };
 
-        var result = behavior.ReduceReadModel(
+        var result = behavior.ProjectReadModel(
             current,
             new SimpleTextEvent
             {
@@ -59,7 +59,7 @@ public sealed class ScriptBehaviorAbstractionsTests
             },
             CreateFactContext());
 
-        result.Should().BeSameAs(current);
+        result.Should().BeNull();
     }
 
     [Fact]
@@ -95,12 +95,12 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void Descriptor_ShouldRejectEventWithoutApplyOrReduce()
+    public void Descriptor_ShouldRejectEventWithoutApplyOrProject()
     {
         var act = () => _ = new MissingEventHandlerBehavior().Descriptor;
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*At least one of apply/reduce must be provided*");
+            .WithMessage("*At least one of apply/project must be provided*");
     }
 
     [Fact]
@@ -436,7 +436,7 @@ public sealed class ScriptBehaviorAbstractionsTests
                 .OnCommand<SimpleTextCommand>((_, _, _) => Task.CompletedTask)
                 .OnEvent<SimpleTextEvent>(
                     apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    reduce: static (_, evt, _) => evt.Current)
+                    project: static (_, evt, _) => evt.Current)
                 .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>((query, snapshot, _) =>
                     Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
                     {
@@ -451,7 +451,7 @@ public sealed class ScriptBehaviorAbstractionsTests
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder.OnEvent<SimpleTextEvent>(
-                reduce: static (_, evt, _) => evt.Current);
+                project: static (_, evt, _) => evt.Current);
         }
     }
 
@@ -486,7 +486,7 @@ public sealed class ScriptBehaviorAbstractionsTests
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder.OnEvent<SimpleTextEvent>(apply: static (_, _, _) => new SimpleTextState());
-            builder.OnEvent<SimpleTextEvent>(reduce: static (_, evt, _) => evt.Current);
+            builder.OnEvent<SimpleTextEvent>(project: static (_, evt, _) => evt.Current);
         }
     }
 

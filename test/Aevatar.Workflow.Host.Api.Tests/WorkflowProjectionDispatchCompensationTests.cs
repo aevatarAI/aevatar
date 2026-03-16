@@ -372,7 +372,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
     }
 
     private static Any CreateReadModelPayload(string rootActorId) =>
-        WorkflowExecutionReportSnapshotMapper.Pack(CreateReadModel(rootActorId));
+        Any.Pack(CreateReadModel(rootActorId));
 
     private static WorkflowExecutionReport CreateReadModel(string rootActorId) =>
         new()
@@ -408,7 +408,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
 
         public int SuccessCount { get; private set; }
 
-        public Task UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
+        public Task<ProjectionWriteResult> UpsertAsync(WorkflowExecutionReport readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ArgumentNullException.ThrowIfNull(readModel);
@@ -421,7 +421,7 @@ public class WorkflowProjectionDispatchCompensationOutboxGAgentTests
             }
 
             SuccessCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 

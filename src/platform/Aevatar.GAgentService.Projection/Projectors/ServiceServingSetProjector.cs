@@ -35,22 +35,32 @@ public sealed class ServiceServingSetProjector
 
     public async ValueTask ProjectAsync(ServiceServingSetProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        _ = context;
-        var normalized = ProjectionEnvelopeNormalizer.Normalize(envelope);
-        if (normalized?.Payload == null || !normalized.Payload.Is(ServiceServingSetUpdatedEvent.Descriptor))
+        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+                envelope,
+                _clock,
+                out var payload,
+                out var eventId,
+                out var stateVersion,
+                out var observedAt) ||
+            payload == null ||
+            !payload.Is(ServiceServingSetUpdatedEvent.Descriptor))
+        {
             return;
+        }
 
-        var evt = normalized.Payload.Unpack<ServiceServingSetUpdatedEvent>();
+        var evt = payload.Unpack<ServiceServingSetUpdatedEvent>();
         var serviceKey = ServiceProjectionMapping.ServiceKey(evt.Identity);
         if (string.IsNullOrWhiteSpace(serviceKey))
             return;
 
-        var updatedAt = ServiceProjectionMapping.FromTimestamp(evt.UpdatedAt, _clock.UtcNow);
         var readModel = await _documentReader.GetAsync(serviceKey, ct)
             ?? new ServiceServingSetReadModel { Id = serviceKey };
         readModel.Generation = evt.Generation;
         readModel.ActiveRolloutId = evt.RolloutId ?? string.Empty;
-        readModel.UpdatedAt = updatedAt;
+        readModel.ActorId = context.RootActorId;
+        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
+        readModel.LastEventId = eventId;
+        readModel.UpdatedAt = observedAt;
         readModel.Targets = evt.Targets
             .Select(ServiceProjectionMapping.ToServingTargetReadModel)
             .OrderByDescending(x => x.AllocationWeight)

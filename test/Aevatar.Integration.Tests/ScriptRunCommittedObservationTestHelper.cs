@@ -15,14 +15,20 @@ internal static class ScriptRunCommittedObservationTestHelper
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(timeoutOverride ?? TimeSpan.FromSeconds(10));
 
-        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+        try
         {
-            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
-                continue;
+            await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+            {
+                if (!TryUnpackCommittedFact(envelope, out var fact))
+                    continue;
 
-            var fact = envelope.Payload.Unpack<ScriptDomainFactCommitted>();
-            if (string.Equals(fact.RunId, runId, StringComparison.Ordinal))
-                return fact;
+                if (string.Equals(fact.RunId, runId, StringComparison.Ordinal))
+                    return fact;
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Timed out waiting for committed script fact. run_id={runId}");
         }
 
         throw new InvalidOperationException($"Timed out waiting for committed script fact. run_id={runId}");
@@ -36,14 +42,41 @@ internal static class ScriptRunCommittedObservationTestHelper
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(timeoutOverride ?? TimeSpan.FromSeconds(10));
 
-        await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+        try
         {
-            if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
-                continue;
-
-            return envelope.Payload.Unpack<ScriptDomainFactCommitted>();
+            await foreach (var envelope in sink.ReadAllAsync(timeout.Token))
+            {
+                if (TryUnpackCommittedFact(envelope, out var fact))
+                    return fact;
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("Timed out waiting for committed script fact.");
         }
 
         throw new InvalidOperationException("Timed out waiting for committed script fact.");
+    }
+
+    internal static bool TryUnpackCommittedFact(EventEnvelope envelope, out ScriptDomainFactCommitted fact)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        fact = default!;
+        if (envelope.Payload?.Is(ScriptDomainFactCommitted.Descriptor) == true)
+        {
+            fact = envelope.Payload.Unpack<ScriptDomainFactCommitted>();
+            return true;
+        }
+
+        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+            return false;
+
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        if (published.StateEvent?.EventData?.Is(ScriptDomainFactCommitted.Descriptor) != true)
+            return false;
+
+        fact = published.StateEvent.EventData.Unpack<ScriptDomainFactCommitted>();
+        return true;
     }
 }

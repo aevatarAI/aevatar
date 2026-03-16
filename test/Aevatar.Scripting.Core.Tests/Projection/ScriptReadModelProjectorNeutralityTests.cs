@@ -1,14 +1,14 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Runtime;
+using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Scripting.Core.Tests.Messages;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -18,25 +18,28 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptReadModelProjectorNeutralityTests
 {
     [Fact]
-    public async Task ProjectAsync_ShouldNotMutateCommittedFactPayload()
+    public async Task ProjectAsync_ShouldNotMutateCommittedStateMirror()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
-            dispatcher,
-            new FixedProjectionClock(DateTimeOffset.UtcNow),
-            new StaticDefinitionSnapshotPort(),
+            new StaticUppercaseDefinitionSnapshotPort(),
             new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec());
-        var payload = Any.Pack(new SimpleTextEvent
+            new ProtobufMessageCodec(),
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var readModel = new SimpleTextReadModel
         {
-            CommandId = "command-1",
-            Current = new SimpleTextReadModel
-            {
-                HasValue = true,
-                Value = "HELLO",
-            },
-        });
+            HasValue = true,
+            Value = "HELLO",
+        };
+        var state = ScriptCommittedEnvelopeFactory.CreateState(
+            "definition-1",
+            "script-1",
+            "rev-1",
+            new SimpleTextState { Value = "HELLO" },
+            1,
+            ScriptSources.UppercaseReadModelTypeUrl);
+        var stateClone = state.Clone();
         var fact = new ScriptDomainFactCommitted
         {
             ActorId = "runtime-1",
@@ -44,9 +47,13 @@ public sealed class ScriptReadModelProjectorNeutralityTests
             ScriptId = "script-1",
             Revision = "rev-1",
             RunId = "run-1",
-            EventType = payload.TypeUrl,
-            DomainEventPayload = payload.Clone(),
-            ReadModelTypeUrl = ScriptSources.UppercaseReadModelTypeUrl,
+            EventType = Any.Pack(new SimpleTextEvent()).TypeUrl,
+            DomainEventPayload = Any.Pack(new SimpleTextEvent
+            {
+                CommandId = "command-1",
+                Current = readModel.Clone(),
+            }),
+            ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
             StateVersion = 1,
         };
         var context = new ScriptExecutionProjectionContext
@@ -55,28 +62,24 @@ public sealed class ScriptReadModelProjectorNeutralityTests
             RootActorId = "runtime-1",
         };
 
-        await projector.InitializeAsync(context, CancellationToken.None);
         await projector.ProjectAsync(
             context,
-            new EventEnvelope
-            {
-                Id = "evt-1",
-                Payload = Any.Pack(fact),
-                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                Route = EnvelopeRouteSemantics.CreateTopologyPublication("projection-test", TopologyAudience.Self),
-            },
+            ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
+                fact,
+                state,
+                "evt-1",
+                new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)),
             CancellationToken.None);
 
-        fact.DomainEventPayload.Should().NotBeNull();
-        fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
-
-        var document = await dispatcher.GetAsync("runtime-1", CancellationToken.None);
-        document.Should().NotBeNull();
-        document!.ReadModelPayload.Should().NotBeNull();
-        document.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
+        state.Should().BeEquivalentTo(stateClone);
     }
 
-    private sealed class StaticDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow => now;
+    }
+
+    private sealed class StaticUppercaseDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
     {
         public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
             string definitionActorId,
@@ -92,18 +95,13 @@ public sealed class ScriptReadModelProjectorNeutralityTests
                 SourceText: ScriptSources.UppercaseBehavior,
                 SourceHash: ScriptSources.UppercaseBehaviorHash,
                 ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: ScriptSources.UppercaseStateTypeUrl,
-                ReadModelTypeUrl: ScriptSources.UppercaseReadModelTypeUrl,
-                ReadModelSchemaVersion: "v1",
-                ReadModelSchemaHash: "schema-hash",
+                StateTypeUrl: Any.Pack(new SimpleTextState()).TypeUrl,
+                ReadModelTypeUrl: Any.Pack(new SimpleTextReadModel()).TypeUrl,
+                ReadModelSchemaVersion: string.Empty,
+                ReadModelSchemaHash: string.Empty,
                 ProtocolDescriptorSet: ByteString.Empty,
                 StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
                 ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
         }
-    }
-
-    private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
-    {
-        public DateTimeOffset UtcNow => now;
     }
 }

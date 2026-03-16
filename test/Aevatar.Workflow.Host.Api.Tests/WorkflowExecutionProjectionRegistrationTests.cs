@@ -13,7 +13,6 @@ using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
-using Aevatar.Workflow.Projection.Reducers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -46,12 +45,16 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
+        var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
+        var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionReport>>();
 
+        currentStateStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
+        currentStateDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
@@ -74,11 +77,22 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowExecutionReportDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    public void WorkflowRunInsightReportDocumentMetadataProvider_ShouldExposeExpectedDefaults()
     {
-        var provider = new WorkflowExecutionReportDocumentMetadataProvider();
+        var provider = new WorkflowRunInsightReportDocumentMetadataProvider();
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-reports");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WorkflowExecutionCurrentStateDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    {
+        var provider = new WorkflowExecutionCurrentStateDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("workflow-execution-current-states");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
@@ -99,26 +113,12 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionReducer_ShouldRegisterReducerAsEnumerableSingleton()
+    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterProjectorAsEnumerableSingleton()
     {
         var services = new ServiceCollection();
 
-        services.AddWorkflowExecutionProjectionReducer<TestWorkflowReducer>();
-        services.AddWorkflowExecutionProjectionReducer<TestWorkflowReducer>();
-
-        using var provider = services.BuildServiceProvider();
-        var reducers = provider.GetServices<IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>>().ToList();
-
-        reducers.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowReducer));
-    }
-
-    [Fact]
-    public void AddWorkflowExecutionProjectionProjector_ShouldRegisterProjectorAsEnumerableSingleton()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowExecutionProjectionProjector<TestWorkflowProjector>();
-        services.AddWorkflowExecutionProjectionProjector<TestWorkflowProjector>();
+        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
+        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
 
         using var provider = services.BuildServiceProvider();
         var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>().ToList();
@@ -127,31 +127,41 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void AddWorkflowExecutionProjectionExtensionsFromAssembly_ShouldRegisterReducerAndProjectorFromAssembly()
+    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterWorkflowBridgeProjectorType()
     {
         var services = new ServiceCollection();
 
-        services.AddWorkflowExecutionProjectionExtensionsFromAssembly(typeof(WorkflowExecutionReadModelProjector).Assembly);
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>) &&
-            x.ImplementationType == typeof(StartWorkflowEventReducer));
+        services.AddWorkflowRunInsightBridgeProjector<WorkflowRunInsightBridgeProjector>();
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>) &&
-            x.ImplementationType == typeof(WorkflowExecutionReadModelProjector));
+            x.ImplementationType == typeof(WorkflowRunInsightBridgeProjector));
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
+        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
-            listSortSelector: report => report.CreatedAt,
-            listTakeMax: 200);
+            defaultSortSelector: report => report.CreatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
 
     private static void RegisterElasticsearchDocumentProvider(IServiceCollection services)
     {
+        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
             optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
@@ -211,24 +221,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     {
         public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(true);
-    }
-
-    private sealed class TestWorkflowReducer : IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>
-    {
-        public string EventTypeUrl => "type://tests/workflow-reducer";
-
-        public bool Reduce(
-            WorkflowExecutionReport readModel,
-            WorkflowExecutionProjectionContext context,
-            EventEnvelope envelope,
-            DateTimeOffset now)
-        {
-            _ = readModel;
-            _ = context;
-            _ = envelope;
-            _ = now;
-            return true;
-        }
     }
 
     private sealed class TestWorkflowProjector
