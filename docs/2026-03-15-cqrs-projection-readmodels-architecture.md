@@ -435,7 +435,7 @@ DI 装配：
 
 当前 `scripting native materialization` 已经继续前推到 actor write-side：
 
-- `ScriptBehaviorDispatcher` 在生成 `ScriptDomainFactCommitted` 时，同时写入 durable `native_document` / `native_graph` 子契约。
+- `ScriptBehaviorDispatcher` 在生成 `ScriptDomainFactCommitted` 时，同时写入 durable `native_document` / `native_graph` 子契约，并保证每条 fact 的 readmodel/native payload 对齐该 fact 自己的 post-event `StateVersion`。
 - `ScriptNativeDocumentProjector` 和 `ScriptNativeGraphProjector` 不再解析 behavior artifact，也不再在 projection 中编译 materialization plan。
 - projection 侧只负责把 committed durable native contract 落到 document / graph store。
 

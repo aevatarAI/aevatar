@@ -536,7 +536,7 @@ flowchart LR
     P3["ServiceConfigurationProjectionPort"]
     A1["ContextProjectionActivationService"]
     A2["ContextProjectionReleaseService"]
-    A3["ServiceProjectionDescriptor<TContext>"]
+    A3["typed context factory"]
     C1["ServiceCatalogProjectionContext"]
     C2["ServiceDeploymentCatalogProjectionContext"]
     C3["ServiceConfigurationProjectionContext"]
@@ -725,21 +725,19 @@ sequenceDiagram
 
 问题表现：
 
-- `ServiceProjectionDescriptor<TContext>`
 - `ServiceProjectionRuntimeLease<TContext>`
 - 多个 `Service*ProjectionContext`
 
-已经不再保留旧 `*PortService` / feature-specific activation wrapper，但 service 平台存在多份近似的 `context + descriptor + runtime lease + DI registration` 组合。
+已经不再保留旧 `*PortService` / feature-specific activation wrapper，但 service 平台存在多份近似的 `context + typed factory + runtime lease + DI registration` 组合。
 
 影响：
 
 1. 风格一致性问题已解决。
 2. 剩余复杂度主要体现在 platform 多视图场景下的模板矩阵仍然偏大。
-3. 后续若继续增加 service 视图，context/descriptor/runtime-lease 组合仍会继续增长。
+3. 后续若继续增加 service 视图，context/runtime-lease/DI 组合仍会继续增长。
 
 代表文件：
 
-- `src/platform/Aevatar.GAgentService.Projection/Orchestration/ServiceProjectionDescriptor.cs`
 - `src/platform/Aevatar.GAgentService.Projection/Orchestration/ServiceProjectionRuntimeLease.cs`
 - `src/platform/Aevatar.GAgentService.Projection/Contexts/*`
 - `src/platform/Aevatar.GAgentService.Governance.Projection/Orchestration/ServiceConfigurationProjectionPort.cs`

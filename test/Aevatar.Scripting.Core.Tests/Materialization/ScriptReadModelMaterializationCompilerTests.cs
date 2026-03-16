@@ -316,8 +316,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnEvent<InvalidProfileUpdated>(
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new InvalidProfileState()
-                                : new InvalidProfileState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                                : new InvalidProfileState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new InvalidProfileReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -458,8 +458,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                         .OnEvent<WrapperProfileUpdated>(
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new WrapperProfileState()
-                                : new WrapperProfileState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                                : new WrapperProfileState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new WrapperProfileReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -584,8 +584,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<NoSchemaCommand>(HandleAsync)
                         .OnEvent<NoSchemaUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new NoSchemaState() : new NoSchemaState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new NoSchemaState() : new NoSchemaState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new NoSchemaReadModel());
                 }
 
                 private static Task HandleAsync(NoSchemaCommand command, ScriptCommandContext<NoSchemaState> context, CancellationToken ct)
@@ -696,8 +696,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<ProviderFilteredCommand>(HandleAsync)
                         .OnEvent<ProviderFilteredUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new ProviderFilteredState() : new ProviderFilteredState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new ProviderFilteredState() : new ProviderFilteredState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new ProviderFilteredReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -829,8 +829,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<InvalidRelationCommand>(HandleAsync)
                         .OnEvent<InvalidRelationUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new InvalidRelationState() : new InvalidRelationState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new InvalidRelationState() : new InvalidRelationState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new InvalidRelationReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -953,8 +953,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<RepeatedNestedCommand>(HandleAsync)
                         .OnEvent<RepeatedNestedUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new RepeatedNestedState() : new RepeatedNestedState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new RepeatedNestedState() : new RepeatedNestedState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new RepeatedNestedReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -1082,8 +1082,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<FieldTypesCommand>(HandleAsync)
                         .OnEvent<FieldTypesUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new FieldTypesState() : new FieldTypesState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new FieldTypesState() : new FieldTypesState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new FieldTypesReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -1230,8 +1230,8 @@ public sealed class ScriptReadModelMaterializationCompilerTests
                     builder
                         .OnCommand<UnsupportedFieldTypeCommand>(HandleAsync)
                         .OnEvent<UnsupportedFieldTypeUpdated>(
-                            apply: static (_, evt, _) => evt.Current == null ? new UnsupportedFieldTypeState() : new UnsupportedFieldTypeState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => evt.Current == null ? new UnsupportedFieldTypeState() : new UnsupportedFieldTypeState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (_, _) => new UnsupportedFieldTypeReadModel());
                 }
 
                 private static Task HandleAsync(

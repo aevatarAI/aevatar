@@ -63,13 +63,12 @@ public sealed class ServiceProjectionInfrastructureTests
     {
         var catalogLifecycle = new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>();
         var activation = ProjectionTestFactory.CreateActivationService(
-            new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
-                static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
-                {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
-                    RootActorId = rootActorId,
-                },
-                static context => context.RootActorId),
+            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
+            {
+                ProjectionId = $"{projectionName}:{rootActorId}",
+                RootActorId = rootActorId,
+            },
+            static context => context.RootActorId,
             catalogLifecycle);
         var release = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>, ServiceCatalogProjectionContext, IReadOnlyList<string>>(catalogLifecycle);
 
@@ -85,13 +84,12 @@ public sealed class ServiceProjectionInfrastructureTests
 
         var revisionLifecycle = new RecordingProjectionLifecycle<ServiceRevisionCatalogProjectionContext>();
         var revisionActivation = ProjectionTestFactory.CreateActivationService(
-            new ServiceProjectionDescriptor<ServiceRevisionCatalogProjectionContext>(
-                static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
-                {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
-                    RootActorId = rootActorId,
-                },
-                static context => context.RootActorId),
+            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
+            {
+                ProjectionId = $"{projectionName}:{rootActorId}",
+                RootActorId = rootActorId,
+            },
+            static context => context.RootActorId,
             revisionLifecycle);
         var revisionRelease = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>, ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>(revisionLifecycle);
         var revisionLease = await revisionActivation.EnsureAsync("actor-2", "service-revisions", string.Empty, "cmd-2");
@@ -145,20 +143,24 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public void ProjectionHelpers_ShouldGuardConstructorInputs_AndMapFallbackValues()
     {
-        var descriptorFactory = () => new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
-            null!,
-            static _ => "actor-1");
-        var descriptorSelector = () => new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
+        Func<string, string, ServiceCatalogProjectionContext>? nullFactory = null;
+        Func<ServiceCatalogProjectionContext, string>? nullSelector = null;
+        var activationFactory = () => ProjectionTestFactory.CreateActivationService<ServiceCatalogProjectionContext>(
+            nullFactory!,
+            static context => context.RootActorId,
+            new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>());
+        var activationSelector = () => ProjectionTestFactory.CreateActivationService<ServiceCatalogProjectionContext>(
             static (_, _) => new ServiceCatalogProjectionContext
             {
                 ProjectionId = "projection-1",
                 RootActorId = "actor-1",
             },
-            null!);
+            nullSelector!,
+            new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>());
         var runtimeLease = () => new ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>("actor-1", null!);
 
-        descriptorFactory.Should().Throw<ArgumentNullException>();
-        descriptorSelector.Should().Throw<ArgumentNullException>();
+        activationFactory.Should().Throw<ArgumentNullException>();
+        activationSelector.Should().Throw<ArgumentNullException>();
         runtimeLease.Should().Throw<ArgumentNullException>();
 
         var mappingType = typeof(ServiceCatalogReadModelMetadataProvider).Assembly

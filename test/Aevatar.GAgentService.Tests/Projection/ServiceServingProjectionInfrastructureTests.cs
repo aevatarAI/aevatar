@@ -68,52 +68,48 @@ public sealed class ServiceServingProjectionInfrastructureTests
     {
         var deploymentLifecycle = new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>();
         var deploymentLease = await ProjectionTestFactory.CreateActivationService(
-                new ServiceProjectionDescriptor<ServiceDeploymentCatalogProjectionContext>(
-                    static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
-                    {
-                        ProjectionId = $"{projectionName}:{rootActorId}",
-                        RootActorId = rootActorId,
-                    },
-                    static context => context.RootActorId),
+                static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
+                {
+                    ProjectionId = $"{projectionName}:{rootActorId}",
+                    RootActorId = rootActorId,
+                },
+                static context => context.RootActorId,
                 deploymentLifecycle)
             .EnsureAsync("actor-deploy", "service-deployments", string.Empty, "cmd-deploy");
         await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>, ServiceDeploymentCatalogProjectionContext, IReadOnlyList<string>>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
 
         var servingLifecycle = new RecordingProjectionLifecycle<ServiceServingSetProjectionContext>();
         var servingLease = await ProjectionTestFactory.CreateActivationService(
-                new ServiceProjectionDescriptor<ServiceServingSetProjectionContext>(
-                    static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
-                    {
-                        ProjectionId = $"{projectionName}:{rootActorId}",
-                        RootActorId = rootActorId,
-                    },
-                    static context => context.RootActorId),
+                static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
+                {
+                    ProjectionId = $"{projectionName}:{rootActorId}",
+                    RootActorId = rootActorId,
+                },
+                static context => context.RootActorId,
                 servingLifecycle)
             .EnsureAsync("actor-serving", "service-serving", string.Empty, "cmd-serving");
         await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>, ServiceServingSetProjectionContext, IReadOnlyList<string>>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
 
         var rolloutLifecycle = new RecordingProjectionLifecycle<ServiceRolloutProjectionContext>();
         var rolloutLease = await ProjectionTestFactory.CreateActivationService(
-                new ServiceProjectionDescriptor<ServiceRolloutProjectionContext>(
-                    static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
-                    {
-                        ProjectionId = $"{projectionName}:{rootActorId}",
-                        RootActorId = rootActorId,
-                    },
-                    static context => context.RootActorId),
+                static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
+                {
+                    ProjectionId = $"{projectionName}:{rootActorId}",
+                    RootActorId = rootActorId,
+                },
+                static context => context.RootActorId,
                 rolloutLifecycle)
             .EnsureAsync("actor-rollout", "service-rollouts", string.Empty, "cmd-rollout");
         await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>, ServiceRolloutProjectionContext, IReadOnlyList<string>>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
 
         var trafficLifecycle = new RecordingProjectionLifecycle<ServiceTrafficViewProjectionContext>();
         var trafficLease = await ProjectionTestFactory.CreateActivationService(
-                new ServiceProjectionDescriptor<ServiceTrafficViewProjectionContext>(
-                    static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
-                    {
-                        ProjectionId = $"{projectionName}:{rootActorId}",
-                        RootActorId = rootActorId,
-                    },
-                    static context => context.RootActorId),
+                static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
+                {
+                    ProjectionId = $"{projectionName}:{rootActorId}",
+                    RootActorId = rootActorId,
+                },
+                static context => context.RootActorId,
                 trafficLifecycle)
             .EnsureAsync("actor-traffic", "service-traffic", string.Empty, "cmd-traffic");
         await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>, ServiceTrafficViewProjectionContext, IReadOnlyList<string>>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
@@ -200,10 +196,12 @@ public sealed class ServiceServingProjectionInfrastructureTests
     }
 
     [Fact]
-    public void ServiceProjectionActivationFactory_ShouldValidateDescriptor()
+    public void ServiceProjectionActivationFactory_ShouldValidateContextFactory()
     {
+        Func<string, string, ServiceDeploymentCatalogProjectionContext>? nullFactory = null;
         Action act = () => ProjectionTestFactory.CreateActivationService<ServiceDeploymentCatalogProjectionContext>(
-            null!,
+            nullFactory!,
+            static context => context.RootActorId,
             new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>());
 
         act.Should().Throw<ArgumentNullException>();

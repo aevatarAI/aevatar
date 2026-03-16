@@ -14,8 +14,7 @@ public interface IScriptBehaviorBridge
         IMessage domainEvent,
         ScriptFactContext context);
 
-    IMessage? ProjectReadModel(
+    IMessage? BuildReadModel(
         IMessage? currentState,
-        IMessage domainEvent,
         ScriptFactContext context);
 }

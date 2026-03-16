@@ -9,8 +9,12 @@ import "scripting_runtime_options.proto";
 
 message ScriptProfileState {
   int32 command_count = 1;
-  string last_command_id = 2;
-  string normalized_text = 3;
+  string actor_id = 2;
+  string policy_id = 3;
+  string last_command_id = 4;
+  string input_text = 5;
+  string normalized_text = 6;
+  repeated string tags = 7;
 }
 
 message ScriptProfileSearchIndex {

@@ -87,6 +87,16 @@ if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|Ex
   exit 1
 fi
 
+if rg -n "ProjectReadModel\(" src test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy event-driven scripting readmodel projection is forbidden. Use ProjectState(...) and BuildReadModel(...)."
+  exit 1
+fi
+
+if rg -n "project:\s*static|project:\s*\(" test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy OnEvent(..., project: ...) scripting authoring is forbidden. Register ProjectState(...) explicitly."
+  exit 1
+fi
+
 if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
   echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
   exit 1

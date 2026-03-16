@@ -458,6 +458,47 @@ public sealed class ScriptBehaviorDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldMaterializeEachFactFromItsOwnPostEventState()
+    {
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new SequentialProjectionBehavior())));
+
+        var facts = await dispatcher.DispatchAsync(
+            new ScriptBehaviorDispatchRequest(
+                ActorId: "runtime-sequential",
+                DefinitionActorId: "definition-1",
+                ScriptId: "script-1",
+                Revision: "rev-1",
+                SourceText: "ignored",
+                SourceHash: "hash-1",
+                ScriptPackage: new ScriptPackageSpec(),
+                StateTypeUrl: string.Empty,
+                ReadModelTypeUrl: string.Empty,
+                CurrentStateRoot: null,
+                CurrentStateVersion: 10,
+                Envelope: new EventEnvelope
+                {
+                    Id = "command-sequential",
+                    Payload = Any.Pack(new SimpleTextCommand
+                    {
+                        CommandId = "command-sequential",
+                        Value = "hello",
+                    }),
+                    Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+                },
+                Capabilities: new NoOpCapabilities()),
+            CancellationToken.None);
+
+        facts.Should().HaveCount(2);
+        facts[0].EventSequence.Should().Be(1);
+        facts[0].StateVersion.Should().Be(11);
+        facts[0].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("FIRST");
+        facts[1].EventSequence.Should().Be(2);
+        facts[1].StateVersion.Should().Be(12);
+        facts[1].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("SECOND");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldReturnEmpty_WhenBehaviorReturnsOnlyNullDomainEvents()
     {
         var behavior = new NullEventBehavior();
@@ -769,8 +810,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleAsync(
@@ -812,8 +859,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleAsync(
@@ -846,8 +899,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleSignalAsync(
@@ -882,6 +941,50 @@ public sealed class ScriptBehaviorDispatcherTests
         }
     }
 
+    private sealed class SequentialProjectionBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    {
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
+        {
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => new SimpleTextReadModel
+                {
+                    HasValue = !string.IsNullOrWhiteSpace(state?.Value),
+                    Value = state?.Value ?? string.Empty,
+                });
+        }
+
+        private static Task HandleAsync(
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
+            CancellationToken ct)
+        {
+            _ = inbound;
+            ct.ThrowIfCancellationRequested();
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = context.CommandId,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "FIRST",
+                },
+            });
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = context.CommandId,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "SECOND",
+                },
+            });
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class NullEventBehavior : IScriptBehaviorBridge, IAsyncDisposable
     {
         public bool DisposeAsyncCalled { get; private set; }
@@ -907,10 +1010,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? BuildReadModel(IMessage? currentState, ScriptFactContext context)
         {
             _ = currentState;
-            _ = domainEvent;
             _ = context;
             return null;
         }
@@ -955,10 +1057,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? BuildReadModel(IMessage? currentState, ScriptFactContext context)
         {
             _ = currentState;
-            _ = domainEvent;
             _ = context;
             return null;
         }

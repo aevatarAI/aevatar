@@ -32,8 +32,8 @@ internal static class TextNormalizationProtocolSampleActors
                 builder
                     .OnCommand<TextNormalizationRequested>(HandleRequestedAsync)
                     .OnEvent<TextNormalizationCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static Task HandleRequestedAsync(

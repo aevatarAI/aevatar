@@ -275,7 +275,8 @@ public sealed class ScriptEvolutionInteractionCompletionTests
         left.Equals((object?)equal).Should().BeTrue();
         left.Equals((object?)different).Should().BeFalse();
         left.Equals((object?)null).Should().BeFalse();
-        var equalHashCode = equal!.GetHashCode();
+        equal.Should().NotBeNull();
+        var equalHashCode = equal.GetHashCode();
         var leftHashCode = left.GetHashCode();
         leftHashCode.Should().Be(equalHashCode);
         left.ToString().Should().Contain("proposal-1");

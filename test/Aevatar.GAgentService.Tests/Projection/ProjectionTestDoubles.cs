@@ -20,11 +20,13 @@ internal sealed class FixedProjectionClock : IProjectionClock
 internal static class ProjectionTestFactory
 {
     public static ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>> CreateActivationService<TContext>(
-        ServiceProjectionDescriptor<TContext> descriptor,
+        Func<string, string, TContext> contextFactory,
+        Func<TContext, string> rootActorIdSelector,
         IProjectionLifecycleService<TContext, IReadOnlyList<string>> lifecycle)
         where TContext : class, IProjectionContext
     {
-        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(contextFactory);
+        ArgumentNullException.ThrowIfNull(rootActorIdSelector);
         ArgumentNullException.ThrowIfNull(lifecycle);
 
         return new ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>(
@@ -34,9 +36,9 @@ internal static class ProjectionTestFactory
                 _ = input;
                 _ = commandId;
                 _ = ct;
-                return descriptor.CreateContext(rootActorId, projectionName);
+                return contextFactory(rootActorId, projectionName);
             },
-            context => new ServiceProjectionRuntimeLease<TContext>(descriptor.GetRootActorId(context), context));
+            context => new ServiceProjectionRuntimeLease<TContext>(rootActorIdSelector(context), context));
     }
 }
 

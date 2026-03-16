@@ -32,7 +32,7 @@
 1. `ServiceConfigurationGAgent` 取代了三套治理长期 actor。
 2. `ServiceConfigurationReadModel` 成为唯一治理读侧。
 3. `IServiceLifecycleQueryPort / IServiceServingQueryPort` 取代了膨胀的 `IServiceQueryPort`。
-4. `ServiceProjectionDescriptor + ContextProjectionActivationService + dedicated projection ports` 取代了 Phase 3 一视图一套投影运行时外壳。
+4. `typed context factory + ContextProjectionActivationService + dedicated projection ports` 取代了 Phase 3 一视图一套投影运行时外壳。
 5. 旧治理事实的升级导入路径已经补齐。
 
 ## 3. 问题定义

@@ -148,6 +148,7 @@ flowchart LR
 
 1. current-state 主查询路径已经收口为 `actor -> committed fact -> readmodel`。
 2. `ScriptBehaviorDispatcher` 在 write-side 基于 behavior artifact + schema plan 生成 durable `native_document/native_graph` 子契约。
+3. 每条 `ScriptDomainFactCommitted` 的 semantic/native payload 都与该条 fact 自身的 post-event state/version 对齐，不再允许“中间版本 fact 复用最终状态”的错位。
 3. `ScriptNativeDocumentProjector` 与 `ScriptNativeGraphProjector` 只消费 committed fact，不再解析 behavior artifact，也不再在 projection 中编译 materialization plan。
 
 ### 目标
@@ -161,7 +162,7 @@ flowchart LR
 
 | 文件 | 动作 | 目标 |
 |---|---|---|
-| `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `已完成主体` | 当前态 query contract 已从 production path 移除，仅保留写侧 dispatch/apply/project |
+| `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `已完成主体` | 当前态 query contract 已从 production path 移除，仅保留写侧 dispatch/apply/build-readmodel |
 | `src/Aevatar.Scripting.Application/Runtime/ScriptBehaviorDispatcher.cs` | `已完成` | write-side 同时产出 semantic readmodel 与 native durable projection contract |
 | `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后发布由 write-side 已准备好的 durable readmodel contract |
 | `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | `已完成` | 直接物化 actor 已给出的 readmodel contract |
