@@ -58,6 +58,11 @@ public sealed class AIGenerationAppService : IAIGenerationAppService
 
             return new AffirmationResult(text.Trim());
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Affirmation generation canceled");
+            return new AffirmationResult(_fallbackContent.GetAffirmationFallback());
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Affirmation generation failed, using fallback");

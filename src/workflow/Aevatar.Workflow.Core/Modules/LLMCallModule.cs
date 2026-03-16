@@ -15,6 +15,7 @@ using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using System.Linq;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -76,6 +77,9 @@ public sealed class LLMCallModule : IEventModule
                 ctx.Logger.LogInformation(
                     "LLMCallModule: step={StepId} → SendTo role={Role} actor={ActorId} prompt=({Len} chars) {Preview}",
                     request.StepId, targetRole, targetActorId, prompt.Length, promptPreview);
+                ctx.Logger.LogInformation(
+                    "LLMCallModule: dispatch meta step={StepId} run={RunId} attempt={Attempt} session={SessionId} target={ActorId} pendingCount={PendingCount}",
+                    request.StepId, runId, attempt, chatSessionId, targetActorId, _pending.Count);
 
                 var chatEvt = new ChatRequestEvent { Prompt = prompt, SessionId = chatSessionId };
                 await ctx.SendToAsync(targetActorId, chatEvt, ct);
@@ -86,6 +90,9 @@ public sealed class LLMCallModule : IEventModule
                 ctx.Logger.LogInformation(
                     "LLMCallModule: step={StepId} → Self (no role) prompt=({Len} chars) {Preview}",
                     request.StepId, prompt.Length, promptPreview);
+                ctx.Logger.LogInformation(
+                    "LLMCallModule: dispatch meta step={StepId} run={RunId} attempt={Attempt} session={SessionId} target={ActorId} pendingCount={PendingCount}",
+                    request.StepId, runId, attempt, chatSessionId, ctx.AgentId, _pending.Count);
 
                 await ctx.PublishAsync(new ChatRequestEvent
                 {
@@ -100,8 +107,26 @@ public sealed class LLMCallModule : IEventModule
         {
             var evt = payload.Unpack<TextMessageEndEvent>();
             var sessionId = evt.SessionId;
-            if (string.IsNullOrEmpty(sessionId)) return;
-            if (!_pending.TryGetValue(sessionId, out var pending)) return;
+            ctx.Logger.LogInformation(
+                "LLMCallModule: text_end received session={SessionId} publisher={PublisherId} pendingCount={PendingCount}",
+                sessionId ?? string.Empty, envelope.PublisherId, _pending.Count);
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: text_end missing session_id publisher={PublisherId}",
+                    envelope.PublisherId);
+                return;
+            }
+
+            if (!_pending.TryGetValue(sessionId, out var pending))
+            {
+                var samplePendingSessions = string.Join(", ", _pending.Keys.Take(3));
+                ctx.Logger.LogWarning(
+                    "LLMCallModule: pending miss session={SessionId} publisher={PublisherId} pendingCount={PendingCount} samplePendingSessions={PendingSessions}",
+                    sessionId, envelope.PublisherId, _pending.Count, samplePendingSessions);
+                return;
+            }
+
             _pending.Remove(sessionId);
             var pendingRunId = WorkflowRunIdNormalizer.Normalize(pending.RunId);
             _attemptsByRunStep.Remove($"{pendingRunId}:{pending.StepId}");
@@ -110,6 +135,9 @@ public sealed class LLMCallModule : IEventModule
             ctx.Logger.LogInformation(
                 "LLMCallModule: step={StepId} completed ({Len} chars): {Preview}",
                 pending.StepId, evt.Content?.Length ?? 0, outputPreview);
+            ctx.Logger.LogInformation(
+                "LLMCallModule: completion meta step={StepId} run={RunId} session={SessionId} worker={WorkerId}",
+                pending.StepId, pendingRunId, sessionId, envelope.PublisherId);
 
             await ctx.PublishAsync(new StepCompletedEvent
             {

@@ -87,6 +87,12 @@ public class WorkflowGAgent : GAgentBase<WorkflowState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         RebuildCompiledWorkflowCache();
+        Logger.LogInformation(
+            "WorkflowGAgent activated actor={ActorId} workflow={WorkflowName} version={Version} compiled={Compiled}",
+            Id,
+            State.WorkflowName,
+            State.Version,
+            State.Compiled);
 
         InstallCognitiveModules();
         await base.OnActivateAsync(ct);
