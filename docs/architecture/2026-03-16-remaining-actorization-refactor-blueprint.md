@@ -44,7 +44,7 @@
 
 | 编号 | 问题 | 当前表现 | 影响 |
 |---|---|---|---|
-| R1 | `scripting` 未彻底 actor 化 | projection/query 仍会加载 behavior artifact 并执行业务逻辑 | 业务语义分散在 actor/projection/query 三处 |
+| R1 | `scripting` actor 化收口 | current-state、native document、native graph 已全部改为消费 actor committed durable fact | 该项主债已消除，剩余仅为文档同步 |
 | R2 | reducer-era core 已退出主链 | 生产代码已移除 reducer 契约与注册，剩余仅为 README/活文档清理 | 新人仍可能被旧文档误导 |
 | R3 | workflow report/export 外围层仍带历史命名 | `WorkflowRunInsightReportDocument` 仍承担 report/export 载体，外围 adapter 还未统一收口 | 报告链与主查询链的边界仍可继续收紧 |
 | R4 | export adapter 已收口为独立导出层 | `IWorkflowRunReportExportPort` / `WorkflowRunReportExportWriter` 已与主查询链分离 | 该项主债已基本消除，剩余仅为零散旧文档 |
@@ -132,7 +132,7 @@ flowchart LR
 
 ## 6.1 WP1: Scripting 彻底 actor 化
 
-> 2026-03-16 进度：已完成。`ScriptReadModelProjector`、native document/graph projector 已切到 write-side committed payload；`ScriptReadModelQueryReader` 已收口为 snapshot/document 读取；`OnQuery<TQuery, TResult>`、`ExecuteQueryAsync(...)`、`QueryTypeUrls`、`QueryResultTypeUrls` 等 declared-query 生产契约已从 scripting 主链删除；`IScriptBehaviorRuntimeCapabilities.GetReadModelSnapshotAsync(...)` 这类 runtime readmodel 侧读能力也已移除。
+> 2026-03-16 进度：已完成。`ScriptReadModelProjector`、native document/graph projector 已切到 actor write-side 产出的 durable committed fact；`ScriptReadModelQueryReader` 已收口为 snapshot/document 读取；`OnQuery<TQuery, TResult>`、`ExecuteQueryAsync(...)`、`QueryTypeUrls`、`QueryResultTypeUrls` 等 declared-query 生产契约已从 scripting 主链删除；`IScriptBehaviorRuntimeCapabilities.GetReadModelSnapshotAsync(...)` 这类 runtime readmodel 侧读能力也已移除。
 
 ### 现状
 
@@ -144,11 +144,11 @@ flowchart LR
 - `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs`
 - `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs`
 
-问题本质：
+当前这条主债已经收口完成：
 
 1. current-state 主查询路径已经收口为 `actor -> committed fact -> readmodel`。
-2. native document / graph 物化仍会解析 behavior artifact，以生成 provider-specific materialization plan。
-3. 当前剩余问题主要是“native materialization 是否还应继续依赖 behavior artifact”，而不是 query path 补算。
+2. `ScriptBehaviorDispatcher` 在 write-side 基于 behavior artifact + schema plan 生成 durable `native_document/native_graph` 子契约。
+3. `ScriptNativeDocumentProjector` 与 `ScriptNativeGraphProjector` 只消费 committed fact，不再解析 behavior artifact，也不再在 projection 中编译 materialization plan。
 
 ### 目标
 
@@ -162,20 +162,22 @@ flowchart LR
 | 文件 | 动作 | 目标 |
 |---|---|---|
 | `src/Aevatar.Scripting.Abstractions/Behaviors/IScriptBehaviorBridge.cs` | `已完成主体` | 当前态 query contract 已从 production path 移除，仅保留写侧 dispatch/apply/project |
-| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后输出 durable readmodel contract |
+| `src/Aevatar.Scripting.Application/Runtime/ScriptBehaviorDispatcher.cs` | `已完成` | write-side 同时产出 semantic readmodel 与 native durable projection contract |
+| `src/Aevatar.Scripting.Core/ScriptBehaviorGAgent.cs` | `已完成主体` | committed 后发布由 write-side 已准备好的 durable readmodel contract |
 | `src/Aevatar.Scripting.Projection/Projectors/ScriptReadModelProjector.cs` | `已完成` | 直接物化 actor 已给出的 readmodel contract |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `待继续收口` | 评估是否还能继续降低对 behavior artifact 的依赖 |
-| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `待继续收口` | 同上 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs` | `已完成` | 只消费 `ScriptDomainFactCommitted.native_document` 并落库 |
+| `src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs` | `已完成` | 只消费 `ScriptDomainFactCommitted.native_graph` 并落库 |
 | `src/Aevatar.Scripting.Projection/Queries/ScriptReadModelQueryReader.cs` | `已完成` | 只读 readmodel，不再解释业务语义 |
 | `src/Aevatar.Scripting.Core/Ports/IScriptDefinitionSnapshotPort.cs` | `已收紧` | 当前态 query/projector 常规依赖已移除 |
 
 ### 验收标准
 
 1. `ScriptReadModelProjector` 不再注入 `IScriptDefinitionSnapshotPort`。
-2. `ScriptReadModelProjector` 不再注入 `IScriptBehaviorArtifactResolver`。
-3. `ScriptReadModelQueryReader` 不再执行 `behavior.ExecuteQueryAsync(...)`。
-4. scripting current-state 路径只依赖 committed observation 中已有的 durable 数据。
-5. production path 中不存在 `OnQuery<TQuery, TResult>`、`QueryTypeUrls`、`QueryResultTypeUrls`。
+2. `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 不再注入 `IScriptBehaviorArtifactResolver`。
+3. `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 不再注入 `IScriptReadModelMaterializationCompiler`。
+4. `ScriptReadModelQueryReader` 不再执行 `behavior.ExecuteQueryAsync(...)`。
+5. scripting current-state 路径只依赖 committed observation 中已有的 durable 数据。
+6. production path 中不存在 `OnQuery<TQuery, TResult>`、`QueryTypeUrls`、`QueryResultTypeUrls`。
 
 ## 6.2 WP2: Projection Core 去 reducer 化
 

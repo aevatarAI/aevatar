@@ -185,7 +185,7 @@ public class WorkflowExecutionProjectionServiceTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_ShouldNotCreateReportArtifactWithoutCommittedEvents()
+    public async Task AttachLiveSinkAsync_ShouldNotCreateRunReportDocumentWithoutCommittedEvents()
     {
         var initialStartedAt = new DateTimeOffset(2026, 2, 19, 0, 0, 0, TimeSpan.Zero);
         var clock = new MutableProjectionClock(initialStartedAt);
