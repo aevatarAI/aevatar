@@ -16,6 +16,7 @@
     <File Path="docs\PROJECT_SPLIT_STRATEGY.md" />
     <File Path="docs\STREAM_FORWARD_ARCHITECTURE.md" />
   </Folder>
+  <Folder Name="/docs/00-overview/" />
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
     <File Path="Directory.Build.props" />
@@ -118,5 +119,6 @@
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
     <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
+    <Project Path="tools\Aevatar.Tools.CodeMetrics\Aevatar.Tools.CodeMetrics.csproj" />
   </Folder>
 </Solution>

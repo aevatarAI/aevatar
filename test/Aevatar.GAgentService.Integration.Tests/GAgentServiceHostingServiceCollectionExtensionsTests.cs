@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -13,6 +15,8 @@ using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
@@ -49,6 +53,30 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WhenWorkflowAndScriptingAlreadyRegistered_ShouldReuseExistingRegistrations()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddScriptCapability(configuration);
+        services.AddWorkflowCapability(configuration);
+
+        var scriptRegistrationsBefore = services.Count(x => x.ServiceType == typeof(IScriptEvolutionProposalPort));
+        var workflowRegistrationsBefore = services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort));
+
+        services.AddGAgentServiceCapability(configuration);
+
+        services.Count(x => x.ServiceType == typeof(IScriptEvolutionProposalPort))
+            .Should()
+            .Be(scriptRegistrationsBefore);
+        services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort))
+            .Should()
+            .Be(workflowRegistrationsBefore);
     }
 
     [Fact]
