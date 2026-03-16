@@ -6,7 +6,6 @@ using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
@@ -26,16 +25,14 @@ public sealed class ScriptNativeGraphProjectorTests
         IProjectionGraphMaterializer<ScriptNativeGraphReadModel> graphMaterializer = new ScriptNativeGraphMaterializer();
         var projector = new ScriptNativeGraphProjector(
             dispatcher,
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeGraphMaterializer(),
-            new ProtobufMessageCodec());
+            new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionProjectionContext
         {
             ProjectionId = "claim-runtime:native-graph",
             RootActorId = "claim-runtime",
         };
         var readModel = BuildClaimReadModel();
+        var nativeGraphProjection = BuildNativeGraphProjection(readModel);
 
         await projector.ProjectAsync(
             context,
@@ -53,6 +50,7 @@ public sealed class ScriptNativeGraphProjectorTests
                     ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 3,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+                    NativeGraph = nativeGraphProjection.Clone(),
                 },
                 ScriptCommittedEnvelopeFactory.CreateState(
                     "definition-1",
@@ -115,6 +113,28 @@ public sealed class ScriptNativeGraphProjectorTests
                 OwnerActorId = "claim-runtime",
             },
         };
+    }
+
+    private static ScriptNativeGraphProjection BuildNativeGraphProjection(ClaimReadModel readModel)
+    {
+        var artifactResolver = new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()));
+        var artifact = artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
+            "claim_orchestrator",
+            "rev-claim-1",
+            ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+            ClaimScriptSources.DecisionBehaviorHash));
+        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+            artifact,
+            "claim-schema",
+            "3");
+        return new ScriptNativeProjectionBuilder()
+            .BuildGraph(
+                "claim-runtime",
+                "claim_orchestrator",
+                "definition-1",
+                "rev-claim-1",
+                readModel,
+                plan)!;
     }
 
     private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact, ScriptBehaviorState state) =>

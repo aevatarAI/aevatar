@@ -28,9 +28,9 @@ public sealed class WorkflowExecutionProjectionOptions
     }
 
     /// <summary>
-    /// Writes run report artifacts (json/html).
+    /// Writes run report documents/export outputs (json/html).
     /// </summary>
-    public bool EnableRunReportArtifacts { get; set; } = true;
+    public bool EnableRunReportDocuments { get; set; } = true;
 
     /// <summary>
     /// Max wait time for one run projection completion signal.

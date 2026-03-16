@@ -4,10 +4,10 @@ namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ProjectionScriptAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
 {
-    private readonly ScriptAuthorityProjectionPortService _projectionPort;
+    private readonly ScriptAuthorityProjectionPort _projectionPort;
 
     public ProjectionScriptAuthorityReadModelActivationPort(
-        ScriptAuthorityProjectionPortService projectionPort)
+        ScriptAuthorityProjectionPort projectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }

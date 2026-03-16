@@ -137,7 +137,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 CurrentStateRoot: State.StateRoot?.Clone(),
                 CurrentStateVersion: State.LastAppliedEventVersion,
                 Envelope: envelope,
-                Capabilities: capabilities),
+                Capabilities: capabilities)
+            {
+                ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
+                ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+            },
             ct);
 
         if (facts.Count == 0)

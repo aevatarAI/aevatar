@@ -87,6 +87,11 @@ if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|Ex
   exit 1
 fi
 
+if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
+  echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
+  exit 1
+fi
+
 if rg -n "IProjectionEventReducer|AddAIDefaultProjectionLayer|AddAllAIProjectionEventReducers|EnableWorkflowAIProjection" src; then
   echo "Reducer-era projection abstractions and workflow AI projection toggles are forbidden on the production path."
   exit 1

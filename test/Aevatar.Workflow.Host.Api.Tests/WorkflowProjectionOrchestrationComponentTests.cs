@@ -63,7 +63,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task ActivationService_ShouldNotWriteReportArtifactDuringStartup()
+    public async Task ActivationService_ShouldNotWriteRunReportDocumentDuringStartup()
     {
         var lifecycle = new RecordingLifecycleService();
         var ownership = new TrackingOwnershipCoordinator();

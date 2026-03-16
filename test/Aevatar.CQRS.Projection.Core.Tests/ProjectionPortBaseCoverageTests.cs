@@ -3,85 +3,7 @@ using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
-public class ProjectionQueryPortServiceBaseTests
-{
-    [Fact]
-    public void Constructor_ShouldThrow_WhenQueryEnabledAccessorIsNull()
-    {
-        Action act = () => _ = new TestProjectionQueryPortService(null!);
-
-        act.Should().Throw<ArgumentNullException>()
-            .WithParameterName("queryEnabledAccessor");
-    }
-
-    [Fact]
-    public async Task QueryMethods_ShouldShortCircuit_WhenQueryIsDisabled()
-    {
-        var service = new TestProjectionQueryPortService(() => false);
-
-        var snapshot = await service.GetSnapshotPublicAsync("actor-1", CancellationToken.None);
-        var snapshots = await service.ListSnapshotsPublicAsync(50, CancellationToken.None);
-        var timeline = await service.ListTimelinePublicAsync("actor-1", 50, CancellationToken.None);
-        var edges = await service.GetGraphEdgesPublicAsync("actor-1", 50, CancellationToken.None);
-        var subgraph = await service.GetGraphSubgraphPublicAsync("actor-1", 2, 50, CancellationToken.None);
-
-        snapshot.Should().BeNull();
-        snapshots.Should().BeEmpty();
-        timeline.Should().BeEmpty();
-        edges.Should().BeEmpty();
-        subgraph.Should().BeEquivalentTo(new TestGraphSubgraph("actor-1", true));
-        service.ReadSnapshotCalls.Should().Be(0);
-        service.ReadSnapshotsCalls.Should().Be(0);
-        service.ReadTimelineCalls.Should().Be(0);
-        service.ReadGraphEdgesCalls.Should().Be(0);
-        service.ReadGraphSubgraphCalls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task EntityScopedMethods_ShouldShortCircuit_WhenEntityIdIsBlank()
-    {
-        var service = new TestProjectionQueryPortService(() => true);
-
-        var snapshot = await service.GetSnapshotPublicAsync("   ", CancellationToken.None);
-        var timeline = await service.ListTimelinePublicAsync(" ", 20, CancellationToken.None);
-        var edges = await service.GetGraphEdgesPublicAsync("\t", 20, CancellationToken.None);
-        var subgraph = await service.GetGraphSubgraphPublicAsync(" ", 3, 20, CancellationToken.None);
-
-        snapshot.Should().BeNull();
-        timeline.Should().BeEmpty();
-        edges.Should().BeEmpty();
-        subgraph.Should().BeEquivalentTo(new TestGraphSubgraph(" ", true));
-        service.ReadSnapshotCalls.Should().Be(0);
-        service.ReadTimelineCalls.Should().Be(0);
-        service.ReadGraphEdgesCalls.Should().Be(0);
-        service.ReadGraphSubgraphCalls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task QueryMethods_ShouldDispatchToCore_WhenEnabledAndInputsAreValid()
-    {
-        var service = new TestProjectionQueryPortService(() => true);
-
-        var snapshot = await service.GetSnapshotPublicAsync("actor-1", CancellationToken.None);
-        var snapshots = await service.ListSnapshotsPublicAsync(10, CancellationToken.None);
-        var timeline = await service.ListTimelinePublicAsync("actor-1", 10, CancellationToken.None);
-        var edges = await service.GetGraphEdgesPublicAsync("actor-1", 10, CancellationToken.None);
-        var subgraph = await service.GetGraphSubgraphPublicAsync("actor-1", 2, 10, CancellationToken.None);
-
-        snapshot.Should().Be("snapshot:actor-1");
-        snapshots.Should().Equal("snapshot-a", "snapshot-b");
-        timeline.Should().Equal("timeline-a");
-        edges.Should().Equal("edge-a");
-        subgraph.Should().BeEquivalentTo(new TestGraphSubgraph("actor-1", false));
-        service.ReadSnapshotCalls.Should().Be(1);
-        service.ReadSnapshotsCalls.Should().Be(1);
-        service.ReadTimelineCalls.Should().Be(1);
-        service.ReadGraphEdgesCalls.Should().Be(1);
-        service.ReadGraphSubgraphCalls.Should().Be(1);
-    }
-}
-
-public class ProjectionLifecyclePortServiceBaseTests
+public class ProjectionLifecyclePortBaseTests
 {
     [Fact]
     public void Constructor_ShouldThrow_WhenDependenciesAreNull()
@@ -91,31 +13,31 @@ public class ProjectionLifecyclePortServiceBaseTests
         var sinkManager = new TestSinkSubscriptionManager();
         var forwarder = new TestLiveSinkForwarder();
 
-        Action noEnabledAccessor = () => _ = new TestProjectionLifecyclePortService(
+        Action noEnabledAccessor = () => _ = new TestProjectionLifecyclePort(
             null!,
             activation,
             release,
             sinkManager,
             forwarder);
-        Action noActivation = () => _ = new TestProjectionLifecyclePortService(
+        Action noActivation = () => _ = new TestProjectionLifecyclePort(
             () => true,
             null!,
             release,
             sinkManager,
             forwarder);
-        Action noRelease = () => _ = new TestProjectionLifecyclePortService(
+        Action noRelease = () => _ = new TestProjectionLifecyclePort(
             () => true,
             activation,
             null!,
             sinkManager,
             forwarder);
-        Action noSinkManager = () => _ = new TestProjectionLifecyclePortService(
+        Action noSinkManager = () => _ = new TestProjectionLifecyclePort(
             () => true,
             activation,
             release,
             null!,
             forwarder);
-        Action noForwarder = () => _ = new TestProjectionLifecyclePortService(
+        Action noForwarder = () => _ = new TestProjectionLifecyclePort(
             () => true,
             activation,
             release,
@@ -293,7 +215,7 @@ public class ProjectionLifecyclePortServiceBaseTests
         var release = new TestReleaseService();
         var sinkManager = new TestSinkSubscriptionManager();
         var forwarder = new TestLiveSinkForwarder();
-        var service = new TestProjectionLifecyclePortService(
+        var service = new TestProjectionLifecyclePort(
             () => enabled,
             activation,
             release,
@@ -303,99 +225,17 @@ public class ProjectionLifecyclePortServiceBaseTests
     }
 
     private sealed record LifecycleFixture(
-        TestProjectionLifecyclePortService Service,
+        TestProjectionLifecyclePort Service,
         TestActivationService Activation,
         TestReleaseService Release,
         TestSinkSubscriptionManager SinkManager,
         TestLiveSinkForwarder Forwarder);
 }
 
-internal sealed class TestProjectionQueryPortService
-    : ProjectionQueryPortServiceBase<string, string, string, TestGraphSubgraph>
+internal sealed class TestProjectionLifecyclePort
+    : ProjectionLifecyclePortBase<TestLeaseContract, TestRuntimeLease, string, string>
 {
-    public TestProjectionQueryPortService(Func<bool> queryEnabledAccessor)
-        : base(queryEnabledAccessor)
-    {
-    }
-
-    public int ReadSnapshotCalls { get; private set; }
-    public int ReadSnapshotsCalls { get; private set; }
-    public int ReadTimelineCalls { get; private set; }
-    public int ReadGraphEdgesCalls { get; private set; }
-    public int ReadGraphSubgraphCalls { get; private set; }
-
-    public Task<string?> GetSnapshotPublicAsync(string entityId, CancellationToken ct = default) =>
-        GetSnapshotAsync(entityId, ct);
-
-    public Task<IReadOnlyList<string>> ListSnapshotsPublicAsync(int take = 200, CancellationToken ct = default) =>
-        ListSnapshotsAsync(take, ct);
-
-    public Task<IReadOnlyList<string>> ListTimelinePublicAsync(
-        string entityId,
-        int take = 200,
-        CancellationToken ct = default) => ListTimelineAsync(entityId, take, ct);
-
-    public Task<IReadOnlyList<string>> GetGraphEdgesPublicAsync(
-        string entityId,
-        int take = 200,
-        CancellationToken ct = default) => GetGraphEdgesAsync(entityId, take, ct);
-
-    public Task<TestGraphSubgraph> GetGraphSubgraphPublicAsync(
-        string entityId,
-        int depth = 2,
-        int take = 200,
-        CancellationToken ct = default) => GetGraphSubgraphAsync(entityId, depth, take, ct);
-
-    protected override Task<string?> ReadSnapshotCoreAsync(string entityId, CancellationToken ct)
-    {
-        ReadSnapshotCalls++;
-        return Task.FromResult<string?>($"snapshot:{entityId}");
-    }
-
-    protected override Task<IReadOnlyList<string>> ReadSnapshotsCoreAsync(int take, CancellationToken ct)
-    {
-        ReadSnapshotsCalls++;
-        return Task.FromResult<IReadOnlyList<string>>(["snapshot-a", "snapshot-b"]);
-    }
-
-    protected override Task<IReadOnlyList<string>> ReadTimelineCoreAsync(
-        string entityId,
-        int take,
-        CancellationToken ct)
-    {
-        ReadTimelineCalls++;
-        return Task.FromResult<IReadOnlyList<string>>(["timeline-a"]);
-    }
-
-    protected override Task<IReadOnlyList<string>> ReadGraphEdgesCoreAsync(
-        string entityId,
-        int take,
-        CancellationToken ct)
-    {
-        ReadGraphEdgesCalls++;
-        return Task.FromResult<IReadOnlyList<string>>(["edge-a"]);
-    }
-
-    protected override Task<TestGraphSubgraph> ReadGraphSubgraphCoreAsync(
-        string entityId,
-        int depth,
-        int take,
-        CancellationToken ct)
-    {
-        ReadGraphSubgraphCalls++;
-        return Task.FromResult(new TestGraphSubgraph(entityId, false));
-    }
-
-    protected override TestGraphSubgraph CreateEmptyGraphSubgraph(string entityId) =>
-        new(entityId, true);
-}
-
-internal sealed record TestGraphSubgraph(string EntityId, bool IsEmpty);
-
-internal sealed class TestProjectionLifecyclePortService
-    : ProjectionLifecyclePortServiceBase<TestLeaseContract, TestRuntimeLease, string, string>
-{
-    public TestProjectionLifecyclePortService(
+    public TestProjectionLifecyclePort(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TestRuntimeLease> activationService,
         IProjectionPortReleaseService<TestRuntimeLease> releaseService,

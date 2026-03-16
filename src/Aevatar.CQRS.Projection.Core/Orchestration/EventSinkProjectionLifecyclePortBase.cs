@@ -5,13 +5,13 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Event-sink specialized lifecycle port base with runtime lease resolution hook.
 /// </summary>
-public abstract class EventSinkProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, TEvent>
-    : ProjectionLifecyclePortServiceBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>,
+public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
+    : ProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, IEventSink<TEvent>, TEvent>,
       IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
     where TLeaseContract : class
     where TRuntimeLease : class, TLeaseContract
 {
-    protected EventSinkProjectionLifecyclePortServiceBase(
+    protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionPortActivationService<TRuntimeLease> activationService,
         IProjectionPortReleaseService<TRuntimeLease> releaseService,

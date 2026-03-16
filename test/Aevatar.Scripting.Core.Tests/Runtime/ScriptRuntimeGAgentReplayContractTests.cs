@@ -5,6 +5,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -130,7 +131,11 @@ public class ScriptBehaviorGAgentReplayContractTests
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var artifactResolver = new CachedScriptBehaviorArtifactResolver(compiler);
         var codec = new ProtobufMessageCodec();
-        var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(artifactResolver, codec);
+        var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(
+            artifactResolver,
+            new ScriptReadModelMaterializationCompiler(),
+            new ScriptNativeProjectionBuilder(),
+            codec);
         var publisher = new RecordingEventPublisher();
         var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, codec)
         {

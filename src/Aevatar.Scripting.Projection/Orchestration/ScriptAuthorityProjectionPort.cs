@@ -4,12 +4,12 @@ using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
-public sealed class ScriptAuthorityProjectionPortService
-    : EventSinkProjectionLifecyclePortServiceBase<IProjectionPortSessionLease, ScriptAuthorityRuntimeLease, EventEnvelope>
+public sealed class ScriptAuthorityProjectionPort
+    : EventSinkProjectionLifecyclePortBase<IProjectionPortSessionLease, ScriptAuthorityRuntimeLease, EventEnvelope>
 {
     private const string ProjectionName = "script-authority-read-model";
 
-    public ScriptAuthorityProjectionPortService(
+    public ScriptAuthorityProjectionPort(
         IProjectionPortActivationService<ScriptAuthorityRuntimeLease> activationService,
         IProjectionPortReleaseService<ScriptAuthorityRuntimeLease> releaseService,
         IEventSinkProjectionSubscriptionManager<ScriptAuthorityRuntimeLease, EventEnvelope> sinkSubscriptionManager,
