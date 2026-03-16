@@ -82,6 +82,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowProjectionControlEvent>, WorkflowProjectionControlEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>, ProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
+        services.TryAddSingleton<IProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>, ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>>();
+        services.TryAddSingleton<IProjectionDispatcher<WorkflowRunInsightProjectionContext>, ProjectionDispatcher<WorkflowRunInsightProjectionContext, bool>>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>, ProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>>();
+        services.TryAddSingleton<IProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>, ProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>>();
         services.TryAddSingleton<IProjectionPortActivationService<WorkflowExecutionRuntimeLease>>(sp =>
         {
             var lifecycle = sp.GetRequiredService<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();

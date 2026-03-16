@@ -46,8 +46,8 @@ public sealed class WorkflowRunInsightBridgeProjector
 
     public async ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        if (!CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) ||
-            observed?.Payload == null)
+        var observed = ResolveObservedEnvelope(envelope);
+        if (observed?.Payload == null)
             return;
 
         if (!string.IsNullOrWhiteSpace(observed.Id))
@@ -127,6 +127,17 @@ public sealed class WorkflowRunInsightBridgeProjector
                || payload.Is(TextMessageReasoningEvent.Descriptor)
                || payload.Is(ToolCallEvent.Descriptor)
                || payload.Is(ToolResultEvent.Descriptor);
+    }
+
+    private static EventEnvelope? ResolveObservedEnvelope(EventEnvelope envelope)
+    {
+        if (CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) &&
+            observed?.Payload != null)
+        {
+            return observed;
+        }
+
+        return envelope.Payload == null ? null : envelope;
     }
 
     private static string ResolvePublisher(EventEnvelope envelope) =>

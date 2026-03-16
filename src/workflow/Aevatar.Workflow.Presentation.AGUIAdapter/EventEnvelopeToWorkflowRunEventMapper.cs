@@ -29,22 +29,31 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
 
     public IReadOnlyList<WorkflowRunEventEnvelope> Map(EventEnvelope envelope)
     {
-        if (!CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) ||
-            observed?.Payload == null)
-        {
+        var mappedEnvelope = ResolveMappedEnvelope(envelope);
+        if (mappedEnvelope?.Payload == null)
             return [];
-        }
 
         var output = new List<WorkflowRunEventEnvelope>();
         foreach (var handler in _handlers)
         {
-            if (!handler.TryMap(observed, out var mapped) || mapped.Count == 0)
+            if (!handler.TryMap(mappedEnvelope, out var mapped) || mapped.Count == 0)
                 continue;
 
             output.AddRange(mapped);
         }
 
         return output;
+    }
+
+    private static EventEnvelope? ResolveMappedEnvelope(EventEnvelope envelope)
+    {
+        if (CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) &&
+            observed?.Payload != null)
+        {
+            return observed;
+        }
+
+        return envelope.Payload == null ? null : envelope;
     }
 }
 
