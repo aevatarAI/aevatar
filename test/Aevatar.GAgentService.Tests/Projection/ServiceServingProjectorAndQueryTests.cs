@@ -80,7 +80,7 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task ServingSetProjectorAndQueryReader_ShouldProjectAndSortTargets()
     {
         var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id);
-        var projector = new ServiceServingSetProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var reader = new ServiceServingSetQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceServingSetProjectionContext
@@ -118,7 +118,7 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task ServingSetProjector_ShouldRespectCancellation_AndReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id);
-        var projector = new ServiceServingSetProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceServingSetQueryReader(store);
         var context = new ServiceServingSetProjectionContext
         {
@@ -323,7 +323,7 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task TrafficViewProjectorAndQueryReader_ShouldGroupEndpointsAndSortTargets()
     {
         var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id);
-        var projector = new ServiceTrafficViewProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var reader = new ServiceTrafficViewQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceTrafficViewProjectionContext
@@ -360,7 +360,7 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task TrafficViewProjector_ShouldRespectCancellation_AndReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id);
-        var projector = new ServiceTrafficViewProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceTrafficViewQueryReader(store);
         var context = new ServiceTrafficViewProjectionContext
         {

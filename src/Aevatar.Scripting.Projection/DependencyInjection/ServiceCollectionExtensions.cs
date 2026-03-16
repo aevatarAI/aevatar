@@ -248,27 +248,27 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>, ScriptEvolutionReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>, ScriptNativeDocumentReadModelMetadataProvider>();
 
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptExecutionMaterializationContext>,
-            ScriptReadModelProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptExecutionMaterializationContext>,
-            ScriptNativeDocumentProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptExecutionMaterializationContext>,
-            ScriptNativeGraphProjector>());
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptReadModelProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptNativeDocumentProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptNativeGraphProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptExecutionProjectionContext>,
             ScriptExecutionSessionEventProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptAuthorityProjectionContext>,
-            ScriptDefinitionSnapshotProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptAuthorityProjectionContext>,
-            ScriptCatalogEntryProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ScriptEvolutionMaterializationContext>,
-            ScriptEvolutionReadModelProjector>());
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptAuthorityProjectionContext,
+            ScriptDefinitionSnapshotProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptAuthorityProjectionContext,
+            ScriptCatalogEntryProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptEvolutionMaterializationContext,
+            ScriptEvolutionReadModelProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionSessionCompletedEventProjector>());

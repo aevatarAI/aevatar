@@ -48,22 +48,29 @@ public class WorkflowExecutionProjectionRegistrationTests
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
-        var graphMirrorStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunGraphMirrorReadModel, string>>();
+        var graphArtifactStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunGraphArtifactDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
-        var graphMirrorDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel>>();
+        var graphArtifactDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument>>();
+        var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
+        var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
 
         currentStateStore.Should().NotBeNull();
         timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
-        graphMirrorStore.Should().NotBeNull();
+        graphArtifactStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
         timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
-        graphMirrorDispatcher.Should().NotBeNull();
+        graphArtifactDispatcher.Should().NotBeNull();
+        currentStateMaterializers.Should().ContainSingle()
+            .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
+        artifactMaterializers.Should().Contain(x => x is WorkflowRunInsightReportArtifactProjector);
+        artifactMaterializers.Should().Contain(x => x is WorkflowRunTimelineArtifactProjector);
+        artifactMaterializers.Should().Contain(x => x is WorkflowRunGraphArtifactProjector);
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -118,11 +125,11 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowRunGraphMirrorReadModelMetadataProvider_ShouldExposeExpectedDefaults()
+    public void WorkflowRunGraphArtifactDocumentMetadataProvider_ShouldExposeExpectedDefaults()
     {
-        var provider = new WorkflowRunGraphMirrorReadModelMetadataProvider();
+        var provider = new WorkflowRunGraphArtifactDocumentMetadataProvider();
 
-        provider.Metadata.IndexName.Should().Be("workflow-run-graph-mirrors");
+        provider.Metadata.IndexName.Should().Be("workflow-run-graph-artifacts");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
@@ -157,10 +164,10 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
             queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
-            keySelector: readModel => readModel.RootActorId,
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
+            keySelector: document => document.RootActorId,
             keyFormatter: key => key,
-            defaultSortSelector: readModel => readModel.UpdatedAt,
+            defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
@@ -191,13 +198,13 @@ public class WorkflowExecutionProjectionRegistrationTests
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
             optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
                 Endpoints = ["http://localhost:9200"],
             },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphMirrorReadModel>>().Metadata,
-            keySelector: readModel => readModel.RootActorId,
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>>().Metadata,
+            keySelector: document => document.RootActorId,
             keyFormatter: key => key);
     }
 

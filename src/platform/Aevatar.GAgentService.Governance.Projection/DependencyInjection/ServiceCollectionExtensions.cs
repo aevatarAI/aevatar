@@ -63,9 +63,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceConfigurationQueryReader, ServiceConfigurationQueryReader>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionMaterializer<ServiceConfigurationProjectionContext>,
-            ServiceConfigurationProjector>());
+        services.AddProjectionArtifactMaterializer<
+            ServiceConfigurationProjectionContext,
+            ServiceConfigurationProjector>();
 
         return services;
     }

@@ -229,9 +229,9 @@ Workflow durable materialization 当前有两条 projection family：
 
 1. `workflow-execution-readmodels`
    - `WorkflowExecutionCurrentStateProjector`
-   - `WorkflowRunInsightReportDocumentProjector`
-   - `WorkflowRunTimelineReadModelProjector`
-   - `WorkflowRunGraphMirrorProjector`
+   - `WorkflowRunInsightReportArtifactProjector`
+   - `WorkflowRunTimelineArtifactProjector`
+   - `WorkflowRunGraphArtifactProjector`
 2. `workflow-binding`
    - `WorkflowActorBindingProjector`
 
@@ -253,9 +253,9 @@ flowchart LR
 
   subgraph D["Durable"]
     B1["WorkflowExecutionCurrentStateProjector"]
-    B2["WorkflowRunInsightReportDocumentProjector"]
-    B3["WorkflowRunTimelineReadModelProjector"]
-    B4["WorkflowRunGraphMirrorProjector"]
+    B2["WorkflowRunInsightReportArtifactProjector"]
+    B3["WorkflowRunTimelineArtifactProjector"]
+    B4["WorkflowRunGraphArtifactProjector"]
     B5["WorkflowActorBindingProjector"]
     C1["Current-State Document"]
     C2["Insight Report Document"]

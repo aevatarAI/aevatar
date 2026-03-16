@@ -5,15 +5,15 @@ using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
-public sealed class WorkflowRunGraphMirrorProjector
-    : IProjectionMaterializer<WorkflowExecutionMaterializationContext>
+public sealed class WorkflowRunInsightReportArtifactProjector
+    : IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>
 {
-    private readonly IProjectionDocumentReader<WorkflowRunGraphMirrorReadModel, string> _documentReader;
-    private readonly IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel> _writeDispatcher;
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _documentReader;
+    private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _writeDispatcher;
 
-    public WorkflowRunGraphMirrorProjector(
-        IProjectionDocumentReader<WorkflowRunGraphMirrorReadModel, string> documentReader,
-        IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel> writeDispatcher)
+    public WorkflowRunInsightReportArtifactProjector(
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> documentReader,
+        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> writeDispatcher)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -24,25 +24,25 @@ public sealed class WorkflowRunGraphMirrorProjector
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!WorkflowExecutionArtifactProjectionSupport.TryUnpackRootStateEnvelope(envelope, out var stateEvent, out var state) ||
+        if (!WorkflowExecutionArtifactMaterializationSupport.TryUnpackRootStateEnvelope(envelope, out var stateEvent, out var state) ||
             stateEvent == null ||
             state == null)
             return;
 
         var existing = await _documentReader.GetAsync(context.RootActorId, ct);
-        if (existing != null && WorkflowExecutionArtifactProjectionSupport.ShouldSkip(existing, stateEvent))
+        if (existing != null && WorkflowExecutionArtifactMaterializationSupport.ShouldSkip(existing, stateEvent))
             return;
 
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
         var readModel = existing?.DeepClone() ??
-                        WorkflowExecutionArtifactProjectionSupport.CreateGraphReadModel(
+                        WorkflowExecutionArtifactMaterializationSupport.CreateReportDocument(
                             context,
                             state,
                             stateEvent,
                             observedAt);
 
-        WorkflowExecutionArtifactProjectionSupport.ApplyGraphBase(readModel, context, state, stateEvent, observedAt);
-        WorkflowExecutionArtifactProjectionSupport.ApplyObservedPayloadToGraph(readModel, stateEvent, observedAt);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
         await _writeDispatcher.UpsertAsync(readModel, ct);
     }
 }

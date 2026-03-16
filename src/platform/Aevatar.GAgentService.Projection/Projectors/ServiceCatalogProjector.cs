@@ -11,7 +11,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceCatalogProjector
-    : IProjectionMaterializer<ServiceCatalogProjectionContext>
+    : IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceCatalogReadModel, string> _documentReader;

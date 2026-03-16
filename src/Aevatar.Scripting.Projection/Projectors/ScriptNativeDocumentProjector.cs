@@ -8,7 +8,7 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptNativeDocumentProjector
-    : IProjectionMaterializer<ScriptExecutionMaterializationContext>
+    : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptNativeDocumentReadModel> _nativeWriteDispatcher;
     private readonly IScriptNativeDocumentMaterializer _materializer;

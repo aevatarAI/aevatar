@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -8,6 +9,8 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.Orchestration;
+using Aevatar.Scripting.Projection.Projectors;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -36,5 +39,14 @@ public sealed class ScriptingProjectWiringTests
         provider.GetRequiredService<IScriptCatalogQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IScriptReadModelQueryApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScriptEvolutionApplicationService>().Should().NotBeNull();
+        provider.GetServices<ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>>()
+            .Should().Contain(x => x is ScriptReadModelProjector)
+            .And.Contain(x => x is ScriptNativeDocumentProjector)
+            .And.Contain(x => x is ScriptNativeGraphProjector);
+        provider.GetServices<ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>>()
+            .Should().Contain(x => x is ScriptDefinitionSnapshotProjector)
+            .And.Contain(x => x is ScriptCatalogEntryProjector);
+        provider.GetServices<ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>>()
+            .Should().ContainSingle(x => x is ScriptEvolutionReadModelProjector);
     }
 }

@@ -9,7 +9,7 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptEvolutionReadModelProjector
-    : IProjectionMaterializer<ScriptEvolutionMaterializationContext>
+    : ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel> _writeDispatcher;
     private readonly IProjectionClock _clock;

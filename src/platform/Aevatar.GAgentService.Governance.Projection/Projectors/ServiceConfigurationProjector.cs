@@ -12,7 +12,7 @@ using Aevatar.GAgentService.Governance.Projection.ReadModels;
 namespace Aevatar.GAgentService.Governance.Projection.Projectors;
 
 public sealed class ServiceConfigurationProjector
-    : IProjectionMaterializer<ServiceConfigurationProjectionContext>
+    : IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceConfigurationReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceConfigurationReadModel, string> _documentReader;

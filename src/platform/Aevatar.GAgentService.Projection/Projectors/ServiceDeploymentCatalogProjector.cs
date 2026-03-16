@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceDeploymentCatalogProjector
-    : IProjectionMaterializer<ServiceDeploymentCatalogProjectionContext>
+    : IProjectionArtifactMaterializer<ServiceDeploymentCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceDeploymentCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> _documentReader;

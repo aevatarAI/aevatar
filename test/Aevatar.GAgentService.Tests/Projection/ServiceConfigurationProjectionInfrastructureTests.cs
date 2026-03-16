@@ -61,6 +61,9 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
             x.ImplementationType == typeof(ServiceConfigurationProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceConfigurationProjector));
     }
 
     [Fact]

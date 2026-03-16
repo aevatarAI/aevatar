@@ -12,7 +12,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceRevisionCatalogProjector
-    : IProjectionMaterializer<ServiceRevisionCatalogProjectionContext>
+    : IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentReader;

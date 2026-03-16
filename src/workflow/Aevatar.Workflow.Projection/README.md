@@ -1,9 +1,10 @@
 # Aevatar.Workflow.Projection
 
-workflow 领域的 projection/readmodel 实现。当前架构已经回到单一 authority：
+workflow 领域的 projection/readmodel 实现。当前 durable materialization 已显式拆分为 authority current-state replica 和 derived artifacts：
 
 - authority：`WorkflowRunGAgent + WorkflowRunState + root committed events`
-- durable artifacts：current-state / report / timeline / graph
+- current-state replica：`WorkflowExecutionCurrentStateDocument`
+- durable artifacts：report / timeline / graph / actor binding
 - session observation：AGUI / live workflow run events
 
 ## 主链
@@ -13,9 +14,9 @@ workflow 领域的 projection/readmodel 实现。当前架构已经回到单一 
 flowchart LR
   RUN["WorkflowRunGAgent committed observation"]
   CUR["WorkflowExecutionCurrentStateProjector"]
-  REP["WorkflowRunInsightReportDocumentProjector"]
-  TL["WorkflowRunTimelineReadModelProjector"]
-  GRA["WorkflowRunGraphMirrorProjector"]
+  REP["WorkflowRunInsightReportArtifactProjector"]
+  TL["WorkflowRunTimelineArtifactProjector"]
+  GRA["WorkflowRunGraphArtifactProjector"]
   AGUI["WorkflowExecutionRunEventProjector"]
   CURDOC["Current-State Document"]
   REPDOC["WorkflowRunInsightReportDocument"]
@@ -36,9 +37,10 @@ flowchart LR
 
 - [WorkflowExecutionReadModelPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionReadModelPort.cs)
 - [WorkflowExecutionCurrentStateProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs)
-- [WorkflowRunInsightReportDocumentProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportDocumentProjector.cs)
-- [WorkflowRunTimelineReadModelProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineReadModelProjector.cs)
-- [WorkflowRunGraphMirrorProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphMirrorProjector.cs)
+- [WorkflowRunInsightReportArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportArtifactProjector.cs)
+- [WorkflowRunTimelineArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineArtifactProjector.cs)
+- [WorkflowRunGraphArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphArtifactProjector.cs)
+- [WorkflowRunGraphArtifactMaterializer.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphArtifactMaterializer.cs)
 
 ### session observation
 
@@ -47,11 +49,13 @@ flowchart LR
 
 ### shared artifact support
 
-- [WorkflowExecutionArtifactProjectionSupport.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionArtifactProjectionSupport.cs)
+- [WorkflowExecutionArtifactMaterializationSupport.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionArtifactMaterializationSupport.cs)
 
 ## 关键约束
 
 - 不存在 `WorkflowRunInsightGAgent` secondary chain
+- current-state 只承认 actor-scoped current-state replica
+- report/timeline/graph 明确属于 derived durable artifacts
 - current-state/report/timeline/graph 都直接消费 root committed observation
 - session release 不会停止 durable materialization
 - session activation 只保留 `rootActorId + commandId`

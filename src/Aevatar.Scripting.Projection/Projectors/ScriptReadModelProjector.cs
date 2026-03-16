@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptReadModelProjector
-    : IProjectionMaterializer<ScriptExecutionMaterializationContext>
+    : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptReadModelDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;

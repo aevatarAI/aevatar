@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Metadata;
 using Aevatar.GAgentService.Projection.Orchestration;
+using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
@@ -115,6 +116,18 @@ public sealed class ServiceServingProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceTrafficViewProjectionPort) &&
             x.ImplementationType == typeof(ServiceTrafficViewProjectionPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceServingSetProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceServingSetProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceTrafficViewProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceTrafficViewProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceDeploymentCatalogProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceDeploymentCatalogProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceRolloutProjector));
     }
 
     [Fact]

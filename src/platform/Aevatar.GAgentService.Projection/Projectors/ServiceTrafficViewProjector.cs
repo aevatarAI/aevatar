@@ -10,19 +10,16 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceTrafficViewProjector
-    : IProjectionMaterializer<ServiceTrafficViewProjectionContext>
+    : ICurrentStateProjectionMaterializer<ServiceTrafficViewProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceTrafficViewReadModel> _storeDispatcher;
-    private readonly IProjectionDocumentReader<ServiceTrafficViewReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceTrafficViewProjector(
         IProjectionWriteDispatcher<ServiceTrafficViewReadModel> storeDispatcher,
-        IProjectionDocumentReader<ServiceTrafficViewReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -46,32 +43,34 @@ public sealed class ServiceTrafficViewProjector
         if (string.IsNullOrWhiteSpace(serviceKey))
             return;
 
-        var readModel = await _documentReader.GetAsync(serviceKey, ct)
-            ?? new ServiceTrafficViewReadModel { Id = serviceKey };
-        readModel.Generation = evt.Generation;
-        readModel.ActiveRolloutId = evt.RolloutId ?? string.Empty;
-        readModel.ActorId = context.RootActorId;
-        readModel.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(readModel.StateVersion, stateVersion);
-        readModel.LastEventId = eventId;
-        readModel.UpdatedAt = observedAt;
-        readModel.Endpoints = evt.Targets
-            .SelectMany(target => target.EnabledEndpointIds.Select(endpointId => new
-            {
-                EndpointId = endpointId ?? string.Empty,
-                Target = ServiceProjectionMapping.ToTrafficTargetReadModel(target),
-            }))
-            .Where(x => !string.IsNullOrWhiteSpace(x.EndpointId))
-            .GroupBy(x => x.EndpointId, StringComparer.Ordinal)
-            .OrderBy(x => x.Key, StringComparer.Ordinal)
-            .Select(group => new ServiceTrafficEndpointReadModel
-            {
-                EndpointId = group.Key,
-                Targets = group.Select(x => x.Target)
-                    .OrderByDescending(x => x.AllocationWeight)
-                    .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
-                    .ToList(),
-            })
-            .ToList();
+        var readModel = new ServiceTrafficViewReadModel
+        {
+            Id = serviceKey,
+            Generation = evt.Generation,
+            ActiveRolloutId = evt.RolloutId ?? string.Empty,
+            ActorId = context.RootActorId,
+            StateVersion = stateVersion,
+            LastEventId = eventId,
+            UpdatedAt = observedAt,
+            Endpoints = evt.Targets
+                .SelectMany(target => target.EnabledEndpointIds.Select(endpointId => new
+                {
+                    EndpointId = endpointId ?? string.Empty,
+                    Target = ServiceProjectionMapping.ToTrafficTargetReadModel(target),
+                }))
+                .Where(x => !string.IsNullOrWhiteSpace(x.EndpointId))
+                .GroupBy(x => x.EndpointId, StringComparer.Ordinal)
+                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                .Select(group => new ServiceTrafficEndpointReadModel
+                {
+                    EndpointId = group.Key,
+                    Targets = group.Select(x => x.Target)
+                        .OrderByDescending(x => x.AllocationWeight)
+                        .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
+                        .ToList(),
+                })
+                .ToList(),
+        };
         await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 

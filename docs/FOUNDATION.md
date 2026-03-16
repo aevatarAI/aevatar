@@ -173,7 +173,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `ProjectionMaterializationScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 释放
   - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
   - `WorkflowProjectionQueryReader` 负责 read model 查询映射
-  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 负责 committed state 到多个 readmodel 的物化
+  - `WorkflowExecutionCurrentStateProjector` 负责 authority current-state replica
+  - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
   - `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责 accepted-only 路径
@@ -187,7 +188,8 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
-  - `WorkflowExecutionCurrentStateProjector` / `WorkflowRunInsightReportDocumentProjector` / `WorkflowRunTimelineReadModelProjector` / `WorkflowRunGraphMirrorProjector` 写入各自消费场景的 readmodel store
+  - `WorkflowExecutionCurrentStateProjector` 写入 canonical current-state store
+  - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 写入各自 artifact store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：

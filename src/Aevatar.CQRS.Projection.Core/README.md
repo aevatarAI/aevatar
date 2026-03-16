@@ -12,6 +12,7 @@
 ### durable materialization
 
 - [IProjectionMaterializer.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializer.cs)
+- [IProjectionMaterializerKinds.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializerKinds.cs)
 - [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionMaterializationContext.cs)
 - [ProjectionMaterializationStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionMaterializationStartRequest.cs)
 - [IProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationActivationService.cs)
@@ -49,4 +50,7 @@
 - scope actor 持有 projection 的存在性、处理水位、失败状态和 release 状态
 - host 侧不保留 `actorId/sessionId/scopeId -> runtime` 长期注册表
 - durable 只消费 committed observation
+- durable materializer 必须显式区分：
+  - `ICurrentStateProjectionMaterializer<TContext>`：actor-scoped current-state replica，不能依赖回读旧文档
+  - `IProjectionArtifactMaterializer<TContext>`：derived durable artifact，不再伪装成 canonical readmodel
 - session 只负责发布 session event stream，不再把 live sink 当作生命周期事实

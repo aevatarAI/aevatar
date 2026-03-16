@@ -5,7 +5,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowExecutionCurrentStateProjector
-    : IProjectionMaterializer<WorkflowExecutionMaterializationContext>
+    : ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;

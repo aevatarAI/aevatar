@@ -8,7 +8,7 @@ using Google.Protobuf;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
-internal static class WorkflowExecutionArtifactProjectionSupport
+internal static class WorkflowExecutionArtifactMaterializationSupport
 {
     public static bool TryUnpackRootStateEnvelope(
         EventEnvelope envelope,
@@ -77,13 +77,13 @@ internal static class WorkflowExecutionArtifactProjectionSupport
         };
     }
 
-    public static WorkflowRunGraphMirrorReadModel CreateGraphReadModel(
+    public static WorkflowRunGraphArtifactDocument CreateGraphDocument(
         WorkflowExecutionMaterializationContext context,
         WorkflowRunState state,
         StateEvent stateEvent,
         DateTimeOffset observedAt)
     {
-        var readModel = new WorkflowRunGraphMirrorReadModel
+        var readModel = new WorkflowRunGraphArtifactDocument
         {
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
@@ -137,7 +137,7 @@ internal static class WorkflowExecutionArtifactProjectionSupport
     }
 
     public static void ApplyGraphBase(
-        WorkflowRunGraphMirrorReadModel readModel,
+        WorkflowRunGraphArtifactDocument readModel,
         WorkflowExecutionMaterializationContext context,
         WorkflowRunState state,
         StateEvent stateEvent,
@@ -399,7 +399,7 @@ internal static class WorkflowExecutionArtifactProjectionSupport
     }
 
     public static void ApplyObservedPayloadToGraph(
-        WorkflowRunGraphMirrorReadModel readModel,
+        WorkflowRunGraphArtifactDocument readModel,
         StateEvent stateEvent,
         DateTimeOffset observedAt)
     {

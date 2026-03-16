@@ -5,12 +5,12 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
-public sealed class WorkflowRunGraphMirrorMaterializer
-    : IProjectionGraphMaterializer<WorkflowRunGraphMirrorReadModel>
+public sealed class WorkflowRunGraphArtifactMaterializer
+    : IProjectionGraphMaterializer<WorkflowRunGraphArtifactDocument>
 {
     private const string UnknownToken = "unknown";
 
-    public ProjectionGraphMaterialization Materialize(WorkflowRunGraphMirrorReadModel readModel)
+    public ProjectionGraphMaterialization Materialize(WorkflowRunGraphArtifactDocument readModel)
     {
         ArgumentNullException.ThrowIfNull(readModel);
 
@@ -22,7 +22,7 @@ public sealed class WorkflowRunGraphMirrorMaterializer
         };
     }
 
-    private static IReadOnlyList<ProjectionGraphNode> BuildGraphNodes(WorkflowRunGraphMirrorReadModel readModel)
+    private static IReadOnlyList<ProjectionGraphNode> BuildGraphNodes(WorkflowRunGraphArtifactDocument readModel)
     {
         var updatedAt = readModel.UpdatedAt == default ? DateTimeOffset.UtcNow : readModel.UpdatedAt;
         var rootActorId = NormalizeToken(readModel.RootActorId);
@@ -81,7 +81,7 @@ public sealed class WorkflowRunGraphMirrorMaterializer
         return nodes.Values.ToList();
     }
 
-    private static IReadOnlyList<ProjectionGraphEdge> BuildGraphEdges(WorkflowRunGraphMirrorReadModel readModel)
+    private static IReadOnlyList<ProjectionGraphEdge> BuildGraphEdges(WorkflowRunGraphArtifactDocument readModel)
     {
         var updatedAt = readModel.UpdatedAt == default ? DateTimeOffset.UtcNow : readModel.UpdatedAt;
         var rootActorId = NormalizeToken(readModel.RootActorId);

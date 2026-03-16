@@ -93,10 +93,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphMirrorReadModel>>().Metadata,
-            keySelector: static readModel => readModel.RootActorId,
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
             keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
@@ -122,10 +122,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             keyFormatter: static key => key,
             defaultSortSelector: static report => report.CreatedAt,
             queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
-            keySelector: static readModel => readModel.RootActorId,
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
+            keySelector: static document => document.RootActorId,
             keyFormatter: static key => key,
-            defaultSortSelector: static readModel => readModel.UpdatedAt,
+            defaultSortSelector: static document => document.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: static document => document.Id,

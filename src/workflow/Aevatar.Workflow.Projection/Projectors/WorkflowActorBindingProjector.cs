@@ -6,7 +6,7 @@ using Aevatar.Workflow.Projection.Orchestration;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowActorBindingProjector
-    : IProjectionMaterializer<WorkflowBindingProjectionContext>
+    : IProjectionArtifactMaterializer<WorkflowBindingProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowActorBindingDocument, string> _documentReader;

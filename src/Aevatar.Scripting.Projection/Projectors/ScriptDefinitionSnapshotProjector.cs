@@ -9,7 +9,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptDefinitionSnapshotProjector
-    : IProjectionMaterializer<ScriptAuthorityProjectionContext>
+    : ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
