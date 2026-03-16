@@ -107,6 +107,55 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldDerivePromptAndInputParts_FromMultimodalInput()
+    {
+        var input = new ChatInput
+        {
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "text",
+                    Text = "describe this",
+                },
+                new ChatInputContentPart
+                {
+                    Type = "image",
+                    Uri = "https://example.com/cat.png",
+                    MediaType = "image/png",
+                    Name = "cat",
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request.Should().BeEquivalentTo(
+            new WorkflowChatRunRequest(
+                "describe this",
+                null,
+                null,
+                null,
+                InputParts:
+                [
+                    new WorkflowChatInputPart
+                    {
+                        Kind = WorkflowChatInputPartKind.Text,
+                        Text = "describe this",
+                    },
+                    new WorkflowChatInputPart
+                    {
+                        Kind = WorkflowChatInputPartKind.Image,
+                        Uri = "https://example.com/cat.png",
+                        MediaType = "image/png",
+                        Name = "cat",
+                    },
+                ],
+                Metadata: new Dictionary<string, string>()));
+    }
+
+    [Fact]
     public void CapabilityTraceContext_CreateAcceptedPayload_ShouldUseReceiptValues()
     {
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");

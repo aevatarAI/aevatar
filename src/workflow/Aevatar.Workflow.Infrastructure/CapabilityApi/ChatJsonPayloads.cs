@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -9,6 +10,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 internal static class ChatJsonPayloads
 {
     private static readonly TypeRegistry WorkflowTypeRegistry = TypeRegistry.FromFiles(
+        AiMessagesReflection.Descriptor,
         WorkflowRunEventEnvelope.Descriptor.File,
         AnyReflection.Descriptor,
         StructReflection.Descriptor,

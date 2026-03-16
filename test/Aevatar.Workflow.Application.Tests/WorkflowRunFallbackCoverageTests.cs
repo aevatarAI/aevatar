@@ -43,11 +43,12 @@ public sealed class WorkflowRunFallbackCoverageTests
 
         var policy = new WorkflowDirectFallbackPolicy(options);
         var request = new WorkflowChatRunRequest(
-            "hello",
-            workflowName,
-            null,
-            null,
-            hasInlineYamls ? ["name: inline"] : null);
+            Prompt: "hello",
+            WorkflowName: workflowName,
+            ActorId: null,
+            SessionId: null,
+            InputParts: null,
+            WorkflowYamls: hasInlineYamls ? ["name: inline"] : null);
         Exception exception = operationCanceled
             ? new OperationCanceledException("cancelled")
             : whitelistedException

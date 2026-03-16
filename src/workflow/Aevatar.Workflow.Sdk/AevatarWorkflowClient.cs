@@ -49,7 +49,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        EnsureNotBlank(request.Prompt, nameof(request.Prompt));
+        if (string.IsNullOrWhiteSpace(request.Prompt) &&
+            request.InputParts is not { Count: > 0 })
+        {
+            throw new ArgumentException("Prompt or InputParts is required.", nameof(request));
+        }
 
         return _chatTransport.StreamAsync(_httpClient, request, _jsonOptions, cancellationToken);
     }

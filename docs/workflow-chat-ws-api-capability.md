@@ -139,6 +139,7 @@ POST /api/workflows/signal
 - `aevatar.run.context`：回传 `actorId/workflowName/commandId`
 - `aevatar.step.request`、`aevatar.step.completed`
 - `aevatar.llm.reasoning`：LLM 思考过程增量
+- `aevatar.media.chunk`：媒体分片，payload 为 `MediaContentEvent`
 - `aevatar.workflow.waiting_signal`
 
 ## 6. WebSocket 请求/回包协议
@@ -150,7 +151,11 @@ POST /api/workflows/signal
   "type": "chat.command",
   "requestId": "client-req-1",
   "payload": {
-    "prompt": "帮我设计一个多角色发布流程"
+    "inputParts": [
+      { "type": "text", "text": "帮我分析这段录音和截图" },
+      { "type": "audio", "uri": "https://example.com/call.wav", "mediaType": "audio/wav" },
+      { "type": "image", "uri": "https://example.com/screenshot.png", "mediaType": "image/png" }
+    ]
   }
 }
 ```

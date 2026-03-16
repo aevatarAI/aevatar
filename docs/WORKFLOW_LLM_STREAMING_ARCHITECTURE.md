@@ -2,12 +2,12 @@
 
 ## 1. 目标与范围
 
-本文档描述 Workflow 能力中 LLM 文本流的完整技术链路，覆盖：
+本文档描述 Workflow 能力中 LLM 流式与多模态输入输出的完整技术链路，覆盖：
 
 1. `Host -> Application -> Domain -> Projection -> SSE/WS` 端到端执行路径。
 2. 会话语义（`actorId/commandId/sessionId/messageId`）与事实源落点。
 3. 统一投影链路中的分支协作（读模型分支 + AGUI 实时分支）。
-4. 当前支持的流类型与扩展到非文本流的演进路径。
+4. 当前支持的流类型、多模态输入输出与后续演进路径。
 
 不包含内容：
 
@@ -39,7 +39,7 @@
 |---|---|---|
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
-| Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具事件 |
+| Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具/媒体事件 |
 | Projection | `WorkflowExecutionReadModelProjector`、`WorkflowExecutionAGUIEventProjector` | 读模型更新 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
@@ -291,6 +291,7 @@ flowchart LR
 | `TextMessageStartEvent` | `RoleGAgent` | 文本消息开始 |
 | `TextMessageContentEvent` | `RoleGAgent` | 文本增量（delta） |
 | `TextMessageEndEvent` | `RoleGAgent` | 文本消息结束（含完整 content） |
+| `MediaContentEvent` | `RoleGAgent` | 多模态媒体分片（image/audio/video） |
 | `ToolCallEvent` | `RoleGAgent`、`ToolCallModule` | 流式工具调用（LLM delta）与模块级工具调用 |
 | `ToolResultEvent` | `ToolCallModule` | 工具执行结果 |
 | `ChatResponseEvent` | `WorkflowGAgent` 等 | 非流式回退路径 |
@@ -301,6 +302,7 @@ flowchart LR
 2. `src/Aevatar.AI.Abstractions/ai_messages.proto:12`
 3. `src/Aevatar.AI.Core/RoleGAgent.cs:114`
 4. `src/workflow/Aevatar.Workflow.Core/Modules/ToolCallModule.cs:53`
+5. `src/Aevatar.AI.Abstractions/ai_messages.proto:34`
 
 ### 8.2 WorkflowRunEvent（输出统一事件）
 
@@ -329,7 +331,7 @@ flowchart LR
 | 人工交互事件流 | 已支持 | `CUSTOM` 事件输出 `aevatar.step.request` / `aevatar.step.completed` / `aevatar.workflow.waiting_signal`（含显式 runId），用于 UI 渲染与回传 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
 | WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` + `ChatWebSocketMessageContracts` 统一 text/binary 与 `ack/event/error` 强类型出站 |
-| 多模态业务事件（音频/图像/video） | 待扩展 | 统一事件模型尚无 `MEDIA_*` 专用语义事件类型 |
+| 多模态业务事件（音频/图像/video） | 已支持 | `ChatInput.inputParts` -> `ChatRequestEvent.input_parts` -> Provider `ContentPart` -> `MediaContentEvent`，输出侧映射为 `CUSTOM(aevatar.media.chunk)` |
 
 锚点：
 
@@ -355,7 +357,7 @@ flowchart LR
 
 ## 10. 演进设计：扩展到多模态业务流
 
-目标：在不破坏统一投影链路的前提下支持多模态业务事件（在 WS 类型化传输之上）。
+当前实现已经支持多模态输入和媒体输出，不再停留在“待扩展”阶段。后续演进目标是把媒体输出从 `CUSTOM(aevatar.media.chunk)` 进一步收敛为更稳定的专用输出事件类型，并在 WS 边界增加可选的二进制载荷协商。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -373,10 +375,16 @@ flowchart LR
     PROJ --> OUT["WorkflowRunEventEnvelope / WS Boundary Frame"]
 ```
 
-建议改造顺序：
+当前收敛方式：
 
-1. 为多模态 chunk 增加标准事件类型（如 `MEDIA_CHUNK` / `AUDIO_DELTA`），并映射到统一 `WorkflowRunEvent`。
-2. 按媒体类型定义输出帧契约（metadata + binary payload 引用），避免在 text delta 中混载媒体语义。
+1. 输入侧统一使用 `ChatInput.inputParts` / `WorkflowChatRunRequest.InputParts` / `ChatRequestEvent.input_parts` 传递 `text/image/audio/video`。
+2. Provider 通过 `ILLMProvider.Capabilities` 声明支持的输入/输出模态与流式能力，failover 仅在兼容能力集合内切换。
+3. 运行时把媒体增量归一化为 `LLMStreamChunk.DeltaContentPart`，`RoleGAgent` 发布 `MediaContentEvent`，投影侧映射到统一输出链路。
+
+后续建议：
+
+1. 为媒体输出增加显式 `WorkflowRunEvent` 类型常量，减少消费方对 `CUSTOM` 名称的分支判断。
+2. 在 WS 边界增加元数据帧 + 二进制附件帧协商，减少大体积 base64 传输的开销。
 
 本次重构已完成：
 

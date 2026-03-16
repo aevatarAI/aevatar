@@ -86,7 +86,7 @@ internal static class ChatWebSocketCommandParser
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_COMMAND",
-                "Expected { type: 'chat.command', payload: { prompt, workflow?, workflowYaml?, workflowYamls?, agentId? } }.",
+                "Expected { type: 'chat.command', payload: { prompt?, inputParts?, workflow?, workflowYaml?, workflowYamls?, agentId? } }.",
                 ResponseMessageType: responseMessageType);
             return false;
         }
@@ -95,11 +95,12 @@ internal static class ChatWebSocketCommandParser
             ? Guid.NewGuid().ToString("N")
             : command.RequestId;
 
-        if (string.IsNullOrWhiteSpace(command.Payload.Prompt))
+        if (string.IsNullOrWhiteSpace(command.Payload.Prompt) &&
+            command.Payload.InputParts is not { Count: > 0 })
         {
             parseError = new ChatWebSocketCommandParseError(
                 "INVALID_PROMPT",
-                "Prompt is required.",
+                "Prompt or inputParts is required.",
                 requestId,
                 responseMessageType);
             return false;

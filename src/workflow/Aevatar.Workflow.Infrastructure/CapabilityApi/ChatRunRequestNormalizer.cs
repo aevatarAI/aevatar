@@ -28,6 +28,7 @@ internal static class ChatRunRequestNormalizer
 
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var normalizedMetadata = NormalizeMetadata(input.Metadata, defaultMetadata);
+        var normalizedInputParts = NormalizeInputParts(input.InputParts);
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
@@ -42,8 +43,9 @@ internal static class ChatRunRequestNormalizer
         if (hasLegacyWorkflowYaml)
             inlineWorkflowYamls = [legacyWorkflowYaml!];
 
+        var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
         var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
-            input.Prompt,
+            rawPrompt,
             requestedWorkflowName,
             inlineWorkflowYamls.Count > 0,
             normalizedMetadata,
@@ -57,6 +59,7 @@ internal static class ChatRunRequestNormalizer
                     WorkflowName: string.IsNullOrWhiteSpace(requestedWorkflowName) ? null : requestedWorkflowName,
                     ActorId: normalizedAgentId,
                     SessionId: NormalizeSessionId(input.SessionId),
+                    InputParts: normalizedInputParts,
                     WorkflowYamls: inlineWorkflowYamls,
                     Metadata: normalizedMetadata));
         }
@@ -69,6 +72,7 @@ internal static class ChatRunRequestNormalizer
                     WorkflowName: requestedWorkflowName,
                     ActorId: normalizedAgentId,
                     SessionId: NormalizeSessionId(input.SessionId),
+                    InputParts: normalizedInputParts,
                     WorkflowYamls: null,
                     Metadata: normalizedMetadata));
         }
@@ -79,6 +83,7 @@ internal static class ChatRunRequestNormalizer
                 WorkflowName: null,
                 ActorId: normalizedAgentId,
                 SessionId: NormalizeSessionId(input.SessionId),
+                InputParts: normalizedInputParts,
                 WorkflowYamls: null,
                 Metadata: normalizedMetadata));
     }
@@ -96,6 +101,34 @@ internal static class ChatRunRequestNormalizer
 
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
+
+    private static IReadOnlyList<WorkflowChatInputPart>? NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
+    {
+        if (inputParts == null || inputParts.Count == 0)
+            return null;
+
+        var normalized = new List<WorkflowChatInputPart>(inputParts.Count);
+        foreach (var part in inputParts)
+        {
+            if (part == null || string.IsNullOrWhiteSpace(part.Type))
+                continue;
+
+            if (!TryParseContentPartKind(part.Type, out var kind))
+                continue;
+
+            normalized.Add(new WorkflowChatInputPart
+            {
+                Kind = kind,
+                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
+                DataBase64 = string.IsNullOrWhiteSpace(part.DataBase64) ? null : part.DataBase64,
+                MediaType = string.IsNullOrWhiteSpace(part.MediaType) ? null : part.MediaType,
+                Uri = string.IsNullOrWhiteSpace(part.Uri) ? null : part.Uri,
+                Name = string.IsNullOrWhiteSpace(part.Name) ? null : part.Name,
+            });
+        }
+
+        return normalized.Count == 0 ? null : normalized;
+    }
 
     private static IReadOnlyDictionary<string, string> NormalizeMetadata(
         IDictionary<string, string>? metadata,
@@ -135,4 +168,45 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
+
+    private static string ResolvePrompt(string? prompt, IReadOnlyList<WorkflowChatInputPart>? inputParts)
+    {
+        if (!string.IsNullOrWhiteSpace(prompt))
+            return prompt.Trim();
+
+        if (inputParts == null || inputParts.Count == 0)
+            return string.Empty;
+
+        var textParts = inputParts
+            .Where(part => part.Kind == WorkflowChatInputPartKind.Text && !string.IsNullOrWhiteSpace(part.Text))
+            .Select(part => part.Text!.Trim())
+            .ToArray();
+
+        if (textParts.Length > 0)
+            return string.Join("\n", textParts);
+
+        return string.Join(
+            ", ",
+            inputParts.Select(part => part.Kind switch
+            {
+                WorkflowChatInputPartKind.Image => "[image]",
+                WorkflowChatInputPartKind.Audio => "[audio]",
+                WorkflowChatInputPartKind.Video => "[video]",
+                _ => "[content]",
+            }));
+    }
+
+    private static bool TryParseContentPartKind(string raw, out WorkflowChatInputPartKind kind)
+    {
+        kind = raw.Trim().ToLowerInvariant() switch
+        {
+            "text" => WorkflowChatInputPartKind.Text,
+            "image" => WorkflowChatInputPartKind.Image,
+            "audio" => WorkflowChatInputPartKind.Audio,
+            "video" => WorkflowChatInputPartKind.Video,
+            _ => WorkflowChatInputPartKind.Unspecified,
+        };
+
+        return kind != WorkflowChatInputPartKind.Unspecified;
+    }
 }

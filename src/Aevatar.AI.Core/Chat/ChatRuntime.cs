@@ -54,19 +54,34 @@ public sealed class ChatRuntime
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
     public Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default) =>
-        ChatAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
+        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
+
+    public Task<string?> ChatAsync(
+        string userMessage,
+        int maxToolRounds,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default) =>
+        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId, metadata, ct);
+
+    public Task<string?> ChatAsync(
+        IReadOnlyList<ContentPart> userContent,
+        int maxToolRounds = 10,
+        CancellationToken ct = default) =>
+        ChatAsync(userContent, maxToolRounds, requestId: null, metadata: null, ct);
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
     public async Task<string?> ChatAsync(
-        string userMessage,
+        IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct = default)
     {
+        var normalizedUserContent = NormalizeUserContent(userContent);
         var runContext = new AgentRunContext
         {
-            UserMessage = userMessage,
+            UserMessage = DescribeUserContent(normalizedUserContent),
             AgentId = _agentId,
             AgentName = _agentName,
             CancellationToken = ct,
@@ -76,7 +91,7 @@ public sealed class ChatRuntime
         {
             if (runContext.Terminate) return;
 
-            _history.Add(ChatMessage.User(runContext.UserMessage));
+            _history.Add(ChatMessage.User(normalizedUserContent, runContext.UserMessage));
             var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
             var provider = _providerFactory();
             runContext.Items["gen_ai.provider.name"] = provider.Name;
@@ -98,15 +113,28 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userMessage, requestId: null, metadata: null, ct);
+        ChatStreamAsync([ContentPart.TextPart(userMessage)], requestId: null, metadata: null, ct);
+
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default) =>
+        ChatStreamAsync([ContentPart.TextPart(userMessage)], requestId, metadata, ct);
+
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userContent, requestId: null, metadata: null, ct);
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-        string userMessage,
+        IReadOnlyList<ContentPart> userContent,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        var normalizedUserContent = NormalizeUserContent(userContent);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
 
@@ -119,7 +147,7 @@ public sealed class ChatRuntime
 
         var runContext = new AgentRunContext
         {
-            UserMessage = userMessage,
+            UserMessage = DescribeUserContent(normalizedUserContent),
             AgentId = _agentId,
             AgentName = _agentName,
             CancellationToken = runToken,
@@ -134,7 +162,7 @@ public sealed class ChatRuntime
                 {
                     if (runContext.Terminate) return;
 
-                    _history.Add(ChatMessage.User(runContext.UserMessage));
+                    _history.Add(ChatMessage.User(normalizedUserContent, runContext.UserMessage));
                     var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                     var provider = _providerFactory();
                     runContext.Items["gen_ai.provider.name"] = provider.Name;
@@ -163,6 +191,7 @@ public sealed class ChatRuntime
                     string? streamedContent = null;
                     TokenUsage? streamedUsage = null;
                     IReadOnlyList<ToolCall>? streamedToolCalls = null;
+                    List<ContentPart>? streamedContentParts = null;
 
                     await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
                     {
@@ -171,10 +200,11 @@ public sealed class ChatRuntime
                         var full = new StringBuilder();
                         TokenUsage? usage = null;
                         var toolCalls = new StreamingToolCallAccumulator();
+                        var contentParts = new List<ContentPart>();
 
                         await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, runToken))
                         {
-                            var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, ref usage);
+                            var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, contentParts, ref usage);
                             if (normalizedChunk == null)
                                 continue;
 
@@ -186,9 +216,11 @@ public sealed class ChatRuntime
                         streamedUsage = usage;
                         var finalizedToolCalls = toolCalls.BuildToolCalls();
                         streamedToolCalls = finalizedToolCalls.Count > 0 ? finalizedToolCalls : null;
+                        streamedContentParts = contentParts.Count > 0 ? contentParts : null;
                         llmCallContext.Response = new LLMResponse
                         {
                             Content = streamedContent,
+                            ContentParts = streamedContentParts,
                             Usage = streamedUsage,
                             ToolCalls = streamedToolCalls,
                         };
@@ -199,6 +231,7 @@ public sealed class ChatRuntime
                         streamedContent = llmCallContext.Response?.Content;
                         streamedUsage = llmCallContext.Response?.Usage;
                         streamedToolCalls = llmCallContext.Response?.ToolCalls;
+                        streamedContentParts = llmCallContext.Response?.ContentParts?.ToList();
 
                         if (llmCallContext.Response != null)
                         {
@@ -210,12 +243,15 @@ public sealed class ChatRuntime
                         }
                     }
 
-                    if (!string.IsNullOrEmpty(streamedContent) || streamedToolCalls is { Count: > 0 })
+                    if (!string.IsNullOrEmpty(streamedContent) ||
+                        streamedToolCalls is { Count: > 0 } ||
+                        streamedContentParts is { Count: > 0 })
                     {
                         _history.Add(new ChatMessage
                         {
                             Role = "assistant",
                             Content = streamedContent,
+                            ContentParts = streamedContentParts,
                             ToolCalls = streamedToolCalls,
                         });
                     }
@@ -310,6 +346,7 @@ public sealed class ChatRuntime
         LLMStreamChunk chunk,
         StreamingToolCallAccumulator toolCalls,
         StringBuilder fullContent,
+        List<ContentPart> fullContentParts,
         ref TokenUsage? usage)
     {
         ToolCall? normalizedToolCall = null;
@@ -319,10 +356,14 @@ public sealed class ChatRuntime
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
             fullContent.Append(chunk.DeltaContent);
 
+        if (chunk.DeltaContentPart != null)
+            fullContentParts.Add(chunk.DeltaContentPart);
+
         if (chunk.Usage != null)
             usage = chunk.Usage;
 
         if (string.IsNullOrEmpty(chunk.DeltaContent) &&
+            chunk.DeltaContentPart == null &&
             string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
             normalizedToolCall == null &&
             !chunk.IsLast &&
@@ -334,6 +375,7 @@ public sealed class ChatRuntime
         return new LLMStreamChunk
         {
             DeltaContent = chunk.DeltaContent,
+            DeltaContentPart = chunk.DeltaContentPart,
             DeltaReasoningContent = chunk.DeltaReasoningContent,
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
@@ -347,6 +389,14 @@ public sealed class ChatRuntime
 
         if (!string.IsNullOrEmpty(response.Content))
             chunks.Add(new LLMStreamChunk { DeltaContent = response.Content });
+
+        if (response.ContentParts is { Count: > 0 })
+        {
+            chunks.AddRange(response.ContentParts.Select(contentPart => new LLMStreamChunk
+            {
+                DeltaContentPart = contentPart,
+            }));
+        }
 
         if (response.ToolCalls is { Count: > 0 })
         {
@@ -363,6 +413,35 @@ public sealed class ChatRuntime
         });
 
         return chunks;
+    }
+
+    private static IReadOnlyList<ContentPart> NormalizeUserContent(IReadOnlyList<ContentPart> userContent)
+    {
+        if (userContent == null || userContent.Count == 0)
+            return [ContentPart.TextPart(string.Empty)];
+
+        return userContent;
+    }
+
+    private static string DescribeUserContent(IReadOnlyList<ContentPart> userContent)
+    {
+        var textParts = userContent
+            .Where(part => part.Kind == ContentPartKind.Text && !string.IsNullOrWhiteSpace(part.Text))
+            .Select(part => part.Text!.Trim())
+            .ToArray();
+
+        if (textParts.Length > 0)
+            return string.Join("\n", textParts);
+
+        return string.Join(
+            ", ",
+            userContent.Select(part => part.Kind switch
+            {
+                ContentPartKind.Image => "[image]",
+                ContentPartKind.Audio => "[audio]",
+                ContentPartKind.Video => "[video]",
+                _ => "[content]",
+            }));
     }
 
 }

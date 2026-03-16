@@ -63,7 +63,7 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
-        if (string.IsNullOrWhiteSpace(input.Prompt))
+        if (!HasAnyInput(input))
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             return;
@@ -147,12 +147,12 @@ public static class WorkflowCapabilityEndpoints
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        if (string.IsNullOrWhiteSpace(input.Prompt))
+        if (!HasAnyInput(input))
         {
             return Results.BadRequest(new
             {
                 code = "INVALID_PROMPT",
-                message = "Prompt is required.",
+                message = "Prompt or inputParts is required.",
             });
         }
 
@@ -198,6 +198,10 @@ public static class WorkflowCapabilityEndpoints
                 statusCode: StatusCodes.Status500InternalServerError);
         }
     }
+
+    private static bool HasAnyInput(ChatInput input) =>
+        !string.IsNullOrWhiteSpace(input.Prompt) ||
+        input.InputParts is { Count: > 0 };
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,

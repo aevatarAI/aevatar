@@ -176,7 +176,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
+        return _chat!.ChatAsync([ContentPart.TextPart(userMessage)], EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
@@ -187,14 +187,24 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        return _chat!.ChatAsync([ContentPart.TextPart(userMessage)], EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+    }
+
+    protected Task<string?> ChatAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        return _chat!.ChatAsync(userContent, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, ct);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], ct);
     }
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
@@ -205,7 +215,17 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], requestId, metadata, ct);
+    }
+
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        return _chat!.ChatStreamAsync(userContent, requestId, metadata, ct);
     }
 
     /// <summary>注册单个工具。</summary>

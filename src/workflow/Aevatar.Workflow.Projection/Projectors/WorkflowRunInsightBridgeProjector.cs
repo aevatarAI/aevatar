@@ -122,6 +122,7 @@ public sealed class WorkflowRunInsightBridgeProjector
                || payload.Is(WorkflowSignalBufferedEvent.Descriptor)
                || payload.Is(TextMessageStartEvent.Descriptor)
                || payload.Is(TextMessageContentEvent.Descriptor)
+               || payload.Is(MediaContentEvent.Descriptor)
                || payload.Is(TextMessageEndEvent.Descriptor)
                || payload.Is(ChatResponseEvent.Descriptor)
                || payload.Is(TextMessageReasoningEvent.Descriptor)

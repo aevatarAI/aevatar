@@ -19,6 +19,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
         };
+        if (command.InputParts is { Count: > 0 })
+            chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
         AppendMetadata(chatRequest.Metadata, context.Headers);
         AppendMetadata(chatRequest.Metadata, command.Metadata);
         chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
@@ -35,6 +37,28 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             },
         };
         return envelope;
+    }
+
+    private static ChatContentPart ToProto(WorkflowChatInputPart source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new ChatContentPart
+        {
+            Kind = source.Kind switch
+            {
+                WorkflowChatInputPartKind.Text => ChatContentPartKind.Text,
+                WorkflowChatInputPartKind.Image => ChatContentPartKind.Image,
+                WorkflowChatInputPartKind.Audio => ChatContentPartKind.Audio,
+                WorkflowChatInputPartKind.Video => ChatContentPartKind.Video,
+                _ => ChatContentPartKind.Unspecified,
+            },
+            Text = source.Text ?? string.Empty,
+            DataBase64 = source.DataBase64 ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            Uri = source.Uri ?? string.Empty,
+            Name = source.Name ?? string.Empty,
+        };
     }
 
     private static void AppendMetadata(

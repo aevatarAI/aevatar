@@ -225,6 +225,24 @@ public sealed class AITextStreamRunEventEnvelopeMappingHandler : IWorkflowRunEve
             return true;
         }
 
+        if (payload.Is(Aevatar.AI.Abstractions.MediaContentEvent.Descriptor))
+        {
+            var evt = payload.Unpack<Aevatar.AI.Abstractions.MediaContentEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = ts,
+                    Custom = new WorkflowCustomEventPayload
+                    {
+                        Name = "aevatar.media.chunk",
+                        Payload = Any.Pack(evt),
+                    },
+                },
+            ];
+            return true;
+        }
+
         if (payload.Is(Aevatar.AI.Abstractions.TextMessageEndEvent.Descriptor))
         {
             var evt = payload.Unpack<Aevatar.AI.Abstractions.TextMessageEndEvent>();
