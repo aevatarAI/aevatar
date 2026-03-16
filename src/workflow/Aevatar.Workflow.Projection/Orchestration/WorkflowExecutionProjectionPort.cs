@@ -10,10 +10,12 @@ public sealed class WorkflowExecutionProjectionPort
     : EventSinkProjectionLifecyclePortBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionPort
 {
+    private const string ProjectionKind = "workflow-execution";
+
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
-        IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
-        IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
+        IProjectionSessionActivationService<WorkflowExecutionRuntimeLease> activationService,
+        IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease> releaseService,
         IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> sinkSubscriptionManager,
         IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> liveSinkForwarder)
         : base(
@@ -27,14 +29,14 @@ public sealed class WorkflowExecutionProjectionPort
 
     public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
-        string workflowName,
-        string input,
         string commandId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            rootActorId,
-            workflowName,
-            input,
-            commandId,
+            new ProjectionSessionStartRequest
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = ProjectionKind,
+                SessionId = commandId,
+            },
             ct);
 }

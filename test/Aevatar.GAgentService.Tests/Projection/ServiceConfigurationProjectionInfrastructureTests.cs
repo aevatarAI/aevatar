@@ -29,37 +29,33 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         await service.EnsureProjectionAsync("config-actor");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("config-actor", "service-configuration", string.Empty, "config-actor"));
+        activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
     }
 
     [Fact]
     public async Task ActivationAndReleaseServices_ShouldCreateContextLeaseAndStopWhenIdle()
     {
         var lifecycle = new RecordingConfigurationLifecycle();
-        var activation = new ContextProjectionActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(
+        var activation = new ContextProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(
             lifecycle,
-            (rootActorId, projectionName, input, commandId, ct) =>
+            (request, _) => new ServiceConfigurationProjectionContext
             {
-                _ = input;
-                _ = commandId;
-                _ = ct;
-                return new ServiceConfigurationProjectionContext
-                {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
-                    RootActorId = rootActorId,
-                };
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
             },
             static context => new ServiceConfigurationRuntimeLease(context));
-        var release = new ContextProjectionReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(lifecycle);
-        var lease = await activation.EnsureAsync("config-actor", "service-configuration", string.Empty, "cmd-config");
+        var release = new ContextProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(lifecycle);
+        var lease = await activation.EnsureAsync(new ProjectionMaterializationStartRequest
+        {
+            RootActorId = "config-actor",
+            ProjectionKind = "service-configuration",
+        });
         await release.ReleaseIfIdleAsync(lease);
 
-        lease.ScopeId.Should().Be("config-actor");
-        lease.SessionId.Should().Be("config-actor");
         lifecycle.StartedContexts.Should().ContainSingle();
-        lifecycle.StartedContexts[0].ProjectionId.Should().Be("service-configuration:config-actor");
+        lifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-configuration");
         lifecycle.StoppedContexts.Should().ContainSingle();
-        ((IProjectionContext)lease.Context).ProjectionId.Should().Be("service-configuration:config-actor");
+        lease.Context.RootActorId.Should().Be("config-actor");
     }
 
     [Fact]
@@ -89,7 +85,7 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
             x.ServiceType == typeof(IServiceConfigurationQueryReader) &&
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionProjector<ServiceConfigurationProjectionContext, IReadOnlyList<string>>) &&
+            x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
             x.ImplementationType == typeof(ServiceConfigurationProjector));
     }
 
@@ -195,48 +191,42 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    private sealed class RecordingConfigurationActivationService : IProjectionPortActivationService<ServiceConfigurationRuntimeLease>
+    private sealed class RecordingConfigurationActivationService : IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>
     {
-        public List<(string rootEntityId, string projectionName, string input, string commandId)> Calls { get; } = [];
+        public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
         public Task<ServiceConfigurationRuntimeLease> EnsureAsync(
-            string rootEntityId,
-            string projectionName,
-            string input,
-            string commandId,
+            ProjectionMaterializationStartRequest request,
             CancellationToken ct = default)
         {
-            Calls.Add((rootEntityId, projectionName, input, commandId));
+            Calls.Add((request.RootActorId, request.ProjectionKind));
             return Task.FromResult(new ServiceConfigurationRuntimeLease(new ServiceConfigurationProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootEntityId}",
-                RootActorId = rootEntityId,
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
             }));
         }
     }
 
-    private sealed class RecordingConfigurationLifecycle : IProjectionLifecycleService<ServiceConfigurationProjectionContext, IReadOnlyList<string>>
+    private sealed class RecordingConfigurationLifecycle : IProjectionMaterializationLifecycleService<ServiceConfigurationProjectionContext, ServiceConfigurationRuntimeLease>
     {
         public List<ServiceConfigurationProjectionContext> StartedContexts { get; } = [];
 
         public List<ServiceConfigurationProjectionContext> StoppedContexts { get; } = [];
 
-        public Task StartAsync(ServiceConfigurationProjectionContext context, CancellationToken ct = default)
+        public Task StartAsync(ServiceConfigurationRuntimeLease runtimeLease, CancellationToken ct = default)
         {
-            StartedContexts.Add(context);
+            StartedContexts.Add(runtimeLease.Context);
             return Task.CompletedTask;
         }
 
         public Task ProjectAsync(ServiceConfigurationProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task StopAsync(ServiceConfigurationProjectionContext context, CancellationToken ct = default)
+        public Task StopAsync(ServiceConfigurationRuntimeLease runtimeLease, CancellationToken ct = default)
         {
-            StoppedContexts.Add(context);
+            StoppedContexts.Add(runtimeLease.Context);
             return Task.CompletedTask;
         }
-
-        public Task CompleteAsync(ServiceConfigurationProjectionContext context, IReadOnlyList<string> completion, CancellationToken ct = default) =>
-            Task.CompletedTask;
     }
 }

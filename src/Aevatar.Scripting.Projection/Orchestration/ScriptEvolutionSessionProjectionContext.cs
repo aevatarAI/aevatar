@@ -1,11 +1,9 @@
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptEvolutionSessionProjectionContext
-    : IProjectionContext, IProjectionStreamSubscriptionContext
+    : IProjectionSessionContext
 {
-    public string ProjectionId { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
     public string RootActorId { get; set; } = string.Empty;
-    public string ProposalId { get; set; } = string.Empty;
-
-    public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }
+    public string ProjectionKind { get; set; } = string.Empty;
 }

@@ -1,48 +1,48 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Workflow.Projection.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.Workflow.Core;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowRunInsightReportDocumentProjector
-    : IProjectionProjector<WorkflowRunInsightProjectionContext, bool>
+    : IProjectionMaterializer<WorkflowExecutionMaterializationContext>
 {
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _documentReader;
     private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _writeDispatcher;
 
-    public WorkflowRunInsightReportDocumentProjector(IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> writeDispatcher)
+    public WorkflowRunInsightReportDocumentProjector(
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> documentReader,
+        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> writeDispatcher)
     {
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
     }
 
-    public ValueTask InitializeAsync(WorkflowRunInsightProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
-
     public async ValueTask ProjectAsync(
-        WorkflowRunInsightProjectionContext context,
+        WorkflowExecutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!WorkflowRunInsightProjectionMaps.TryUnpack(envelope, out var stateEvent, out var state))
-        {
+        if (!WorkflowExecutionArtifactProjectionSupport.TryUnpackRootStateEnvelope(envelope, out var stateEvent, out var state) ||
+            stateEvent == null ||
+            state == null)
             return;
-        }
 
-        var readModel = WorkflowRunInsightProjectionMaps.ToReportDocument(state!, stateEvent!);
+        var existing = await _documentReader.GetAsync(context.RootActorId, ct);
+        if (existing != null && WorkflowExecutionArtifactProjectionSupport.ShouldSkip(existing, stateEvent))
+            return;
+
+        var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
+        var readModel = existing?.DeepClone() ??
+                        WorkflowExecutionArtifactProjectionSupport.CreateReportDocument(
+                            context,
+                            state,
+                            stateEvent,
+                            observedAt);
+
+        WorkflowExecutionArtifactProjectionSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
+        WorkflowExecutionArtifactProjectionSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
         await _writeDispatcher.UpsertAsync(readModel, ct);
-    }
-
-    public ValueTask CompleteAsync(
-        WorkflowRunInsightProjectionContext context,
-        bool completion,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = completion;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 }

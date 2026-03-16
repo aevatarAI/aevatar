@@ -133,8 +133,9 @@ public sealed class ClaimReadModelProjectorTests
     private static ScriptExecutionProjectionContext CreateContext(string rootActorId) =>
         new()
         {
-            ProjectionId = rootActorId + ":projection",
+            SessionId = rootActorId,
             RootActorId = rootActorId,
+            ProjectionKind = "script-execution-read-model",
         };
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock

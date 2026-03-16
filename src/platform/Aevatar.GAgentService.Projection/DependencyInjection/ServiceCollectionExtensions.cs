@@ -27,43 +27,43 @@ public static class ServiceCollectionExtensions
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
         services.AddServiceProjectionRuntime(
             static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId);
 
@@ -86,22 +86,22 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceTrafficViewQueryReader, ServiceTrafficViewQueryReader>();
         services.TryAddSingleton<IServiceRevisionCatalogQueryReader, ServiceRevisionCatalogQueryReader>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceCatalogProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceCatalogProjectionContext>,
             ServiceCatalogProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceDeploymentCatalogProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceDeploymentCatalogProjectionContext>,
             ServiceDeploymentCatalogProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceServingSetProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceServingSetProjectionContext>,
             ServiceServingSetProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceRolloutProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceRolloutProjectionContext>,
             ServiceRolloutProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceTrafficViewProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceTrafficViewProjectionContext>,
             ServiceTrafficViewProjector>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceRevisionCatalogProjectionContext>,
             ServiceRevisionCatalogProjector>());
 
         return services;
@@ -111,31 +111,23 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Func<string, string, TContext> contextFactory,
         Func<TContext, string> rootActorIdSelector)
-        where TContext : class, IProjectionContext, IProjectionStreamSubscriptionContext
+        where TContext : class, IProjectionMaterializationContext
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(contextFactory);
         ArgumentNullException.ThrowIfNull(rootActorIdSelector);
 
-        services.AddEventSinkProjectionRuntimeCore<
+        services.AddProjectionMaterializationRuntimeCore<
             TContext,
-            IReadOnlyList<string>,
-            ServiceProjectionRuntimeLease<TContext>,
-            EventEnvelope>();
-        services.TryAddSingleton<IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>>(sp =>
+            ServiceProjectionRuntimeLease<TContext>>();
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>>>(sp =>
         {
-            return new ContextProjectionActivationService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<TContext, IReadOnlyList<string>>>(),
-                (rootActorId, projectionName, input, commandId, ct) =>
-                {
-                    _ = input;
-                    _ = commandId;
-                    _ = ct;
-                    return contextFactory(rootActorId, projectionName);
-                },
+            return new ContextProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>, TContext>(
+                sp.GetRequiredService<IProjectionMaterializationLifecycleService<TContext, ServiceProjectionRuntimeLease<TContext>>>(),
+                (request, _) => contextFactory(request.RootActorId, request.ProjectionKind),
                 context => new ServiceProjectionRuntimeLease<TContext>(rootActorIdSelector(context), context));
         });
-        services.TryAddSingleton<IProjectionPortReleaseService<ServiceProjectionRuntimeLease<TContext>>, ContextProjectionReleaseService<ServiceProjectionRuntimeLease<TContext>, TContext, IReadOnlyList<string>>>();
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>>, ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>, TContext>>();
 
         return services;
     }

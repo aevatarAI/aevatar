@@ -24,5 +24,5 @@ public sealed class ScriptExecutionRuntimeLease
 
     public string ScopeId => RootEntityId;
 
-    public string SessionId => RootEntityId;
+    public string SessionId => Context.SessionId;
 }

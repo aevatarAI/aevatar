@@ -8,7 +8,7 @@ public sealed class ServiceRolloutProjectionPort
       IServiceRolloutProjectionPort
 {
     public ServiceRolloutProjectionPort(
-        IProjectionPortActivationService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>> activationService)
+        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>> activationService)
         : base(activationService, ServiceProjectionNames.Rollouts)
     {
     }

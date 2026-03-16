@@ -5,7 +5,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowExecutionCurrentStateProjector
-    : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+    : IProjectionMaterializer<WorkflowExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -18,17 +18,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
-    public ValueTask InitializeAsync(
-        WorkflowExecutionProjectionContext context,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
-
     public async ValueTask ProjectAsync(
-        WorkflowExecutionProjectionContext context,
+        WorkflowExecutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -47,10 +38,10 @@ public sealed class WorkflowExecutionCurrentStateProjector
         {
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
-            CommandId = context.CommandId ?? string.Empty,
+            CommandId = state.LastCommandId ?? string.Empty,
             DefinitionActorId = state.DefinitionActorId ?? string.Empty,
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
-            WorkflowName = string.IsNullOrWhiteSpace(state.WorkflowName) ? context.WorkflowName ?? string.Empty : state.WorkflowName,
+            WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
@@ -65,17 +56,6 @@ public sealed class WorkflowExecutionCurrentStateProjector
         };
 
         await _writeDispatcher.UpsertAsync(document, ct);
-    }
-
-    public ValueTask CompleteAsync(
-        WorkflowExecutionProjectionContext context,
-        IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     private static bool? ResolveSuccess(string? status)

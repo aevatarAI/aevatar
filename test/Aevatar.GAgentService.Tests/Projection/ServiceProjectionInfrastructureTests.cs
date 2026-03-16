@@ -28,8 +28,8 @@ public sealed class ServiceProjectionInfrastructureTests
         var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             });
         IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(activationService);
 
@@ -37,7 +37,7 @@ public sealed class ServiceProjectionInfrastructureTests
         await service.EnsureProjectionAsync("actor-1");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-1", "service-catalog", string.Empty, "actor-1"));
+        activationService.Calls[0].Should().Be(("actor-1", "service-catalog"));
     }
 
     [Fact]
@@ -46,8 +46,8 @@ public sealed class ServiceProjectionInfrastructureTests
         var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             });
         IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(activationService);
 
@@ -55,7 +55,7 @@ public sealed class ServiceProjectionInfrastructureTests
         await service.EnsureProjectionAsync("actor-2");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-2", "service-revisions", string.Empty, "actor-2"));
+        activationService.Calls[0].Should().Be(("actor-2", "service-revisions"));
     }
 
     [Fact]
@@ -65,20 +65,22 @@ public sealed class ServiceProjectionInfrastructureTests
         var activation = ProjectionTestFactory.CreateActivationService(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId,
             catalogLifecycle);
-        var release = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>, ServiceCatalogProjectionContext, IReadOnlyList<string>>(catalogLifecycle);
+        var release = new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>, ServiceCatalogProjectionContext>(catalogLifecycle);
 
-        var lease = await activation.EnsureAsync("actor-1", "service-catalog", string.Empty, "cmd-1");
+        var lease = await activation.EnsureAsync(new ProjectionMaterializationStartRequest
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "service-catalog",
+        });
         await release.ReleaseIfIdleAsync(lease);
 
-        lease.ScopeId.Should().Be("actor-1");
-        lease.SessionId.Should().Be("actor-1");
         catalogLifecycle.StartedContexts.Should().ContainSingle();
-        catalogLifecycle.StartedContexts[0].ProjectionId.Should().Be("service-catalog:actor-1");
+        catalogLifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-catalog");
         catalogLifecycle.StoppedContexts.Should().ContainSingle();
         catalogLifecycle.StoppedContexts[0].RootActorId.Should().Be("actor-1");
 
@@ -86,19 +88,22 @@ public sealed class ServiceProjectionInfrastructureTests
         var revisionActivation = ProjectionTestFactory.CreateActivationService(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             },
             static context => context.RootActorId,
             revisionLifecycle);
-        var revisionRelease = new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>, ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>(revisionLifecycle);
-        var revisionLease = await revisionActivation.EnsureAsync("actor-2", "service-revisions", string.Empty, "cmd-2");
+        var revisionRelease = new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>, ServiceRevisionCatalogProjectionContext>(revisionLifecycle);
+        var revisionLease = await revisionActivation.EnsureAsync(new ProjectionMaterializationStartRequest
+        {
+            RootActorId = "actor-2",
+            ProjectionKind = "service-revisions",
+        });
         await revisionRelease.ReleaseIfIdleAsync(revisionLease);
 
         revisionLifecycle.StartedContexts.Should().ContainSingle();
-        revisionLifecycle.StartedContexts[0].ProjectionId.Should().Be("service-revisions:actor-2");
+        revisionLifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-revisions");
         revisionLifecycle.StoppedContexts.Should().ContainSingle();
-        revisionLease.ScopeId.Should().Be("actor-2");
     }
 
     [Fact]
@@ -152,8 +157,8 @@ public sealed class ServiceProjectionInfrastructureTests
         var activationSelector = () => ProjectionTestFactory.CreateActivationService<ServiceCatalogProjectionContext>(
             static (_, _) => new ServiceCatalogProjectionContext
             {
-                ProjectionId = "projection-1",
                 RootActorId = "actor-1",
+                ProjectionKind = "service-catalog",
             },
             nullSelector!,
             new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>());

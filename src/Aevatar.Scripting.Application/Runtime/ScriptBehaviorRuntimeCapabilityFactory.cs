@@ -13,7 +13,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
 {
     private readonly IAICapability _aiCapability;
     private readonly IActorRuntime _runtime;
-    private readonly IScriptExecutionProjectionPort _executionProjectionPort;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
@@ -25,7 +24,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
     public ScriptBehaviorRuntimeCapabilityFactory(
         IAICapability aiCapability,
         IActorRuntime runtime,
-        IScriptExecutionProjectionPort executionProjectionPort,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
@@ -36,7 +34,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
     {
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
@@ -66,7 +63,6 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
             cancelCallbackAsync,
             _aiCapability,
             _runtime,
-            _executionProjectionPort,
             _definitionSnapshotPort,
             _proposalPort,
             _definitionCommandPort,

@@ -12,15 +12,15 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     where TRuntimeLease : class, TLeaseContract
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionPortActivationService<TRuntimeLease> _activationService;
-    private readonly IProjectionPortReleaseService<TRuntimeLease> _releaseService;
+    private readonly IProjectionSessionActivationService<TRuntimeLease> _activationService;
+    private readonly IProjectionSessionReleaseService<TRuntimeLease> _releaseService;
     private readonly IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> _sinkSubscriptionManager;
     private readonly IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> _liveSinkForwarder;
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionPortActivationService<TRuntimeLease> activationService,
-        IProjectionPortReleaseService<TRuntimeLease> releaseService,
+        IProjectionSessionActivationService<TRuntimeLease> activationService,
+        IProjectionSessionReleaseService<TRuntimeLease> releaseService,
         IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> sinkSubscriptionManager,
         IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> liveSinkForwarder)
     {
@@ -34,21 +34,13 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     public bool ProjectionEnabled => _projectionEnabledAccessor();
 
     protected async Task<TLeaseContract?> EnsureProjectionAsync(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
+        ProjectionSessionStartRequest request,
         CancellationToken ct = default)
     {
-        if (!ProjectionEnabled || string.IsNullOrWhiteSpace(rootEntityId))
+        if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))
             return null;
 
-        return await _activationService.EnsureAsync(
-            rootEntityId,
-            projectionName,
-            input,
-            commandId,
-            ct);
+        return await _activationService.EnsureAsync(request, ct);
     }
 
     public Task AttachLiveSinkAsync(

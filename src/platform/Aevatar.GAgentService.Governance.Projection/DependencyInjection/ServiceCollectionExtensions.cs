@@ -24,34 +24,26 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
 
-        services.AddEventSinkProjectionRuntimeCore<
+        services.AddProjectionMaterializationRuntimeCore<
             ServiceConfigurationProjectionContext,
-            IReadOnlyList<string>,
-            ServiceConfigurationRuntimeLease,
-            EventEnvelope>();
+            ServiceConfigurationRuntimeLease>();
 
-        services.TryAddSingleton<IProjectionPortActivationService<ServiceConfigurationRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<ServiceConfigurationProjectionContext, IReadOnlyList<string>>>(),
-                static (rootActorId, projectionName, input, commandId, ct) =>
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>>(sp =>
+            new ContextProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(
+                sp.GetRequiredService<IProjectionMaterializationLifecycleService<ServiceConfigurationProjectionContext, ServiceConfigurationRuntimeLease>>(),
+                static (request, _) => new ServiceConfigurationProjectionContext
                 {
-                    _ = input;
-                    _ = commandId;
-                    _ = ct;
-                    return new ServiceConfigurationProjectionContext
-                    {
-                        ProjectionId = $"{projectionName}:{rootActorId}",
-                        RootActorId = rootActorId,
-                    };
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
                 },
                 static context => new ServiceConfigurationRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<ServiceConfigurationRuntimeLease>, ContextProjectionReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext, IReadOnlyList<string>>>();
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>, ContextProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>>();
         services.TryAddSingleton<ServiceConfigurationProjectionPort>();
         services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceConfigurationQueryReader, ServiceConfigurationQueryReader>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceConfigurationProjectionContext, IReadOnlyList<string>>,
+            IProjectionMaterializer<ServiceConfigurationProjectionContext>,
             ServiceConfigurationProjector>());
 
         return services;

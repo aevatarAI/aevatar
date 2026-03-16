@@ -501,11 +501,13 @@ public sealed class WorkflowApplicationLayerTests
         IReadOnlyList<string>? createdActorIds = null,
         IWorkflowRunDetachedCleanupScheduler? cleanupScheduler = null)
     {
+        var readModelActivationPort = projectionPort;
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
             workflowName,
             createdActorIds ?? [],
             projectionPort,
+            readModelActivationPort,
             actorPort,
             cleanupScheduler ?? new FakeDetachedCleanupScheduler());
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
@@ -765,7 +767,9 @@ public sealed class WorkflowApplicationLayerTests
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class FakeProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled => true;
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];
@@ -778,10 +782,15 @@ public sealed class WorkflowApplicationLayerTests
         public int ReleaseFailureCount { get; set; }
         public int ReleaseAttemptCount => ReleaseAttempts.Count;
 
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
-            string workflowName,
-            string input,
             string commandId,
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
@@ -894,6 +903,13 @@ public sealed class WorkflowApplicationLayerTests
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();

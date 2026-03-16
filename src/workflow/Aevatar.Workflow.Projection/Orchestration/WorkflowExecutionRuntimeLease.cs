@@ -33,13 +33,13 @@ public sealed class WorkflowExecutionRuntimeLease
         WorkflowExecutionProjectionContext context,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null,
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         ILogger<WorkflowExecutionRuntimeLease>? logger = null)
         : base(context.RootActorId)
     {
         Context = context;
-        CommandId = context.CommandId;
+        CommandId = context.SessionId;
         _ownershipCoordinator = ownershipCoordinator;
         _projectionControlHub = projectionControlHub;
         _logger = logger ?? NullLogger<WorkflowExecutionRuntimeLease>.Instance;
@@ -153,7 +153,7 @@ public sealed class WorkflowExecutionRuntimeLease
     }
 
     private async Task RunProjectionReleaseListenerAsync(
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease> lifecycle,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent> projectionControlHub,
         CancellationToken ct)
     {
@@ -185,7 +185,7 @@ public sealed class WorkflowExecutionRuntimeLease
     }
 
     private async ValueTask HandleProjectionControlAsync(
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease> lifecycle,
         WorkflowProjectionControlEvent evt)
     {
         if (evt.EventCase != WorkflowProjectionControlEvent.EventOneofCase.ReleaseRequested)
@@ -204,7 +204,7 @@ public sealed class WorkflowExecutionRuntimeLease
 
         try
         {
-            await lifecycle.StopAsync(Context, CancellationToken.None).ConfigureAwait(false);
+            await lifecycle.StopAsync(this, CancellationToken.None).ConfigureAwait(false);
             await OnProjectionStoppedAsync(CancellationToken.None).ConfigureAwait(false);
             await PublishReleaseCompletedAsync().ConfigureAwait(false);
             if (_projectionReleaseListenerCts != null &&

@@ -9,7 +9,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptDefinitionSnapshotProjector
-    : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
+    : IProjectionMaterializer<ScriptAuthorityProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptDefinitionSnapshotDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -20,13 +20,6 @@ public sealed class ScriptDefinitionSnapshotProjector
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ScriptAuthorityProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(
@@ -75,14 +68,4 @@ public sealed class ScriptDefinitionSnapshotProjector
             ct);
     }
 
-    public ValueTask CompleteAsync(
-        ScriptAuthorityProjectionContext context,
-        IReadOnlyList<string> projectionResult,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = projectionResult;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
 }

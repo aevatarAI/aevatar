@@ -409,19 +409,21 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var actorPort = new FakeWorkflowRunActorPort();
         var cleanupScheduler = new FakeDetachedCleanupScheduler();
 
-        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, actorPort, cleanupScheduler);
-        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, actorPort, cleanupScheduler);
-        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, actorPort, cleanupScheduler);
-        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, cleanupScheduler);
-        var actOnCleanupScheduler = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, actorPort, null!);
+        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, projectionPort, actorPort, cleanupScheduler);
+        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, projectionPort, actorPort, cleanupScheduler);
+        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, projectionPort, actorPort, cleanupScheduler);
+        var actOnReadModelActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort, cleanupScheduler);
+        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, null!, cleanupScheduler);
+        var actOnCleanupScheduler = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort, null!);
 
         actOnActor.Should().Throw<ArgumentNullException>();
         actOnWorkflowName.Should().Throw<ArgumentException>();
         actOnProjectionPort.Should().Throw<ArgumentNullException>();
+        actOnReadModelActivationPort.Should().Throw<ArgumentNullException>();
         actOnActorPort.Should().Throw<ArgumentNullException>();
         actOnCleanupScheduler.Should().Throw<ArgumentNullException>();
 
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, actorPort, cleanupScheduler);
+        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort, cleanupScheduler);
         var lease = new FakeProjectionLease("actor-1", "cmd-1");
         var sink = new FakeEventSink();
 
@@ -448,6 +450,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             ["definition-1", "run-1"],
+            projectionPort,
             projectionPort,
             actorPort,
             cleanupScheduler);
@@ -479,6 +482,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             [],
+            new FakeProjectionPort(),
             new FakeProjectionPort(),
             new FakeWorkflowRunActorPort(),
             new FakeDetachedCleanupScheduler());
@@ -550,6 +554,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeWorkflowRunActorResolver(
                 new WorkflowActorResolutionResult(null, "auto", WorkflowChatRunStartError.AgentNotFound)),
             new FakeProjectionPort(),
+            new FakeProjectionPort(),
             new FakeWorkflowRunActorPort(),
             new FakeDetachedCleanupScheduler());
 
@@ -577,6 +582,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             "workflow-1",
             ["actor-1"],
             projectionPort,
+            projectionPort,
             actorPort,
             new FakeDetachedCleanupScheduler());
 
@@ -603,6 +609,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             ["definition-1", "run-1"],
+            projectionPort,
             projectionPort,
             actorPort,
             new FakeDetachedCleanupScheduler());
@@ -681,7 +688,9 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             throw new NotSupportedException();
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class FakeProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }
@@ -689,16 +698,19 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         public Exception? ReleaseException { get; set; }
         public List<string> Events { get; } = [];
 
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
-            string workflowName,
-            string input,
             string commandId,
             CancellationToken ct = default)
         {
             _ = rootActorId;
-            _ = workflowName;
-            _ = input;
             _ = commandId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
@@ -766,6 +778,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();

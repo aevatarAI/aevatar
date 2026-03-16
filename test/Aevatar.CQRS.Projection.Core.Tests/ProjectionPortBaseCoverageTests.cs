@@ -61,7 +61,6 @@ public class EventSinkProjectionLifecyclePortBaseTests
         var disabledResult = await disabledFixture.Service.EnsureProjectionPublicAsync(
             "actor-1",
             "projection",
-            "{}",
             "cmd-1",
             CancellationToken.None);
         disabledResult.Should().BeNull();
@@ -71,7 +70,6 @@ public class EventSinkProjectionLifecyclePortBaseTests
         var blankRootResult = await blankRootFixture.Service.EnsureProjectionPublicAsync(
             "   ",
             "projection",
-            "{}",
             "cmd-1",
             CancellationToken.None);
         blankRootResult.Should().BeNull();
@@ -86,7 +84,6 @@ public class EventSinkProjectionLifecyclePortBaseTests
         var lease = await fixture.Service.EnsureProjectionPublicAsync(
             "actor-1",
             "projection-1",
-            "{\"k\":\"v\"}",
             "cmd-1",
             CancellationToken.None);
 
@@ -94,7 +91,6 @@ public class EventSinkProjectionLifecyclePortBaseTests
         fixture.Activation.Calls.Should().Be(1);
         fixture.Activation.LastRootEntityId.Should().Be("actor-1");
         fixture.Activation.LastProjectionName.Should().Be("projection-1");
-        fixture.Activation.LastInput.Should().Be("{\"k\":\"v\"}");
         fixture.Activation.LastCommandId.Should().Be("cmd-1");
     }
 
@@ -102,7 +98,7 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task AttachSinkAsync_ShouldValidateArgumentsAndCancellation()
     {
         var fixture = CreateLifecycleFixture(enabled: true);
-        var lease = new TestRuntimeLease("lease-1");
+        var lease = new TestPortRuntimeLease("lease-1");
         var sink = new TestEventSink();
 
         Func<Task> noLease = () => fixture.Service.AttachSinkPublicAsync(null!, sink, CancellationToken.None);
@@ -120,7 +116,7 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task AttachSinkAsync_ShouldNoOp_WhenProjectionDisabled()
     {
         var fixture = CreateLifecycleFixture(enabled: false);
-        var lease = new TestRuntimeLease("lease-1");
+        var lease = new TestPortRuntimeLease("lease-1");
         var sink = new TestEventSink();
 
         await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
@@ -133,7 +129,7 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task AttachSinkAsync_ShouldAttachAndForwardLiveEvents_WhenEnabled()
     {
         var fixture = CreateLifecycleFixture(enabled: true);
-        var lease = new TestRuntimeLease("lease-1");
+        var lease = new TestPortRuntimeLease("lease-1");
         var sink = new TestEventSink();
 
         await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
@@ -154,7 +150,7 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task DetachSinkAsync_ShouldValidateArgumentsAndCancellation()
     {
         var fixture = CreateLifecycleFixture(enabled: true);
-        var lease = new TestRuntimeLease("lease-1");
+        var lease = new TestPortRuntimeLease("lease-1");
         var sink = new TestEventSink();
 
         Func<Task> noLease = () => fixture.Service.DetachSinkPublicAsync(null!, sink, CancellationToken.None);
@@ -172,13 +168,13 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task DetachSinkAsync_ShouldRespectProjectionEnabledGate()
     {
         var disabledFixture = CreateLifecycleFixture(enabled: false);
-        var disabledLease = new TestRuntimeLease("lease-disabled");
+        var disabledLease = new TestPortRuntimeLease("lease-disabled");
         var disabledSink = new TestEventSink();
         await disabledFixture.Service.DetachSinkPublicAsync(disabledLease, disabledSink, CancellationToken.None);
         disabledFixture.SinkManager.DetachCalls.Should().Be(0);
 
         var enabledFixture = CreateLifecycleFixture(enabled: true);
-        var enabledLease = new TestRuntimeLease("lease-enabled");
+        var enabledLease = new TestPortRuntimeLease("lease-enabled");
         var enabledSink = new TestEventSink();
         await enabledFixture.Service.DetachSinkPublicAsync(enabledLease, enabledSink, CancellationToken.None);
         enabledFixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
@@ -191,7 +187,7 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task ReleaseProjectionAsync_ShouldValidateArgumentsAndCancellation()
     {
         var fixture = CreateLifecycleFixture(enabled: true);
-        var lease = new TestRuntimeLease("lease-1");
+        var lease = new TestPortRuntimeLease("lease-1");
 
         Func<Task> noLease = () => fixture.Service.ReleaseProjectionPublicAsync(null!, CancellationToken.None);
         using var cts = new CancellationTokenSource();
@@ -206,12 +202,12 @@ public class EventSinkProjectionLifecyclePortBaseTests
     public async Task ReleaseProjectionAsync_ShouldRespectProjectionEnabledGate()
     {
         var disabledFixture = CreateLifecycleFixture(enabled: false);
-        var disabledLease = new TestRuntimeLease("lease-disabled");
+        var disabledLease = new TestPortRuntimeLease("lease-disabled");
         await disabledFixture.Service.ReleaseProjectionPublicAsync(disabledLease, CancellationToken.None);
         disabledFixture.Release.Calls.Should().Be(0);
 
         var enabledFixture = CreateLifecycleFixture(enabled: true);
-        var enabledLease = new TestRuntimeLease("lease-enabled");
+        var enabledLease = new TestPortRuntimeLease("lease-enabled");
         await enabledFixture.Service.ReleaseProjectionPublicAsync(enabledLease, CancellationToken.None);
         enabledFixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
         enabledFixture.Release.Calls.Should().Be(1);
@@ -242,14 +238,14 @@ public class EventSinkProjectionLifecyclePortBaseTests
 }
 
 internal sealed class TestEventSinkProjectionLifecyclePort
-    : EventSinkProjectionLifecyclePortBase<TestLeaseContract, TestRuntimeLease, string>
+    : EventSinkProjectionLifecyclePortBase<TestLeaseContract, TestPortRuntimeLease, string>
 {
     public TestEventSinkProjectionLifecyclePort(
         Func<bool> projectionEnabledAccessor,
-        IProjectionPortActivationService<TestRuntimeLease> activationService,
-        IProjectionPortReleaseService<TestRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<TestRuntimeLease, string> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<TestRuntimeLease, string> liveSinkForwarder)
+        IProjectionSessionActivationService<TestPortRuntimeLease> activationService,
+        IProjectionSessionReleaseService<TestPortRuntimeLease> releaseService,
+        IEventSinkProjectionSubscriptionManager<TestPortRuntimeLease, string> sinkSubscriptionManager,
+        IEventSinkProjectionLiveForwarder<TestPortRuntimeLease, string> liveSinkForwarder)
         : base(
             projectionEnabledAccessor,
             activationService,
@@ -264,10 +260,16 @@ internal sealed class TestEventSinkProjectionLifecyclePort
     public Task<TestLeaseContract?> EnsureProjectionPublicAsync(
         string rootEntityId,
         string projectionName,
-        string input,
         string commandId,
         CancellationToken ct = default) =>
-        EnsureProjectionAsync(rootEntityId, projectionName, input, commandId, ct);
+        EnsureProjectionAsync(
+            new ProjectionSessionStartRequest
+            {
+                RootActorId = rootEntityId,
+                ProjectionKind = projectionName,
+                SessionId = commandId,
+            },
+            ct);
 
     public Task AttachSinkPublicAsync(
         TestLeaseContract lease,
@@ -286,10 +288,10 @@ internal sealed class TestEventSinkProjectionLifecyclePort
         CancellationToken ct = default) =>
         ReleaseActorProjectionAsync(lease, ct);
 
-    protected override TestRuntimeLease ResolveRuntimeLease(TestLeaseContract lease)
+    protected override TestPortRuntimeLease ResolveRuntimeLease(TestLeaseContract lease)
     {
         ResolveRuntimeLeaseCalls++;
-        return (TestRuntimeLease)lease;
+        return (TestPortRuntimeLease)lease;
     }
 }
 
@@ -303,45 +305,40 @@ internal class TestLeaseContract
     public string LeaseId { get; }
 }
 
-internal sealed class TestRuntimeLease : TestLeaseContract
+internal sealed class TestPortRuntimeLease : TestLeaseContract
 {
-    public TestRuntimeLease(string leaseId)
+    public TestPortRuntimeLease(string leaseId)
         : base(leaseId)
     {
     }
 }
 
-internal sealed class TestActivationService : IProjectionPortActivationService<TestRuntimeLease>
+internal sealed class TestActivationService : IProjectionSessionActivationService<TestPortRuntimeLease>
 {
     public int Calls { get; private set; }
     public string? LastRootEntityId { get; private set; }
     public string? LastProjectionName { get; private set; }
-    public string? LastInput { get; private set; }
     public string? LastCommandId { get; private set; }
-    public TestRuntimeLease LeaseToReturn { get; } = new("lease-activation");
+    public TestPortRuntimeLease LeaseToReturn { get; } = new("lease-activation");
 
-    public Task<TestRuntimeLease> EnsureAsync(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
+    public Task<TestPortRuntimeLease> EnsureAsync(
+        ProjectionSessionStartRequest request,
         CancellationToken ct = default)
     {
         Calls++;
-        LastRootEntityId = rootEntityId;
-        LastProjectionName = projectionName;
-        LastInput = input;
-        LastCommandId = commandId;
+        LastRootEntityId = request.RootActorId;
+        LastProjectionName = request.ProjectionKind;
+        LastCommandId = request.SessionId;
         return Task.FromResult(LeaseToReturn);
     }
 }
 
-internal sealed class TestReleaseService : IProjectionPortReleaseService<TestRuntimeLease>
+internal sealed class TestReleaseService : IProjectionSessionReleaseService<TestPortRuntimeLease>
 {
     public int Calls { get; private set; }
-    public TestRuntimeLease? LastLease { get; private set; }
+    public TestPortRuntimeLease? LastLease { get; private set; }
 
-    public Task ReleaseIfIdleAsync(TestRuntimeLease lease, CancellationToken ct = default)
+    public Task ReleaseIfIdleAsync(TestPortRuntimeLease lease, CancellationToken ct = default)
     {
         Calls++;
         LastLease = lease;
@@ -350,16 +347,16 @@ internal sealed class TestReleaseService : IProjectionPortReleaseService<TestRun
 }
 
 internal sealed class TestSinkSubscriptionManager
-    : IEventSinkProjectionSubscriptionManager<TestRuntimeLease, string>
+    : IEventSinkProjectionSubscriptionManager<TestPortRuntimeLease, string>
 {
     public int AttachCalls { get; private set; }
     public int DetachCalls { get; private set; }
-    public TestRuntimeLease? LastLease { get; private set; }
+    public TestPortRuntimeLease? LastLease { get; private set; }
     public IEventSink<string>? LastSink { get; private set; }
     public Func<string, ValueTask>? LastHandler { get; private set; }
 
     public Task AttachOrReplaceAsync(
-        TestRuntimeLease lease,
+        TestPortRuntimeLease lease,
         IEventSink<string> sink,
         Func<string, ValueTask> handler,
         CancellationToken ct = default)
@@ -372,7 +369,7 @@ internal sealed class TestSinkSubscriptionManager
     }
 
     public Task DetachAsync(
-        TestRuntimeLease lease,
+        TestPortRuntimeLease lease,
         IEventSink<string> sink,
         CancellationToken ct = default)
     {
@@ -383,16 +380,16 @@ internal sealed class TestSinkSubscriptionManager
     }
 }
 
-internal sealed class TestLiveSinkForwarder : IEventSinkProjectionLiveForwarder<TestRuntimeLease, string>
+internal sealed class TestLiveSinkForwarder : IEventSinkProjectionLiveForwarder<TestPortRuntimeLease, string>
 {
     public int ForwardCalls { get; private set; }
-    public TestRuntimeLease? LastLease { get; private set; }
+    public TestPortRuntimeLease? LastLease { get; private set; }
     public IEventSink<string>? LastSink { get; private set; }
     public string? LastEvent { get; private set; }
     public CancellationToken LastToken { get; private set; }
 
     public ValueTask ForwardAsync(
-        TestRuntimeLease lease,
+        TestPortRuntimeLease lease,
         IEventSink<string> sink,
         string evt,
         CancellationToken ct = default)

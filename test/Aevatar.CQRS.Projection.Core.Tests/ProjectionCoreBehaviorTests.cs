@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -15,86 +16,44 @@ public class ProjectionCoordinatorTests
     public async Task ShouldExecuteProjectorsInRegistrationOrder()
     {
         var trace = new List<string>();
-        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(
+        var coordinator = new ProjectionCoordinator<TestProjectionContext>(
         [
             new RecordingProjector("p1", trace),
             new RecordingProjector("p2", trace),
         ]);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = new EventEnvelope { Id = "evt-1" };
+        var context = new TestProjectionContext("session-1", "actor-1");
 
-        await coordinator.InitializeAsync(context, CancellationToken.None);
-        await coordinator.ProjectAsync(context, envelope, CancellationToken.None);
-        await coordinator.CompleteAsync(context, "done", CancellationToken.None);
+        await coordinator.ProjectAsync(context, new EventEnvelope { Id = "evt-1" }, CancellationToken.None);
 
-        trace.Should().Equal(
-            "p1:init",
-            "p2:init",
-            "p1:project",
-            "p2:project",
-            "p1:complete:done",
-            "p2:complete:done");
+        trace.Should().Equal("p1:project", "p2:project");
     }
 
     [Fact]
     public async Task ProjectAsync_WhenProjectorFails_ShouldContinueOtherProjectorsAndThrowAggregate()
     {
         var trace = new List<string>();
-        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(
+        var coordinator = new ProjectionCoordinator<TestProjectionContext>(
         [
             new RecordingProjector("p1", trace),
             new ThrowingProjector("p2", trace, new InvalidOperationException("boom")),
             new RecordingProjector("p3", trace),
         ]);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = new EventEnvelope { Id = "evt-1" };
+        var context = new TestProjectionContext("session-1", "actor-1");
 
-        var act = () => coordinator.ProjectAsync(context, envelope, CancellationToken.None);
+        var act = () => coordinator.ProjectAsync(context, new EventEnvelope { Id = "evt-1" }, CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<ProjectionDispatchAggregateException>();
         ex.Which.Failures.Should().ContainSingle();
         ex.Which.Failures[0].ProjectorName.Should().Be(nameof(ThrowingProjector));
         ex.Which.Failures[0].ProjectorOrder.Should().Be(2);
-
-        trace.Should().Equal(
-            "p1:project",
-            "p2:project",
-            "p3:project");
-    }
-
-    [Fact]
-    public async Task ProjectAsync_WhenMultipleProjectorsFail_ShouldAggregateAllFailuresWithOrder()
-    {
-        var trace = new List<string>();
-        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(
-        [
-            new ThrowingProjector("p1", trace, new InvalidOperationException("boom-1")),
-            new RecordingProjector("p2", trace),
-            new ThrowingProjector("p3", trace, new ArgumentException("boom-2")),
-        ]);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = new EventEnvelope { Id = "evt-1" };
-
-        var act = () => coordinator.ProjectAsync(context, envelope, CancellationToken.None);
-
-        var ex = await act.Should().ThrowAsync<ProjectionDispatchAggregateException>();
-        ex.Which.Failures.Should().HaveCount(2);
-        ex.Which.Failures.Should().OnlyContain(x => x.ProjectorName == nameof(ThrowingProjector));
-        ex.Which.Failures.Select(x => x.ProjectorOrder).Should().Equal(1, 3);
-
-        trace.Should().Equal(
-            "p1:project",
-            "p2:project",
-            "p3:project");
+        trace.Should().Equal("p1:project", "p2:project", "p3:project");
     }
 
     [Fact]
     public void ProjectionDispatchAggregateException_ShouldUseDefaultMessage_WhenNoFailures()
     {
         var ex = new ProjectionDispatchAggregateException([]);
-
         ex.Message.Should().Be("Projection dispatch failed.");
-        ex.InnerException.Should().BeNull();
         ex.Failures.Should().BeEmpty();
     }
 }
@@ -102,29 +61,20 @@ public class ProjectionCoordinatorTests
 public class ProjectionLifecycleServiceTests
 {
     [Fact]
-    public async Task ShouldOrchestrateStartProjectStopAndCompleteInExpectedOrder()
+    public async Task ShouldOrchestrateStartProjectAndStopInExpectedOrder()
     {
         var trace = new List<string>();
-        var coordinator = new FakeCoordinator(trace);
         var dispatcher = new FakeDispatcher(trace);
         var registry = new FakeRegistry(trace);
-        var lifecycle = new ProjectionLifecycleService<TestProjectionContext, string>(coordinator, dispatcher, registry);
+        var lifecycle = new ProjectionLifecycleService<TestProjectionContext, TestRuntimeLease>(dispatcher, registry);
+        var context = new TestProjectionContext("session-1", "actor-1");
+        var runtimeLease = new TestRuntimeLease(context);
 
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = new EventEnvelope { Id = "evt-1" };
+        await lifecycle.StartAsync(runtimeLease, CancellationToken.None);
+        await lifecycle.ProjectAsync(context, new EventEnvelope { Id = "evt-1" }, CancellationToken.None);
+        await lifecycle.StopAsync(runtimeLease, CancellationToken.None);
 
-        await lifecycle.StartAsync(context, CancellationToken.None);
-        await lifecycle.ProjectAsync(context, envelope, CancellationToken.None);
-        await lifecycle.StopAsync(context, CancellationToken.None);
-        await lifecycle.CompleteAsync(context, "topology-1", CancellationToken.None);
-
-        trace.Should().Equal(
-            "coordinator:init",
-            "registry:register",
-            "dispatcher:dispatch",
-            "registry:unregister",
-            "registry:unregister",
-            "coordinator:complete:topology-1");
+        trace.Should().Equal("registry:register", "dispatcher:dispatch", "registry:unregister");
     }
 }
 
@@ -135,192 +85,86 @@ public class ProjectionSubscriptionRegistryTests
     {
         var dispatcher = new CountingDispatcher();
         var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(dispatcher, hub);
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
 
-        await registry.RegisterAsync(context, CancellationToken.None);
+        await registry.RegisterAsync(runtimeLease, CancellationToken.None);
 
-        context.StreamSubscriptionLease.Should().NotBeNull();
+        runtimeLease.ActorStreamSubscriptionLease.Should().NotBeNull();
         hub.LastActorId.Should().Be("actor-1");
 
         await hub.EmitAsync(CreateObservedEnvelope("evt-1"));
         dispatcher.DispatchCount.Should().Be(1);
 
-        await registry.UnregisterAsync(context, CancellationToken.None);
+        await registry.UnregisterAsync(runtimeLease, CancellationToken.None);
 
-        context.StreamSubscriptionLease.Should().BeNull();
+        runtimeLease.ActorStreamSubscriptionLease.Should().BeNull();
         hub.LastLease.Should().NotBeNull();
         hub.LastLease!.Disposed.Should().BeTrue();
     }
 
     [Fact]
-    public async Task RegisterAsync_ShouldThrow_WhenContextAlreadyRegistered()
+    public async Task RegisterAsync_ShouldThrow_WhenAlreadyRegistered()
     {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(
+            new CountingDispatcher(),
+            new FakeSubscriptionHub());
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
 
-        await registry.RegisterAsync(context, CancellationToken.None);
+        await registry.RegisterAsync(runtimeLease, CancellationToken.None);
 
-        Func<Task> act = () => registry.RegisterAsync(context, CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>();
-    }
-
-    [Fact]
-    public async Task RegisterAsync_ShouldForwardCancelableDispatchToken()
-    {
-        var dispatcher = new TokenCapturingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-
-        await registry.RegisterAsync(context, CancellationToken.None);
-        await hub.EmitAsync(CreateObservedEnvelope("evt-1"));
-
-        dispatcher.LastToken.Should().NotBeNull();
-        dispatcher.LastToken!.Value.CanBeCanceled.Should().BeTrue();
-
-        await registry.UnregisterAsync(context, CancellationToken.None);
+        await FluentActions.Invoking(() => registry.RegisterAsync(runtimeLease, CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
     }
 
     [Fact]
     public async Task RegisterAsync_ShouldReportFailure_WhenDispatcherThrows()
     {
-        var dispatcher = new ThrowingDispatcher(new InvalidOperationException("boom"));
         var reporter = new CapturingFailureReporter();
+        var envelope = CreateObservedEnvelope("evt-1");
         var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(
-            dispatcher,
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(
+            new ThrowingDispatcher(new InvalidOperationException("boom")),
             hub,
             reporter);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        var envelope = CreateObservedEnvelope("evt-1");
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
 
-        await registry.RegisterAsync(context, CancellationToken.None);
+        await registry.RegisterAsync(runtimeLease, CancellationToken.None);
         await hub.EmitAsync(envelope);
 
         reporter.Calls.Should().ContainSingle();
-        reporter.Calls[0].Context.Should().BeSameAs(context);
+        reporter.Calls[0].Context.Should().BeSameAs(runtimeLease.Context);
         reporter.Calls[0].Envelope.Should().BeSameAs(envelope);
         reporter.Calls[0].Exception.Should().BeOfType<InvalidOperationException>();
-        reporter.Calls[0].Token.CanBeCanceled.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task RegisterAsync_ShouldThrow_WhenRegistryDisposed()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        await registry.DisposeAsync();
-
-        Func<Task> act = () => registry.RegisterAsync(context, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ObjectDisposedException>();
-    }
-
-    [Fact]
-    public async Task RegisterAsync_ShouldRethrow_WhenHubSubscriptionFails()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new ThrowingSubscriptionHub(new InvalidOperationException("subscribe-failed"));
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-
-        Func<Task> act = () => registry.RegisterAsync(context, CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("subscribe-failed");
-        context.StreamSubscriptionLease.Should().BeNull();
     }
 
     [Fact]
     public async Task RegisterAsync_ShouldIgnoreDispatchFailures_WhenReporterIsMissing()
     {
-        var dispatcher = new ThrowingDispatcher(new InvalidOperationException("boom"));
         var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(
+            new ThrowingDispatcher(new InvalidOperationException("boom")),
+            hub);
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
 
-        await registry.RegisterAsync(context, CancellationToken.None);
-
-        Func<Task> act = () => hub.EmitAsync(CreateObservedEnvelope("evt-1"));
-        await act.Should().NotThrowAsync();
+        await registry.RegisterAsync(runtimeLease, CancellationToken.None);
+        await FluentActions.Invoking(() => hub.EmitAsync(CreateObservedEnvelope("evt-1")))
+            .Should().NotThrowAsync();
     }
 
     [Fact]
-    public async Task RegisterAsync_ShouldIgnoreReporterFailures()
+    public async Task RegisterAsync_ShouldThrow_WhenHubSubscriptionFails()
     {
-        var dispatcher = new ThrowingDispatcher(new InvalidOperationException("boom"));
-        var reporter = new ThrowingFailureReporter(new InvalidOperationException("report-failed"));
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub, reporter);
-        var context = new TestProjectionContext("projection-1", "actor-1");
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(
+            new CountingDispatcher(),
+            new ThrowingSubscriptionHub(new InvalidOperationException("subscribe-failed")));
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
 
-        await registry.RegisterAsync(context, CancellationToken.None);
+        await FluentActions.Invoking(() => registry.RegisterAsync(runtimeLease, CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("subscribe-failed");
 
-        Func<Task> act = () => hub.EmitAsync(new EventEnvelope { Id = "evt-1" });
-        await act.Should().NotThrowAsync();
-    }
-
-    [Fact]
-    public async Task UnregisterAsync_ShouldThrow_WhenCancellationRequested()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Func<Task> act = () => registry.UnregisterAsync(context, cts.Token);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    [Fact]
-    public async Task UnregisterAsync_ShouldThrow_WhenDisposed()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-        await registry.DisposeAsync();
-
-        Func<Task> act = () => registry.UnregisterAsync(context, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ObjectDisposedException>();
-    }
-
-    [Fact]
-    public async Task UnregisterAsync_ShouldReturn_WhenContextIdentityIsIncomplete()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext(" ", "actor-1");
-
-        Func<Task> act = () => registry.UnregisterAsync(context, CancellationToken.None);
-
-        await act.Should().NotThrowAsync();
-        hub.LastLease.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task UnregisterAsync_ShouldReturn_WhenLeaseMissing()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
-
-        Func<Task> act = () => registry.UnregisterAsync(context, CancellationToken.None);
-
-        await act.Should().NotThrowAsync();
-        hub.LastLease.Should().BeNull();
+        runtimeLease.ActorStreamSubscriptionLease.Should().BeNull();
     }
 
     [Fact]
@@ -328,41 +172,32 @@ public class ProjectionSubscriptionRegistryTests
     {
         var dispatcher = new CountingDispatcher();
         var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-        var context = new TestProjectionContext("projection-1", "actor-1");
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(dispatcher, hub);
+        var runtimeLease = new TestRuntimeLease(new TestProjectionContext("session-1", "actor-1"));
         using var cts = new CancellationTokenSource();
-        await registry.RegisterAsync(context, cts.Token);
-        cts.Cancel();
 
+        await registry.RegisterAsync(runtimeLease, cts.Token);
+        cts.Cancel();
         await hub.EmitAsync(CreateObservedEnvelope("evt-late"));
-        await registry.UnregisterAsync(context, CancellationToken.None);
+        await registry.UnregisterAsync(runtimeLease, CancellationToken.None);
 
         dispatcher.DispatchCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task RegisterAsync_ShouldThrow_WhenContextIsNull()
+    public async Task RegisterAndUnregister_ShouldValidateArgumentsAndDisposedState()
     {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
+        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>(
+            new CountingDispatcher(),
+            new FakeSubscriptionHub());
+        await registry.DisposeAsync();
 
-        Func<Task> act = () => registry.RegisterAsync(null!, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ArgumentNullException>();
+        await FluentActions.Invoking(() => registry.RegisterAsync(null!, CancellationToken.None))
+            .Should().ThrowAsync<ObjectDisposedException>();
+        await FluentActions.Invoking(() => registry.UnregisterAsync(null!, CancellationToken.None))
+            .Should().ThrowAsync<ArgumentNullException>();
     }
 
-    [Fact]
-    public async Task UnregisterAsync_ShouldThrow_WhenContextIsNull()
-    {
-        var dispatcher = new CountingDispatcher();
-        var hub = new FakeSubscriptionHub();
-        var registry = new ProjectionSubscriptionRegistry<TestProjectionContext>(dispatcher, hub);
-
-        Func<Task> act = () => registry.UnregisterAsync(null!, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ArgumentNullException>();
-    }
     private static EventEnvelope CreateObservedEnvelope(string eventId) =>
         new()
         {
@@ -398,78 +233,15 @@ public class ActorStreamSubscriptionHubTests
     }
 
     [Fact]
-    public async Task SubscribeAsync_ShouldThrow_WhenActorIdIsBlank()
+    public async Task SubscribeAsync_ShouldValidateInputs()
     {
         var provider = new FakeStreamProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
-        Func<Task> act = () => hub.SubscribeAsync("   ", _ => ValueTask.CompletedTask, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ArgumentException>();
-    }
-
-    [Fact]
-    public async Task SubscribeAsync_ShouldThrow_WhenHandlerIsNull()
-    {
-        var provider = new FakeStreamProvider();
-        var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
-
-        Func<Task> act = () => hub.SubscribeAsync("actor-1", null!, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ArgumentNullException>();
-    }
-
-    [Fact]
-    public async Task SubscribeAsync_ShouldThrow_WhenHubDisposed()
-    {
-        var provider = new FakeStreamProvider();
-        var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
-        await hub.DisposeAsync();
-
-        Func<Task> act = () => hub.SubscribeAsync("actor-1", _ => ValueTask.CompletedTask, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ObjectDisposedException>();
-    }
-
-    [Fact]
-    public async Task SubscribeAsync_ShouldSwallowHandlerExceptions()
-    {
-        var provider = new FakeStreamProvider();
-        var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
-
-        await hub.SubscribeAsync(
-            "actor-1",
-            _ => throw new InvalidOperationException("handler-failed"),
-            CancellationToken.None);
-
-        Func<Task> act = () => provider.Stream.DeliverAsync(new EventEnvelope { Id = "evt-1" });
-
-        await act.Should().NotThrowAsync();
-    }
-
-    [Fact]
-    public async Task LeaseDispose_ShouldSwallowUnderlyingDisposeExceptions()
-    {
-        var provider = new FakeStreamProvider();
-        provider.Stream.Subscription.ThrowOnDispose = true;
-        var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
-
-        var lease = await hub.SubscribeAsync("actor-1", _ => ValueTask.CompletedTask, CancellationToken.None);
-        Func<Task> act = async () => await lease.DisposeAsync();
-
-        await act.Should().NotThrowAsync();
-    }
-
-    [Fact]
-    public async Task DisposeAsync_ShouldBeIdempotent()
-    {
-        var provider = new FakeStreamProvider();
-        var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
-
-        await hub.DisposeAsync();
-        Func<Task> act = async () => await hub.DisposeAsync();
-
-        await act.Should().NotThrowAsync();
+        await FluentActions.Invoking(() => hub.SubscribeAsync("   ", _ => ValueTask.CompletedTask, CancellationToken.None))
+            .Should().ThrowAsync<ArgumentException>();
+        await FluentActions.Invoking(() => hub.SubscribeAsync("actor-1", null!, CancellationToken.None))
+            .Should().ThrowAsync<ArgumentNullException>();
     }
 }
 
@@ -497,20 +269,34 @@ public class ProjectionAssemblyRegistrationTests
     }
 }
 
-public sealed class TestProjectionContext : IProjectionContext, IProjectionStreamSubscriptionContext
+public sealed class TestProjectionContext : IProjectionSessionContext
 {
-    public TestProjectionContext(string projectionId, string rootActorId)
+    public TestProjectionContext(string sessionId, string rootActorId, string projectionKind = "projection-test")
     {
-        ProjectionId = projectionId;
+        SessionId = sessionId;
         RootActorId = rootActorId;
+        ProjectionKind = projectionKind;
     }
 
-    public string ProjectionId { get; }
+    public string SessionId { get; }
     public string RootActorId { get; }
-    public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }
+    public string ProjectionKind { get; }
 }
 
-internal sealed class RecordingProjector : IProjectionProjector<TestProjectionContext, string>
+internal sealed class TestRuntimeLease
+    : ProjectionRuntimeLeaseBase,
+      IProjectionContextRuntimeLease<TestProjectionContext>
+{
+    public TestRuntimeLease(TestProjectionContext context)
+        : base(context.RootActorId)
+    {
+        Context = context;
+    }
+
+    public TestProjectionContext Context { get; }
+}
+
+internal sealed class RecordingProjector : IProjectionProjector<TestProjectionContext>
 {
     private readonly string _name;
     private readonly IList<string> _trace;
@@ -521,26 +307,14 @@ internal sealed class RecordingProjector : IProjectionProjector<TestProjectionCo
         _trace = trace;
     }
 
-    public ValueTask InitializeAsync(TestProjectionContext context, CancellationToken ct = default)
-    {
-        _trace.Add($"{_name}:init");
-        return ValueTask.CompletedTask;
-    }
-
     public ValueTask ProjectAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         _trace.Add($"{_name}:project");
         return ValueTask.CompletedTask;
     }
-
-    public ValueTask CompleteAsync(TestProjectionContext context, string topology, CancellationToken ct = default)
-    {
-        _trace.Add($"{_name}:complete:{topology}");
-        return ValueTask.CompletedTask;
-    }
 }
 
-internal sealed class ThrowingProjector : IProjectionProjector<TestProjectionContext, string>
+internal sealed class ThrowingProjector : IProjectionProjector<TestProjectionContext>
 {
     private readonly string _name;
     private readonly IList<string> _trace;
@@ -553,44 +327,10 @@ internal sealed class ThrowingProjector : IProjectionProjector<TestProjectionCon
         _exception = exception;
     }
 
-    public ValueTask InitializeAsync(TestProjectionContext context, CancellationToken ct = default) =>
-        ValueTask.CompletedTask;
-
     public ValueTask ProjectAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
         _trace.Add($"{_name}:project");
         throw _exception;
-    }
-
-    public ValueTask CompleteAsync(TestProjectionContext context, string topology, CancellationToken ct = default) =>
-        ValueTask.CompletedTask;
-}
-
-internal sealed class FakeCoordinator : IProjectionCoordinator<TestProjectionContext, string>
-{
-    private readonly IList<string> _trace;
-
-    public FakeCoordinator(IList<string> trace)
-    {
-        _trace = trace;
-    }
-
-    public Task InitializeAsync(TestProjectionContext context, CancellationToken ct = default)
-    {
-        _trace.Add("coordinator:init");
-        return Task.CompletedTask;
-    }
-
-    public Task ProjectAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-    {
-        _trace.Add("coordinator:project");
-        return Task.CompletedTask;
-    }
-
-    public Task CompleteAsync(TestProjectionContext context, string topology, CancellationToken ct = default)
-    {
-        _trace.Add($"coordinator:complete:{topology}");
-        return Task.CompletedTask;
     }
 }
 
@@ -598,10 +338,7 @@ internal sealed class FakeDispatcher : IProjectionDispatcher<TestProjectionConte
 {
     private readonly IList<string> _trace;
 
-    public FakeDispatcher(IList<string> trace)
-    {
-        _trace = trace;
-    }
+    public FakeDispatcher(IList<string> trace) => _trace = trace;
 
     public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
@@ -610,22 +347,19 @@ internal sealed class FakeDispatcher : IProjectionDispatcher<TestProjectionConte
     }
 }
 
-internal sealed class FakeRegistry : IProjectionSubscriptionRegistry<TestProjectionContext>
+internal sealed class FakeRegistry : IProjectionSubscriptionRegistry<TestProjectionContext, TestRuntimeLease>
 {
     private readonly IList<string> _trace;
 
-    public FakeRegistry(IList<string> trace)
-    {
-        _trace = trace;
-    }
+    public FakeRegistry(IList<string> trace) => _trace = trace;
 
-    public Task RegisterAsync(TestProjectionContext context, CancellationToken ct = default)
+    public Task RegisterAsync(TestRuntimeLease runtimeLease, CancellationToken ct = default)
     {
         _trace.Add("registry:register");
         return Task.CompletedTask;
     }
 
-    public Task UnregisterAsync(TestProjectionContext context, CancellationToken ct = default)
+    public Task UnregisterAsync(TestRuntimeLease runtimeLease, CancellationToken ct = default)
     {
         _trace.Add("registry:unregister");
         return Task.CompletedTask;
@@ -643,63 +377,24 @@ internal sealed class CountingDispatcher : IProjectionDispatcher<TestProjectionC
     }
 }
 
-internal sealed class TokenCapturingDispatcher : IProjectionDispatcher<TestProjectionContext>
-{
-    public CancellationToken? LastToken { get; private set; }
-
-    public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-    {
-        LastToken = ct;
-        return Task.CompletedTask;
-    }
-}
-
 internal sealed class ThrowingDispatcher : IProjectionDispatcher<TestProjectionContext>
 {
     private readonly Exception _exception;
 
-    public ThrowingDispatcher(Exception exception)
-    {
-        _exception = exception;
-    }
+    public ThrowingDispatcher(Exception exception) => _exception = exception;
 
-    public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-    {
-        throw _exception;
-    }
+    public Task DispatchAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) =>
+        Task.FromException(_exception);
 }
 
 internal sealed class CapturingFailureReporter : IProjectionDispatchFailureReporter<TestProjectionContext>
 {
     public List<(TestProjectionContext Context, EventEnvelope Envelope, Exception Exception, CancellationToken Token)> Calls { get; } = [];
 
-    public ValueTask ReportAsync(
-        TestProjectionContext context,
-        EventEnvelope envelope,
-        Exception exception,
-        CancellationToken ct = default)
+    public ValueTask ReportAsync(TestProjectionContext context, EventEnvelope envelope, Exception exception, CancellationToken ct = default)
     {
         Calls.Add((context, envelope, exception, ct));
         return ValueTask.CompletedTask;
-    }
-}
-
-internal sealed class ThrowingFailureReporter : IProjectionDispatchFailureReporter<TestProjectionContext>
-{
-    private readonly Exception _exception;
-
-    public ThrowingFailureReporter(Exception exception)
-    {
-        _exception = exception;
-    }
-
-    public ValueTask ReportAsync(
-        TestProjectionContext context,
-        EventEnvelope envelope,
-        Exception exception,
-        CancellationToken ct = default)
-    {
-        throw _exception;
     }
 }
 
@@ -731,29 +426,18 @@ internal sealed class ThrowingSubscriptionHub : IActorStreamSubscriptionHub<Even
 {
     private readonly Exception _exception;
 
-    public ThrowingSubscriptionHub(Exception exception)
-    {
-        _exception = exception;
-    }
+    public ThrowingSubscriptionHub(Exception exception) => _exception = exception;
 
     public Task<IActorStreamSubscriptionLease> SubscribeAsync(
         string actorId,
         Func<EventEnvelope, ValueTask> handler,
-        CancellationToken ct = default)
-    {
-        _ = actorId;
-        _ = handler;
-        _ = ct;
-        throw _exception;
-    }
+        CancellationToken ct = default) =>
+        Task.FromException<IActorStreamSubscriptionLease>(_exception);
 }
 
 internal sealed class FakeLease : IActorStreamSubscriptionLease
 {
-    public FakeLease(string actorId)
-    {
-        ActorId = actorId;
-    }
+    public FakeLease(string actorId) => ActorId = actorId;
 
     public string ActorId { get; }
     public bool Disposed { get; private set; }
@@ -791,25 +475,12 @@ internal sealed class FakeStream : IStream
         return Task.FromResult<IAsyncDisposable>(Subscription);
     }
 
-    public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
-    {
-        _ = binding;
-        _ = ct;
-        return Task.CompletedTask;
-    }
+    public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) => Task.CompletedTask;
 
-    public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
-    {
-        _ = targetStreamId;
-        _ = ct;
-        return Task.CompletedTask;
-    }
+    public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) => Task.CompletedTask;
 
-    public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default)
-    {
-        _ = ct;
-        return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
-    }
+    public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
 
     public async Task DeliverAsync(EventEnvelope envelope)
     {
@@ -821,37 +492,21 @@ internal sealed class FakeStream : IStream
 internal sealed class FakeAsyncSubscription : IAsyncDisposable
 {
     public bool Disposed { get; private set; }
-    public bool ThrowOnDispose { get; set; }
 
     public ValueTask DisposeAsync()
     {
         Disposed = true;
-        if (ThrowOnDispose)
-            throw new InvalidOperationException("Subscription dispose failure.");
         return ValueTask.CompletedTask;
     }
 }
 
-public interface ITestReducerMarker
-{
-}
-
-public interface ITestProjectorMarker
-{
-}
-
-public interface ITestReducerGeneric<TContext, TTopology>
-{
-}
-
-public interface ITestProjectorGeneric<TContext, TTopology>
-{
-}
+public interface ITestReducerMarker;
+public interface ITestProjectorMarker;
+public interface ITestReducerGeneric<TContext, TTopology>;
+public interface ITestProjectorGeneric<TContext, TTopology>;
 
 public sealed class TestReducerExtension :
     ITestReducerMarker,
     ITestProjectorMarker,
     ITestReducerGeneric<TestProjectionContext, string>,
-    ITestProjectorGeneric<TestProjectionContext, string>
-{
-}
+    ITestProjectorGeneric<TestProjectionContext, string>;

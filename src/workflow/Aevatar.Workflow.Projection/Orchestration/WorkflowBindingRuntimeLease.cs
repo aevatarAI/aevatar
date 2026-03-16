@@ -1,11 +1,9 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowBindingRuntimeLease
-    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
-      IProjectionPortSessionLease,
+    : ProjectionRuntimeLeaseBase,
       IProjectionContextRuntimeLease<WorkflowBindingProjectionContext>
 {
     public WorkflowBindingRuntimeLease(WorkflowBindingProjectionContext context)
@@ -15,8 +13,4 @@ public sealed class WorkflowBindingRuntimeLease
     }
 
     public WorkflowBindingProjectionContext Context { get; }
-
-    public string ScopeId => RootEntityId;
-
-    public string SessionId => RootEntityId;
 }

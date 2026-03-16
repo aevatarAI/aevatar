@@ -269,12 +269,9 @@ public sealed class WorkflowProjectionSinkFailurePolicyCoverageTests
     private static WorkflowExecutionRuntimeLease CreateLease(string actorId, string commandId) =>
         new(new WorkflowExecutionProjectionContext
         {
-            ProjectionId = actorId,
+            SessionId = commandId,
             RootActorId = actorId,
-            CommandId = commandId,
-            WorkflowName = "workflow",
-            StartedAt = new DateTimeOffset(2026, 2, 27, 5, 0, 0, TimeSpan.Zero),
-            Input = "input",
+            ProjectionKind = "workflow-execution",
         });
 
     private static WorkflowRunEventEnvelope BuildRunStarted(string threadId) =>

@@ -8,7 +8,7 @@ public sealed class ServiceRevisionCatalogProjectionPort
       IServiceRevisionCatalogProjectionPort
 {
     public ServiceRevisionCatalogProjectionPort(
-        IProjectionPortActivationService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>> activationService)
+        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>> activationService)
         : base(activationService, ServiceProjectionNames.Revisions)
     {
     }

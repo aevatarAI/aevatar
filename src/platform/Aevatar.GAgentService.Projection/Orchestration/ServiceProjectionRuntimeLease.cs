@@ -1,14 +1,12 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
 public sealed class ServiceProjectionRuntimeLease<TContext>
-    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
-      IProjectionPortSessionLease,
+    : ProjectionRuntimeLeaseBase,
       IProjectionContextRuntimeLease<TContext>
-    where TContext : class, IProjectionContext
+    where TContext : class, IProjectionMaterializationContext
 {
     public ServiceProjectionRuntimeLease(string rootEntityId, TContext context)
         : base(rootEntityId)
@@ -17,8 +15,4 @@ public sealed class ServiceProjectionRuntimeLease<TContext>
     }
 
     public TContext Context { get; }
-
-    public string ScopeId => RootEntityId;
-
-    public string SessionId => RootEntityId;
 }

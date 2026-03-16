@@ -27,7 +27,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAITextMessageEndProjectionApplier<TReadModel, TContext>(
         this IServiceCollection services)
         where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-        where TContext : class, IProjectionContext
+        where TContext : class, IProjectionSessionContext
     {
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionEventApplier<TReadModel, TContext, TextMessageEndEvent>, AITextMessageEndProjectionApplier<TReadModel, TContext>>());
         return services;
@@ -52,7 +52,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddAIDefaultProjectionAppliers<TReadModel, TContext>(
         this IServiceCollection services)
         where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-        where TContext : class, IProjectionContext
+        where TContext : class, IProjectionSessionContext
     {
         return services
             .AddAITextMessageStartProjectionApplier<TReadModel, TContext>()

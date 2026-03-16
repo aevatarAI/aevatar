@@ -11,7 +11,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceCatalogProjector
-    : IProjectionProjector<ServiceCatalogProjectionContext, IReadOnlyList<string>>
+    : IProjectionMaterializer<ServiceCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceCatalogReadModel, string> _documentReader;
@@ -25,13 +25,6 @@ public sealed class ServiceCatalogProjector
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ServiceCatalogProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(ServiceCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -120,17 +113,6 @@ public sealed class ServiceCatalogProjector
                 readModel.DeploymentStatus = evt.Status.ToString();
             }, ct);
         }
-    }
-
-    public ValueTask CompleteAsync(
-        ServiceCatalogProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     private async Task UpsertDefinitionAsync(

@@ -24,8 +24,8 @@ public sealed class WorkflowActorBindingProjectorTests
             new StaticClock(new DateTimeOffset(2026, 3, 14, 12, 0, 0, TimeSpan.Zero)));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-1:binding",
             RootActorId = "actor-1",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(
@@ -62,8 +62,8 @@ public sealed class WorkflowActorBindingProjectorTests
         var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-2:binding",
             RootActorId = "actor-2",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(
@@ -99,8 +99,8 @@ public sealed class WorkflowActorBindingProjectorTests
         var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-3:binding",
             RootActorId = "actor-3",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(

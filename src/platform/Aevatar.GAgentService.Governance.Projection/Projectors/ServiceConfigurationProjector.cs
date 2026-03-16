@@ -12,7 +12,7 @@ using Aevatar.GAgentService.Governance.Projection.ReadModels;
 namespace Aevatar.GAgentService.Governance.Projection.Projectors;
 
 public sealed class ServiceConfigurationProjector
-    : IProjectionProjector<ServiceConfigurationProjectionContext, IReadOnlyList<string>>
+    : IProjectionMaterializer<ServiceConfigurationProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceConfigurationReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceConfigurationReadModel, string> _documentReader;
@@ -26,13 +26,6 @@ public sealed class ServiceConfigurationProjector
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ServiceConfigurationProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(ServiceConfigurationProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -134,17 +127,6 @@ public sealed class ServiceConfigurationProjector
                 policy.Retired = true;
             });
         }
-    }
-
-    public ValueTask CompleteAsync(
-        ServiceConfigurationProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     private async Task UpsertAsync(

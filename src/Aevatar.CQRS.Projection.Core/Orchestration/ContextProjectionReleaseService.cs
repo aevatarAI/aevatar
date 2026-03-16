@@ -1,13 +1,13 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public sealed class ContextProjectionReleaseService<TRuntimeLease, TContext, TTopology>
-    : IProjectionPortReleaseService<TRuntimeLease>
+public sealed class ContextProjectionReleaseService<TRuntimeLease, TContext>
+    : IProjectionSessionReleaseService<TRuntimeLease>
     where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
-    where TContext : class, IProjectionContext
+    where TContext : class, IProjectionSessionContext
 {
-    private readonly IProjectionLifecycleService<TContext, TTopology> _lifecycle;
+    private readonly IProjectionLifecycleService<TContext, TRuntimeLease> _lifecycle;
 
-    public ContextProjectionReleaseService(IProjectionLifecycleService<TContext, TTopology> lifecycle)
+    public ContextProjectionReleaseService(IProjectionLifecycleService<TContext, TRuntimeLease> lifecycle)
     {
         _lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
     }
@@ -22,7 +22,7 @@ public sealed class ContextProjectionReleaseService<TRuntimeLease, TContext, TTo
         if (runtimeLease.GetLiveSinkSubscriptionCount() > 0)
             return;
 
-        await _lifecycle.StopAsync(runtimeLease.Context, ct);
+        await _lifecycle.StopAsync(runtimeLease, ct);
         if (runtimeLease is IProjectionRuntimeLeaseStopHandler stopHandler)
             await stopHandler.OnProjectionStoppedAsync(ct);
     }

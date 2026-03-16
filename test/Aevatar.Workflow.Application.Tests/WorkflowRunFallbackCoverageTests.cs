@@ -208,6 +208,7 @@ public sealed class WorkflowRunFallbackCoverageTests
             workflowName,
             [actorId],
             projectionPort,
+            projectionPort,
             actorPort,
             new RecordingDetachedCleanupScheduler());
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
@@ -381,14 +382,21 @@ public sealed class WorkflowRunFallbackCoverageTests
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class FakeProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled => true;
 
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
-            string workflowName,
-            string input,
             string commandId,
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
@@ -436,6 +444,13 @@ public sealed class WorkflowRunFallbackCoverageTests
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();

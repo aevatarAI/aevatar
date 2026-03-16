@@ -10,33 +10,32 @@ namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
 /// </summary>
 public static class EventSinkProjectionRuntimeRegistration
 {
-    public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TTopology, TRuntimeLease, TEvent>(
+    public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TRuntimeLease, TEvent>(
         this IServiceCollection services)
-        where TContext : class, IProjectionContext, IProjectionStreamSubscriptionContext
-        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease
+        where TContext : class, IProjectionSessionContext
+        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease, IProjectionContextRuntimeLease<TContext>, IProjectionStreamSubscriptionRuntimeLease
         where TEvent : class
     {
         return services.AddEventSinkProjectionRuntimeCore<
             TContext,
-            TTopology,
             TRuntimeLease,
             TEvent,
             DefaultEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>>();
     }
 
-    public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TTopology, TRuntimeLease, TEvent, TSinkFailurePolicy>(
+    public static IServiceCollection AddEventSinkProjectionRuntimeCore<TContext, TRuntimeLease, TEvent, TSinkFailurePolicy>(
         this IServiceCollection services)
-        where TContext : class, IProjectionContext, IProjectionStreamSubscriptionContext
-        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease
+        where TContext : class, IProjectionSessionContext
+        where TRuntimeLease : EventSinkProjectionRuntimeLeaseBase<TEvent>, IProjectionPortSessionLease, IProjectionContextRuntimeLease<TContext>, IProjectionStreamSubscriptionRuntimeLease
         where TEvent : class
         where TSinkFailurePolicy : class, IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<IProjectionCoordinator<TContext, TTopology>, ProjectionCoordinator<TContext, TTopology>>();
-        services.TryAddSingleton<IProjectionDispatcher<TContext>, ProjectionDispatcher<TContext, TTopology>>();
-        services.TryAddSingleton<IProjectionSubscriptionRegistry<TContext>, ProjectionSubscriptionRegistry<TContext>>();
-        services.TryAddSingleton<IProjectionLifecycleService<TContext, TTopology>, ProjectionLifecycleService<TContext, TTopology>>();
+        services.TryAddSingleton<IProjectionCoordinator<TContext>, ProjectionCoordinator<TContext>>();
+        services.TryAddSingleton<IProjectionDispatcher<TContext>, ProjectionDispatcher<TContext>>();
+        services.TryAddSingleton<IProjectionSubscriptionRegistry<TContext, TRuntimeLease>, ProjectionSubscriptionRegistry<TContext, TRuntimeLease>>();
+        services.TryAddSingleton<IProjectionLifecycleService<TContext, TRuntimeLease>, ProjectionLifecycleService<TContext, TRuntimeLease>>();
         services.TryAddSingleton<IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent>,
             EventSinkProjectionSessionSubscriptionManager<TRuntimeLease, TEvent>>();
         services.TryAddSingleton<IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>, TSinkFailurePolicy>();

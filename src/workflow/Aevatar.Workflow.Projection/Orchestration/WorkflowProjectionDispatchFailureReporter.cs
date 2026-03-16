@@ -32,7 +32,7 @@ public sealed class WorkflowProjectionDispatchFailureReporter
         ArgumentNullException.ThrowIfNull(envelope);
         ArgumentNullException.ThrowIfNull(exception);
 
-        if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.CommandId))
+        if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.SessionId))
             return ValueTask.CompletedTask;
 
         var payloadType = envelope.Payload?.TypeUrl ?? "(none)";
@@ -52,6 +52,6 @@ public sealed class WorkflowProjectionDispatchFailureReporter
         };
 
         return new ValueTask(
-            _runEventStreamHub.PublishAsync(context.RootActorId, context.CommandId, evt, ct));
+            _runEventStreamHub.PublishAsync(context.RootActorId, context.SessionId, evt, ct));
     }
 }

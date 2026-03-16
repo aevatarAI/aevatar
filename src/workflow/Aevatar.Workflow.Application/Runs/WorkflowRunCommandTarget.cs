@@ -15,6 +15,7 @@ internal sealed class WorkflowRunCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionReadModelActivationPort _readModelActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
     private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
     private bool _createdActorsDestroyed;
@@ -24,6 +25,7 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
+        IWorkflowExecutionReadModelActivationPort readModelActivationPort,
         IWorkflowRunActorPort actorPort,
         IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
     {
@@ -33,6 +35,7 @@ internal sealed class WorkflowRunCommandTarget
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
@@ -56,6 +59,9 @@ internal sealed class WorkflowRunCommandTarget
 
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
+
+    public Task<bool> ActivateReadModelAsync(CancellationToken ct = default) =>
+        _readModelActivationPort.ActivateAsync(ActorId, ct);
 
     public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
     {

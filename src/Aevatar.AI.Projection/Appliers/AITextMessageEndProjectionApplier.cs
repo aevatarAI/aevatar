@@ -6,7 +6,7 @@ namespace Aevatar.AI.Projection.Appliers;
 public sealed class AITextMessageEndProjectionApplier<TReadModel, TContext>
     : IProjectionEventApplier<TReadModel, TContext, TextMessageEndEvent>
     where TReadModel : class, IHasProjectionTimeline, IHasProjectionRoleReplies
-    where TContext : class, IProjectionContext
+    where TContext : class, IProjectionSessionContext
 {
     public bool Apply(
         TReadModel readModel,

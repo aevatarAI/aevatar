@@ -12,7 +12,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceRevisionCatalogProjector
-    : IProjectionProjector<ServiceRevisionCatalogProjectionContext, IReadOnlyList<string>>
+    : IProjectionMaterializer<ServiceRevisionCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentReader;
@@ -26,13 +26,6 @@ public sealed class ServiceRevisionCatalogProjector
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ServiceRevisionCatalogProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(ServiceRevisionCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -112,17 +105,6 @@ public sealed class ServiceRevisionCatalogProjector
                 entry.RetiredAt = ToDateTimeOffset(evt.RetiredAt);
             }, ct);
         }
-    }
-
-    public ValueTask CompleteAsync(
-        ServiceRevisionCatalogProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     private async Task UpsertRevisionAsync(

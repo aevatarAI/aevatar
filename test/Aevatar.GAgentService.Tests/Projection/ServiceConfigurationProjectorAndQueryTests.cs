@@ -24,8 +24,8 @@ public sealed class ServiceConfigurationProjectorAndQueryTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceConfigurationProjectionContext
         {
-            ProjectionId = "service-configuration:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-configuration",
         };
         var importedState = new ServiceConfigurationState
         {
@@ -78,8 +78,8 @@ public sealed class ServiceConfigurationProjectorAndQueryTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceConfigurationProjectionContext
         {
-            ProjectionId = "service-configuration:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-configuration",
         };
         var createdBinding = CreateBindingSpec(identity, "binding-b", ServiceBindingKind.Service);
         createdBinding.PolicyIds.Add("policy-a");
@@ -257,8 +257,8 @@ public sealed class ServiceConfigurationProjectorAndQueryTests
         var projector = new ServiceConfigurationProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var context = new ServiceConfigurationProjectionContext
         {
-            ProjectionId = "service-configuration:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-configuration",
         };
 
         await projector.ProjectAsync(context, BuildEnvelope(new LegacyServiceConfigurationImportedEvent
@@ -276,8 +276,8 @@ public sealed class ServiceConfigurationProjectorAndQueryTests
         var projector = new ServiceConfigurationProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var context = new ServiceConfigurationProjectionContext
         {
-            ProjectionId = "service-configuration:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-configuration",
         };
 
         await projector.ProjectAsync(
@@ -310,8 +310,8 @@ public sealed class ServiceConfigurationProjectorAndQueryTests
         var spec = CreateBindingSpec(identity, "binding-c", ServiceBindingKind.Connector);
         var context = new ServiceConfigurationProjectionContext
         {
-            ProjectionId = "service-configuration:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-configuration",
         };
 
         await projector.ProjectAsync(

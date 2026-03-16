@@ -8,35 +8,30 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ProjectionCoordinatorTests
 {
     [Fact]
-    public async Task ProjectionCoordinator_ShouldExecuteProjectorsInRegistrationOrder()
+    public async Task ProjectAsync_ShouldExecuteProjectorsInRegistrationOrder()
     {
         var traces = new List<string>();
-        IProjectionProjector<TestProjectionContext, string>[] projectors =
+        IProjectionProjector<TestProjectionContext>[] projectors =
         [
             new RecordingProjector("projector-2", traces),
             new RecordingProjector("projector-1", traces),
         ];
-        var coordinator = new ProjectionCoordinator<TestProjectionContext, string>(projectors);
+        var coordinator = new ProjectionCoordinator<TestProjectionContext>(projectors);
         var context = new TestProjectionContext
         {
-            ProjectionId = "projection-1",
+            SessionId = "session-1",
             RootActorId = "actor-1",
+            ProjectionKind = "test-projection",
         };
 
-        await coordinator.InitializeAsync(context);
         await coordinator.ProjectAsync(context, new EventEnvelope { Id = "evt-1" });
-        await coordinator.CompleteAsync(context, "done");
 
         traces.Should().Equal(
-            "projector-2.initialize",
-            "projector-1.initialize",
             "projector-2.project",
-            "projector-1.project",
-            "projector-2.complete",
-            "projector-1.complete");
+            "projector-1.project");
     }
 
-    private sealed class RecordingProjector : IProjectionProjector<TestProjectionContext, string>
+    private sealed class RecordingProjector : IProjectionProjector<TestProjectionContext>
     {
         private readonly string _name;
         private readonly List<string> _traces;
@@ -47,28 +42,19 @@ public sealed class ProjectionCoordinatorTests
             _traces = traces;
         }
 
-        public ValueTask InitializeAsync(TestProjectionContext context, CancellationToken ct = default)
-        {
-            _traces.Add($"{_name}.initialize");
-            return ValueTask.CompletedTask;
-        }
-
         public ValueTask ProjectAsync(TestProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
         {
+            _ = context;
+            _ = envelope;
             _traces.Add($"{_name}.project");
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask CompleteAsync(TestProjectionContext context, string topology, CancellationToken ct = default)
-        {
-            _traces.Add($"{_name}.complete");
             return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class TestProjectionContext : IProjectionContext
+    private sealed class TestProjectionContext : IProjectionSessionContext
     {
-        public string ProjectionId { get; init; } = string.Empty;
-        public string RootActorId { get; init; } = string.Empty;
+        public required string SessionId { get; init; }
+        public required string RootActorId { get; init; }
+        public required string ProjectionKind { get; init; }
     }
 }

@@ -187,8 +187,9 @@ public class ClaimReplayTests
 
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "projection-claim-readmodel",
+            SessionId = "projection-claim-readmodel",
             RootActorId = runtimeActorId,
+            ProjectionKind = "script-execution-read-model",
         };
 
         var projectionNow = DateTimeOffset.UtcNow;
@@ -196,7 +197,6 @@ public class ClaimReplayTests
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
             new FixedProjectionClock(projectionNow));
-        await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel1 = await dispatcher1.GetAsync(runtimeActorId, CancellationToken.None);
@@ -205,7 +205,6 @@ public class ClaimReplayTests
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
             new FixedProjectionClock(projectionNow));
-        await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel2 = await dispatcher2.GetAsync(runtimeActorId, CancellationToken.None);

@@ -48,18 +48,22 @@ public class WorkflowExecutionProjectionRegistrationTests
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
+        var graphMirrorStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunGraphMirrorReadModel, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
+        var graphMirrorDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunGraphMirrorReadModel>>();
 
         currentStateStore.Should().NotBeNull();
         timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
+        graphMirrorStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
         timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
+        graphMirrorDispatcher.Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -114,6 +118,17 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
+    public void WorkflowRunGraphMirrorReadModelMetadataProvider_ShouldExposeExpectedDefaults()
+    {
+        var provider = new WorkflowRunGraphMirrorReadModelMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("workflow-run-graph-mirrors");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task AddWorkflowExecutionProjectionCQRS_ShouldRegisterPassthroughEventDeduplicator()
     {
         var services = new ServiceCollection();
@@ -125,31 +140,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         var deduplicator = provider.GetRequiredService<IEventDeduplicator>();
 
         (await deduplicator.TryRecordAsync("evt-1")).Should().BeTrue();
-    }
-
-    [Fact]
-    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterProjectorAsEnumerableSingleton()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
-        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
-
-        using var provider = services.BuildServiceProvider();
-        var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>().ToList();
-
-        projectors.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowProjector));
-    }
-
-    [Fact]
-    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterWorkflowBridgeProjectorType()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowRunInsightBridgeProjector<WorkflowRunInsightBridgeProjector>();
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>) &&
-            x.ImplementationType == typeof(WorkflowRunInsightBridgeProjector));
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
@@ -168,6 +158,11 @@ public class WorkflowExecutionProjectionRegistrationTests
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+            keySelector: readModel => readModel.RootActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: readModel => readModel.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
@@ -197,6 +192,14 @@ public class WorkflowExecutionProjectionRegistrationTests
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
+            keyFormatter: key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphMirrorReadModel>>().Metadata,
+            keySelector: readModel => readModel.RootActorId,
             keyFormatter: key => key);
     }
 
@@ -250,37 +253,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(true);
     }
-
-    private sealed class TestWorkflowProjector
-        : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
-    {
-        public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
-        {
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = context;
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask CompleteAsync(
-            WorkflowExecutionProjectionContext context,
-            IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
-            CancellationToken ct = default)
-        {
-            _ = context;
-            _ = topology;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-    }
-
     private sealed class EnvironmentVariableScope : IDisposable
     {
         private readonly string _name;

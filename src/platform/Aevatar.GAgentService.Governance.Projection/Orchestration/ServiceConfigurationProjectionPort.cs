@@ -2,14 +2,14 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 
 namespace Aevatar.GAgentService.Governance.Projection.Orchestration;
 
-public sealed class ServiceConfigurationProjectionPort : IServiceConfigurationProjectionPort
+public sealed class ServiceConfigurationProjectionPort
+    : MaterializationProjectionPortBase<ServiceConfigurationRuntimeLease>,
+      IServiceConfigurationProjectionPort
 {
-    private readonly IProjectionPortActivationService<ServiceConfigurationRuntimeLease> _activationService;
-
     public ServiceConfigurationProjectionPort(
-        IProjectionPortActivationService<ServiceConfigurationRuntimeLease> activationService)
+        IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease> activationService)
+        : base(static () => true, activationService)
     {
-        _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
     }
 
     public async Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
@@ -17,6 +17,12 @@ public sealed class ServiceConfigurationProjectionPort : IServiceConfigurationPr
         if (string.IsNullOrWhiteSpace(actorId))
             return;
 
-        _ = await _activationService.EnsureAsync(actorId, "service-configuration", string.Empty, actorId, ct);
+        _ = await EnsureProjectionAsync(
+            new ProjectionMaterializationStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = "service-configuration",
+            },
+            ct);
     }
 }

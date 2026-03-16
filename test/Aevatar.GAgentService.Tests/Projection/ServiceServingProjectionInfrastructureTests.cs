@@ -23,26 +23,26 @@ public sealed class ServiceServingProjectionInfrastructureTests
         var deploymentActivation = new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
             (root, projectionName) => new ServiceDeploymentCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{root}",
                 RootActorId = root,
+                ProjectionKind = projectionName,
             });
         var servingActivation = new RecordingProjectionActivationService<ServiceServingSetProjectionContext>(
             (root, projectionName) => new ServiceServingSetProjectionContext
             {
-                ProjectionId = $"{projectionName}:{root}",
                 RootActorId = root,
+                ProjectionKind = projectionName,
             });
         var rolloutActivation = new RecordingProjectionActivationService<ServiceRolloutProjectionContext>(
             (root, projectionName) => new ServiceRolloutProjectionContext
             {
-                ProjectionId = $"{projectionName}:{root}",
                 RootActorId = root,
+                ProjectionKind = projectionName,
             });
         var trafficActivation = new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>(
             (root, projectionName) => new ServiceTrafficViewProjectionContext
             {
-                ProjectionId = $"{projectionName}:{root}",
                 RootActorId = root,
+                ProjectionKind = projectionName,
             });
 
         IServiceDeploymentCatalogProjectionPort deploymentPort = new ServiceDeploymentCatalogProjectionPort(deploymentActivation);
@@ -57,10 +57,10 @@ public sealed class ServiceServingProjectionInfrastructureTests
         await rolloutPort.EnsureProjectionAsync("actor-rollout");
         await trafficPort.EnsureProjectionAsync("actor-traffic");
 
-        deploymentActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-deploy", "service-deployments", string.Empty, "actor-deploy"));
-        servingActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-serving", "service-serving", string.Empty, "actor-serving"));
-        rolloutActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-rollout", "service-rollouts", string.Empty, "actor-rollout"));
-        trafficActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-traffic", "service-traffic", string.Empty, "actor-traffic"));
+        deploymentActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-deploy", "service-deployments"));
+        servingActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-serving", "service-serving"));
+        rolloutActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-rollout", "service-rollouts"));
+        trafficActivation.Calls.Should().ContainSingle().Which.Should().Be(("actor-traffic", "service-traffic"));
     }
 
     [Fact]
@@ -70,57 +70,55 @@ public sealed class ServiceServingProjectionInfrastructureTests
         var deploymentLease = await ProjectionTestFactory.CreateActivationService(
                 static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
                 {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
                     RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
                 },
                 static context => context.RootActorId,
                 deploymentLifecycle)
-            .EnsureAsync("actor-deploy", "service-deployments", string.Empty, "cmd-deploy");
-        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>, ServiceDeploymentCatalogProjectionContext, IReadOnlyList<string>>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
+            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-deploy", ProjectionKind = "service-deployments" });
+        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>, ServiceDeploymentCatalogProjectionContext>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
 
         var servingLifecycle = new RecordingProjectionLifecycle<ServiceServingSetProjectionContext>();
         var servingLease = await ProjectionTestFactory.CreateActivationService(
                 static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
                 {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
                     RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
                 },
                 static context => context.RootActorId,
                 servingLifecycle)
-            .EnsureAsync("actor-serving", "service-serving", string.Empty, "cmd-serving");
-        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>, ServiceServingSetProjectionContext, IReadOnlyList<string>>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
+            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-serving", ProjectionKind = "service-serving" });
+        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>, ServiceServingSetProjectionContext>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
 
         var rolloutLifecycle = new RecordingProjectionLifecycle<ServiceRolloutProjectionContext>();
         var rolloutLease = await ProjectionTestFactory.CreateActivationService(
                 static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
                 {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
                     RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
                 },
                 static context => context.RootActorId,
                 rolloutLifecycle)
-            .EnsureAsync("actor-rollout", "service-rollouts", string.Empty, "cmd-rollout");
-        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>, ServiceRolloutProjectionContext, IReadOnlyList<string>>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
+            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-rollout", ProjectionKind = "service-rollouts" });
+        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>, ServiceRolloutProjectionContext>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
 
         var trafficLifecycle = new RecordingProjectionLifecycle<ServiceTrafficViewProjectionContext>();
         var trafficLease = await ProjectionTestFactory.CreateActivationService(
                 static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
                 {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
                     RootActorId = rootActorId,
+                    ProjectionKind = projectionName,
                 },
                 static context => context.RootActorId,
                 trafficLifecycle)
-            .EnsureAsync("actor-traffic", "service-traffic", string.Empty, "cmd-traffic");
-        await new ContextProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>, ServiceTrafficViewProjectionContext, IReadOnlyList<string>>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
+            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-traffic", ProjectionKind = "service-traffic" });
+        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>, ServiceTrafficViewProjectionContext>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
 
-        deploymentLease.ScopeId.Should().Be("actor-deploy");
-        deploymentLifecycle.StartedContexts.Single().ProjectionId.Should().Be("service-deployments:actor-deploy");
+        deploymentLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-deployments");
         deploymentLifecycle.StoppedContexts.Single().RootActorId.Should().Be("actor-deploy");
-        servingLease.SessionId.Should().Be("actor-serving");
-        servingLifecycle.StartedContexts.Single().ProjectionId.Should().Be("service-serving:actor-serving");
+        servingLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-serving");
         rolloutLifecycle.StoppedContexts.Single().RootActorId.Should().Be("actor-rollout");
-        trafficLifecycle.StartedContexts.Single().ProjectionId.Should().Be("service-traffic:actor-traffic");
+        trafficLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-traffic");
     }
 
     [Fact]

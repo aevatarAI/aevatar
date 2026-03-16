@@ -17,6 +17,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var resolver = new WorkflowRunCommandTargetResolver(
             actorResolver,
             new FakeProjectionPort { ProjectionEnabled = false },
+            new FakeProjectionPort { ProjectionEnabled = false },
             new FakeWorkflowRunActorPort(),
             new FakeDetachedCleanupScheduler());
 
@@ -34,6 +35,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
         var resolver = new WorkflowRunCommandTargetResolver(
             new FakeWorkflowRunActorResolver(
                 new WorkflowActorResolutionResult(actor, "auto", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
+            new FakeProjectionPort(),
             new FakeProjectionPort(),
             new FakeWorkflowRunActorPort(),
             new FakeDetachedCleanupScheduler());
@@ -60,6 +62,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeActor("actor-1"),
             "direct",
             [],
+            projectionPort,
             projectionPort,
             actorPort,
             new FakeDetachedCleanupScheduler());
@@ -96,6 +99,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             "direct",
             ["definition-1", "actor-1", "definition-1"],
             projectionPort,
+            projectionPort,
             actorPort,
             new FakeDetachedCleanupScheduler());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
@@ -129,6 +133,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             new FakeActor("actor-1"),
             "direct",
             ["definition-1", "actor-1"],
+            projectionPort,
             projectionPort,
             actorPort,
             new FakeDetachedCleanupScheduler());
@@ -170,23 +175,28 @@ public sealed class WorkflowRunOrchestrationComponentTests
         }
     }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class FakeProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }
         public Exception? AttachException { get; set; }
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> AttachCalls { get; } = [];
 
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
-            string workflowName,
-            string input,
             string commandId,
             CancellationToken ct = default)
         {
             _ = rootActorId;
-            _ = workflowName;
-            _ = input;
             _ = commandId;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
@@ -241,6 +251,13 @@ public sealed class WorkflowRunOrchestrationComponentTests
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();

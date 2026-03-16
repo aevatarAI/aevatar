@@ -2,7 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public abstract class ProjectionRuntimeLeaseBase : IProjectionRuntimeLease
+public abstract class ProjectionRuntimeLeaseBase : IProjectionRuntimeLease, IProjectionStreamSubscriptionRuntimeLease
 {
     protected ProjectionRuntimeLeaseBase(string rootEntityId)
     {
@@ -11,6 +11,8 @@ public abstract class ProjectionRuntimeLeaseBase : IProjectionRuntimeLease
     }
 
     public string RootEntityId { get; }
+
+    public IActorStreamSubscriptionLease? ActorStreamSubscriptionLease { get; set; }
 
     public virtual int GetLiveSinkSubscriptionCount() => 0;
 }

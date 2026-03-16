@@ -93,6 +93,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphMirrorReadModel>>().Metadata,
+            keySelector: static readModel => readModel.RootActorId,
+            keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>>().Metadata,
@@ -116,6 +121,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key,
             defaultSortSelector: static report => report.CreatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphMirrorReadModel, string>(
+            keySelector: static readModel => readModel.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static readModel => readModel.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: static document => document.Id,

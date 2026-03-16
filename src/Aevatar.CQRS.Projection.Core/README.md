@@ -1,42 +1,46 @@
 # Aevatar.CQRS.Projection.Core
 
-`Aevatar.CQRS.Projection.Core` 是与业务无关的 CQRS 投影内核实现。
+`Aevatar.CQRS.Projection.Core` 是与业务无关的 projection runtime 内核。当前架构已经拆成两条主链：
 
-## 项目边界
+- `Durable Materialization`
+- `Session Observation`
 
-- `Aevatar.CQRS.Projection.Core.Abstractions`
-  - 仅定义通用契约：`IProjection*`、`IActorStreamSubscriptionHub<TMessage>`。
-- `Aevatar.CQRS.Projection.Core`
-  - 通用运行时实现：
-    - `ProjectionCoordinator<TContext, TTopology>`
-    - `ProjectionDispatcher<TContext, TTopology>`
-    - `ProjectionSubscriptionRegistry<TContext>`
-    - `ProjectionLifecycleService<TContext, TCompletion>`
-    - `EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>`
-    - `ActorStreamSubscriptionHub<TMessage>`
-    - `ProjectionAssemblyRegistration`
-    - `SystemProjectionClock`
-- 领域扩展项目
-  - 在子系统内承载具体 context/read model/projector/query adapter/DI。
+## 核心接口
 
-## 设计原则
+### durable materialization
 
-1. 内核只处理通用编排，不绑定任何业务模型。
-2. 业务投影通过 `IProjectionProjector<,>` 扩展；主链不再提供 reducer-era 扩展点。
-3. 订阅按 `actorId` 复用底层 stream，再分发到投影上下文。
-4. 同一事件分发到多个 projector 时采用全分支尝试，最终按 projector 顺序聚合失败信息统一上报。
-5. query 语义由 feature 自己的 read adapter 直接实现，不再保留通用 query-port 基类。
+- [IProjectionMaterializer.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializer.cs)
+- [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionSessionContext.cs)
+- [ProjectionMaterializationStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionMaterializationStartRequest.cs)
+- [IProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationActivationService.cs)
+- [IProjectionMaterializationReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationReleaseService.cs)
 
-## 运行链路（通用）
+### session observation
 
-1. `ProjectionLifecycleService.StartAsync` -> `Coordinator.InitializeAsync` + `SubscriptionRegistry.RegisterAsync`
-2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `ProjectionDispatcher.DispatchAsync`
-3. `ProjectionDispatcher` 调用 `Coordinator.ProjectAsync`
-4. `Coordinator` 按服务注册顺序调用多个 projector
-5. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
+- [IProjectionProjector.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs)
+- [IProjectionSessionContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionSessionContext.cs)
+- [ProjectionSessionStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionSessionStartRequest.cs)
+- [IProjectionSessionActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionActivationService.cs)
+- [IProjectionSessionReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionReleaseService.cs)
 
-## 扩展点
+## 运行时实现
 
-- 外部程序集自动注册：`ProjectionAssemblyRegistration.RegisterProjectionExtensionsFromAssembly(...)`
-- 典型扩展：
-  - 新 projector：`IProjectionProjector<TContext, TTopology>`
+- durable：
+  - [ProjectionMaterializationLifecycleService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationLifecycleService.cs)
+  - [ContextProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionMaterializationActivationService.cs)
+  - [ContextProjectionMaterializationReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionMaterializationReleaseService.cs)
+  - [MaterializationProjectionPortBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/MaterializationProjectionPortBase.cs)
+
+- session：
+  - [ProjectionLifecycleService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionLifecycleService.cs)
+  - [ContextProjectionActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs)
+  - [ContextProjectionReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionReleaseService.cs)
+  - [EventSinkProjectionLifecyclePortBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs)
+  - [ProjectionSessionEventHub.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs)
+
+## 关键约束
+
+- 根接口不再有 `InitializeAsync/CompleteAsync`
+- durable path 不再复用 `SessionId`
+- `Context` 只表达 runtime scope，不表达业务事实
+- query 语义不在 core 提供基类

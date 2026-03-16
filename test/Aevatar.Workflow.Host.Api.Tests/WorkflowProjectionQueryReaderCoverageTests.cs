@@ -145,18 +145,15 @@ public sealed class WorkflowProjectionQueryReaderCoverageTests
 
     private static QueryPortHarness CreateHarness(
         WorkflowExecutionProjectionOptions options,
-        RecordingDocumentReader<WorkflowRunInsightReportDocument>? reportReader = null,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
         RecordingDocumentReader<WorkflowRunTimelineDocument>? timelineReader = null,
         RecordingProjectionGraphStore? graphStore = null)
     {
-        reportReader ??= new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
         currentStateReader ??= new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
         timelineReader ??= new RecordingDocumentReader<WorkflowRunTimelineDocument>();
         graphStore ??= new RecordingProjectionGraphStore();
         return new QueryPortHarness(
             new WorkflowProjectionQueryReader(
-                reportReader,
                 currentStateReader,
                 timelineReader,
                 new WorkflowExecutionReadModelMapper(),

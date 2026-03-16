@@ -26,7 +26,7 @@ public class WorkflowProjectionDispatchFailureReporterTests
 
         hub.Published.Should().ContainSingle();
         hub.Published[0].ScopeId.Should().Be(context.RootActorId);
-        hub.Published[0].SessionId.Should().Be(context.CommandId);
+        hub.Published[0].SessionId.Should().Be(context.SessionId);
         hub.Published[0].Event.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
         hub.Published[0].Event.Custom.Name.Should().Be(WorkflowProjectionDispatchFailureReporter.ProjectionDispatchFailureEventName);
         var payload = hub.Published[0].Event.Custom.Payload.Unpack<WorkflowProjectionDispatchFailureCustomPayload>();
@@ -41,8 +41,7 @@ public class WorkflowProjectionDispatchFailureReporterTests
     {
         var hub = new CapturingRunEventHub();
         var reporter = new WorkflowProjectionDispatchFailureReporter(hub, new FixedProjectionClock(DateTimeOffset.UtcNow));
-        var context = BuildContext();
-        context.CommandId = string.Empty;
+        var context = BuildContext(string.Empty);
 
         await reporter.ReportAsync(
             context,
@@ -53,14 +52,11 @@ public class WorkflowProjectionDispatchFailureReporterTests
         hub.Published.Should().BeEmpty();
     }
 
-    private static WorkflowExecutionProjectionContext BuildContext() => new()
+    private static WorkflowExecutionProjectionContext BuildContext(string sessionId = "cmd-1") => new()
     {
-        ProjectionId = "projection-1",
-        CommandId = "cmd-1",
+        SessionId = sessionId,
         RootActorId = "actor-1",
-        WorkflowName = "wf",
-        StartedAt = DateTimeOffset.UtcNow,
-        Input = "input",
+        ProjectionKind = "workflow-execution",
     };
 }
 

@@ -15,7 +15,7 @@ public sealed class ScriptEvolutionRuntimeLease
         : base(context.RootActorId)
     {
         Context = context ?? throw new ArgumentNullException(nameof(context));
-        ProposalId = context.ProposalId;
+        ProposalId = context.SessionId;
     }
 
     public string ActorId => RootEntityId;

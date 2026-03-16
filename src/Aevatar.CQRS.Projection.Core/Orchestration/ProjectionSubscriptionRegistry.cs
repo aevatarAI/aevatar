@@ -5,21 +5,23 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Actor-level projection registry built on top of shared actor stream subscriptions.
 /// </summary>
-public sealed class ProjectionSubscriptionRegistry<TContext>
-    : IProjectionSubscriptionRegistry<TContext>, IAsyncDisposable, IDisposable
-    where TContext : IProjectionContext, IProjectionStreamSubscriptionContext
+public sealed class ProjectionSubscriptionRegistry<TContext, TRuntimeLease>
+    : IProjectionSubscriptionRegistry<TContext, TRuntimeLease>, IAsyncDisposable, IDisposable
+    where TContext : class, IProjectionSessionContext
+    where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>, IProjectionStreamSubscriptionRuntimeLease
 {
+
     private readonly IProjectionDispatcher<TContext> _dispatcher;
     private readonly IActorStreamSubscriptionHub<EventEnvelope> _subscriptionHub;
     private readonly IProjectionDispatchFailureReporter<TContext>? _dispatchFailureReporter;
-    private readonly ILogger<ProjectionSubscriptionRegistry<TContext>>? _logger;
+    private readonly ILogger<ProjectionSubscriptionRegistry<TContext, TRuntimeLease>>? _logger;
     private int _disposed;
 
     public ProjectionSubscriptionRegistry(
         IProjectionDispatcher<TContext> dispatcher,
         IActorStreamSubscriptionHub<EventEnvelope> subscriptionHub,
         IProjectionDispatchFailureReporter<TContext>? dispatchFailureReporter = null,
-        ILogger<ProjectionSubscriptionRegistry<TContext>>? logger = null)
+        ILogger<ProjectionSubscriptionRegistry<TContext, TRuntimeLease>>? logger = null)
     {
         _dispatcher = dispatcher;
         _subscriptionHub = subscriptionHub;
@@ -27,13 +29,14 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         _logger = logger;
     }
 
-    public async Task RegisterAsync(TContext context, CancellationToken ct = default)
+    public async Task RegisterAsync(TRuntimeLease runtimeLease, CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(context);
-        if (context.StreamSubscriptionLease != null)
+        ArgumentNullException.ThrowIfNull(runtimeLease);
+        var context = runtimeLease.Context;
+        if (runtimeLease.ActorStreamSubscriptionLease != null)
             throw new InvalidOperationException(
-                $"Projection '{context.ProjectionId}' for actor '{context.RootActorId}' is already registered.");
+                $"Projection '{context.ProjectionKind}' session '{context.SessionId}' for actor '{context.RootActorId}' is already registered.");
 
         var actorId = context.RootActorId;
         var dispatchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -43,7 +46,7 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
                 actorId,
                 envelope => DispatchAsync(actorId, context, envelope, dispatchCts.Token),
                 ct);
-            context.StreamSubscriptionLease = new ProjectionStreamSubscriptionLease(actorId, lease, dispatchCts);
+            runtimeLease.ActorStreamSubscriptionLease = new ProjectionStreamSubscriptionLease(actorId, lease, dispatchCts);
         }
         catch
         {
@@ -52,25 +55,29 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         }
 
         _logger?.LogDebug(
-            "Registered projection {ProjectionId} for actor {ActorId}.",
-            context.ProjectionId,
+            "Registered projection {ProjectionKind} session {SessionId} for actor {ActorId}.",
+            context.ProjectionKind,
+            context.SessionId,
             actorId);
     }
 
-    public async Task UnregisterAsync(TContext context, CancellationToken ct = default)
+    public async Task UnregisterAsync(TRuntimeLease runtimeLease, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(runtimeLease);
         ThrowIfDisposed();
 
-        if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.ProjectionId))
+        var context = runtimeLease.Context;
+        if (string.IsNullOrWhiteSpace(context.RootActorId) ||
+            string.IsNullOrWhiteSpace(context.ProjectionKind) ||
+            string.IsNullOrWhiteSpace(context.SessionId))
             return;
 
-        var lease = context.StreamSubscriptionLease;
+        var lease = runtimeLease.ActorStreamSubscriptionLease;
         if (lease == null)
             return;
 
-        context.StreamSubscriptionLease = null;
+        runtimeLease.ActorStreamSubscriptionLease = null;
         await lease.DisposeAsync();
     }
 
@@ -94,7 +101,7 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
         {
             _logger?.LogDebug(
                 "Projection dispatch cancelled for projection {ProjectionId} on actor {ActorId}.",
-                context.ProjectionId,
+                $"{context.ProjectionKind}:{context.SessionId}",
                 actorId);
         }
         catch (Exception ex)
@@ -111,7 +118,7 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
                     _logger?.LogError(
                         reportEx,
                         "Projection dispatch failure reporter failed for projection {ProjectionId} on actor {ActorId}.",
-                        context.ProjectionId,
+                        $"{context.ProjectionKind}:{context.SessionId}",
                         actorId);
                 }
             }
@@ -119,7 +126,7 @@ public sealed class ProjectionSubscriptionRegistry<TContext>
             _logger?.LogWarning(
                 ex,
                 "Projection dispatch failed for projection {ProjectionId} on actor {ActorId}.",
-                context.ProjectionId,
+                $"{context.ProjectionKind}:{context.SessionId}",
                 actorId);
         }
     }

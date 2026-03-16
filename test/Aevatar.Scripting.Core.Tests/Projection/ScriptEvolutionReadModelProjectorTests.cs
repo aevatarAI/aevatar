@@ -24,12 +24,10 @@ public class ScriptEvolutionReadModelProjectorTests
 
         var context = new ScriptEvolutionSessionProjectionContext
         {
-            ProjectionId = "projection-evolution-1",
+            SessionId = "proposal-1",
             RootActorId = "evolution-manager-1",
-            ProposalId = "proposal-1",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,
@@ -138,12 +136,10 @@ public class ScriptEvolutionReadModelProjectorTests
 
         var context = new ScriptEvolutionSessionProjectionContext
         {
-            ProjectionId = "projection-evolution-2",
+            SessionId = "proposal-2",
             RootActorId = "evolution-manager-2",
-            ProposalId = "proposal-2",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,
@@ -242,12 +238,10 @@ public class ScriptEvolutionReadModelProjectorTests
 
         var context = new ScriptEvolutionSessionProjectionContext
         {
-            ProjectionId = "projection-evolution-3",
+            SessionId = "proposal-3",
             RootActorId = "evolution-manager-3",
-            ProposalId = "proposal-3",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,

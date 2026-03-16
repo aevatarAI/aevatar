@@ -316,11 +316,11 @@ internal sealed class WorkflowRunDetachedCleanupOutboxGAgent
         string actorId,
         CancellationToken ct)
     {
-        var insightPort = Services.GetRequiredService<IWorkflowRunInsightActorPort>();
-        await insightPort.MarkStoppedAsync(
+        var actorPort = Services.GetRequiredService<IWorkflowRunActorPort>();
+        await actorPort.MarkStoppedAsync(
             actorId,
+            runId: actorId,
             reason: "workflow_detached_cleanup",
-            stoppedAt: DateTimeOffset.UtcNow,
             ct);
     }
 

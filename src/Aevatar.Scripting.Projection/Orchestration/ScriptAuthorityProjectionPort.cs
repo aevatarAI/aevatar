@@ -1,35 +1,30 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptAuthorityProjectionPort
-    : EventSinkProjectionLifecyclePortBase<IProjectionPortSessionLease, ScriptAuthorityRuntimeLease, EventEnvelope>
+    : MaterializationProjectionPortBase<ScriptAuthorityRuntimeLease>
 {
     private const string ProjectionName = "script-authority-read-model";
 
     public ScriptAuthorityProjectionPort(
-        IProjectionPortActivationService<ScriptAuthorityRuntimeLease> activationService,
-        IProjectionPortReleaseService<ScriptAuthorityRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<ScriptAuthorityRuntimeLease, EventEnvelope> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<ScriptAuthorityRuntimeLease, EventEnvelope> liveSinkForwarder)
+        IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease> activationService,
+        IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease> releaseService)
         : base(
             static () => true,
             activationService,
-            releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
+            releaseService)
     {
     }
 
-    public Task<IProjectionPortSessionLease?> EnsureActorProjectionAsync(
+    public Task<ScriptAuthorityRuntimeLease?> EnsureActorProjectionAsync(
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            actorId,
-            ProjectionName,
-            input: string.Empty,
-            commandId: actorId,
+            new ProjectionMaterializationStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = ProjectionName,
+            },
             ct);
 }

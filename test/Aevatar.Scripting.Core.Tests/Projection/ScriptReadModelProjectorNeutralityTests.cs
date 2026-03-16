@@ -52,8 +52,9 @@ public sealed class ScriptReadModelProjectorNeutralityTests
         };
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "runtime-1:read-model",
+            SessionId = "runtime-1",
             RootActorId = "runtime-1",
+            ProjectionKind = "script-execution-read-model",
         };
 
         await projector.ProjectAsync(

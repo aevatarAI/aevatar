@@ -23,8 +23,9 @@ public sealed class ScriptReadModelProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "runtime-1:read-model",
+            SessionId = "runtime-1",
             RootActorId = "runtime-1",
+            ProjectionKind = "script-execution-read-model",
         };
         var readModel = new SimpleTextReadModel
         {
@@ -89,8 +90,9 @@ public sealed class ScriptReadModelProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "runtime-2:read-model",
+            SessionId = "runtime-2",
             RootActorId = "runtime-2",
+            ProjectionKind = "script-execution-read-model",
         };
 
         await projector.ProjectAsync(
@@ -120,8 +122,9 @@ public sealed class ScriptReadModelProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "runtime-3:read-model",
+            SessionId = "runtime-3",
             RootActorId = "runtime-3",
+            ProjectionKind = "script-execution-read-model",
         };
         var committedReadModel = new SimpleTextReadModel
         {

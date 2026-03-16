@@ -24,15 +24,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var activationService = CreateActivationService(
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
             ownership);
 
-        var lease = await activationService.EnsureAsync(
-            "actor-activation",
-            "direct",
-            "hello",
-            "cmd-activation",
-            CancellationToken.None);
+        var lease = await activationService.EnsureAsync(new ProjectionSessionStartRequest
+        {
+            RootActorId = "actor-activation",
+            ProjectionKind = "workflow-execution",
+            SessionId = "cmd-activation",
+        }, CancellationToken.None);
 
         lease.ActorId.Should().Be("actor-activation");
         lease.CommandId.Should().Be("cmd-activation");
@@ -47,15 +46,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var activationService = CreateActivationService(
             new ThrowingLifecycleService(new InvalidOperationException("start failed")),
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
             ownership);
 
-        var act = async () => await activationService.EnsureAsync(
-            "actor-fail",
-            "direct",
-            "hello",
-            "cmd-fail",
-            CancellationToken.None);
+        var act = async () => await activationService.EnsureAsync(new ProjectionSessionStartRequest
+        {
+            RootActorId = "actor-fail",
+            ProjectionKind = "workflow-execution",
+            SessionId = "cmd-fail",
+        }, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("start failed");
         ownership.Acquired.Should().ContainSingle().Which.Should().Be(("actor-fail", "cmd-fail"));
@@ -70,15 +68,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var activationService = CreateActivationService(
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
             ownership);
 
-        var lease = await activationService.EnsureAsync(
-            "actor-clean-start",
-            "direct",
-            "hello",
-            "cmd-clean-start",
-            CancellationToken.None);
+        var lease = await activationService.EnsureAsync(new ProjectionSessionStartRequest
+        {
+            RootActorId = "actor-clean-start",
+            ProjectionKind = "workflow-execution",
+            SessionId = "cmd-clean-start",
+        }, CancellationToken.None);
 
         lease.ActorId.Should().Be("actor-clean-start");
         lifecycle.StartedContexts.Should().ContainSingle();
@@ -95,16 +92,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var activationService = CreateActivationService(
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
             ownership,
             projectionControlHub: projectionControlHub);
 
-        var ensureTask = activationService.EnsureAsync(
-            "actor-ready",
-            "direct",
-            "hello",
-            "cmd-ready",
-            CancellationToken.None);
+        var ensureTask = activationService.EnsureAsync(new ProjectionSessionStartRequest
+        {
+            RootActorId = "actor-ready",
+            ProjectionKind = "workflow-execution",
+            SessionId = "cmd-ready",
+        }, CancellationToken.None);
 
         await projectionControlHub.SubscribeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         ensureTask.IsCompleted.Should().BeFalse();
@@ -130,18 +126,17 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var activationService = CreateActivationService(
             lifecycle,
             new FixedClock(new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero)),
-            new DefaultWorkflowExecutionProjectionContextFactory(),
             ownership,
             ownershipOptions: ownershipOptions);
-        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
             lifecycle);
 
-        var lease = await activationService.EnsureAsync(
-            "actor-heartbeat",
-            "direct",
-            "hello",
-            "cmd-heartbeat",
-            CancellationToken.None);
+        var lease = await activationService.EnsureAsync(new ProjectionSessionStartRequest
+        {
+            RootActorId = "actor-heartbeat",
+            ProjectionKind = "workflow-execution",
+            SessionId = "cmd-heartbeat",
+        }, CancellationToken.None);
         await ownership.WaitForAcquireCountAsync(2, TimeSpan.FromSeconds(3));
 
         await releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None);
@@ -249,17 +244,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var lifecycle = new RecordingLifecycleService();
         var ownership = new TrackingOwnershipCoordinator();
-        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
             lifecycle);
         var lease = new WorkflowExecutionRuntimeLease(
             new WorkflowExecutionProjectionContext
             {
-                ProjectionId = "projection-release-fail",
+                SessionId = "cmd-release-fail",
                 RootActorId = "actor-release-fail",
-                CommandId = "cmd-release-fail",
-                WorkflowName = "direct",
-                StartedAt = new DateTimeOffset(2026, 2, 21, 10, 0, 0, TimeSpan.Zero),
-                Input = "hello",
+                ProjectionKind = "workflow-execution",
             },
             ownershipCoordinator: ownership);
 
@@ -314,9 +306,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             LastEventId = "evt-3",
             UpdatedAt = new DateTimeOffset(2026, 2, 21, 10, 5, 0, TimeSpan.Zero),
         });
-        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
-            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -404,9 +394,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             UpdatedAt = now.AddMinutes(1),
         });
 
-        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
-            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -460,9 +448,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         var timelineStore = CreateTimelineStore();
         var currentStateStore = CreateCurrentStateStore();
         var graphStore = new InMemoryProjectionGraphStore();
-        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
-            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -537,9 +523,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             UpdatedAt = now,
         });
 
-        var reportStore = CreateStore();
         var reader = new WorkflowProjectionQueryReader(
-            reportStore,
             currentStateStore,
             timelineStore,
             new WorkflowExecutionReadModelMapper(),
@@ -732,7 +716,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var lifecycle = new RecordingLifecycleService();
         var ownership = new TrackingOwnershipCoordinator();
-        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
             lifecycle);
         var lease = CreateLease("actor-release", "cmd-release", ownershipCoordinator: ownership);
 
@@ -747,7 +731,7 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     {
         var lifecycle = new RecordingLifecycleService();
         var ownership = new TrackingOwnershipCoordinator();
-        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
+        var releaseService = new ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext>(
             lifecycle);
         var lease = CreateLease("actor-busy", "cmd-busy", ownershipCoordinator: ownership);
         lease.AttachOrReplaceLiveSinkSubscription(
@@ -817,31 +801,29 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
         keyFormatter: key => key,
         defaultSortSelector: document => document.UpdatedAt);
 
-    private static ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> CreateActivationService(
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>> lifecycle,
+    private static ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext> CreateActivationService(
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease> lifecycle,
         IProjectionClock clock,
-        IWorkflowExecutionProjectionContextFactory contextFactory,
         IProjectionOwnershipCoordinator ownershipCoordinator,
         ProjectionOwnershipCoordinatorOptions? ownershipOptions = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null) =>
         new(
             lifecycle,
-            (rootEntityId, workflowName, input, commandId, _) => contextFactory.Create(
-                rootEntityId,
-                commandId,
-                rootEntityId,
-                workflowName,
-                input,
-                clock.UtcNow),
+            (request, _) => new WorkflowExecutionProjectionContext
+            {
+                SessionId = request.SessionId,
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
+            },
             context => new WorkflowExecutionRuntimeLease(
                 context,
                 ownershipCoordinator,
                 ownershipOptions,
                 lifecycle,
                 projectionControlHub),
-            acquireBeforeStart: (rootEntityId, _, _, commandId, ct) =>
-                ownershipCoordinator.AcquireAsync(rootEntityId, commandId, ct),
-            onRuntimeLeaseCreated: async (_, _, _, runtimeLease, ct) =>
+            acquireBeforeStart: (request, ct) =>
+                ownershipCoordinator.AcquireAsync(request.RootActorId, request.SessionId, ct),
+            onRuntimeLeaseCreated: async (_, _, runtimeLease, ct) =>
             {
                 try
                 {
@@ -854,11 +836,11 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
                     throw;
                 }
             },
-            cleanupOnStartFailure: async (rootEntityId, commandId) =>
+            cleanupOnStartFailure: async request =>
             {
                 try
                 {
-                    await ownershipCoordinator.ReleaseAsync(rootEntityId, commandId, CancellationToken.None);
+                    await ownershipCoordinator.ReleaseAsync(request.RootActorId, request.SessionId, CancellationToken.None);
                 }
                 catch
                 {
@@ -868,17 +850,14 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
     private static WorkflowExecutionRuntimeLease CreateLease(
         string actorId,
         string commandId,
-        IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>? lifecycle = null,
+        IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease>? lifecycle = null,
         IProjectionSessionEventHub<WorkflowProjectionControlEvent>? projectionControlHub = null,
         IProjectionOwnershipCoordinator? ownershipCoordinator = null) => new(
         new WorkflowExecutionProjectionContext
         {
-            ProjectionId = actorId,
+            SessionId = commandId,
             RootActorId = actorId,
-            CommandId = commandId,
-            WorkflowName = "direct",
-            Input = "hello",
-            StartedAt = DateTimeOffset.UtcNow,
+            ProjectionKind = "workflow-execution",
         },
         ownershipCoordinator: ownershipCoordinator,
         lifecycle: lifecycle,
@@ -1025,15 +1004,15 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
 
     }
     private sealed class RecordingLifecycleService
-        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease>
     {
         public List<WorkflowExecutionProjectionContext> StartedContexts { get; } = [];
         public List<WorkflowExecutionProjectionContext> StoppedContexts { get; } = [];
 
-        public Task StartAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StartAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            StartedContexts.Add(context);
+            StartedContexts.Add(runtimeLease.Context);
             return Task.CompletedTask;
         }
 
@@ -1048,34 +1027,24 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
-        public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StopAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            StoppedContexts.Add(context);
-            return Task.CompletedTask;
-        }
-
-        public Task CompleteAsync(
-            WorkflowExecutionProjectionContext context,
-            IReadOnlyList<WorkflowExecutionTopologyEdge> completion,
-            CancellationToken ct = default)
-        {
-            _ = context;
-            _ = completion;
+            StoppedContexts.Add(runtimeLease.Context);
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }
 
     private sealed class RetryableStopLifecycleService
-        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease>
     {
         public int StopAttempts { get; private set; }
         public List<WorkflowExecutionProjectionContext> StoppedContexts { get; } = [];
 
-        public Task StartAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StartAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
-            _ = context;
+            _ = runtimeLease;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -1091,31 +1060,21 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
-        public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StopAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             StopAttempts++;
             if (StopAttempts == 1)
                 throw new InvalidOperationException("stop failed");
 
-            StoppedContexts.Add(context);
-            return Task.CompletedTask;
-        }
-
-        public Task CompleteAsync(
-            WorkflowExecutionProjectionContext context,
-            IReadOnlyList<WorkflowExecutionTopologyEdge> completion,
-            CancellationToken ct = default)
-        {
-            _ = context;
-            _ = completion;
+            StoppedContexts.Add(runtimeLease.Context);
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }
 
     private sealed class ThrowingLifecycleService
-        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
+        : IProjectionLifecycleService<WorkflowExecutionProjectionContext, WorkflowExecutionRuntimeLease>
     {
         private readonly Exception _startException;
 
@@ -1124,9 +1083,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             _startException = startException;
         }
 
-        public Task StartAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StartAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
-            _ = context;
+            _ = runtimeLease;
             ct.ThrowIfCancellationRequested();
             return Task.FromException(_startException);
         }
@@ -1142,20 +1101,9 @@ public sealed class WorkflowProjectionOrchestrationComponentTests
             return Task.CompletedTask;
         }
 
-        public Task StopAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
+        public Task StopAsync(WorkflowExecutionRuntimeLease runtimeLease, CancellationToken ct = default)
         {
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task CompleteAsync(
-            WorkflowExecutionProjectionContext context,
-            IReadOnlyList<WorkflowExecutionTopologyEdge> completion,
-            CancellationToken ct = default)
-        {
-            _ = context;
-            _ = completion;
+            _ = runtimeLease;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

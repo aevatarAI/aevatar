@@ -28,8 +28,9 @@ public sealed class ScriptNativeGraphProjectorTests
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionProjectionContext
         {
-            ProjectionId = "claim-runtime:native-graph",
+            SessionId = "claim-runtime",
             RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
         };
         var readModel = BuildClaimReadModel();
         var nativeGraphProjection = BuildNativeGraphProjection(readModel);

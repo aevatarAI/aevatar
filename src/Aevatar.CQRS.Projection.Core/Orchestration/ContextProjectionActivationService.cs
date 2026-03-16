@@ -1,24 +1,24 @@
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public sealed class ContextProjectionActivationService<TRuntimeLease, TContext, TTopology>
-    : IProjectionPortActivationService<TRuntimeLease>
-    where TRuntimeLease : class
-    where TContext : class, IProjectionContext
+public sealed class ContextProjectionActivationService<TRuntimeLease, TContext>
+    : IProjectionSessionActivationService<TRuntimeLease>
+    where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
+    where TContext : class, IProjectionSessionContext
 {
-    private readonly IProjectionLifecycleService<TContext, TTopology> _lifecycle;
-    private readonly Func<string, string, string, string, CancellationToken, TContext> _contextFactory;
+    private readonly IProjectionLifecycleService<TContext, TRuntimeLease> _lifecycle;
+    private readonly Func<ProjectionSessionStartRequest, CancellationToken, TContext> _contextFactory;
     private readonly Func<TContext, TRuntimeLease> _runtimeLeaseFactory;
-    private readonly Func<string, string, string, string, CancellationToken, Task>? _acquireBeforeStart;
-    private readonly Func<string, string, TContext, TRuntimeLease, CancellationToken, Task>? _onRuntimeLeaseCreated;
-    private readonly Func<string, string, Task>? _cleanupOnStartFailure;
+    private readonly Func<ProjectionSessionStartRequest, CancellationToken, Task>? _acquireBeforeStart;
+    private readonly Func<ProjectionSessionStartRequest, TContext, TRuntimeLease, CancellationToken, Task>? _onRuntimeLeaseCreated;
+    private readonly Func<ProjectionSessionStartRequest, Task>? _cleanupOnStartFailure;
 
     public ContextProjectionActivationService(
-        IProjectionLifecycleService<TContext, TTopology> lifecycle,
-        Func<string, string, string, string, CancellationToken, TContext> contextFactory,
+        IProjectionLifecycleService<TContext, TRuntimeLease> lifecycle,
+        Func<ProjectionSessionStartRequest, CancellationToken, TContext> contextFactory,
         Func<TContext, TRuntimeLease> runtimeLeaseFactory,
-        Func<string, string, string, string, CancellationToken, Task>? acquireBeforeStart = null,
-        Func<string, string, TContext, TRuntimeLease, CancellationToken, Task>? onRuntimeLeaseCreated = null,
-        Func<string, string, Task>? cleanupOnStartFailure = null)
+        Func<ProjectionSessionStartRequest, CancellationToken, Task>? acquireBeforeStart = null,
+        Func<ProjectionSessionStartRequest, TContext, TRuntimeLease, CancellationToken, Task>? onRuntimeLeaseCreated = null,
+        Func<ProjectionSessionStartRequest, Task>? cleanupOnStartFailure = null)
     {
         _lifecycle = lifecycle ?? throw new ArgumentNullException(nameof(lifecycle));
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
@@ -29,43 +29,44 @@ public sealed class ContextProjectionActivationService<TRuntimeLease, TContext, 
     }
 
     public async Task<TRuntimeLease> EnsureAsync(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
+        ProjectionSessionStartRequest request,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootEntityId);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.RootActorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ProjectionKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.SessionId);
         ct.ThrowIfCancellationRequested();
 
-        await (_acquireBeforeStart?.Invoke(rootEntityId, projectionName, input, commandId, ct) ?? Task.CompletedTask);
+        await (_acquireBeforeStart?.Invoke(request, ct) ?? Task.CompletedTask);
 
         TContext? context = null;
+        TRuntimeLease? runtimeLease = null;
         var started = false;
         try
         {
-            context = _contextFactory(rootEntityId, projectionName, input, commandId, ct);
-            await _lifecycle.StartAsync(context, ct);
+            context = _contextFactory(request, ct);
+            runtimeLease = _runtimeLeaseFactory(context);
+            await _lifecycle.StartAsync(runtimeLease, ct);
             started = true;
 
-            var runtimeLease = _runtimeLeaseFactory(context);
-            await (_onRuntimeLeaseCreated?.Invoke(rootEntityId, commandId, context, runtimeLease, ct) ?? Task.CompletedTask);
+            await (_onRuntimeLeaseCreated?.Invoke(request, context, runtimeLease, ct) ?? Task.CompletedTask);
             return runtimeLease;
         }
         catch
         {
-            if (started && context != null)
+            if (started && runtimeLease != null)
             {
                 try
                 {
-                    await _lifecycle.StopAsync(context, CancellationToken.None);
+                    await _lifecycle.StopAsync(runtimeLease, CancellationToken.None);
                 }
                 catch
                 {
                 }
             }
 
-            await (_cleanupOnStartFailure?.Invoke(rootEntityId, commandId) ?? Task.CompletedTask);
+            await (_cleanupOnStartFailure?.Invoke(request) ?? Task.CompletedTask);
             throw;
         }
     }

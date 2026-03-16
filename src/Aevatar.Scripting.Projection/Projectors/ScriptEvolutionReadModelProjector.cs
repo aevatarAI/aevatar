@@ -9,7 +9,7 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptEvolutionReadModelProjector
-    : IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>
+    : IProjectionMaterializer<ScriptEvolutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptEvolutionReadModel> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -22,17 +22,8 @@ public sealed class ScriptEvolutionReadModelProjector
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
-    public ValueTask InitializeAsync(
-        ScriptEvolutionSessionProjectionContext context,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
-    }
-
     public async ValueTask ProjectAsync(
-        ScriptEvolutionSessionProjectionContext context,
+        ScriptEvolutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -47,7 +38,7 @@ public sealed class ScriptEvolutionReadModelProjector
             return;
         }
 
-        var readModelId = ResolveReadModelId(state, context.ProposalId);
+        var readModelId = ResolveReadModelId(state, context.RootActorId);
         if (string.IsNullOrWhiteSpace(readModelId))
             return;
 
@@ -59,17 +50,6 @@ public sealed class ScriptEvolutionReadModelProjector
             stateEvent,
             now);
         await _writeDispatcher.UpsertAsync(readModel, ct);
-    }
-
-    public ValueTask CompleteAsync(
-        ScriptEvolutionSessionProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     private static ScriptEvolutionReadModel BuildReadModel(

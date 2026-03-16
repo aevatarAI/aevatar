@@ -18,9 +18,9 @@ public class ScriptEvolutionSessionCompletedEventProjectorTests
         var projector = new ScriptEvolutionSessionCompletedEventProjector(hub);
         var context = new ScriptEvolutionSessionProjectionContext
         {
-            ProjectionId = "script-evolution-session:proposal-1",
+            SessionId = "proposal-1",
             RootActorId = "script-evolution-session:proposal-1",
-            ProposalId = "proposal-1",
+            ProjectionKind = "script-evolution-session",
         };
 
         await projector.ProjectAsync(
@@ -50,9 +50,9 @@ public class ScriptEvolutionSessionCompletedEventProjectorTests
         var projector = new ScriptEvolutionSessionCompletedEventProjector(hub);
         var context = new ScriptEvolutionSessionProjectionContext
         {
-            ProjectionId = "script-evolution-session:proposal-2",
+            SessionId = "proposal-2",
             RootActorId = "script-evolution-session:proposal-2",
-            ProposalId = "proposal-2",
+            ProjectionKind = "script-evolution-session",
         };
 
         await projector.ProjectAsync(
