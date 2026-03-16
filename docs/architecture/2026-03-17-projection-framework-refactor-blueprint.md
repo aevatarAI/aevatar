@@ -1,686 +1,696 @@
-# Projection 框架层问题与重构实施蓝图
+# Projection 框架 Actor 化瘦身重构蓝图
 
-## 1. 文档目标
+## 1. 文档定位
 
-本文只分析 Projection 框架层本身，不讨论 Workflow、Scripting、Platform 的业务语义差异，重点回答三件事：
+本文替换上一版 Projection 框架蓝图。
 
-- 现有 Projection 框架内核存在哪些结构性问题。
-- 重构后的框架边界、抽象和运行时形态应该是什么。
-- 如何在不把系统打散的前提下，分阶段完成重构。
+上一版的问题是：虽然看到了 `runtime scope / failure / committed-only` 这些核心矛盾，但实现方向仍然偏向“再造一个更完整的 projection runtime 平台”，复杂度继续上升，不符合当前仓库的顶级约束：
 
-本文对应的是框架层重构蓝图，不是最终代码设计稿。目标是先统一约束、主干和实施顺序。
+- Projection 两条链路都必须 Actor 化。
+- Projection 运行态事实必须由 Actor 或分布式状态持有。
+- 中间层不能再持有 `actorId / sessionId / scopeId -> runtime` 这类进程内事实映射。
+- 框架必须瘦身，而不是继续叠控制面。
 
-## 2. 范围与非目标
+本文的目标不是“改良现有框架”，而是直接给出一个更瘦、更硬、更 Actor-first 的新框架方案。
 
-### 2.1 范围
+## 2. 这次重构的核心结论
 
-本次重构范围限定在以下模块：
+Projection 框架接下来只做一件事：
 
-- `Aevatar.CQRS.Projection.Core.Abstractions`
-- `Aevatar.CQRS.Projection.Core`
-- `Aevatar.CQRS.Projection.Runtime`
+- 把 `Durable Materialization` 和 `Session Observation` 两条链路都收敛成 `scope actor`。
 
-涉及的核心职责包括：
+也就是说：
 
-- Projection runtime activation / lease / session / context
-- actor stream subscription
-- dispatch / routing / failure reporting / replay
-- store materialization runtime
-- framework guardrail 与约束收口
+- `durable scope` 是 actor。
+- `session scope` 是 actor。
+- scope 的存在性、生命周期、订阅状态、失败记录、水位，都属于 scope actor 状态。
+- host 侧只保留非常薄的 port / store adapter / session stream adapter。
 
-### 2.2 非目标
+这意味着以下方向全部放弃：
 
-以下内容不在本文直接落地范围内：
+- 不再做 host-local runtime registry。
+- 不再做 host-local multiplexer 作为框架核心。
+- 不再保留 session/materialization 两套 lifecycle/dispatcher/registry。
+- 不再让 live sink 附着关系参与 projection 生命周期判断。
+- 不再保留额外的 ownership coordinator 作为 durable/session scope 事实源。
 
-- 不重新定义 Workflow/Scripting/Platform 的业务 read model。
-- 不在本轮直接改造所有 feature projectors。
-- 不在本轮引入新的业务 actor 协议。
-- 不把 artifact/export/log 类视图全部一次性删除。
+scope actor 自己就是控制面。
 
-这些能力只在“迁移影响”章节中描述框架落地后的适配要求。
+## 3. 当前框架的根问题
 
-## 3. 当前框架快照
+当前 Projection 框架的主要问题，不是某几个类写得重复，而是框架模型本身偏离了 Actor-first。
 
-现有 Projection 框架实际上由两套非常接近的运行时叠加而成：
+### 3.1 运行态事实不在 Actor 里
 
-- `Session Observation`
-- `Durable Materialization`
-
-两者都包含相似的构件：
+当前“某个 projection 是否已经启动”主要散落在：
 
 - activation service
 - lifecycle service
-- coordinator
-- dispatcher
-- subscription registry
 - runtime lease
+- subscription registry
+- 调用方是否还持有 lease
 
-只是接口名和上下文类型不同。
+这意味着：
 
-当前主链路可以概括为：
+- `durable projection` 的存在性不是权威事实。
+- `session projection` 的附着状态不是权威事实。
+- 运行态依赖中间层对象关系，而不是 actor 状态。
 
-```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
-flowchart LR
-  A["Feature Port / Activation Request"] --> B["Activation Service"]
-  B --> C["Lifecycle Service"]
-  C --> D["Coordinator"]
-  D --> E["Dispatcher"]
-  E --> F["ActorStreamSubscriptionHub"]
-  F --> G["Actor Event Stream"]
-  G --> F
-  F --> H["Subscription Registry"]
-  H --> I["Projector / Materializer"]
-  I --> J["Store Dispatcher / Live Sink"]
-```
+### 3.2 session 与 materialization 各自复制了一套框架
 
-框架表面上做了 `session` 和 `materialization` 的职责分离，但内部运行时机制并没有被统一抽象，反而复制了两套近似实现。
-
-## 4. 框架层面的主要问题
-
-### 4.1 Durable activation 不是幂等的权威事实
-
-`ContextProjectionMaterializationActivationService.EnsureAsync(...)` 当前语义是“收到请求就创建一个新的 context + lifecycle + runtime lease，并立即启动订阅”。框架没有提供按以下维度唯一化的权威运行时事实：
-
-- `actorId`
-- `projection kind`
-- `runtime mode`
-
-结果是：
-
-- 同一 actor 的 durable projection 可被重复激活。
-- activation 调用者如果不长期持有 lease，框架层也不会自动复用既有 runtime。
-- “是否已经存在 durable materialization” 不是一个可查询、可复用、可释放的权威状态。
-
-这与仓库顶级约束冲突：Projection 运行态不应依赖中间层调用链偶然持有的进程内对象。
-
-### 4.2 “Shared actor stream subscription” 名义存在，事实不存在
-
-`ActorStreamSubscriptionHub<TMessage>` 当前每次 `SubscribeAsync(...)` 都会直接调用底层 `stream.SubscribeAsync<TMessage>(...)`。它没有：
-
-- actor 维度的复用键
-- ref-count
-- 物理订阅复用
-- host 内派发复用
-
-因此它不是 “hub”，只是一个薄包装。
-
-这会带来两个结果：
-
-- 同一 actor 在同一 host 上可能被 durable/session 多次重复订阅。
-- 随着 projection view 数量增加，底层订阅和反序列化开销近似线性增长。
-
-### 4.3 Session 与 Materialization 运行时内核高度重复
-
-以下成对类型几乎是同构的：
+当前核心组件成双成对出现：
 
 - `ProjectionLifecycleService` / `ProjectionMaterializationLifecycleService`
 - `ProjectionCoordinator` / `ProjectionMaterializationCoordinator`
 - `ProjectionDispatcher` / `ProjectionMaterializationDispatcher`
 - `ProjectionSubscriptionRegistry` / `ProjectionMaterializationSubscriptionRegistry`
 
-这种复制带来的问题不是“代码丑”，而是：
+这说明框架没有抓住真正的差异。
 
-- 修一侧时很容易漏另一侧。
-- 失败语义、路由规则、日志行为逐渐漂移。
-- feature 团队理解成本高，容易把 session 路径和 durable 路径当成两套框架。
+真正的差异只有：
 
-正确的语义区分应该保留，但内核机制不应该复制。
+- 一个输出 durable read model
+- 一个输出 session stream
 
-### 4.4 失败语义没有闭环
+而不是两套完全独立的 runtime。
 
-当前 dispatch 失败处理主要停留在：
+### 3.3 ActorStreamSubscriptionHub 仍然是中间层协调器
 
-- catch exception
-- report failure
-- log warning/error
+即使不把它视为权威事实源，它仍然把订阅和派发职责放在了 Actor 外部的中间层对象里。
 
-问题在于失败后框架没有统一的可恢复语义：
+问题在于：
 
-- projector/materializer 失败通常直接丢事件
-- route/filter/unpack 失败没有统一 durable replay 语义
-- 只有 store fan-out 失败部分接入了 compensation/outbox/replay
+- runtime 状态仍然由普通服务对象持有
+- projection 是否 attached 仍不在 actor state 中
+- 订阅失败、释放失败、重试语义仍然在 actor 外部收敛
 
-因此现在的补偿系统只覆盖“写 store 失败”，没有覆盖“框架 dispatch 主链失败”。
+这和“Projection 运行态 Actor 化”的目标相冲突。
 
-这会造成两个严重后果：
+### 3.4 live sink 附着语义绑坏了 session projection
 
-- Projection 主链对暂时性失败不具备完整恢复能力。
-- 线上数据缺口很难界定是 reducer 失败、dispatch 失败还是 store 失败。
+现在 session projection 的释放逻辑依赖：
 
-### 4.5 公共 lease 抽象泄露了 transport/runtime 细节
+- 当前还有没有 live sink
+- release service 是否判断 idle
 
-当前公共抽象存在几个明显的设计泄露：
+这会把两个本应解耦的事情绑在一起：
 
-- `IProjectionRuntimeLease.GetLiveSinkSubscriptionCount()` 混入了 live sink 统计语义。
-- `IProjectionStreamSubscriptionRuntimeLease.ActorStreamSubscriptionLease` 直接暴露底层 stream lease。
-- `IProjectionContextRuntimeLease` 与 `IProjectionPortSessionLease` 的边界更像实现拼装结果，而不是稳定领域抽象。
+- projection session 是否存在
+- 某个 UI/client sink 是否还在订阅
 
-这类泄露会导致：
+正确模型应该是：
 
-- feature 层开始依赖 runtime 内部装配细节。
-- durable materialization 也不得不背 live sink 语义。
-- 框架未来替换 transport 或 subscription 形态时很难演进。
+- session projection actor 负责把事件发布到 session stream
+- UI/client sink 自己订阅 session stream
+- sink 不应该反过来成为 projection 生命周期的事实源
 
-### 4.6 Durable materialization 没有在框架入口强制 committed-only
+### 3.5 durable committed-only 仍然没有收在框架入口
 
-仓库规则明确要求 projection 只消费 committed facts，但当前框架没有把这条规则收成 runtime guardrail。
+当前 durable materialization 虽然名义上只吃 committed 事实，但实际上大部分判断还散在 projector/materializer 内部。
 
-目前 durable 路径的 committed-only 主要依赖每个 materializer 自己做：
+这不符合框架职责。
 
-- `CommittedStateEventEnvelope.TryUnpack...`
-- payload 类型判断
-- event 类型兜底
+durable scope actor 的入口就应该天然只接收 committed observation，不给 feature 模块继续兜底的空间。
 
-框架层只做 observer publication 和 route filter，不做 committed observation 入口约束。
+### 3.6 failure / replay 仍然是“局部补偿”
 
-结果是：
+现在 replay/compensation 主要覆盖 store fan-out 失败。
 
-- 框架无法从机制上保证 durable materialization 只消费 committed state feed。
-- feature 模块可以继续把“过滤 committed payload”的责任散落到 projector/materializer 里。
+但真正的 projection 主链失败还包括：
 
-### 4.7 Store runtime 的成功语义过弱
+- observation 收到但路由失败
+- payload normalize 失败
+- projector/materializer 执行失败
+- session publish 失败
 
-`ProjectionStoreDispatcher` 当前是顺序 fan-out：
+如果这些失败不进入同一个 scope actor 的恢复语义，最终一致性就不闭环。
 
-- 先 document
-- 再 graph
-- 失败时再尝试补偿
+### 3.7 Projection 框架被做得太像子平台
 
-框架层缺少更清晰的写入语义建模：
+当前框架已经开始包含：
 
-- 没有标准化 per-sink outcome
-- 没有统一 freshness/watermark 表达
-- 没有把“部分成功”建模为明确状态
+- activation orchestration
+- lifecycle orchestration
+- registry
+- subscription hub
+- compensation outbox
+- replay hosted service
+- ownership coordinator
 
-这导致上层很难准确表达：
+这已经不是“projection framework”，而是一个单独的小平台。
 
-- 当前 read model 到底写到了哪一个权威版本
-- 哪个 sink 成功，哪个 sink 失败
-- replay 应该从哪个粒度恢复
+我们现在要做的不是继续增强它，而是删层、收口、Actor 化。
 
-### 4.8 框架级门禁还不够
+## 4. 重构目标与硬约束
 
-仓库已有较多 projection 相关 guard，但框架层还有几个关键约束没有自动化：
+### 4.1 一切运行态事实都回到 scope actor
 
-- durable activation 必须可复用、不可重复激活
-- durable materialization 必须 committed-only
-- dispatch 主链失败必须进入统一 replay 语义
-- framework public abstraction 不得泄露 transport handle
+以下事实必须放到 scope actor 状态里：
 
-没有这些门禁，重构后规则仍然容易回退。
+- scope 是否存在
+- scope 是否 active
+- observation 是否 attached
+- 最后处理到哪个 committed version
+- 最后一次 materialization / session publish 结果
+- 待 replay 失败项
+- release / detach / cleanup 状态
 
-## 5. 重构目标与硬约束
+### 4.2 actor id 直接等于 scope key
 
-本轮框架重构必须满足以下硬约束。
+不要再有“scope actor + ownership coordinator actor”双层控制面。
 
-### 5.1 保留单一主干
+正确做法是：
 
-系统只保留一条 Projection 主干：
+- scope key 直接编码为 actor id
+- actor runtime 的单身份语义就是唯一控制面
 
-- 权威输入：`EventEnvelope<CommittedStateEventPublished>` 或其同源 durable feed
-- 统一 runtime control plane
-- 一对多分发到 session observation 与 durable materialization
+建议：
 
-不能保留两套互不相干的 projection framework。
+- durable scope actor id = `projection:durable:{projectionKind}:{rootActorId}`
+- session scope actor id = `projection:session:{projectionKind}:{rootActorId}:{sessionId}`
 
-### 5.2 运行态事实必须有权威来源
+### 4.3 host 侧不保留长期 registry
 
-以下事实必须由 actor 或分布式状态承载，而不是进程内字典：
+host 侧允许存在的，只能是：
 
-- 某个 durable runtime scope 是否存在
-- scope 当前 owner 是谁
-- scope 当前 lease 是否有效
-- session 是否仍处于附着状态
+- port
+- session stream codec/hub
+- store runtime/provider
+- actor dispatch/runtime adapter
 
-host 内缓存可以存在，但只能是派生缓存，不能是权威事实。
+host 侧禁止再保留：
 
-### 5.3 session 与 durable 语义分离，内核统一
+- `scope -> runtime lease` 字典
+- `actor -> context` 字典
+- `session -> live sink list` 事实态
+- `projection already started` 进程内标记
 
-必须同时做到两点：
+### 4.4 session projection 不再管理 live sink 生命周期
 
-- session observation 与 durable materialization 保持清晰语义区分
-- activation / dispatch / failure / replay / subscription 等底层机制统一抽象
+Projection 框架只负责：
 
-### 5.4 durable 路径必须 committed-only
+- 生成 session event stream
 
-durable materialization 的入口必须由框架保证 committed-only，而不是让每个 materializer 自行判断。
+不再负责：
 
-### 5.5 失败必须可重放
+- 维护某个 sink 是否 attached
+- 用 sink 数量决定 session scope 是否释放
+- 在 framework core 中保存 sink subscription handle
 
-凡是进入 projection dispatch 主链的 committed event，如果没有被明确判定为“路由不匹配/正常忽略”，失败就必须进入统一 replay/recovery 语义。
+### 4.5 durable projection 必须天然 committed-only
 
-### 5.6 公共抽象必须 runtime-neutral
+durable scope actor 的 observation 入口必须只接收：
 
-feature 层可见的 lease/context/port 抽象不能泄露：
+- `EventEnvelope<CommittedStateEventPublished>` 或同源 committed feed
 
-- stream implementation
-- live sink 内部计数
-- provider-specific handle
-- host 内局部缓存结构
+feature materializer 看到的输入默认就是 committed fact，不再自己过滤。
 
-## 6. 目标架构
+### 4.6 replay 必须内聚到 scope actor
 
-目标不是继续维护两套 runtime，而是形成“一个控制平面 + 两种运行模式 + 一个公共内核”。
+replay 不再是 framework 外侧的“补偿平台”。
+
+正确模型是：
+
+- scope actor 记录失败
+- scope actor 触发 replay
+- scope actor 推进自己的水位和恢复状态
+
+### 4.7 framework 只提供最小主干
+
+新框架只保留以下最小职责：
+
+- scope actor protocol
+- observation attach / detach
+- ordered dispatch
+- durable materialization runtime
+- session stream publish runtime
+- failure log / replay
+
+除此之外一律不要再长。
+
+## 5. 目标架构总图
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
-  A["Committed Observation Feed"] --> B["Projection Runtime Scope Coordinator"]
-  B --> C["Projection Feed Multiplexer"]
-  C --> D["Unified Dispatch Kernel"]
-  D --> E["Durable Materialization Mode"]
-  D --> F["Session Observation Mode"]
-  E --> G["Store Runtime"]
-  F --> H["Live Sink / Session Stream"]
-  D --> I["Unified Failure Sink"]
-  I --> J["Replay / Recovery Pipeline"]
+  A["Committed Observation Feed"] --> B["Projection Materialization Scope Actor"]
+  A --> C["Projection Session Scope Actor"]
+  B --> D["Materializers"]
+  D --> E["Store Runtime"]
+  E --> F["Document / Graph / Index Stores"]
+  C --> G["Session Projectors"]
+  G --> H["Session Event Stream"]
+  H --> I["UI / AGUI / Streaming Clients"]
+  B --> J["Failure Log / Replay State"]
+  C --> J
+  F --> K["Query Readers"]
 ```
 
-其中：
+这张图有两个关键点：
 
-- `Projection Runtime Scope Coordinator` 是权威控制平面。
-- `Projection Feed Multiplexer` 是 host 内的非权威物理订阅复用层。
-- `Unified Dispatch Kernel` 统一处理路由、派发、失败建模。
-- `Durable Materialization Mode` 与 `Session Observation Mode` 只保留语义差异，不复制底层引擎。
+- 两条链路都直接是 actor，不再绕一层中间生命周期框架。
+- `UI sink` 不再附着到 projection runtime 本身，而是订阅 session event stream。
 
-## 7. 目标抽象设计
+## 6. 新框架的最小组成
 
-### 7.1 引入 Runtime Scope 作为统一事实单元
+## 6.1 两类 scope actor
 
-建议新增统一 scope 抽象：
+只保留两类 actor：
 
-- `ProjectionRuntimeScopeKey`
-- `ProjectionRuntimeMode`
-- `ProjectionRuntimeScopeState`
+- `ProjectionMaterializationScopeGAgent`
+- `ProjectionSessionScopeGAgent`
 
-建议语义如下：
+它们都只表达运行态，不承载业务事实。
 
-- `ProjectionRuntimeScopeKey`
-  - `RootActorId`
-  - `ProjectionKind`
-  - `RuntimeMode`
-  - `SessionId`（仅 session 模式需要）
-- `ProjectionRuntimeMode`
-  - `DurableMaterialization`
-  - `SessionObservation`
+### 6.1.1 durable scope actor 职责
 
-这样可以明确：
+- 确保自己已经附着到目标 actor 的 committed observation feed
+- 顺序接收 committed observation
+- 调用 materializers
+- 调用 store runtime
+- 记录 per-sink outcome
+- 记录失败并支持 replay
+- 推进 durable watermark
 
-- durable scope 的唯一键是 `actor + projection kind + durable mode`
-- session scope 的唯一键是 `actor + projection kind + session id + session mode`
+### 6.1.2 session scope actor 职责
 
-框架层不再把“lease 对象是否还活着”误当成事实源。
+- 确保自己已经附着到目标 actor 的 observation feed
+- 顺序接收 observation
+- 调用 session projectors
+- 发布 session event stream
+- 记录 publish 失败
+- 管理 session release / cleanup 状态
 
-### 7.2 把 activation 改成 scope ensure / attach 语义
+## 6.2 一个薄 port 层
 
-现有 `EnsureAsync(...)` 需要拆成更诚实的语义：
+host/application 侧只看到极薄端口：
 
-- `EnsureScopeAsync(...)`
-- `AttachScopeAsync(...)`
-- `ReleaseScopeAsync(...)`
+- `EnsureDurableScopeAsync(scopeKey)`
+- `ReleaseDurableScopeAsync(scopeKey)`
+- `EnsureSessionScopeAsync(scopeKey)`
+- `ReleaseSessionScopeAsync(scopeKey)`
 
-其中：
+端口职责只有：
 
-- `EnsureScopeAsync(...)` 只负责确保权威 scope 存在并返回 scope 句柄。
-- `AttachScopeAsync(...)` 只负责当前 host 附着到 scope，并建立本地订阅/派发。
-- `ReleaseScopeAsync(...)` 负责显式释放 durable 或 session 附着。
+- 计算 scope key
+- 创建或获取 scope actor
+- 发送 typed command
 
-这样可以避免当前“activation = 直接新建 runtime + 立即订阅”的隐式行为。
+它不再：
 
-### 7.3 保留权威 control plane，新增本地 multiplexer
+- new context
+- new runtime lease
+- 持有 registry
+- 订阅 actor stream
+- 管理 sink attach/detach
 
-必须严格区分两类状态：
+## 6.3 一个薄 observation adapter
 
-- 权威运行态事实
-- host 内局部执行缓存
+scope actor 需要一个极薄 observation adapter，用于：
 
-建议引入两个独立抽象：
+- 订阅目标 actor observation feed
+- 把收到的 envelope 重新事件化回 scope actor 自己的 inbox
 
-- `IProjectionRuntimeScopeCoordinator`
-- `IProjectionFeedMultiplexer`
+注意：
 
-职责分工：
+- adapter 不是 registry
+- adapter 不持有跨 scope 的事实状态
+- adapter 只是 actor 到 stream 的连接器
 
-- `IProjectionRuntimeScopeCoordinator`
-  - 基于 actor/distributed state 维护 scope 是否存在、owner、lease、模式
-  - 是 activation/release 的唯一权威入口
-- `IProjectionFeedMultiplexer`
-  - 仅在单 host 内复用同一 actor 的物理 stream subscription
-  - 维护 ref-count、local consumers、fan-out
-  - 不是权威事实源
+## 6.4 一个薄 session stream adapter
 
-这满足两个仓库约束：
+session scope actor 不再理解 `IEventSink<TEvent>`。
 
-- 不在中间层把本地字典当事实源
-- 允许把本地缓存作为派生执行优化
+它只需要：
 
-### 7.4 合并 dispatch 内核
+- publish `TEvent` 到 session stream
 
-建议把当前两套 dispatcher/coordinator/registry 合并为一套内部内核，例如：
+UI / AGUI / downstream streaming client 如果要消费，就自己从 session stream 读。
 
-- `ProjectionDispatchKernel`
-- `ProjectionDispatchPlan`
-- `ProjectionDispatchScope`
-- `ProjectionDispatchResult`
+## 6.5 一个更诚实的 store runtime
 
-其中 mode-specific 差异只通过策略接口注入：
+durable scope actor 调用的 store runtime 必须返回显式结果，而不是只有一个模糊 `Applied / Conflict`。
 
-- `IProjectionDispatchModeAdapter`
+至少应包含：
 
-由它决定：
+- 当前 committed version
+- 每个 sink 的结果
+- 哪些 sink 成功
+- 哪些 sink 失败
+- 是否可重试
 
-- durable 还是 session
-- route/filter 规则
-- sink 类型
-- success/failure 映射方式
+这些结果写回 scope actor state，作为恢复和治理依据。
 
-这样可以保留语义差异，但不复制主流程。
+## 7. 新框架中的状态与协议
 
-### 7.5 把 committed-only 前移到 durable mode adapter
+## 7.1 durable scope state
 
-durable mode adapter 必须在统一入口做 committed-only 过滤，并在框架层输出标准化结果：
-
-- `AcceptedCommittedObservation`
-- `IgnoredNonCommittedObservation`
-- `RejectedInvalidObservation`
-
-不能再把 committed payload 判断散落到每个 materializer 内部。
-
-这条规则应成为 durable dispatch kernel 的第一层 guardrail。
-
-### 7.6 统一失败建模与 replay
-
-建议新增统一失败记录模型，例如：
-
-- `ProjectionDispatchFailureRecord`
-
-至少包含：
+建议 durable scope actor state 至少包含：
 
 - `ScopeKey`
-- `ActorId`
-- `ProjectionKind`
-- `RuntimeMode`
-- `EventType`
-- `SourceVersion`
-- `FailureStage`
-- `FailureCategory`
-- `RetryDisposition`
+- `Status`
+- `ObservationAttached`
+- `LastObservedCommittedVersion`
+- `LastMaterializedCommittedVersion`
+- `LastSuccessfulStoreVersion`
+- `LastStoreOutcomes`
+- `PendingFailures`
+- `Released`
 
-`FailureStage` 至少覆盖：
+这里最重要的是：
 
-- subscription receive
-- route resolution
-- payload normalization
-- projector/materializer execution
-- store dispatch
-- session sink dispatch
+- `LastObservedCommittedVersion` 和 `LastMaterializedCommittedVersion` 必须显式分开
 
-然后把当前只覆盖 store 的补偿链，扩展为统一 dispatch failure sink：
+这样才能诚实表达：
 
-- `IProjectionDispatchFailureSink`
-- `IProjectionDispatchReplayService`
+- 我已经看到了某个 committed version
+- 但不一定已经成功物化到了所有 sinks
 
-原则是：
+## 7.2 session scope state
 
-- 正常忽略必须显式可区分
-- 非正常失败必须 durable 化并可重放
+建议 session scope actor state 至少包含：
 
-### 7.7 清理公共 lease 抽象
+- `ScopeKey`
+- `Status`
+- `ObservationAttached`
+- `LastObservedVersion`
+- `LastPublishedVersion`
+- `PendingFailures`
+- `Released`
+- `ExpiresAtUtc` 或 `LastTouchedAtUtc`
 
-建议把公共 lease 抽象收敛为两层：
+session actor 的关键不是 sink 数量，而是：
 
-- feature-visible scope lease
-- internal execution attachment
+- session 是否仍然有效
+- stream 是否仍应继续发布
 
-外部只保留类似：
+## 7.3 scope actor command / event
 
-- `IProjectionScopeLease`
-- `IProjectionSessionLease`
+建议最小协议如下：
 
-内部才保留：
+- command
+  - `EnsureProjectionScopeCommand`
+  - `ReleaseProjectionScopeCommand`
+  - `ReplayProjectionFailuresCommand`
+  - `RefreshProjectionAttachmentCommand`
+- internal event / signal
+  - `ProjectionObservationArrivedEvent`
+  - `ProjectionScopeAttachedEvent`
+  - `ProjectionScopeReleasedEvent`
+  - `ProjectionDispatchFailedEvent`
+  - `ProjectionReplayCompletedEvent`
+  - `ProjectionWatermarkAdvancedEvent`
 
-- stream subscription handle
-- local sink attachment
-- host execution token
+这些协议必须是强类型 proto，而不是 bag。
 
-这意味着以下能力不应继续暴露在公共接口中：
+## 8. 两条链路如何变瘦
 
-- `ActorStreamSubscriptionLease`
-- `GetLiveSinkSubscriptionCount()`
-- 任何 provider-specific 或 transport-specific handle
+## 8.1 Durable Materialization 链
 
-### 7.8 强化 store runtime 合同
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["EnsureDurableScope"] --> B["ProjectionMaterializationScopeGAgent"]
+  B --> C["Attach Committed Observation"]
+  C --> D["ProjectionObservationArrivedEvent"]
+  D --> E["Materializer Dispatch"]
+  E --> F["Store Runtime"]
+  F --> G["Per-Sink Outcomes"]
+  G --> H["Advance Watermark / Record Failure"]
+```
 
-`ProjectionStoreDispatcher` 需要从“顺序调用几个 sink”提升为“返回明确 outcome 的 store runtime”。
+这条链路的瘦身点在于：
 
-建议补充以下建模：
+- 删除 lifecycle/registry/dispatcher 这一整层 host runtime
+- 删除额外 ownership coordinator
+- committed-only 在 actor 入口强制
+- 失败与重放直接回到 scope actor
 
-- `ProjectionStoreWriteOutcome`
-- `ProjectionStoreSinkOutcome`
-- `ProjectionMaterializationWatermark`
+## 8.2 Session Observation 链
 
-最少要能表达：
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  A["EnsureSessionScope"] --> B["ProjectionSessionScopeGAgent"]
+  B --> C["Attach Observation Feed"]
+  C --> D["ProjectionObservationArrivedEvent"]
+  D --> E["Session Projector Dispatch"]
+  E --> F["Publish Session Stream"]
+  F --> G["UI / AGUI / Consumers Subscribe Directly"]
+```
 
-- document 成功 / graph 失败
-- 当前成功写到的权威版本
-- 哪个失败可重试，哪个需要人工介入
+这条链路的瘦身点在于：
 
-这样查询侧、replay 侧和治理侧才有共同语言。
+- projection 不再知道具体 sink
+- 不再维护 live sink attach/detach 列表
+- 不再用 sink 数量决定 projection release
+- 发布失败也由 session scope actor 自己记录与恢复
 
-## 8. 分阶段实施方案
+## 9. 必须删除的旧框架层
 
-### 8.1 Phase 1: 建立统一 scope 模型与新抽象
+这次重构不考虑兼容性，因此以下旧层应直接删除，而不是保留适配壳。
 
-目标：
+### 9.1 host 中间生命周期层
 
-- 引入 `ProjectionRuntimeScopeKey`、`ProjectionRuntimeMode`、`IProjectionRuntimeScopeCoordinator`
-- 新增统一 failure record/sink 抽象
-- 为旧 lease/public port 加 `[Obsolete]` 或迁移层
-
-涉及模块：
-
-- `Aevatar.CQRS.Projection.Core.Abstractions`
-- `Aevatar.CQRS.Projection.Core`
-
-产出要求：
-
-- 新旧抽象并存
-- 不改 feature 行为
-- 文档和命名先统一
-
-### 8.2 Phase 2: 提取统一 dispatch kernel
-
-目标：
-
-- 合并 session/materialization 的 dispatcher/coordinator/registry 主逻辑
-- 以 mode adapter 替代双份 orchestration 实现
-
-优先改造对象：
-
+- `ContextProjectionActivationService`
+- `ContextProjectionMaterializationActivationService`
+- `ContextProjectionReleaseService`
+- `ContextProjectionMaterializationReleaseService`
 - `ProjectionLifecycleService`
 - `ProjectionMaterializationLifecycleService`
-- `ProjectionCoordinator`
-- `ProjectionMaterializationCoordinator`
-- `ProjectionDispatcher`
-- `ProjectionMaterializationDispatcher`
 - `ProjectionSubscriptionRegistry`
 - `ProjectionMaterializationSubscriptionRegistry`
+- `ProjectionDispatcher`
+- `ProjectionMaterializationDispatcher`
+- `ProjectionCoordinator`
+- `ProjectionMaterializationCoordinator`
 
-阶段结果：
-
-- 对外仍保留 session/materialization 入口
-- 内部主流程统一
-
-### 8.3 Phase 3: durable activation 改为权威 scope ensure
-
-目标：
-
-- durable runtime existence 改由 `IProjectionRuntimeScopeCoordinator` 管理
-- activation 从“创建新 runtime”改为“ensure/attach 既有 scope”
-
-关键要求：
-
-- 同一 `actor + projection kind + durable mode` 只能存在一个权威 durable scope
-- 重复 activation 必须幂等
-- scope 生命周期必须可查询、可释放
-
-这一步是整个框架重构的核心里程碑。
-
-### 8.4 Phase 4: 落地 host-local feed multiplexer
-
-目标：
-
-- 让同一 host 上同一 actor 的物理订阅只建立一次
-- durable/session 都从 multiplexer 拿逻辑 consumer attachment
-
-优先改造对象：
+### 9.2 host 中间订阅层
 
 - `ActorStreamSubscriptionHub`
+- `IActorStreamSubscriptionHub`
+- `IProjectionStreamSubscriptionRuntimeLease`
 
-实现要求：
+### 9.3 live sink 绑定层
 
-- 可以用本地字典做 ref-count 和 fan-out
-- 但必须明确声明其为 host-local derived cache
-- 权威状态仍由 scope coordinator 管理
+- `IProjectionPortSessionLease`
+- `EventSinkProjectionSessionSubscriptionManager`
+- `EventSinkProjectionLiveForwarder`
+- `EventSinkProjectionFailurePolicyBase`
+- `DefaultEventSinkProjectionFailurePolicy`
+- `GetLiveSinkSubscriptionCount()` 相关语义
 
-### 8.5 Phase 5: 统一 dispatch failure 与 replay 语义
+如果某些 feature 需要“给外部返回一个 session handle”，也只能返回 opaque handle，不再包含 sink attachment 逻辑。
 
-目标：
+### 9.4 多余控制面
 
-- 把 projector/materializer/store/session sink 失败纳入统一 failure sink
-- replay 不再只服务 store compensation
+- `ProjectionOwnershipCoordinatorGAgent`
+- `ActorProjectionOwnershipCoordinator`
+- `ProjectionOwnershipCoordinatorOptions`
 
-优先改造对象：
+scope actor 自身就是唯一控制面后，这一层应删除。
+
+### 9.5 外围补偿平台化实现
 
 - `ProjectionDispatchCompensationOutboxGAgent`
 - `ProjectionDispatchCompensationReplayHostedService`
-- `DurableProjectionDispatchCompensator`
+- 以及一切只围绕 store fan-out 的独立补偿框架
 
-建议结果：
+replay 要回到 scope actor 内聚处理。
 
-- compensation 语义升级为 generalized replay pipeline
-- store failure 只是其一个 stage
+## 10. 新框架建议保留的最小抽象
 
-### 8.6 Phase 6: durable committed-only guardrail 与 store outcome 落地
+只保留必要抽象，不重新堆一层框架。
+
+- `ProjectionRuntimeScopeKey`
+- `ProjectionRuntimeMode`
+- `IProjectionScopePort`
+- `IProjectionObservationAdapter`
+- `IProjectionSessionPublisher<TEvent>`
+- `IProjectionStoreRuntime<TReadModel>`
+- `ProjectionStoreWriteOutcome`
+- `ProjectionStoreSinkOutcome`
+
+其中：
+
+- `IProjectionScopePort` 只负责 ensure/release
+- `IProjectionObservationAdapter` 只负责 actor 附着 observation
+- `IProjectionSessionPublisher<TEvent>` 只负责 publish stream
+- `IProjectionStoreRuntime<TReadModel>` 只负责写 store 并返回 outcome
+
+不要再重新引入：
+
+- lifecycle
+- registry
+- coordinator
+- multiplexer
+- ownership overlay
+
+## 11. Store runtime 需要同步瘦身
+
+当前 `ProjectionStoreDispatcher` 的问题不是“顺序写”本身，而是它被放在一个独立补偿体系里，导致 durable failure 被拆开了。
+
+新模型中应当改成：
+
+- store runtime 只做一件事：按 sink 写并返回 outcome
+- replay 决策由 durable scope actor 做
+- sink 层不再自己启动补偿平台
+
+建议 store runtime 至少返回：
+
+- `SourceVersion`
+- `AppliedSinks`
+- `FailedSinks`
+- `FinalDisposition`
+
+这样 durable scope actor 才能在自己的 state 里留下诚实记录。
+
+## 12. Graph 默认策略必须收紧
+
+当前默认 graph binding 会做：
+
+- upsert nodes/edges
+- 全量列 owner 的 nodes/edges
+- 删除脏数据
+
+这对“框架默认行为”来说太重了。
+
+新的框架默认策略应改成：
+
+- 框架只负责 upsert 当前 materialized graph payload
+- graph cleanup 不再作为默认框架行为
+
+如果某个 graph view 确实需要全量替换语义，应显式声明为：
+
+- full-snapshot graph projection
+
+然后由该 projection 自己带 revision / prune 策略，或者单独由 artifact actor 管理。
+
+不要把 O(n) owner scan 当成基础设施默认动作。
+
+## 13. 对 Workflow / Scripting / Platform 的迁移要求
+
+虽然本文只谈框架，但迁移会带来明确影响：
+
+### 13.1 Workflow
+
+- `WorkflowExecutionRuntimeLease` 不再承担 heartbeat / listener / stop handler 组合职责
+- projection port 只负责 ensure session scope actor
+- AGUI/live sink 改成直接订阅 session stream
+
+### 13.2 Scripting
+
+- `ScriptExecutionProjectionPort` / `ScriptEvolutionProjectionPort` 改为 session scope ensure port
+- `ScriptExecutionReadModelPort` / `ScriptEvolutionReadModelPort` 改为 durable scope ensure port
+
+### 13.3 Platform
+
+- 所有 materialization port 改为 durable scope ensure port
+- committed-only 过滤必须从 projector 内部移除，改由 framework 入口承担
+
+## 14. 分阶段实施方案
+
+## 14.1 Phase 1: 先删错层
+
+先做删除，不先做增强。
 
 目标：
 
-- durable mode 在框架入口统一做 committed-only 过滤
-- `ProjectionStoreDispatcher` 输出显式 outcome / watermark
+- 删掉旧 lifecycle/registry/dispatcher 双套 host runtime
+- 删掉 ownership coordinator
+- 删掉 live sink attach/detach 进入 projection core 的能力
 
-优先改造对象：
+这一步完成前，不要继续加新 service 层。
 
-- `ProjectionDispatchRouteFilter`
-- `ProjectionStoreDispatcher`
-- `ProjectionMaterializationDispatcher`
-
-结果要求：
-
-- materializer 不再自己做 committed payload 兜底
-- replay/freshness/query 都能读到统一结果模型
-
-### 8.7 Phase 7: feature 迁移与旧抽象删除
+## 14.2 Phase 2: 引入 scope actor 协议与状态
 
 目标：
 
-- Workflow/Scripting/Platform 改接新 scope/lease 模型
-- 删除旧 runtime lease 泄露接口
-- 删除双份 orchestration 残留实现
+- 定义 `durable scope actor` 和 `session scope actor` 的 proto contract
+- 定义 scope state
+- 定义 ensure/release/replay/internal observation signal
 
-这一阶段完成后，Projection 框架才算真正收口。
+这一步的重点是把运行态事实建模清楚。
 
-## 9. 迁移影响
+## 14.3 Phase 3: durable 链路先 Actor 化
 
-虽然本文不展开 feature 细节，但框架重构后，所有 feature module 至少要做以下收敛：
+目标：
 
-- activation port 从“拿到 lease 就启动一套 runtime”改为“ensure scope + attach”
-- durable projector/materializer 删除 committed payload 自行兜底逻辑
-- query/binder 不得再假设 activation 每次都会创建新 runtime
-- session/live sink 路径只消费 session adapter 暴露的稳定 lease，不再依赖内部 runtime handle
+- 先把 durable materialization 全量切到 scope actor
+- durable actor 直接消费 committed observation
+- durable actor 直接维护 failure / watermark / replay
 
-换句话说，feature 层需要接受的核心变化只有一个：
+原因：
 
-Projection runtime 从“临时拼装对象”升级为“有权威 scope 的基础设施能力”。
+- durable 链路要求最高
+- current-state read model 是最重要的权威副本
 
-## 10. 风险与注意事项
+## 14.4 Phase 4: session 链路 Actor 化并与 sink 解耦
 
-### 10.1 不要把本地 multiplexer 再误做成事实源
+目标：
 
-这次重构里最容易走偏的一点，是把 host-local multiplexer 做成另一个“注册中心”。
+- session actor 负责 observation -> session stream
+- UI/client 直接订阅 session stream
+- 删除 sink attach/detach runtime 逻辑
 
-必须强调：
+这一步完成后，session projection 会大幅变薄。
 
-- multiplexer 只负责本地物理订阅复用
-- 它可以重建、丢失、重附着
-- 它不负责声明某个 scope 是否存在
+## 14.5 Phase 5: store runtime 收敛
 
-### 10.2 不要为了统一而抹掉语义边界
+目标：
 
-session observation 与 durable materialization 的业务语义不同，这点必须保留。
+- `ProjectionStoreDispatcher` 改成 outcome runtime
+- 删除独立补偿平台
+- replay 回到 durable scope actor
 
-统一的是：
+## 14.6 Phase 6: feature 侧全部切换
 
-- orchestration kernel
-- failure model
-- scope lifecycle model
+目标：
 
-不是把 session 也强行变成 durable materialization。
+- Workflow/Scripting/Platform 全部改接新 scope actor 端口
+- 删除旧 runtime lease 体系
+- 删除旧 event sink lifecycle port
 
-### 10.3 不要继续扩大 replay 的职责
+## 14.7 Phase 7: 守卫与文档收口
 
-replay 只用于恢复 projection dispatch 主链失败，不应被重新扩展成：
+目标：
 
-- query-time rebuild
-- on-demand priming
-- feature 自定义 side rebuild
+- 加 CI guard，防止重新长回去
+- 更新所有 Projection 相关架构文档
 
-否则会再次违反仓库的 projection/query 边界约束。
+## 15. 必须新增的守卫
 
-### 10.4 Store outcome 建模不能伪装成强一致
+建议新增以下门禁：
 
-即使 document 和 graph 都写成功，也只能说明：
+- `tools/ci/projection_actorization_guard.sh`
+  - 禁止在 `Projection.Core` 中重新出现 `registry/lifecycle/coordinator` 型中间层运行态
+- `tools/ci/projection_no_host_scope_cache_guard.sh`
+  - 禁止在 Projection/Application/Orchestration 中出现 `scopeId/actorId/sessionId -> runtime/lease/context` 的长期字典事实态
+- `tools/ci/projection_no_sink_lifecycle_guard.sh`
+  - 禁止在 Projection.Core 中重新引入 live sink attach/detach 生命周期管理
+- `tools/ci/projection_durable_committed_only_guard.sh`
+  - 校验 durable scope 只消费 committed observation
+- `tools/ci/projection_scope_actor_guard.sh`
+  - 校验 durable/session 两条链路的 runtime facts 由 scope actor 持有
 
-- 某个权威版本已经被这些 sinks 成功物化
+## 16. 结论
 
-不能暗示：
+这次重构最重要的不是“统一抽象”，而是回到一个更简单、更硬的结构：
 
-- 所有查询入口都已经强一致可见
-- 所有下游索引都已刷新完成
+- Projection 两条链路都 Actor 化
+- scope actor 自己持有运行态事实
+- host 侧不再维护 runtime registry
+- session 只发布 stream，不再管理 sink
+- durable 只吃 committed observation
+- replay 回到 scope actor 内部
 
-结果模型必须诚实表达边界。
+如果这条路线执行到位，Projection 框架会从现在这个“偏平台化、偏中间层协调”的形态，收敛为一个真正符合仓库约束的、Actor-first 的最小主干。
 
-## 11. 建议新增的 CI / 守卫
+也就是说，新的框架不是“更聪明的协调器”，而是：
 
-建议补充以下守卫脚本：
+- 更少的层
+- 更少的对象
+- 更少的隐式生命周期
+- 更清楚的权威事实边界
 
-- `tools/ci/projection_runtime_scope_guard.sh`
-  - 禁止 durable activation 直接 new runtime 并绕过 scope coordinator
-- `tools/ci/projection_committed_only_guard.sh`
-  - 禁止 durable materialization path 直接消费非 committed payload
-- `tools/ci/projection_dispatch_failure_replay_guard.sh`
-  - 禁止 dispatch 主链 catch 后仅 log/report 而不进入统一 replay sink
-- `tools/ci/projection_public_abstraction_guard.sh`
-  - 禁止公共接口暴露 transport-specific lease / handle
-
-这些守卫是这轮重构长期生效的必要条件。
-
-## 12. 结论
-
-当前 Projection 框架的根问题不是“代码重复”本身，而是缺少一个统一、权威、诚实的 runtime 模型。现状把很多关键事实分散在：
-
-- activation 调用链
-- 临时 lease 对象
-- 重复的 dispatcher/registry
-- 局部补偿逻辑
-
-结果是 durable/session 两条链都能工作，但框架不具备足够清晰的事实边界和故障恢复边界。
-
-这次重构应当以 `runtime scope` 为中心收口：
-
-- 用权威 control plane 管 scope 事实
-- 用 host-local multiplexer 做物理订阅复用
-- 用 unified dispatch kernel 收敛 session/materialization 主流程
-- 用统一 failure/replay 模型闭合 dispatch 故障语义
-
-只有这样，Projection 框架才能从“可运行的一组组件”升级为“可治理、可扩展、可验证的基础设施主干”。
+这才是这轮 Projection 重构应该达到的终态。
