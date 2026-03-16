@@ -684,9 +684,10 @@ if [ -f "src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRe
 fi
 
 lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
-query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
+current_state_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionCurrentStateQueryPort.cs"
+artifact_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionArtifactQueryPort.cs"
 
-if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then
+if [ ! -f "${lifecycle_port}" ] || [ ! -f "${current_state_query_port}" ] || [ ! -f "${artifact_query_port}" ]; then
   echo "Workflow projection ports must be split into lifecycle/query contracts."
   exit 1
 fi
@@ -704,9 +705,24 @@ if ! rg -n "IWorkflowExecutionProjectionLease" "${lifecycle_port}" >/dev/null; t
 fi
 
 if rg -n "EnsureActorProjectionAsync|AttachLiveSinkAsync|DetachLiveSinkAsync|ReleaseActorProjectionAsync" \
-  "${query_port}"
+  "${current_state_query_port}" \
+  "${artifact_query_port}"
 then
   echo "Workflow projection query port must not include lifecycle operations."
+  exit 1
+fi
+
+if rg -n "ListActorTimelineAsync|GetActorGraphEdgesAsync|GetActorGraphSubgraphAsync" \
+  "${current_state_query_port}"
+then
+  echo "Workflow current-state query port must not include artifact queries."
+  exit 1
+fi
+
+if rg -n "GetActorSnapshotAsync|ListActorSnapshotsAsync|GetActorProjectionStateAsync" \
+  "${artifact_query_port}"
+then
+  echo "Workflow artifact query port must not include current-state queries."
   exit 1
 fi
 

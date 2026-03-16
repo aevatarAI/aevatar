@@ -508,7 +508,7 @@ public sealed class WorkflowApplicationLayerTests
 
     private sealed class FakeProjectionPort
         : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionReadModelActivationPort
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];

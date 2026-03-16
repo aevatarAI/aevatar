@@ -227,7 +227,7 @@ flowchart TD
 
 Workflow durable materialization 当前有两条 projection family：
 
-1. `workflow-execution-readmodels`
+1. `workflow-execution-materialization`
    - `WorkflowExecutionCurrentStateProjector`
    - `WorkflowRunInsightReportArtifactProjector`
    - `WorkflowRunTimelineArtifactProjector`
@@ -453,7 +453,7 @@ Workflow host 当前策略是：
 
 典型调用点：
 
-- workflow：`ProjectionWorkflowExecutionReadModelActivationPort`
+- workflow：`ProjectionWorkflowExecutionMaterializationActivationPort`
 - scripting：`ProjectionScript*ReadModelActivationPort`
 - platform：`Service*ProjectionPort`
 - governance：`ServiceConfigurationProjectionPort`

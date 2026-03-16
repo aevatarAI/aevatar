@@ -4,28 +4,6 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
-    public WorkflowActorSnapshot ToActorSnapshot(WorkflowRunInsightReportDocument source)
-    {
-        var summary = source.Summary;
-        return new WorkflowActorSnapshot
-        {
-            ActorId = source.RootActorId,
-            WorkflowName = source.WorkflowName,
-            LastCommandId = source.CommandId,
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
-            StateVersion = source.StateVersion,
-            LastEventId = source.LastEventId,
-            LastUpdatedAt = source.UpdatedAt,
-            LastSuccess = source.Success,
-            LastOutput = source.FinalOutput,
-            LastError = source.FinalError,
-            TotalSteps = summary.TotalSteps,
-            RequestedSteps = summary.RequestedSteps,
-            CompletedSteps = summary.CompletedSteps,
-            RoleReplyCount = summary.RoleReplyCount,
-        };
-    }
-
     public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorSnapshot

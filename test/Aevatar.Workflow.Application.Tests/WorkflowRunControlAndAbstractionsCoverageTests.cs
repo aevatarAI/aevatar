@@ -411,13 +411,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, projectionPort, actorPort);
         var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, projectionPort, actorPort);
         var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, projectionPort, actorPort);
-        var actOnReadModelActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort);
+        var actOnMaterializationActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort);
         var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, null!);
 
         actOnActor.Should().Throw<ArgumentNullException>();
         actOnWorkflowName.Should().Throw<ArgumentException>();
         actOnProjectionPort.Should().Throw<ArgumentNullException>();
-        actOnReadModelActivationPort.Should().Throw<ArgumentNullException>();
+        actOnMaterializationActivationPort.Should().Throw<ArgumentNullException>();
         actOnActorPort.Should().Throw<ArgumentNullException>();
 
         var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort);
@@ -680,7 +680,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
 
     private sealed class FakeProjectionPort
         : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionReadModelActivationPort
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }

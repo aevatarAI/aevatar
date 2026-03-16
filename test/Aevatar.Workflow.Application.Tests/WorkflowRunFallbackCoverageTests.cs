@@ -352,7 +352,7 @@ public sealed class WorkflowRunFallbackCoverageTests
 
     private sealed class FakeProjectionPort
         : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionReadModelActivationPort
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
 

@@ -20,7 +20,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         WorkflowRunCompletionStatus snapshotStatus,
         WorkflowProjectionCompletionStatus expected)
     {
-        var port = new FakeProjectionQueryPort
+        var port = new FakeCurrentStateQueryPort
         {
             Snapshot = new WorkflowActorSnapshot { CompletionStatus = snapshotStatus },
         };
@@ -41,7 +41,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         WorkflowRunCompletionStatus snapshotStatus)
     {
         var resolver = new WorkflowRunDurableCompletionResolver(
-            new FakeProjectionQueryPort
+            new FakeCurrentStateQueryPort
             {
                 Snapshot = new WorkflowActorSnapshot { CompletionStatus = snapshotStatus },
             });
@@ -56,7 +56,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
     [Fact]
     public async Task ResolveAsync_ShouldReturnIncomplete_WhenSnapshotMissing()
     {
-        var resolver = new WorkflowRunDurableCompletionResolver(new FakeProjectionQueryPort());
+        var resolver = new WorkflowRunDurableCompletionResolver(new FakeCurrentStateQueryPort());
 
         var observation = await resolver.ResolveAsync(
             new WorkflowChatRunAcceptedReceipt("actor-1", "workflow-1", "cmd-1", "corr-1"),
@@ -69,7 +69,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
     public async Task ResolveAsync_ShouldReturnIncomplete_WhenProjectionQueryThrows()
     {
         var resolver = new WorkflowRunDurableCompletionResolver(
-            new FakeProjectionQueryPort
+            new FakeCurrentStateQueryPort
             {
                 Exception = new InvalidOperationException("projection failed"),
             });
@@ -87,7 +87,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var resolver = new WorkflowRunDurableCompletionResolver(
-            new FakeProjectionQueryPort
+            new FakeCurrentStateQueryPort
             {
                 ThrowOnCancellation = true,
             });
@@ -102,7 +102,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
     [Fact]
     public async Task ResolveAsync_ShouldThrow_WhenReceiptIsNull()
     {
-        var resolver = new WorkflowRunDurableCompletionResolver(new FakeProjectionQueryPort());
+        var resolver = new WorkflowRunDurableCompletionResolver(new FakeCurrentStateQueryPort());
 
         var act = async () => await resolver.ResolveAsync(null!, CancellationToken.None);
 
@@ -112,7 +112,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
     [Fact]
     public async Task ResolveAsync_ShouldThrow_WhenActorIdIsBlank()
     {
-        var resolver = new WorkflowRunDurableCompletionResolver(new FakeProjectionQueryPort());
+        var resolver = new WorkflowRunDurableCompletionResolver(new FakeCurrentStateQueryPort());
 
         var act = async () => await resolver.ResolveAsync(
             new WorkflowChatRunAcceptedReceipt(" ", "workflow-1", "cmd-1", "corr-1"),
@@ -121,7 +121,7 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
-    private sealed class FakeProjectionQueryPort : IWorkflowExecutionProjectionQueryPort
+    private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
         public WorkflowActorSnapshot? Snapshot { get; set; }
         public Exception? Exception { get; set; }
@@ -143,32 +143,6 @@ public sealed class WorkflowRunDurableCompletionResolverCoverageTests
             throw new NotSupportedException();
 
         public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(
-            string actorId,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-            string actorId,
-            int depth = 2,
-            int take = 200,
-            WorkflowActorGraphQueryOptions? options = null,
-            CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 }

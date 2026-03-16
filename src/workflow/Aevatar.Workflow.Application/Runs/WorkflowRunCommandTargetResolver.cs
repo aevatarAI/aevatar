@@ -9,18 +9,18 @@ internal sealed class WorkflowRunCommandTargetResolver
 {
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
-    private readonly IWorkflowExecutionReadModelActivationPort _readModelActivationPort;
+    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
 
     public WorkflowRunCommandTargetResolver(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowExecutionReadModelActivationPort readModelActivationPort,
+        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
         IWorkflowRunActorPort actorPort)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
+        _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
     }
 
@@ -44,7 +44,7 @@ internal sealed class WorkflowRunCommandTargetResolver
                 actorResolution.WorkflowNameForRun,
                 actorResolution.CreatedActorIds,
                 _projectionPort,
-                _readModelActivationPort,
+                _materializationActivationPort,
                 _actorPort));
     }
 }

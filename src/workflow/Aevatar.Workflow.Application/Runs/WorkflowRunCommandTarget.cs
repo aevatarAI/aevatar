@@ -15,7 +15,7 @@ internal sealed class WorkflowRunCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
-    private readonly IWorkflowExecutionReadModelActivationPort _readModelActivationPort;
+    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
     private bool _createdActorsDestroyed;
 
@@ -24,7 +24,7 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowExecutionReadModelActivationPort readModelActivationPort,
+        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
         IWorkflowRunActorPort actorPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
@@ -33,7 +33,7 @@ internal sealed class WorkflowRunCommandTarget
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
+        _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
     }
 
@@ -57,8 +57,8 @@ internal sealed class WorkflowRunCommandTarget
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
 
-    public Task<bool> ActivateReadModelAsync(CancellationToken ct = default) =>
-        _readModelActivationPort.ActivateAsync(ActorId, ct);
+    public Task<bool> ActivateMaterializationAsync(CancellationToken ct = default) =>
+        _materializationActivationPort.ActivateAsync(ActorId, ct);
 
     public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
     {

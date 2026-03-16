@@ -165,14 +165,15 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionPort`（投影端口）与 `WorkflowProjectionQueryReader`（查询端口实现）
+  - `WorkflowExecutionProjectionPort`（投影端口）与 `WorkflowExecutionCurrentStateQueryPort` / `WorkflowExecutionArtifactQueryPort`（查询端口实现）
   - 生命周期复用 `Aevatar.CQRS.Projection.Core` 的通用 event-sink port 基类：`EventSinkProjectionLifecyclePortBase<>`
   - `ProjectionSessionScopeActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 激活
   - `ProjectionSessionScopeReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 释放
   - `ProjectionMaterializationScopeActivationService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationContext, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 激活
   - `ProjectionMaterializationScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 释放
   - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
-  - `WorkflowProjectionQueryReader` 负责 read model 查询映射
+  - `WorkflowExecutionCurrentStateQueryPort` 负责 authority current-state 查询映射
+  - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射
   - `WorkflowExecutionCurrentStateProjector` 负责 authority current-state replica
   - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：

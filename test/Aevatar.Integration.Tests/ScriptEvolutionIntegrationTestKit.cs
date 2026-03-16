@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
@@ -233,6 +234,51 @@ internal static class ScriptEvolutionIntegrationTestKit
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
+        }
+    }
+
+    public static async Task<ProjectionGraphSubgraph> WaitForGraphSubgraphAsync(
+        IServiceProvider provider,
+        string scope,
+        string rootNodeId,
+        Func<ProjectionGraphSubgraph, bool> isReady,
+        CancellationToken ct,
+        int depth = 1,
+        int take = 20)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootNodeId);
+        ArgumentNullException.ThrowIfNull(isReady);
+
+        var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        ProjectionGraphSubgraph? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await graphStore.GetSubgraphAsync(
+                    new ProjectionGraphQuery
+                    {
+                        Scope = scope,
+                        RootNodeId = rootNodeId,
+                        Depth = depth,
+                        Take = take,
+                    },
+                    timeoutCts.Token);
+                if (isReady(last))
+                    return last;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Script graph subgraph not ready. scope={scope}, root_node_id={rootNodeId}");
         }
     }
 

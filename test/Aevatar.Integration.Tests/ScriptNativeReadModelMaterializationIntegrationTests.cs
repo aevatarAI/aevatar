@@ -47,14 +47,17 @@ public sealed class ScriptNativeReadModelMaterializationIntegrationTests
         nativeDocument.Fields["search"].Should().BeAssignableTo<IDictionary<string, object?>>();
         nativeDocument.Fields["search"].As<IDictionary<string, object?>>()["lookup_key"].Should().Be("case-b:policy-b");
 
-        var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var subgraph = await graphStore.GetSubgraphAsync(new ProjectionGraphQuery
-        {
-            Scope = "script-native-claim_case",
-            RootNodeId = "script:claim_case:claim-native-runtime",
-            Depth = 1,
-            Take = 20,
-        }, CancellationToken.None);
+        var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
+            provider,
+            scope: "script-native-claim_case",
+            rootNodeId: "script:claim_case:claim-native-runtime",
+            isReady: graph =>
+                graph.Nodes.Any(x => x.NodeId == "ref:policy:POLICY-B") &&
+                graph.Edges.Any(x =>
+                    x.FromNodeId == "script:claim_case:claim-native-runtime" &&
+                    x.ToNodeId == "ref:policy:POLICY-B" &&
+                    x.EdgeType == "rel_policy"),
+            CancellationToken.None);
 
         subgraph.Nodes.Should().Contain(x => x.NodeId == "script:claim_case:claim-native-runtime");
         subgraph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-B");

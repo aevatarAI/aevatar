@@ -79,7 +79,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
 
     private sealed class NoOpProjectionPort
         : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionReadModelActivationPort
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
 

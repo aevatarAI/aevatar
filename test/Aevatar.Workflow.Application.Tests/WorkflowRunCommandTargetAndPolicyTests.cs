@@ -211,7 +211,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
 
     private sealed class FakeProjectionPort
         : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionReadModelActivationPort
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
         public Exception? DetachException { get; set; }

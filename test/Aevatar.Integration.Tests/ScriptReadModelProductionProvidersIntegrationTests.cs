@@ -118,14 +118,17 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             },
             CancellationToken.None);
 
-        var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var subgraph = await graphStore.GetSubgraphAsync(new ProjectionGraphQuery
-        {
-            Scope = "script-native-claim_case",
-            RootNodeId = $"script:claim_case:{runtimeActorId}",
-            Depth = 1,
-            Take = 20,
-        }, CancellationToken.None);
+        var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
+            provider,
+            scope: "script-native-claim_case",
+            rootNodeId: $"script:claim_case:{runtimeActorId}",
+            isReady: graph =>
+                graph.Nodes.Any(x => x.NodeId == "ref:policy:POLICY-N4J") &&
+                graph.Edges.Any(x =>
+                    x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
+                    x.ToNodeId == "ref:policy:POLICY-N4J" &&
+                    x.EdgeType == "rel_policy"),
+            CancellationToken.None);
 
         subgraph.Nodes.Should().Contain(x => x.NodeId == $"script:claim_case:{runtimeActorId}");
         subgraph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-N4J");
@@ -190,14 +193,16 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 CancellationToken.None);
             nativeDocument.GetProperty("fields").GetProperty("policy_id").GetString().Should().Be("POLICY-PROD");
 
-            var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
-            var subgraph = await graphStore.GetSubgraphAsync(new ProjectionGraphQuery
-            {
-                Scope = "script-native-claim_case",
-                RootNodeId = $"script:claim_case:{runtimeActorId}",
-                Depth = 1,
-                Take = 20,
-            }, CancellationToken.None);
+            var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
+                provider,
+                scope: "script-native-claim_case",
+                rootNodeId: $"script:claim_case:{runtimeActorId}",
+                isReady: graph =>
+                    graph.Edges.Any(x =>
+                        x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
+                        x.ToNodeId == "ref:policy:POLICY-PROD" &&
+                        x.EdgeType == "rel_policy"),
+                CancellationToken.None);
             subgraph.Edges.Should().ContainSingle(x =>
                 x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
                 x.ToNodeId == "ref:policy:POLICY-PROD" &&

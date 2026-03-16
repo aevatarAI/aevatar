@@ -3,12 +3,12 @@ using Aevatar.Workflow.Projection.Configuration;
 
 namespace Aevatar.Workflow.Projection.Orchestration;
 
-public sealed class WorkflowExecutionReadModelPort
+public sealed class WorkflowExecutionMaterializationPort
     : MaterializationProjectionPortBase<WorkflowExecutionMaterializationRuntimeLease>
 {
-    private const string ProjectionKind = "workflow-execution-readmodels";
+    private const string ProjectionKind = "workflow-execution-materialization";
 
-    public WorkflowExecutionReadModelPort(
+    public WorkflowExecutionMaterializationPort(
         WorkflowExecutionProjectionOptions options,
         IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease> activationService,
         IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease> releaseService)

@@ -151,15 +151,18 @@ public static class ServiceCollectionExtensions
                     lease.Context.ProjectionKind,
                     ProjectionRuntimeMode.DurableMaterialization),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<WorkflowProjectionQueryReader>();
-        services.TryAddSingleton<WorkflowExecutionReadModelPort>();
+        services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
+        services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
+        services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<IWorkflowActorBindingReader, ProjectionWorkflowActorBindingReader>();
-        services.TryAddSingleton<IWorkflowExecutionReadModelActivationPort, ProjectionWorkflowExecutionReadModelActivationPort>();
+        services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort, ProjectionWorkflowExecutionMaterializationActivationPort>();
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
-        services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
-            sp.GetRequiredService<WorkflowProjectionQueryReader>());
+        services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
+        services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,

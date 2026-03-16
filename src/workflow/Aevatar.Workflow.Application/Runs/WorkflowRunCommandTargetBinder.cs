@@ -31,7 +31,7 @@ internal sealed class WorkflowRunCommandTargetBinder
 
         try
         {
-            if (!await target.ActivateReadModelAsync(ct))
+            if (!await target.ActivateMaterializationAsync(ct))
             {
                 await target.RollbackCreatedActorsAsync(CancellationToken.None);
                 return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
