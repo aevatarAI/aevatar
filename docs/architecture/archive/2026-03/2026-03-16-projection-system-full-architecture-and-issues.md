@@ -17,20 +17,21 @@
 当前投影体系已经完成了两条最关键的收口：
 
 1. 写侧统一在 `GAgentBase<TState>` commit 成功后发布 `EventEnvelope<CommittedStateEventPublished>`，并携带 `state_event + state_root`。
-2. workflow 的 `report/timeline` 语义已经从 projection 内部 reducer 状态机前移到 `WorkflowRunInsightGAgent`，projection 重新退回为物化层。
+2. workflow 的 `report/timeline` 状态机已经从 projection 内部 reducer 状态机前移到 `WorkflowRunInsightGAgent`。
 
-因此，现行主链已经不是“读侧再算一套状态机”，而是：
+因此，现行主链已经不再是“读侧再算一套状态机”，而是更接近：
 
 `actor committed fact/state -> projection runtime -> multiple readmodels/live sinks`
 
 但这还不是终态。当前最大的架构问题已经从“事实拥有者错位”转移为以下几类：
 
 1. Projection Core 仍然是一个偏重的运行时子平台，混合了 lifecycle、ownership、session hub、compensation、replay。
-2. `WorkflowRunInsightGAgent` 正确地成为 workflow insight 语义拥有者，但语义密度过高，已经形成新的热点。
-3. scripting 的 native/materialization 路径虽然已前推到写侧，但仍保留一套相对动态的 schema/compiler/materializer 组合。
-4. document store 与 graph store 之间仍是显式最终一致，不存在跨 store 原子提交。
-5. platform/GAgentService 侧已经收口到新的 projection port / core activation 口径，但多视图场景下仍保留较大的 `context/descriptor/runtime-lease` 矩阵。
-6. `StateMirror` 是合法的辅助组件，但如果不明确它只是结构镜像工具，仍容易被误读成“第二套通用 projection 框架”。
+2. workflow 仍保留 `projection -> aggregate actor -> projection` 的二次链，聚合与投影没有彻底分离。
+3. `WorkflowRunInsightGAgent` 虽然成为语义拥有者，但语义密度过高，已经形成新的热点。
+4. scripting 的 native/materialization 路径虽然已前推到写侧，但仍保留一套相对动态的 schema/compiler/materializer 组合。
+5. document store 与 graph store 之间仍是显式最终一致，不存在跨 store 原子提交。
+6. platform/GAgentService 侧已经收口到新的 projection port / core activation 口径，但多视图场景下仍保留较大的 `context/descriptor/runtime-lease` 矩阵。
+7. `StateMirror` 是合法的辅助组件，但如果不明确它只是结构镜像工具，仍容易被误读成“第二套通用 projection 框架”。
 
 ## 3. 范围与术语
 
@@ -441,6 +442,12 @@ workflow 当前已经分成两条清晰主链：
 - graph mirror
 - AGUI/live event sink
 
+但这里仍有一个没有收口的方向性错误：
+
+- 第 2 条链路本质上仍是 `projection -> aggregate actor -> projection`
+- 这意味着 `WorkflowRunInsightGAgent` 虽然是业务聚合 actor，却仍由 projector 驱动
+- 这不是终态，只是比“projection 内部直接维护第二套状态机”更靠近正确方向的过渡态
+
 ### 9.2 Workflow 架构图
 
 ```mermaid
@@ -497,13 +504,28 @@ flowchart LR
 3. timeline 和 graph 已从 monolithic report 中拆开，按消费场景形成各自 readmodel。
 4. AGUI/live sink 被明确降级为实时观察分支，不再和 durable readmodel 混用。
 
+但要强调：
+
+- “状态机从 projection 挪到 actor”不等于“边界已经彻底正确”
+- 只要上游还是 `WorkflowRunInsightBridgeProjector` 在驱动这个 actor，聚合仍然没有完全回到业务主链
+
 ### 9.4 Workflow 现存问题
 
-workflow 最大的剩余风险不再是 ownership 错位，而是：
+workflow 最大的剩余风险不是 ownership 本身，而是聚合与投影还没彻底分开：
 
-1. `WorkflowRunInsightGAgent` 的语义密度很高。
-2. 目前 timeline / report / graph 虽已拆分，但仍集中由一个 insight actor 提供上游语义。
-3. 如果 workflow/AI event 类型继续增长，这个 actor 很容易再次变成“大状态机热点”。
+1. `WorkflowRunInsightBridgeProjector` 让 projection 在驱动业务 aggregate actor。
+2. `IProjectionProjector.InitializeAsync(...)` / `CompleteAsync(...)` 在这条链里被误用为 actor ensure、topology finalize 之类的业务/编排钩子。
+3. `WorkflowRunInsightGAgent` 的语义密度很高。
+4. 目前 timeline / report / graph 虽已拆分，但仍集中由一个 insight actor 提供上游语义。
+5. 如果 workflow/AI event 类型继续增长，这个 actor 很容易再次变成“大状态机热点”。
+
+正确终态应当是：
+
+`business actor committed facts -> aggregate actor -> committed state -> projection -> readmodels`
+
+而不是：
+
+`business actor -> projection bridge -> aggregate actor -> projection -> readmodels`
 
 ## 10. Platform / GAgentService 投影收口结果
 
@@ -668,7 +690,27 @@ sequenceDiagram
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionDispatchCompensationOutboxGAgent.cs`
 - `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionOwnershipCoordinatorGAgent.cs`
 
-### 13.2 Workflow insight actor 形成新的语义热点
+### 13.2 Workflow 仍保留二次投影链
+
+问题表现：
+
+- `WorkflowRunInsightBridgeProjector` 仍位于 `WorkflowRunGAgent` 和 `WorkflowRunInsightGAgent` 之间。
+- 这让业务聚合 actor 的输入依赖 projection runtime，而不是直接依赖业务 committed facts。
+- `InitializeAsync(...)` / `CompleteAsync(...)` 的怪异感，本质上来自这条错位链路。
+
+影响：
+
+1. 聚合与投影职责仍然耦合。
+2. projection 接口被迫承载 actor ensure、业务 finalize、runtime side-read 之类不属于 projector 的语义。
+3. 这条链不删，`IProjectionProjector` 根接口就很难真正瘦下来。
+
+代表文件：
+
+- `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightBridgeProjector.cs`
+- `src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs`
+- `src/workflow/Aevatar.Workflow.Application/Orchestration/WorkflowExecutionTopologyResolver.cs`
+
+### 13.3 Workflow insight actor 形成新的语义热点
 
 问题表现：
 
@@ -685,7 +727,7 @@ sequenceDiagram
 - `src/workflow/Aevatar.Workflow.Core/WorkflowRunInsightGAgent.cs`
 - `src/workflow/Aevatar.Workflow.Core/WorkflowRunInsightStateMutations.cs`
 
-### 13.3 Scripting 仍保留较强动态 materialization 特征
+### 13.4 Scripting 仍保留较强动态 materialization 特征
 
 问题表现：
 
@@ -702,7 +744,7 @@ sequenceDiagram
 - `src/Aevatar.Scripting.Core/Materialization/ScriptReadModelMaterializationCompiler.cs`
 - `src/Aevatar.Scripting.Core/Materialization/ScriptNativeProjectionBuilder.cs`
 
-### 13.4 跨 store 原子一致性不存在
+### 13.5 跨 store 原子一致性不存在
 
 问题表现：
 
@@ -721,7 +763,7 @@ sequenceDiagram
 - `src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs`
 - `src/Aevatar.CQRS.Projection.Providers.Neo4j/Stores/Neo4jProjectionGraphStore.cs`
 
-### 13.5 Platform/GAgentService 仍保留较大的多视图模板矩阵
+### 13.6 Platform/GAgentService 仍保留较大的多视图模板矩阵
 
 问题表现：
 
@@ -743,7 +785,7 @@ sequenceDiagram
 - `src/platform/Aevatar.GAgentService.Governance.Projection/Orchestration/ServiceConfigurationProjectionPort.cs`
 - `src/platform/Aevatar.GAgentService.Projection/DependencyInjection/ServiceCollectionExtensions.cs`
 
-### 13.6 实时 live sink 与 durable readmodel 仍容易被误解
+### 13.7 实时 live sink 与 durable readmodel 仍容易被误解
 
 问题表现：
 
@@ -760,7 +802,7 @@ sequenceDiagram
 - `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
 - `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs`
 
-### 13.7 StateMirror 的概念边界仍需持续澄清
+### 13.8 StateMirror 的概念边界仍需持续澄清
 
 问题表现：
 
@@ -827,15 +869,18 @@ sequenceDiagram
 - workflow insight 从 projection reducer 状态机转为 actor-owned state
 - scripting native materialization 前移到写侧 durable contract
 
-所以现在的主要问题，不再是“架构方向错了”，而是：
+但还不能说“方向已经完全对了”。当前最需要继续纠正的，是 workflow 里仍残留的 `projection -> aggregate actor -> projection` 二次链。
 
-1. runtime 还偏重
-2. 个别 actor 语义热点过于集中
-3. 平台侧还有旧风格残留
-4. 多 store 之间依然是诚实的最终一致，而不是强一致
+所以现在的主要问题是：
+
+1. workflow 聚合与 projection 还没有彻底分离
+2. runtime 还偏重
+3. 个别 actor 语义热点过于集中
+4. 平台侧还有模板矩阵复杂度
+5. 多 store 之间依然是诚实的最终一致，而不是强一致
 
 这意味着后续重构应继续遵循同一原则：
 
-`actor own semantics, projection materializes, query only reads`
+`actor own semantics, aggregate actors own aggregation, projection only materializes, query only reads`
 
 而不是重新引入第二套读侧业务框架。

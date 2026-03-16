@@ -2,8 +2,8 @@
 
 ## 1. 文档元信息
 
-- 状态：`Proposed`
-- 版本：`R1`
+- 状态：`Active`
+- 版本：`R2`
 - 日期：`2026-03-16`
 - 适用范围：
   - `src/workflow/Aevatar.Workflow.Core`
@@ -17,15 +17,21 @@
 
 ## 2. 文档目的
 
-本文用于讨论 `WorkflowRunInsightBridgeProjector` 当前实现与原设计之间的差异，并给出推荐处理方案。
+本文用于讨论 `WorkflowRunInsightBridgeProjector` 当前实现、此前的 `committed-only bridge` 方案，以及更新后的推荐终态。
 
-这不是一份“先改代码再补解释”的事后文档，而是用于对齐以下问题：
+当前结论已经收敛得更明确：
 
-1. `WorkflowRunInsightBridgeProjector` 是否应该继续接受原始 runtime envelope。
-2. `WorkflowRunGAgent` 是否需要补 root-owned committed observation。
-3. 默认 projector 是否需要同步收紧。
+- `WorkflowRunInsightGAgent` 如果保留，应被视为业务 `aggregate actor`
+- 聚合属于业务语义，不属于 projection 语义
+- 因此 `projection -> aggregate actor -> projection` 本身就是错误结构
+
+本文用于对齐以下问题：
+
+1. `WorkflowRunInsightBridgeProjector` 是否应继续存在。
+2. workflow insight 所需事实应该由谁提交。
+3. `InitializeAsync(...)` / `CompleteAsync(...)` 为什么会显得很怪。
 4. `AGUI/SSE` 的实时流应当属于哪一层语义。
-5. 新方案与当前临时修复、旧架构相比的性能和复杂度取舍。
+5. 业务聚合与 projection 的边界应如何彻底分开。
 
 ## 3. 背景
 
@@ -36,10 +42,10 @@
 3. `WorkflowRunInsightReportDocumentProjector`、`WorkflowRunTimelineReadModelProjector`、`WorkflowRunGraphMirrorProjector` 再从 insight actor 的 committed state 物化多个 readmodel。
 4. query 侧通过 `WorkflowProjectionQueryReader` 读取 readmodel，不直接读 actor state。
 
-这条链路符合仓库的主设计原则：
+这条链路比“projection 自己维护第二套状态机”更接近正确方向，但它并不满足终态原则。原因很简单：
 
-1. `projection` 只消费 committed facts。
-2. `actor` 是业务事实拥有者。
+1. `projection` 不应驱动业务聚合 actor。
+2. `aggregate actor` 必须直接消费业务 committed facts。
 3. `query` 只读 readmodel。
 
 ## 4. 这次暴露出的具体问题
@@ -76,11 +82,11 @@
 
 结论：该修复适合作为过渡补丁，不适合作为长期方案。
 
-## 6. 原设计要求的终态
+## 6. 之前的 committed-only bridge 方案为什么还不够
 
-原设计下，`WorkflowRunInsightBridgeProjector` 应当只消费 committed observation。
+此前一个更纯的思路是：让 `WorkflowRunInsightBridgeProjector` 只消费 committed observation。
 
-也就是说，理想主链应当是：
+也就是说，主链会变成：
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -99,7 +105,11 @@ flowchart LR
   RM --> STORE
 ```
 
-这里的关键不是让 bridge 变复杂，而是让 write-side 先把 insight 所需事实提交成 durable committed fact。
+这个方案比“bridge 同时接受 runtime envelope 和 committed envelope”要干净，但它仍然保留了一个核心问题：
+
+- insight actor 仍然是由 projector 驱动的
+- 聚合操作仍然发生在 projection 主链旁边
+- `InitializeAsync(...)` / `CompleteAsync(...)` 这种 projector lifecycle 钩子仍会继续被业务语义污染
 
 ## 7. 为什么当前分支做不到 committed-only
 
@@ -113,32 +123,34 @@ flowchart LR
 
 特别是 `TextMessageContentEvent`、`ToolCallEvent`、`ToolResultEvent` 这类来自 child role actor 的事件，如果没有 root-owned committed fact，bridge 无法在 committed-only 模式下稳定看见它们。
 
-## 8. 推荐方案
+## 8. 更新后的推荐方案
 
-推荐方案不是继续放宽 bridge，而是把写侧补完整。
+推荐方案不是继续放宽 bridge，也不是把 bridge 改成 committed-only 后继续保留，而是彻底取消这条二次投影链。
 
 ### 8.1 核心决议
 
-1. `WorkflowRunInsightBridgeProjector` 改回 committed-only。
-2. `WorkflowRunGAgent` 在 root actor 上把 insight 所需的运行事实重新提交为 `WorkflowRunInsightObservedEvent`。
-3. `WorkflowRunInsightGAgent` 继续只消费 `WorkflowRunInsightObservedEvent`。
-4. `WorkflowExecutionCurrentStateProjector` 同步收紧，不对 observation-only committed event 做 current-state 写放大。
-5. `AGUI/SSE` 继续作为 presentation boundary，允许消费 runtime live stream，但不得作为 query/readmodel/completion 的权威事实源。
+1. `WorkflowRunInsightGAgent` 若保留，应被明确视为业务 `aggregate actor`。
+2. `WorkflowRunInsightBridgeProjector` 应删除，而不是继续演进。
+3. `WorkflowRunGAgent` 或其正式业务协议负责提交 insight 所需的 committed business facts。
+4. insight actor 直接消费这些 business facts，并提交自己的 committed state/facts。
+5. projection 只从 insight actor 的 committed state/facts 物化 report/timeline/graph readmodel。
+6. `AGUI/SSE` 继续作为 presentation boundary，允许消费 runtime live stream，但不得作为 query/readmodel/completion 的权威事实源。
 
 ### 8.2 推荐原因
 
 这样做有几个直接好处：
 
-1. 恢复 `projection 只消费 committed facts` 的主设计。
-2. 让 insight actor 的输入重新回到 durable、可重放、可审计的事实流。
-3. 保持 `AGUI/SSE` 的实时性，不强迫 token streaming 立刻完全 durable 化。
-4. 避免 query/readmodel 再次绑定 runtime 偶然细节。
+1. 恢复“聚合属于业务 actor，projection 只做物化”的主设计。
+2. 让 insight actor 的输入重新回到 durable、可重放、可审计的业务事实流。
+3. 删除 `InitializeAsync(...)` / `CompleteAsync(...)` 上承载的错误业务语义。
+4. 保持 `AGUI/SSE` 的实时性，不强迫 token streaming 立刻完全 durable 化。
+5. 避免 query/readmodel 再次绑定 runtime 偶然细节。
 
 ## 9. 默认 projector 是否需要调整
 
 答案是：需要。
 
-如果只改 `WorkflowRunInsightBridgeProjector` 和 `WorkflowRunGAgent`，而不调整默认的 `WorkflowExecutionCurrentStateProjector`，会引入新的写放大和语义污染。
+如果 workflow 最终删除 `WorkflowRunInsightBridgeProjector`，并把 insight 输入改成 root-owned committed business facts，那么默认 current-state projector 也必须同步收紧，否则会引入新的写放大和语义污染。
 
 原因如下：
 
@@ -238,21 +250,21 @@ flowchart LR
 
 尤其要注意：
 
-如果不收紧 `WorkflowExecutionCurrentStateProjector`，新增的 observation-only committed event 会继续触发 current-state document 重写，这属于第二层写放大。
+如果不收紧 `WorkflowExecutionCurrentStateProjector`，新增的 insight-only committed facts 会继续触发 current-state document 重写，这属于第二层写放大。
 
 ### 11.1 与当前临时修复相比
 
-原设计方案的成本会更高。
+最终方案的成本会更高。
 
 原因：
 
 1. 当前临时修复直接在 bridge 中消费 runtime envelope，少了一次 root actor 持久化。
-2. 原设计要求 root actor 先把 insight 事实提交成 `WorkflowRunInsightObservedEvent`，再由 bridge 消费 committed event 转发到 insight actor。
+2. 最终方案要求 root actor 先把 insight 事实提交成 committed business fact，再由 insight actor 直接消费。
 3. 对每一条高频 `TextMessageContentEvent`，都会增加一次 committed write。
 
 因此：
 
-1. 原设计的语义更稳。
+1. 最终方案的语义更稳。
 2. 当前临时修复的瞬时吞吐更便宜。
 
 ### 11.2 与旧架构相比
@@ -265,16 +277,17 @@ flowchart LR
 2. report/timeline/current-state 容易被混写到一个大文档或一个大状态机里。
 3. 调试、重放、跨节点一致性都更依赖实现细节。
 
-相比之下，原设计虽然多了一跳 `root actor committed observation -> insight actor`，但它换来了：
+相比之下，最终方案虽然多了一跳 `root actor committed fact -> insight actor`，但它换来了：
 
 1. 更清晰的单一事实源。
 2. 更好的重放一致性。
 3. 更稳定的 query 语义。
 4. 更少的 projection 侧业务状态机。
+5. 更清晰的聚合/投影分层。
 
 ### 11.3 高风险点：token streaming 写放大
 
-原设计里最需要谨慎处理的是 `TextMessageContentEvent`。
+最终方案里最需要谨慎处理的是 `TextMessageContentEvent`。
 
 如果每一个 token delta 都变成 root-owned committed observation，会出现：
 
@@ -282,11 +295,11 @@ flowchart LR
 2. current-state 之外的 durable write 增加
 3. insight actor 和 readmodel projector 的处理频率上升
 
-这意味着原设计在低频业务事件上更优，在高频 token 事件上未必最优。
+这意味着最终方案在低频业务事件上更优，在高频 token 事件上未必最优。
 
 ## 12. 推荐的性能折中
 
-如果坚持原设计主线，建议采用下面的折中：
+如果坚持“聚合归业务 actor”的主线，建议采用下面的折中：
 
 1. `workflow.start`
 2. `step.request`
@@ -310,9 +323,10 @@ flowchart LR
 
 ### Phase 1
 
-1. 在 `WorkflowRunGAgent` 增加 root-owned `WorkflowRunInsightObservedEvent` 提交逻辑。
-2. `WorkflowRunInsightBridgeProjector` 改回 committed-only。
-3. 保留 `AGUI` runtime live stream。
+1. 在 `WorkflowRunGAgent` 增加 root-owned insight committed business fact 提交逻辑。
+2. `WorkflowRunInsightGAgent` 直接消费这些 committed facts。
+3. 删除 `WorkflowRunInsightBridgeProjector`。
+4. 保留 `AGUI` runtime live stream。
 
 ### Phase 2
 
@@ -329,11 +343,12 @@ flowchart LR
 建议采用以下结论作为评审基线：
 
 1. 当前 runtime fallback 修复可保留为短期补丁，但不作为终态。
-2. 长期方案采用原设计：`WorkflowRunInsightBridgeProjector` 只消费 committed observation。
-3. 为支持该设计，必须补 `WorkflowRunGAgent` 的 root-owned committed observation。
-4. 默认 `WorkflowExecutionCurrentStateProjector` 需要同步收紧，否则会出现语义污染和写放大。
-5. `AGUI/SSE` 可以继续保留 runtime live stream，但必须明确它只是 presentation boundary，不是 durable facts 主链。
-6. `TextMessageContentEvent` 是否逐条 durable，不应在未评审前直接落地，应单独做性能决策。
+2. 长期方案不是 `committed-only bridge`，而是删除 `WorkflowRunInsightBridgeProjector`。
+3. `WorkflowRunInsightGAgent` 若保留，必须被视为业务 aggregate actor，而不是 projection actor。
+4. 为支持该设计，必须补 `WorkflowRunGAgent` 的 root-owned committed business facts。
+5. 默认 `WorkflowExecutionCurrentStateProjector` 需要同步收紧，否则会出现语义污染和写放大。
+6. `AGUI/SSE` 可以继续保留 runtime live stream，但必须明确它只是 presentation boundary，不是 durable facts 主链。
+7. `TextMessageContentEvent` 是否逐条 durable，不应在未评审前直接落地，应单独做性能决策。
 
 ## 15. 需要在评审会上明确的问题
 
@@ -341,4 +356,4 @@ flowchart LR
 2. 如果要 durable，接受的延迟和写放大上限是多少。
 3. current-state document 的 `StateVersion/LastEventId` 是否必须严格只反映 `WorkflowRunState` 语义变化。
 4. `AGUI/SSE` 是否接受“实时展示”和“durable timeline”存在细粒度差异。
-5. 是否要把这套边界补充回 `docs/FOUNDATION.md` 和 `Aevatar.Workflow.Projection/README.md`。
+5. 是否要把“聚合属于业务 actor，不属于 projection”这条规则补充回 `docs/FOUNDATION.md` 和 `Aevatar.Workflow.Projection/README.md`。
