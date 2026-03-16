@@ -152,8 +152,7 @@ internal static class ScriptEvolutionIntegrationTestKit
                 ct);
 
             var fact = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, runId, ct);
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct)
-                ?? throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
+            var snapshot = await WaitForSnapshotAsync(provider, runtimeActorId, ct);
             return (fact, snapshot);
         }
         finally
@@ -207,6 +206,33 @@ internal static class ScriptEvolutionIntegrationTestKit
         finally
         {
             await projectionPort.ReleaseActorProjectionAsync(lease, ct);
+        }
+    }
+
+    public static async Task<ScriptReadModelSnapshot> WaitForSnapshotAsync(
+        IServiceProvider provider,
+        string runtimeActorId,
+        CancellationToken ct)
+    {
+        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        ScriptReadModelSnapshot? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await queryService.GetSnapshotAsync(runtimeActorId, timeoutCts.Token);
+                if (last != null && last.ReadModelPayload != null)
+                    return last;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
         }
     }
 

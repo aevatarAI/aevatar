@@ -22,50 +22,103 @@ public static class ServiceCollectionExtensions
 
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
 
-        services.AddServiceProjectionRuntime(
+        services.AddServiceProjectionRuntime<ServiceCatalogProjectionContext, ServiceCatalogProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
-        services.AddServiceProjectionRuntime(
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceCatalogProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
+        services.AddServiceProjectionRuntime<ServiceDeploymentCatalogProjectionContext, ServiceDeploymentCatalogProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
-        services.AddServiceProjectionRuntime(
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
+        services.AddServiceProjectionRuntime<ServiceRevisionCatalogProjectionContext, ServiceRevisionCatalogProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
-        services.AddServiceProjectionRuntime(
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
+        services.AddServiceProjectionRuntime<ServiceServingSetProjectionContext, ServiceServingSetProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
-        services.AddServiceProjectionRuntime(
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceServingSetProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
+        services.AddServiceProjectionRuntime<ServiceRolloutProjectionContext, ServiceRolloutProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
-        services.AddServiceProjectionRuntime(
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceRolloutProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
+        services.AddServiceProjectionRuntime<ServiceTrafficViewProjectionContext, ServiceTrafficViewProjectionScopeGAgent>(
             static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             },
-            static context => context.RootActorId);
+            static (_, context) => new ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>(context.RootActorId, context),
+            static lease => new ProjectionRuntimeScopeKey(
+                lease.Context.RootActorId,
+                lease.Context.ProjectionKind,
+                ProjectionRuntimeMode.DurableMaterialization),
+            static scopeKey => new ServiceTrafficViewProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            });
 
         services.TryAddSingleton<IServiceCatalogProjectionPort, ServiceCatalogProjectionPort>();
         services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort, ServiceDeploymentCatalogProjectionPort>();
@@ -107,27 +160,44 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static IServiceCollection AddServiceProjectionRuntime<TContext>(
+    private static IServiceCollection AddServiceProjectionRuntime<TContext, TScopeAgent>(
         this IServiceCollection services,
         Func<string, string, TContext> contextFactory,
-        Func<TContext, string> rootActorIdSelector)
+        Func<ProjectionRuntimeScopeKey, TContext, ServiceProjectionRuntimeLease<TContext>> leaseFactory,
+        Func<ServiceProjectionRuntimeLease<TContext>, ProjectionRuntimeScopeKey> scopeKeyAccessor,
+        Func<ProjectionRuntimeScopeKey, TContext> scopeContextFactory)
         where TContext : class, IProjectionMaterializationContext
+        where TScopeAgent : IAgent
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(contextFactory);
-        ArgumentNullException.ThrowIfNull(rootActorIdSelector);
+        ArgumentNullException.ThrowIfNull(leaseFactory);
+        ArgumentNullException.ThrowIfNull(scopeKeyAccessor);
+        ArgumentNullException.ThrowIfNull(scopeContextFactory);
 
         services.AddProjectionMaterializationRuntimeCore<
             TContext,
             ServiceProjectionRuntimeLease<TContext>>();
+        services.TryAddSingleton<IProjectionScopeContextFactory<TContext>>(
+            _ => new ProjectionScopeContextFactory<TContext>(scopeContextFactory));
         services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>>>(sp =>
-        {
-            return new ContextProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>, TContext>(
-                sp.GetRequiredService<IProjectionMaterializationLifecycleService<TContext, ServiceProjectionRuntimeLease<TContext>>>(),
-                (request, _) => contextFactory(request.RootActorId, request.ProjectionKind),
-                context => new ServiceProjectionRuntimeLease<TContext>(rootActorIdSelector(context), context));
-        });
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>>, ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>, TContext>>();
+            new ProjectionMaterializationScopeActivationService<
+                ServiceProjectionRuntimeLease<TContext>,
+                TContext,
+                TScopeAgent>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => contextFactory(request.RootActorId, request.ProjectionKind),
+                leaseFactory,
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ServiceProjectionRuntimeLease<TContext>,
+                TScopeAgent>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                scopeKeyAccessor,
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
 
         return services;
     }

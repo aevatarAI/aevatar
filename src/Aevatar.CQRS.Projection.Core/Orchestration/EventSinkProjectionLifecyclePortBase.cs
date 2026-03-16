@@ -15,21 +15,18 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     private readonly Func<bool> _projectionEnabledAccessor;
     private readonly IProjectionSessionActivationService<TRuntimeLease> _activationService;
     private readonly IProjectionSessionReleaseService<TRuntimeLease> _releaseService;
-    private readonly IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> _sinkSubscriptionManager;
-    private readonly IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> _liveSinkForwarder;
+    private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
         IProjectionSessionActivationService<TRuntimeLease> activationService,
         IProjectionSessionReleaseService<TRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<TRuntimeLease, TEvent> liveSinkForwarder)
+        IProjectionSessionEventHub<TEvent> sessionEventHub)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
         _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
         _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
-        _sinkSubscriptionManager = sinkSubscriptionManager ?? throw new ArgumentNullException(nameof(sinkSubscriptionManager));
-        _liveSinkForwarder = liveSinkForwarder ?? throw new ArgumentNullException(nameof(liveSinkForwarder));
+        _sessionEventHub = sessionEventHub ?? throw new ArgumentNullException(nameof(sessionEventHub));
     }
 
     public bool ProjectionEnabled => _projectionEnabledAccessor();
@@ -44,7 +41,7 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         return await _activationService.EnsureAsync(request, ct);
     }
 
-    public Task AttachLiveSinkAsync(
+    public async Task AttachLiveSinkAsync(
         TLeaseContract lease,
         IEventSink<TEvent> sink,
         CancellationToken ct = default)
@@ -54,17 +51,27 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         ct.ThrowIfCancellationRequested();
 
         if (!ProjectionEnabled)
-            return Task.CompletedTask;
+            return;
 
         var runtimeLease = ResolveRuntimeLease(lease);
-        return _sinkSubscriptionManager.AttachOrReplaceAsync(
-            runtimeLease,
-            sink,
-            evt => _liveSinkForwarder.ForwardAsync(runtimeLease, sink, evt, CancellationToken.None),
-            ct);
+        if (runtimeLease is not EventSinkProjectionRuntimeLeaseBase<TEvent> sessionLease ||
+            runtimeLease is not IProjectionPortSessionLease portLease)
+        {
+            throw new InvalidOperationException(
+                $"Runtime lease `{runtimeLease.GetType().FullName}` must implement `{typeof(IProjectionPortSessionLease).FullName}` and inherit `{typeof(EventSinkProjectionRuntimeLeaseBase<TEvent>).FullName}`.");
+        }
+
+        var subscription = await _sessionEventHub.SubscribeAsync(
+            portLease.ScopeId,
+            portLease.SessionId,
+            evt => sink.PushAsync(evt, CancellationToken.None),
+            ct).ConfigureAwait(false);
+        var previous = sessionLease.AttachOrReplaceLiveSinkSubscription(sink, subscription);
+        if (previous != null)
+            await previous.DisposeAsync().ConfigureAwait(false);
     }
 
-    public Task DetachLiveSinkAsync(
+    public async Task DetachLiveSinkAsync(
         TLeaseContract lease,
         IEventSink<TEvent> sink,
         CancellationToken ct = default)
@@ -74,9 +81,18 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         ct.ThrowIfCancellationRequested();
 
         if (!ProjectionEnabled)
-            return Task.CompletedTask;
+            return;
 
-        return _sinkSubscriptionManager.DetachAsync(ResolveRuntimeLease(lease), sink, ct);
+        var runtimeLease = ResolveRuntimeLease(lease);
+        if (runtimeLease is not EventSinkProjectionRuntimeLeaseBase<TEvent> sessionLease)
+        {
+            throw new InvalidOperationException(
+                $"Runtime lease `{runtimeLease.GetType().FullName}` must inherit `{typeof(EventSinkProjectionRuntimeLeaseBase<TEvent>).FullName}`.");
+        }
+
+        var subscription = sessionLease.DetachLiveSinkSubscription(sink);
+        if (subscription != null)
+            await subscription.DisposeAsync().ConfigureAwait(false);
     }
 
     public Task ReleaseActorProjectionAsync(

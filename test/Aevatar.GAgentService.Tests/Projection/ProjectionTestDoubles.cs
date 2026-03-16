@@ -17,25 +17,6 @@ internal sealed class FixedProjectionClock : IProjectionClock
     public DateTimeOffset UtcNow { get; }
 }
 
-internal static class ProjectionTestFactory
-{
-    public static ContextProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>, TContext> CreateActivationService<TContext>(
-        Func<string, string, TContext> contextFactory,
-        Func<TContext, string> rootActorIdSelector,
-        IProjectionMaterializationLifecycleService<TContext, ServiceProjectionRuntimeLease<TContext>> lifecycle)
-        where TContext : class, IProjectionMaterializationContext
-    {
-        ArgumentNullException.ThrowIfNull(contextFactory);
-        ArgumentNullException.ThrowIfNull(rootActorIdSelector);
-        ArgumentNullException.ThrowIfNull(lifecycle);
-
-        return new ContextProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>, TContext>(
-            lifecycle,
-            (request, _) => contextFactory(request.RootActorId, request.ProjectionKind),
-            context => new ServiceProjectionRuntimeLease<TContext>(rootActorIdSelector(context), context));
-    }
-}
-
 internal sealed class RecordingDocumentStore<TReadModel> :
     IProjectionDocumentReader<TReadModel, string>,
     IProjectionWriteDispatcher<TReadModel>
@@ -131,29 +112,5 @@ internal sealed class RecordingProjectionActivationService<TContext>
         return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
             request.RootActorId,
             _contextFactory(request.RootActorId, request.ProjectionKind)));
-    }
-}
-
-internal sealed class RecordingProjectionLifecycle<TContext>
-    : IProjectionMaterializationLifecycleService<TContext, ServiceProjectionRuntimeLease<TContext>>
-    where TContext : class, IProjectionMaterializationContext
-{
-    public List<TContext> StartedContexts { get; } = [];
-
-    public List<TContext> StoppedContexts { get; } = [];
-
-    public Task StartAsync(ServiceProjectionRuntimeLease<TContext> runtimeLease, CancellationToken ct = default)
-    {
-        StartedContexts.Add(runtimeLease.Context);
-        return Task.CompletedTask;
-    }
-
-    public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-        Task.CompletedTask;
-
-    public Task StopAsync(ServiceProjectionRuntimeLease<TContext> runtimeLease, CancellationToken ct = default)
-    {
-        StoppedContexts.Add(runtimeLease.Context);
-        return Task.CompletedTask;
     }
 }

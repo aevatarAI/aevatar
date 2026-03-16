@@ -64,64 +64,6 @@ public sealed class ServiceServingProjectionInfrastructureTests
     }
 
     [Fact]
-    public async Task ServingActivationAndReleaseServices_ShouldCreateContext_AndStopWhenIdle()
-    {
-        var deploymentLifecycle = new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>();
-        var deploymentLease = await ProjectionTestFactory.CreateActivationService(
-                static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = projectionName,
-                },
-                static context => context.RootActorId,
-                deploymentLifecycle)
-            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-deploy", ProjectionKind = "service-deployments" });
-        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>, ServiceDeploymentCatalogProjectionContext>(deploymentLifecycle).ReleaseIfIdleAsync(deploymentLease);
-
-        var servingLifecycle = new RecordingProjectionLifecycle<ServiceServingSetProjectionContext>();
-        var servingLease = await ProjectionTestFactory.CreateActivationService(
-                static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = projectionName,
-                },
-                static context => context.RootActorId,
-                servingLifecycle)
-            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-serving", ProjectionKind = "service-serving" });
-        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>, ServiceServingSetProjectionContext>(servingLifecycle).ReleaseIfIdleAsync(servingLease);
-
-        var rolloutLifecycle = new RecordingProjectionLifecycle<ServiceRolloutProjectionContext>();
-        var rolloutLease = await ProjectionTestFactory.CreateActivationService(
-                static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = projectionName,
-                },
-                static context => context.RootActorId,
-                rolloutLifecycle)
-            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-rollout", ProjectionKind = "service-rollouts" });
-        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>, ServiceRolloutProjectionContext>(rolloutLifecycle).ReleaseIfIdleAsync(rolloutLease);
-
-        var trafficLifecycle = new RecordingProjectionLifecycle<ServiceTrafficViewProjectionContext>();
-        var trafficLease = await ProjectionTestFactory.CreateActivationService(
-                static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
-                {
-                    RootActorId = rootActorId,
-                    ProjectionKind = projectionName,
-                },
-                static context => context.RootActorId,
-                trafficLifecycle)
-            .EnsureAsync(new ProjectionMaterializationStartRequest { RootActorId = "actor-traffic", ProjectionKind = "service-traffic" });
-        await new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>, ServiceTrafficViewProjectionContext>(trafficLifecycle).ReleaseIfIdleAsync(trafficLease);
-
-        deploymentLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-deployments");
-        deploymentLifecycle.StoppedContexts.Single().RootActorId.Should().Be("actor-deploy");
-        servingLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-serving");
-        rolloutLifecycle.StoppedContexts.Single().RootActorId.Should().Be("actor-rollout");
-        trafficLifecycle.StartedContexts.Single().ProjectionKind.Should().Be("service-traffic");
-    }
-
-    [Fact]
     public void ServingMetadataProviders_ShouldExposeStableIndexNames()
     {
         new ServiceDeploymentCatalogReadModelMetadataProvider().Metadata.IndexName.Should().Be("gagent-service-deployments");
@@ -193,15 +135,4 @@ public sealed class ServiceServingProjectionInfrastructureTests
         nullTraffic.Should().Throw<ArgumentNullException>();
     }
 
-    [Fact]
-    public void ServiceProjectionActivationFactory_ShouldValidateContextFactory()
-    {
-        Func<string, string, ServiceDeploymentCatalogProjectionContext>? nullFactory = null;
-        Action act = () => ProjectionTestFactory.CreateActivationService<ServiceDeploymentCatalogProjectionContext>(
-            nullFactory!,
-            static context => context.RootActorId,
-            new RecordingProjectionLifecycle<ServiceDeploymentCatalogProjectionContext>());
-
-        act.Should().Throw<ArgumentNullException>();
-    }
 }

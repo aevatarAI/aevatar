@@ -1,11 +1,13 @@
 # Aevatar.CQRS.Projection.Core
 
-`Aevatar.CQRS.Projection.Core` 是与业务无关的 projection runtime 内核。当前架构已经拆成两条主链：
+`Aevatar.CQRS.Projection.Core` 是 actorized projection runtime 内核。当前框架只保留两条主链：
 
 - `Durable Materialization`
 - `Session Observation`
 
-## 核心接口
+两条链路都以 `scope actor` 为唯一运行态事实源，host 侧只保留薄适配层。
+
+## 核心抽象
 
 ### durable materialization
 
@@ -23,24 +25,28 @@
 - [IProjectionSessionActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionActivationService.cs)
 - [IProjectionSessionReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionReleaseService.cs)
 
-## 运行时实现
+## 当前运行时
 
-- durable：
-  - [ProjectionMaterializationLifecycleService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationLifecycleService.cs)
-  - [ContextProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionMaterializationActivationService.cs)
-  - [ContextProjectionMaterializationReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionMaterializationReleaseService.cs)
-  - [MaterializationProjectionPortBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/MaterializationProjectionPortBase.cs)
-
-- session：
-  - [ProjectionLifecycleService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionLifecycleService.cs)
-  - [ContextProjectionActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionActivationService.cs)
-  - [ContextProjectionReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ContextProjectionReleaseService.cs)
+- scope identity：
+  - [ProjectionRuntimeScopeKey.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionRuntimeScopeKey.cs)
+  - [ProjectionRuntimeMode.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionRuntimeMode.cs)
+- scope actor runtime：
+  - [ProjectionScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeGAgentBase.cs)
+  - [ProjectionMaterializationScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeGAgentBase.cs)
+  - [ProjectionSessionScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeGAgentBase.cs)
+  - [ProjectionScopeActorRuntime.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeActorRuntime.cs)
+- host 侧薄适配：
+  - [ProjectionMaterializationScopeActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeActivationService.cs)
+  - [ProjectionMaterializationScopeReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeReleaseService.cs)
+  - [ProjectionSessionScopeActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeActivationService.cs)
+  - [ProjectionSessionScopeReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeReleaseService.cs)
   - [EventSinkProjectionLifecyclePortBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs)
+- session stream：
   - [ProjectionSessionEventHub.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs)
 
 ## 关键约束
 
-- 根接口不再有 `InitializeAsync/CompleteAsync`
-- durable path 不再复用 `SessionId`
-- `Context` 只表达 runtime scope，不表达业务事实
-- query 语义不在 core 提供基类
+- scope actor 持有 projection 的存在性、处理水位、失败状态和 release 状态
+- host 侧不保留 `actorId/sessionId/scopeId -> runtime` 长期注册表
+- durable 只消费 committed observation
+- session 只负责发布 session event stream，不再把 live sink 当作生命周期事实

@@ -143,44 +143,6 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldThrow_WhenDetachedCleanupCannotBeScheduled()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var cleanupScheduler = new FakeDetachedCleanupScheduler
-        {
-            ScheduleException = new InvalidOperationException("schedule failed"),
-        };
-        var target = CreateBoundTarget(
-            projectionPort,
-            actorPort,
-            "actor-1",
-            "direct",
-            "cmd-1",
-            ["definition-1", "actor-1"],
-            cleanupScheduler);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var service = CreateInteractionService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) },
-            new FakeEventOutputStream { Events = [BuildEvent("progress")] },
-            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
-            new FakeFinalizeEmitter(),
-            new FakeDurableCompletionResolver());
-
-        var act = () => service.ExecuteAsync(
-            new WorkflowChatRunRequest("hello", "direct", null),
-            static (_, _) => ValueTask.CompletedTask,
-            ct: CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("schedule failed");
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().BeEmpty();
-        actorPort.DestroyCalls.Should().BeEmpty();
-        cleanupScheduler.Requests.Should().ContainSingle();
-    }
-
-    [Fact]
     public async Task CommandInteractionService_ShouldDestroyActors_WhenTerminalFrameMissingButDurableStateIsTerminal()
     {
         var projectionPort = new FakeProjectionPort();
@@ -216,15 +178,13 @@ public sealed class WorkflowApplicationLayerTests
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var cleanupScheduler = new FakeDetachedCleanupScheduler();
         var target = CreateBoundTarget(
             projectionPort,
             actorPort,
             "actor-1",
             "direct",
             "cmd-1",
-            ["definition-1", "actor-1"],
-            cleanupScheduler);
+            ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         var service = CreateInteractionService(
             new FakeDispatchPipeline { Result = Success(target, receipt) },
@@ -241,9 +201,8 @@ public sealed class WorkflowApplicationLayerTests
         result.Succeeded.Should().BeTrue();
         result.FinalizeResult.Should().Be(new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Unknown, false));
         projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().BeEmpty();
-        cleanupScheduler.Requests.Should().ContainSingle();
         target.ProjectionLease.Should().BeNull();
     }
 
@@ -256,8 +215,7 @@ public sealed class WorkflowApplicationLayerTests
                 .Failure(WorkflowChatRunStartError.WorkflowNotFound),
         };
         var service = CreateDetachedDispatchService(
-            pipeline,
-            new FakeDetachedCleanupScheduler());
+            pipeline);
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
 
@@ -266,197 +224,65 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldDetachLiveObservation_AndScheduleDurableCleanup()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler();
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) },
-            scheduler);
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(receipt);
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().BeEmpty();
-        actorPort.DestroyCalls.Should().BeEmpty();
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
-        scheduler.Requests.Single().ActorId.Should().Be("actor-1");
-        scheduler.Requests.Single().WorkflowName.Should().Be("direct");
-        scheduler.Requests.Single().CommandId.Should().Be("cmd-1");
-        scheduler.Requests.Single().CreatedActorIds.Should().Equal("definition-1", "actor-1");
-        target.ProjectionLease.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldScheduleDurableCleanup_BeforePreparedDispatch()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var pipeline = new FakeDispatchPipeline { Result = Success(target, receipt) };
-        var scheduler = new AssertingDetachedCleanupScheduler(() =>
-        {
-            projectionPort.DetachCalls.Should().BeEmpty();
-            pipeline.DispatchPreparedCalls.Should().Be(0);
-        });
-        var service = CreateDetachedDispatchService(
-            pipeline,
-            scheduler);
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        result.Succeeded.Should().BeTrue();
-        projectionPort.DetachCalls.Should().ContainSingle();
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
-        target.ProjectionLease.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldScheduleDurableCleanup_WhenDetachFails()
-    {
-        var projectionPort = new FakeProjectionPort
-        {
-            DetachException = new InvalidOperationException("detach failed"),
-            DetachFailureCount = 1,
-        };
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler();
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) },
-            scheduler);
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        result.Succeeded.Should().BeTrue();
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().BeEmpty();
-        actorPort.DestroyCalls.Should().BeEmpty();
-        scheduler.Requests.Should().ContainSingle();
-        target.LiveSink.Should().BeNull();
-        target.ProjectionLease.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldCompleteAcceptanceHandoff_WhenCallerCancelsAfterDispatch()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler();
-        using var cts = new CancellationTokenSource();
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline
-            {
-                Result = Success(target, receipt),
-                AfterDispatchPrepared = () => cts.Cancel(),
-            },
-            scheduler);
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null), cts.Token);
-
-        result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(receipt);
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldReturnFailure_WhenDurableCleanupCannotBeScheduled()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler
-        {
-            ScheduleException = new InvalidOperationException("schedule failed"),
-        };
-        var pipeline = new FakeDispatchPipeline { Result = Success(target, receipt) };
-        var service = CreateDetachedDispatchService(
-            pipeline,
-            scheduler);
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.DetachedCleanupUnavailable);
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
-        scheduler.DiscardRequests.Should().BeEmpty();
-        pipeline.DispatchPreparedCalls.Should().Be(0);
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().ContainSingle();
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
-        target.LiveSink.Should().BeNull();
-        target.ProjectionLease.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldDiscardScheduledCleanup_WhenPreparedDispatchFails()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler();
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline
-            {
-                Result = Success(target, receipt),
-                DispatchPreparedException = new InvalidOperationException("dispatch failed"),
-            },
-            scheduler);
-
-        var act = () => service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch failed");
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
-        scheduler.DiscardRequests.Should().ContainSingle();
-        scheduler.DiscardRequests.Single().ActorId.Should().Be("actor-1");
-        scheduler.DiscardRequests.Single().CommandId.Should().Be("cmd-1");
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldKeepScheduledCleanup_WhenPreparedDispatchRollbackFails()
+    public async Task DetachedCommandDispatchService_ShouldReleaseAndDestroyActorsInBackground_WhenTerminalEventIsObserved()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort
         {
-            DestroyException = new InvalidOperationException("cleanup failed"),
+            ExpectedDestroyCount = 2,
         };
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var scheduler = new FakeDetachedCleanupScheduler();
+        var outputStream = new FakeEventOutputStream
+        {
+            Events = [BuildEvent("progress"), BuildEvent("done")],
+        };
         var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            outputStream,
+            new FakeWorkflowRunCompletionPolicy
             {
-                Result = Success(target, receipt),
-                DispatchPreparedException = new InvalidOperationException("dispatch failed"),
+                TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
+                TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
             },
-            scheduler);
+            new FakeDurableCompletionResolver());
 
-        var act = () => service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*actor-1*");
-        scheduler.Requests.Should().ContainSingle();
-        scheduler.DispatchAcceptedRequests.Should().BeEmpty();
-        scheduler.DiscardRequests.Should().BeEmpty();
-        target.DispatchFailureCleanupCompleted.Should().BeFalse();
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(receipt);
+        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle();
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task DetachedCommandDispatchService_ShouldReleaseWithoutDestroy_WhenRunRemainsNonTerminal()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var outputStream = new FakeEventOutputStream
+        {
+            Events = [BuildEvent("progress")],
+        };
+        var service = CreateDetachedDispatchService(
+            new FakeDispatchPipeline { Result = Success(target, receipt) },
+            outputStream,
+            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
+            new FakeDurableCompletionResolver());
+
+        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
+
+        result.Succeeded.Should().BeTrue();
+        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await projectionPort.Released.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        projectionPort.DetachCalls.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle();
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
@@ -474,11 +300,14 @@ public sealed class WorkflowApplicationLayerTests
 
     private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
         ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
-        IWorkflowRunDetachedCleanupScheduler cleanupScheduler) =>
-        new WorkflowRunDetachedDispatchService(
+        IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>? outputStream = null,
+        ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>? completionPolicy = null,
+        ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>? durableCompletionResolver = null) =>
+        new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
             pipeline,
-            cleanupScheduler,
-            logger: null);
+            outputStream ?? new FakeEventOutputStream(),
+            completionPolicy ?? new FakeWorkflowRunCompletionPolicy(),
+            durableCompletionResolver ?? new FakeDurableCompletionResolver());
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
         WorkflowRunCommandTarget target,
@@ -498,8 +327,7 @@ public sealed class WorkflowApplicationLayerTests
         string actorId,
         string workflowName,
         string commandId,
-        IReadOnlyList<string>? createdActorIds = null,
-        IWorkflowRunDetachedCleanupScheduler? cleanupScheduler = null)
+        IReadOnlyList<string>? createdActorIds = null)
     {
         var readModelActivationPort = projectionPort;
         var target = new WorkflowRunCommandTarget(
@@ -508,8 +336,7 @@ public sealed class WorkflowApplicationLayerTests
             createdActorIds ?? [],
             projectionPort,
             readModelActivationPort,
-            actorPort,
-            cleanupScheduler ?? new FakeDetachedCleanupScheduler());
+            actorPort);
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
@@ -679,94 +506,6 @@ public sealed class WorkflowApplicationLayerTests
         }
     }
 
-    private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
-        public Exception? ScheduleException { get; set; }
-        public Exception? DispatchAcceptedException { get; set; }
-        public Exception? DiscardException { get; set; }
-
-        public Task ScheduleAsync(
-            WorkflowRunDetachedCleanupRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            if (ScheduleException != null)
-                return Task.FromException(ScheduleException);
-
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DispatchAcceptedRequests.Add(request);
-            if (DispatchAcceptedException != null)
-                return Task.FromException(DispatchAcceptedException);
-
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(
-            WorkflowRunDetachedCleanupDiscardRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DiscardRequests.Add(request);
-            if (DiscardException != null)
-                return Task.FromException(DiscardException);
-
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class AssertingDetachedCleanupScheduler(Action assertBeforeSchedule)
-        : IWorkflowRunDetachedCleanupScheduler
-    {
-        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
-
-        public Task ScheduleAsync(
-            WorkflowRunDetachedCleanupRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            assertBeforeSchedule();
-            Requests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DispatchAcceptedRequests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(
-            WorkflowRunDetachedCleanupDiscardRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DiscardRequests.Add(request);
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class FakeProjectionPort
         : IWorkflowExecutionProjectionPort,
           IWorkflowExecutionReadModelActivationPort
@@ -850,7 +589,7 @@ public sealed class WorkflowApplicationLayerTests
         }
     }
 
-    private sealed class FakeProjectionLease : IWorkflowExecutionProjectionOwnershipLease
+    private sealed class FakeProjectionLease : IWorkflowExecutionProjectionLease
     {
         public FakeProjectionLease(string actorId, string commandId)
         {
@@ -862,14 +601,6 @@ public sealed class WorkflowApplicationLayerTests
         public string CommandId { get; }
         public bool LiveSinkAttached { get; set; } = true;
         public bool Released { get; set; }
-
-        public int OwnershipHeartbeatStopCalls { get; private set; }
-
-        public ValueTask StopOwnershipHeartbeatAsync()
-        {
-            OwnershipHeartbeatStopCalls++;
-            return ValueTask.CompletedTask;
-        }
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

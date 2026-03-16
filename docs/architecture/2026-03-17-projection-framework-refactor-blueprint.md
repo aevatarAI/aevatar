@@ -1,5 +1,9 @@
 # Projection 框架 Actor 化瘦身重构蓝图
 
+> 状态：`Implemented`
+>
+> 这份蓝图对应的框架层重构已经落地。当前实现以 `ProjectionMaterializationScopeGAgentBase` / `ProjectionSessionScopeGAgentBase` 为核心，host 侧通过 `ProjectionMaterializationScopeActivationService` / `ProjectionSessionScopeActivationService` 做薄适配。
+
 ## 1. 文档定位
 
 本文替换上一版 Projection 框架蓝图。

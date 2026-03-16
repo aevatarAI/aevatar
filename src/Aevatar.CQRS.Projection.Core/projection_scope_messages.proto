@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
+
+import "agent_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+enum ProjectionScopeMode {
+  PROJECTION_SCOPE_MODE_UNSPECIFIED = 0;
+  PROJECTION_SCOPE_MODE_DURABLE_MATERIALIZATION = 1;
+  PROJECTION_SCOPE_MODE_SESSION_OBSERVATION = 2;
+}
+
+message ProjectionScopeState {
+  string root_actor_id = 1;
+  string projection_kind = 2;
+  string session_id = 3;
+  ProjectionScopeMode mode = 4;
+  bool active = 5;
+  bool observation_attached = 6;
+  bool released = 7;
+  int64 last_observed_version = 8;
+  int64 last_successful_version = 9;
+  repeated ProjectionScopeFailure failures = 10;
+  google.protobuf.Timestamp updated_at_utc = 11;
+}
+
+message ProjectionScopeFailure {
+  string failure_id = 1;
+  string stage = 2;
+  string event_id = 3;
+  string event_type = 4;
+  int64 source_version = 5;
+  string reason = 6;
+  aevatar.EventEnvelope envelope = 7;
+  int32 attempts = 8;
+  google.protobuf.Timestamp occurred_at_utc = 9;
+}
+
+message EnsureProjectionScopeCommand {
+  string root_actor_id = 1;
+  string projection_kind = 2;
+  string session_id = 3;
+  ProjectionScopeMode mode = 4;
+}
+
+message ReleaseProjectionScopeCommand {
+  string root_actor_id = 1;
+  string projection_kind = 2;
+  string session_id = 3;
+  ProjectionScopeMode mode = 4;
+}
+
+message ReplayProjectionFailuresCommand {
+  int32 max_items = 1;
+}
+
+message ProjectionObservationArrivedSignal {
+  aevatar.EventEnvelope envelope = 1;
+}
+
+message ProjectionScopeStartedEvent {
+  string root_actor_id = 1;
+  string projection_kind = 2;
+  string session_id = 3;
+  ProjectionScopeMode mode = 4;
+  google.protobuf.Timestamp occurred_at_utc = 5;
+}
+
+message ProjectionObservationAttachmentUpdatedEvent {
+  bool attached = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeReleasedEvent {
+  google.protobuf.Timestamp occurred_at_utc = 1;
+}
+
+message ProjectionScopeWatermarkAdvancedEvent {
+  int64 last_observed_version = 1;
+  int64 last_successful_version = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+message ProjectionScopeDispatchFailedEvent {
+  string failure_id = 1;
+  string stage = 2;
+  string event_id = 3;
+  string event_type = 4;
+  int64 source_version = 5;
+  string reason = 6;
+  aevatar.EventEnvelope envelope = 7;
+  google.protobuf.Timestamp occurred_at_utc = 8;
+}
+
+message ProjectionScopeFailureReplayedEvent {
+  string failure_id = 1;
+  bool succeeded = 2;
+  string reason = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}

@@ -59,54 +59,6 @@ public sealed class ServiceProjectionInfrastructureTests
     }
 
     [Fact]
-    public async Task ActivationAndReleaseServices_ShouldCreateContext_AndStopWhenIdle()
-    {
-        var catalogLifecycle = new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>();
-        var activation = ProjectionTestFactory.CreateActivationService(
-            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            },
-            static context => context.RootActorId,
-            catalogLifecycle);
-        var release = new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>, ServiceCatalogProjectionContext>(catalogLifecycle);
-
-        var lease = await activation.EnsureAsync(new ProjectionMaterializationStartRequest
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "service-catalog",
-        });
-        await release.ReleaseIfIdleAsync(lease);
-
-        catalogLifecycle.StartedContexts.Should().ContainSingle();
-        catalogLifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-catalog");
-        catalogLifecycle.StoppedContexts.Should().ContainSingle();
-        catalogLifecycle.StoppedContexts[0].RootActorId.Should().Be("actor-1");
-
-        var revisionLifecycle = new RecordingProjectionLifecycle<ServiceRevisionCatalogProjectionContext>();
-        var revisionActivation = ProjectionTestFactory.CreateActivationService(
-            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
-            {
-                RootActorId = rootActorId,
-                ProjectionKind = projectionName,
-            },
-            static context => context.RootActorId,
-            revisionLifecycle);
-        var revisionRelease = new ContextProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>, ServiceRevisionCatalogProjectionContext>(revisionLifecycle);
-        var revisionLease = await revisionActivation.EnsureAsync(new ProjectionMaterializationStartRequest
-        {
-            RootActorId = "actor-2",
-            ProjectionKind = "service-revisions",
-        });
-        await revisionRelease.ReleaseIfIdleAsync(revisionLease);
-
-        revisionLifecycle.StartedContexts.Should().ContainSingle();
-        revisionLifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-revisions");
-        revisionLifecycle.StoppedContexts.Should().ContainSingle();
-    }
-
-    [Fact]
     public void MetadataProviders_ShouldExposeStableIndexNames()
     {
         var catalog = new ServiceCatalogReadModelMetadataProvider();
@@ -148,24 +100,8 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public void ProjectionHelpers_ShouldGuardConstructorInputs_AndMapFallbackValues()
     {
-        Func<string, string, ServiceCatalogProjectionContext>? nullFactory = null;
-        Func<ServiceCatalogProjectionContext, string>? nullSelector = null;
-        var activationFactory = () => ProjectionTestFactory.CreateActivationService<ServiceCatalogProjectionContext>(
-            nullFactory!,
-            static context => context.RootActorId,
-            new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>());
-        var activationSelector = () => ProjectionTestFactory.CreateActivationService<ServiceCatalogProjectionContext>(
-            static (_, _) => new ServiceCatalogProjectionContext
-            {
-                RootActorId = "actor-1",
-                ProjectionKind = "service-catalog",
-            },
-            nullSelector!,
-            new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>());
         var runtimeLease = () => new ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>("actor-1", null!);
 
-        activationFactory.Should().Throw<ArgumentNullException>();
-        activationSelector.Should().Throw<ArgumentNullException>();
         runtimeLease.Should().Throw<ArgumentNullException>();
 
         var mappingType = typeof(ServiceCatalogReadModelMetadataProvider).Assembly
@@ -300,17 +236,17 @@ public sealed class ServiceProjectionInfrastructureTests
         committedArgs[3].Should().Be("evt-1");
         committedArgs[4].Should().Be(5L);
         committedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00"));
-        invalidCommittedResult.Should().BeTrue();
-        ((Any)invalidCommittedArgs[2]!).Is(CommittedStateEventPublished.Descriptor).Should().BeTrue();
-        invalidCommittedArgs[3].Should().Be("outer-2");
+        invalidCommittedResult.Should().BeFalse();
+        invalidCommittedArgs[2].Should().BeNull();
+        invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
-        invalidCommittedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T03:05:00+00:00"));
-        plainResult.Should().BeTrue();
-        ((Any)plainArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
-        plainArgs[3].Should().Be("plain-1");
+        invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
+        plainResult.Should().BeFalse();
+        plainArgs[2].Should().BeNull();
+        plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
-        plainArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T04:00:00+00:00"));
-        resolvedVersion.Should().Be(4L);
+        plainArgs[5].Should().Be(default(DateTimeOffset));
+        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]

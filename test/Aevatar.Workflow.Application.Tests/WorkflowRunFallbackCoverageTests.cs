@@ -157,28 +157,13 @@ public sealed class WorkflowRunFallbackCoverageTests
     [Fact]
     public async Task FallbackCommandDispatchService_ShouldRetryWithDirect_WhenFallbackEligibleExceptionOccurs()
     {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort();
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var target = CreateBoundTarget(projectionPort, actorPort, receipt.ActorId, receipt.WorkflowName, receipt.CommandId);
-        var pipeline = new SequencedDispatchPipeline();
-        var cleanupScheduler = new RecordingDetachedCleanupScheduler();
-        pipeline.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
-        pipeline.EnqueueResult(
-            CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
-                new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
-                {
-                    Target = target,
-                    Context = new CommandContext(receipt.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
-                    Envelope = new EventEnvelope { Id = "evt-1" },
-                    Receipt = receipt,
-                }));
+        var dispatchService = new SequencedCommandDispatchService();
+        dispatchService.EnqueueException(new WorkflowDirectFallbackTriggerException("retry"));
+        dispatchService.EnqueueResult(CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(receipt));
 
         var service = new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-            new WorkflowRunDetachedDispatchService(
-                pipeline,
-                cleanupScheduler,
-                logger: null),
+            dispatchService,
             new WorkflowDirectFallbackPolicy(),
             logger: null);
 
@@ -187,13 +172,8 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        pipeline.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
-        pipeline.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
-        cleanupScheduler.Requests.Should().ContainSingle();
-        cleanupScheduler.Requests.Single().ActorId.Should().Be("actor-1");
-        cleanupScheduler.Requests.Single().WorkflowName.Should().Be("direct");
-        cleanupScheduler.Requests.Single().CommandId.Should().Be("cmd-1");
-        cleanupScheduler.Requests.Single().CreatedActorIds.Should().Equal("actor-1");
+        dispatchService.Requests.Select(static x => x.WorkflowName).Should().Equal("auto", "direct");
+        dispatchService.Requests.Select(static x => x.ActorId).Should().Equal("actor-requested", null);
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
@@ -209,10 +189,35 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             projectionPort,
-            actorPort,
-            new RecordingDetachedCleanupScheduler());
+            actorPort);
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
+    }
+
+    private sealed class SequencedCommandDispatchService
+        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    {
+        private readonly Queue<object> _results = new();
+
+        public List<WorkflowChatRunRequest> Requests { get; } = [];
+
+        public void EnqueueException(Exception ex) => _results.Enqueue(ex);
+
+        public void EnqueueResult(CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> result) =>
+            _results.Enqueue(result);
+
+        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(command);
+            var next = _results.Dequeue();
+            if (next is Exception ex)
+                throw ex;
+
+            return Task.FromResult((CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>)next);
+        }
     }
 
     private sealed class SequencedDispatchPipeline
@@ -342,43 +347,6 @@ public sealed class WorkflowRunFallbackCoverageTests
             _ = receipt;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(_observation);
-        }
-    }
-
-    private sealed class RecordingDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDispatchAcceptedRequest> DispatchAcceptedRequests { get; } = [];
-        public List<WorkflowRunDetachedCleanupDiscardRequest> DiscardRequests { get; } = [];
-
-        public Task ScheduleAsync(
-            WorkflowRunDetachedCleanupRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DispatchAcceptedRequests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(
-            WorkflowRunDetachedCleanupDiscardRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            ct.ThrowIfCancellationRequested();
-            DiscardRequests.Add(request);
-            return Task.CompletedTask;
         }
     }
 

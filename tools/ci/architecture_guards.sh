@@ -487,7 +487,6 @@ fi
 
 stateful_replay_contract_requirements=(
   "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
-  "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -678,7 +677,8 @@ if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/
   exit 1
 fi
 
-if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
+if [ -f "src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs" ] && \
+  rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
   echo "ProjectionSubscriptionRegistry must not keep in-memory dictionary state."
   exit 1
 fi

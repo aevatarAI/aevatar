@@ -64,8 +64,7 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             createdActorIds: [],
             projectionPort,
             projectionPort,
-            new NoOpWorkflowRunActorPort(),
-            new NoOpDetachedCleanupScheduler());
+            new NoOpWorkflowRunActorPort());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -142,32 +141,6 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    private sealed class NoOpDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class FakeActor : IActor

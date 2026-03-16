@@ -17,14 +17,12 @@ public sealed class ScriptExecutionProjectionPort
         ScriptExecutionProjectionOptions options,
         IProjectionSessionActivationService<ScriptExecutionRuntimeLease> activationService,
         IProjectionSessionReleaseService<ScriptExecutionRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<ScriptExecutionRuntimeLease, EventEnvelope> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<ScriptExecutionRuntimeLease, EventEnvelope> liveSinkForwarder)
+        IProjectionSessionEventHub<EventEnvelope> sessionEventHub)
         : base(
             () => options?.Enabled ?? false,
             activationService,
             releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
+            sessionEventHub)
     {
     }
 

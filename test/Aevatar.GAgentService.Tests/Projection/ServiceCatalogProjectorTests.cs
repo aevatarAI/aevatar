@@ -266,12 +266,11 @@ public sealed class ServiceCatalogProjectorTests
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
         where T : Google.Protobuf.IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-        };
+        BuildCommittedEnvelope(
+            evt,
+            Guid.NewGuid().ToString("N"),
+            1,
+            DateTimeOffset.UtcNow);
 
     private static EventEnvelope BuildCommittedEnvelope<T>(
         T evt,

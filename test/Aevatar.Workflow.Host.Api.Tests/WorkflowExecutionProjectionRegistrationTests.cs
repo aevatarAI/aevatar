@@ -129,7 +129,7 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldRegisterPassthroughEventDeduplicator()
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
     {
         var services = new ServiceCollection();
         RegisterEventStore(services);
@@ -137,9 +137,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
-        var deduplicator = provider.GetRequiredService<IEventDeduplicator>();
-
-        (await deduplicator.TryRecordAsync("evt-1")).Should().BeTrue();
+        provider.GetService<IEventDeduplicator>().Should().BeNull();
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)

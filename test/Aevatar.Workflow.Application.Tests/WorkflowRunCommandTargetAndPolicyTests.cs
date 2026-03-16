@@ -53,13 +53,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
-    public async Task ReleaseAfterInteractionAsync_WhenNonTerminal_ShouldScheduleDetachedCleanupAndTransferOwnership()
+    public async Task ReleaseAfterInteractionAsync_WhenNonTerminal_ShouldReleaseProjectionWithoutDestroyingActors()
     {
         var projectionPort = new FakeProjectionPort();
-        var cleanupScheduler = new FakeDetachedCleanupScheduler();
         var target = CreateTarget(
             projectionPort: projectionPort,
-            cleanupScheduler: cleanupScheduler,
             createdActorIds: ["definition-1", "run-1"]);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         target.BindLiveObservation(lease, new FakeEventSink());
@@ -72,10 +70,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
                 Aevatar.CQRS.Core.Abstractions.Interactions.CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
             CancellationToken.None);
 
-        projectionPort.Events.Should().Equal("detach:run-1");
-        cleanupScheduler.Requests.Should().ContainSingle();
-        cleanupScheduler.Requests.Single().ActorId.Should().Be("run-1");
-        lease.OwnershipHeartbeatStopCalls.Should().Be(1);
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
         target.ProjectionLease.Should().BeNull();
         target.LiveSink.Should().BeNull();
     }
@@ -201,20 +196,17 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     private static WorkflowRunCommandTarget CreateTarget(
         FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
-        FakeDetachedCleanupScheduler? cleanupScheduler = null,
         IReadOnlyList<string>? createdActorIds = null)
     {
         projectionPort ??= new FakeProjectionPort();
         actorPort ??= new FakeWorkflowRunActorPort();
-        cleanupScheduler ??= new FakeDetachedCleanupScheduler();
         return new WorkflowRunCommandTarget(
             new FakeActor("run-1"),
             "direct",
             createdActorIds ?? [],
             projectionPort,
             projectionPort,
-            actorPort,
-            cleanupScheduler);
+            actorPort);
     }
 
     private sealed class FakeProjectionPort
@@ -256,44 +248,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         }
     }
 
-    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionOwnershipLease
+    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
-        public int OwnershipHeartbeatStopCalls { get; private set; }
-
-        public ValueTask StopOwnershipHeartbeatAsync()
-        {
-            OwnershipHeartbeatStopCalls++;
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
-
-        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>

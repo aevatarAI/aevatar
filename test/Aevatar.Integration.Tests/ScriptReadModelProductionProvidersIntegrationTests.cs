@@ -175,7 +175,10 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 CancellationToken.None);
 
             var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
+                provider,
+                runtimeActorId,
+                CancellationToken.None);
             snapshot.Should().NotBeNull();
             snapshot!.ReadModelPayload.Should().NotBeNull();
             snapshot.ReadModelPayload!.Unpack<ClaimCaseReadModel>().CaseId.Should().Be("Case-PROD");

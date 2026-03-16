@@ -2,7 +2,7 @@
 
 ## 1. 文档信息
 
-- 状态：`Active`
+- 状态：`Historical Baseline + Post-Refactor Note`
 - 日期：`2026-03-17`
 - 范围：
   - `src/Aevatar.Foundation.*`
@@ -13,26 +13,21 @@
 
 ## 2. 结论摘要
 
-当前 Projection 系统已经收口到一个明确主干：
+本文原始主体记录的是 2026-03-17 当天重构前的 Projection 系统全链路问题。对应的框架层问题已经在同日完成 actorized scope 重构；旧的 lifecycle / registry / ownership / compensation control plane 不再代表当前实现。
 
-`actor committed fact/state -> committed observation trunk -> projection runtime -> durable materialization + session observation -> document/graph/query/live sink`
+当前主干已经收口为：
 
-相比早期版本，当前系统有三个明显进步：
+`actor committed fact/state -> committed observation trunk -> scope actor runtime -> durable materialization + session observation -> document/graph/query/session stream`
 
-1. 写侧统一通过 `EventEnvelope<CommittedStateEventPublished>` 向 Projection 暴露 committed 事实。
-2. Durable Materialization 与 Session Observation 已经在类型系统上拆开。
-3. Query 路径基本遵守 `Query -> ReadModel`，没有回退到 query-time replay。
+已完成的框架层收敛包括：
 
-但系统仍存在一组关键问题：
+1. durable 与 session 两条链都改为 `scope actor` 持有唯一运行态事实。
+2. host 侧删除 `ContextProjection*Service / Projection*Registry / ActorStreamSubscriptionHub / ownership / compensation replay` 这套旧控制面。
+3. platform projection 改为 committed-only，不再回退 raw envelope，也不再发明本地 `StateVersion`。
+4. Workflow projection session 只发布 session stream，不再用 live sink 数量决定 projection 生命周期。
+5. Workflow accepted-only 路径删掉无生产实现的 detached cleanup scheduler，改回通用 `DefaultDetachedCommandDispatchService<...>`。
 
-1. durable materialization 没有 actor 级唯一 lease/订阅复用，重复 activation 会叠加订阅。
-2. 故障恢复只覆盖 store fan-out 的一部分，不覆盖 materializer/projector 失败。
-3. platform projection 仍保留 raw envelope fallback 和本地 `StateVersion` 发明。
-4. 多个 artifact projector 仍依赖“读旧文档 + 增量补丁”，重建语义不够稳。
-5. 所谓 shared actor stream subscription 在实现上并没有真正的 ref-count/registry 复用。
-6. document + graph 是顺序写、非原子提交，graph cleanup 成本偏高。
-7. workflow control plane 复杂度已经接近独立子平台。
-8. 现有 CI guard 覆盖了一部分架构边界，但还没有覆盖最危险的 subscription/lifecycle 漏洞。
+这份文档中剩余的大段旧控制平面描述保留为历史分析基线，方便对照重构前后的复杂度差异。
 
 ## 3. 分析边界与项目地图
 

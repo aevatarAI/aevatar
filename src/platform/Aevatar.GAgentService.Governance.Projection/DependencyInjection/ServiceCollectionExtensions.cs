@@ -22,22 +22,43 @@ public static class ServiceCollectionExtensions
 
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
 
         services.AddProjectionMaterializationRuntimeCore<
             ServiceConfigurationProjectionContext,
             ServiceConfigurationRuntimeLease>();
+        services.TryAddSingleton<IProjectionScopeContextFactory<ServiceConfigurationProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<ServiceConfigurationProjectionContext>(scopeKey =>
+                new ServiceConfigurationProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
 
         services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>>(sp =>
-            new ContextProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(
-                sp.GetRequiredService<IProjectionMaterializationLifecycleService<ServiceConfigurationProjectionContext, ServiceConfigurationRuntimeLease>>(),
-                static (request, _) => new ServiceConfigurationProjectionContext
+            new ProjectionMaterializationScopeActivationService<
+                ServiceConfigurationRuntimeLease,
+                ServiceConfigurationProjectionContext,
+                ServiceConfigurationProjectionScopeGAgent>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                static request => new ServiceConfigurationProjectionContext
                 {
                     RootActorId = request.RootActorId,
                     ProjectionKind = request.ProjectionKind,
                 },
-                static context => new ServiceConfigurationRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>, ContextProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>>();
+                static (_, context) => new ServiceConfigurationRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ServiceConfigurationRuntimeLease,
+                ServiceConfigurationProjectionScopeGAgent>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ServiceConfigurationProjectionPort>();
         services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();

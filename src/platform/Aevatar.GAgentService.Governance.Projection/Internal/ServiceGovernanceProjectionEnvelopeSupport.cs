@@ -18,25 +18,25 @@ internal static class ServiceGovernanceCommittedStateSupport
         ArgumentNullException.ThrowIfNull(envelope);
         ArgumentNullException.ThrowIfNull(clock);
 
-        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out payload, out eventId, out stateVersion) &&
-            payload != null)
+        payload = null;
+        eventId = string.Empty;
+        stateVersion = 0;
+        observedAt = default;
+
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out payload, out eventId, out stateVersion) ||
+            payload == null ||
+            stateVersion <= 0)
         {
-            observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, clock.UtcNow);
-            return true;
+            return false;
         }
 
-        payload = envelope.Payload;
-        eventId = envelope.Id ?? string.Empty;
-        stateVersion = 0;
-        observedAt = EventEnvelopeTimestampResolver.Resolve(envelope, clock.UtcNow);
-        return payload != null;
+        observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, clock.UtcNow);
+        return true;
     }
 
     public static long ResolveNextStateVersion(long currentVersion, long observedStateVersion)
     {
-        if (observedStateVersion > 0)
-            return observedStateVersion;
-
-        return currentVersion <= 0 ? 1 : currentVersion + 1;
+        _ = currentVersion;
+        return observedStateVersion;
     }
 }

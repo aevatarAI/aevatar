@@ -79,7 +79,10 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
             committed.DomainEventPayload.Should().NotBeNull();
             committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current.NormalizedText.Should().Be("HELLO");
 
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
+                provider,
+                runtimeActorId,
+                CancellationToken.None);
             snapshot.Should().NotBeNull();
             snapshot!.ReadModelPayload.Should().NotBeNull();
             snapshot.ReadModelPayload.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("HELLO");

@@ -16,14 +16,12 @@ public sealed class WorkflowExecutionProjectionPort
         WorkflowExecutionProjectionOptions options,
         IProjectionSessionActivationService<WorkflowExecutionRuntimeLease> activationService,
         IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> liveSinkForwarder)
+        IProjectionSessionEventHub<WorkflowRunEventEnvelope> sessionEventHub)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
+            sessionEventHub)
     {
     }
 

@@ -17,7 +17,6 @@ internal sealed class WorkflowRunCommandTarget
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowExecutionReadModelActivationPort _readModelActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
-    private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -26,8 +25,7 @@ internal sealed class WorkflowRunCommandTarget
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowExecutionReadModelActivationPort readModelActivationPort,
-        IWorkflowRunActorPort actorPort,
-        IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
+        IWorkflowRunActorPort actorPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
@@ -37,7 +35,6 @@ internal sealed class WorkflowRunCommandTarget
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
-        _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
 
     public IActor Actor { get; }
@@ -183,18 +180,6 @@ internal sealed class WorkflowRunCommandTarget
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
-    public async Task ReleaseDetachedSessionOwnershipAsync()
-    {
-        var projectionLease = ProjectionLease;
-        if (projectionLease == null)
-            return;
-
-        if (projectionLease is IWorkflowExecutionProjectionOwnershipLease ownershipLease)
-            await ownershipLease.StopOwnershipHeartbeatAsync();
-
-        ProjectionLease = null;
-    }
-
     private static async Task CompleteAndDisposeLiveSinkAsync(
         IEventSink<WorkflowRunEventEnvelope> sink,
         CancellationToken ct)
@@ -276,19 +261,6 @@ internal sealed class WorkflowRunCommandTarget
             return;
         }
 
-        await DetachLiveObservationAsync(ct);
-        await ScheduleDetachedCleanupAsync(receipt, ct);
-        await ReleaseDetachedSessionOwnershipAsync();
+        await ReleaseAsync(destroyCreatedActors: false, ct: ct);
     }
-
-    private Task ScheduleDetachedCleanupAsync(
-        WorkflowChatRunAcceptedReceipt receipt,
-        CancellationToken ct) =>
-        _cleanupScheduler.ScheduleAsync(
-            new WorkflowRunDetachedCleanupRequest(
-                receipt.ActorId,
-                WorkflowName,
-                receipt.CommandId,
-                CreatedActorIds),
-            ct);
 }

@@ -33,32 +33,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
     }
 
     [Fact]
-    public async Task ActivationAndReleaseServices_ShouldCreateContextLeaseAndStopWhenIdle()
-    {
-        var lifecycle = new RecordingConfigurationLifecycle();
-        var activation = new ContextProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(
-            lifecycle,
-            (request, _) => new ServiceConfigurationProjectionContext
-            {
-                RootActorId = request.RootActorId,
-                ProjectionKind = request.ProjectionKind,
-            },
-            static context => new ServiceConfigurationRuntimeLease(context));
-        var release = new ContextProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease, ServiceConfigurationProjectionContext>(lifecycle);
-        var lease = await activation.EnsureAsync(new ProjectionMaterializationStartRequest
-        {
-            RootActorId = "config-actor",
-            ProjectionKind = "service-configuration",
-        });
-        await release.ReleaseIfIdleAsync(lease);
-
-        lifecycle.StartedContexts.Should().ContainSingle();
-        lifecycle.StartedContexts[0].ProjectionKind.Should().Be("service-configuration");
-        lifecycle.StoppedContexts.Should().ContainSingle();
-        lease.Context.RootActorId.Should().Be("config-actor");
-    }
-
-    [Fact]
     public void MetadataProviders_ShouldExposeStableIndexNames()
     {
         var metadataProvider = new ServiceConfigurationReadModelMetadataProvider();
@@ -170,17 +144,17 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         committedArgs[3].Should().Be("evt-1");
         committedArgs[4].Should().Be(8L);
         committedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00"));
-        plainResult.Should().BeTrue();
-        ((Any)plainArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
-        plainArgs[3].Should().Be("plain-1");
+        plainResult.Should().BeFalse();
+        plainArgs[2].Should().BeNull();
+        plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
-        plainArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T03:00:00+00:00"));
-        invalidCommittedResult.Should().BeTrue();
-        ((Any)invalidCommittedArgs[2]!).Is(CommittedStateEventPublished.Descriptor).Should().BeTrue();
-        invalidCommittedArgs[3].Should().Be("outer-2");
+        plainArgs[5].Should().Be(default(DateTimeOffset));
+        invalidCommittedResult.Should().BeFalse();
+        invalidCommittedArgs[2].Should().BeNull();
+        invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
-        invalidCommittedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T05:00:00+00:00"));
-        resolvedVersion.Should().Be(1L);
+        invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
+        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]
@@ -205,28 +179,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
                 RootActorId = request.RootActorId,
                 ProjectionKind = request.ProjectionKind,
             }));
-        }
-    }
-
-    private sealed class RecordingConfigurationLifecycle : IProjectionMaterializationLifecycleService<ServiceConfigurationProjectionContext, ServiceConfigurationRuntimeLease>
-    {
-        public List<ServiceConfigurationProjectionContext> StartedContexts { get; } = [];
-
-        public List<ServiceConfigurationProjectionContext> StoppedContexts { get; } = [];
-
-        public Task StartAsync(ServiceConfigurationRuntimeLease runtimeLease, CancellationToken ct = default)
-        {
-            StartedContexts.Add(runtimeLease.Context);
-            return Task.CompletedTask;
-        }
-
-        public Task ProjectAsync(ServiceConfigurationProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task StopAsync(ServiceConfigurationRuntimeLease runtimeLease, CancellationToken ct = default)
-        {
-            StoppedContexts.Add(runtimeLease.Context);
-            return Task.CompletedTask;
         }
     }
 }
