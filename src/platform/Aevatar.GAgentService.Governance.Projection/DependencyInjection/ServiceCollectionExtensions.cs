@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
             new ProjectionMaterializationScopeActivationService<
                 ServiceConfigurationRuntimeLease,
                 ServiceConfigurationProjectionContext,
-                ServiceConfigurationProjectionScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 static request => new ServiceConfigurationProjectionContext
@@ -51,7 +51,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 ServiceConfigurationRuntimeLease,
-                ServiceConfigurationProjectionScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(

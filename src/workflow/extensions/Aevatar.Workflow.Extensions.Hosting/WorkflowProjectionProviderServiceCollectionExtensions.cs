@@ -19,12 +19,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(WorkflowProjectionProviderRegistrationsMarker)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>)))
             return services;
 
         EnsureLegacyProviderOptionsNotUsed(configuration);
-
-        services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
         var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
         var enableNeo4jGraph = ResolveNeo4jGraphEnabled(configuration);
@@ -260,6 +258,4 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         return parsed;
     }
-
-    private sealed class WorkflowProjectionProviderRegistrationsMarker;
 }

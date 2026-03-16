@@ -84,7 +84,7 @@ public static class ServiceCollectionExtensions
             new ProjectionSessionScopeActivationService<
                 ScriptExecutionRuntimeLease,
                 ScriptExecutionProjectionContext,
-                ScriptExecutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<ScriptExecutionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new ScriptExecutionProjectionContext
@@ -98,7 +98,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionReleaseService<ScriptExecutionRuntimeLease>>(sp =>
             new ProjectionSessionScopeReleaseService<
                 ScriptExecutionRuntimeLease,
-                ScriptExecutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<ScriptExecutionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -114,7 +114,7 @@ public static class ServiceCollectionExtensions
             new ProjectionMaterializationScopeActivationService<
                 ScriptExecutionMaterializationRuntimeLease,
                 ScriptExecutionMaterializationContext,
-                ScriptExecutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptExecutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new ScriptExecutionMaterializationContext
@@ -127,7 +127,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptExecutionMaterializationRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 ScriptExecutionMaterializationRuntimeLease,
-                ScriptExecutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptExecutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -136,12 +136,13 @@ public static class ServiceCollectionExtensions
                     ProjectionRuntimeMode.DurableMaterialization),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ScriptExecutionReadModelPort>();
-        services.TryAddSingleton<IScriptExecutionReadModelActivationPort, ProjectionScriptExecutionReadModelActivationPort>();
+        services.TryAddSingleton<IScriptExecutionReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptExecutionReadModelPort>());
         services.TryAddSingleton<IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeActivationService<
                 ScriptAuthorityRuntimeLease,
                 ScriptAuthorityProjectionContext,
-                ScriptAuthorityMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptAuthorityProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new ScriptAuthorityProjectionContext
@@ -154,7 +155,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 ScriptAuthorityRuntimeLease,
-                ScriptAuthorityMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptAuthorityProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -176,7 +177,7 @@ public static class ServiceCollectionExtensions
             new ProjectionSessionScopeActivationService<
                 ScriptEvolutionRuntimeLease,
                 ScriptEvolutionSessionProjectionContext,
-                ScriptEvolutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<ScriptEvolutionSessionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new ScriptEvolutionSessionProjectionContext
@@ -190,7 +191,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionReleaseService<ScriptEvolutionRuntimeLease>>(sp =>
             new ProjectionSessionScopeReleaseService<
                 ScriptEvolutionRuntimeLease,
-                ScriptEvolutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<ScriptEvolutionSessionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -206,7 +207,7 @@ public static class ServiceCollectionExtensions
             new ProjectionMaterializationScopeActivationService<
                 ScriptEvolutionMaterializationRuntimeLease,
                 ScriptEvolutionMaterializationContext,
-                ScriptEvolutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptEvolutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new ScriptEvolutionMaterializationContext
@@ -219,7 +220,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptEvolutionMaterializationRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 ScriptEvolutionMaterializationRuntimeLease,
-                ScriptEvolutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<ScriptEvolutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -228,14 +229,16 @@ public static class ServiceCollectionExtensions
                     ProjectionRuntimeMode.DurableMaterialization),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ScriptEvolutionReadModelPort>();
-        services.TryAddSingleton<IScriptEvolutionReadModelActivationPort, ProjectionScriptEvolutionReadModelActivationPort>();
+        services.TryAddSingleton<IScriptEvolutionReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptEvolutionReadModelPort>());
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort>(sp =>
             sp.GetRequiredService<ScriptReadModelQueryReader>());
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
-        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort, ProjectionScriptAuthorityReadModelActivationPort>();
+        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptAuthorityProjectionPort>());
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();
         services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>

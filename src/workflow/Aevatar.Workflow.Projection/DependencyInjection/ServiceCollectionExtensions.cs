@@ -78,7 +78,7 @@ public static class ServiceCollectionExtensions
             new ProjectionSessionScopeActivationService<
                 WorkflowExecutionRuntimeLease,
                 WorkflowExecutionProjectionContext,
-                WorkflowExecutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new WorkflowExecutionProjectionContext
@@ -92,7 +92,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease>>(sp =>
             new ProjectionSessionScopeReleaseService<
                 WorkflowExecutionRuntimeLease,
-                WorkflowExecutionSessionScopeGAgent>(
+                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -105,7 +105,7 @@ public static class ServiceCollectionExtensions
             new ProjectionMaterializationScopeActivationService<
                 WorkflowExecutionMaterializationRuntimeLease,
                 WorkflowExecutionMaterializationContext,
-                WorkflowExecutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new WorkflowExecutionMaterializationContext
@@ -118,7 +118,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 WorkflowExecutionMaterializationRuntimeLease,
-                WorkflowExecutionMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -130,7 +130,7 @@ public static class ServiceCollectionExtensions
             new ProjectionMaterializationScopeActivationService<
                 WorkflowBindingRuntimeLease,
                 WorkflowBindingProjectionContext,
-                WorkflowBindingMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 request => new WorkflowBindingProjectionContext
@@ -143,7 +143,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowBindingRuntimeLease>>(sp =>
             new ProjectionMaterializationScopeReleaseService<
                 WorkflowBindingRuntimeLease,
-                WorkflowBindingMaterializationScopeGAgent>(
+                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
                 sp.GetRequiredService<IActorRuntime>(),
                 sp.GetRequiredService<IActorDispatchPort>(),
                 lease => new ProjectionRuntimeScopeKey(
@@ -156,7 +156,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<IWorkflowActorBindingReader, ProjectionWorkflowActorBindingReader>();
-        services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort, ProjectionWorkflowExecutionMaterializationActivationPort>();
+        services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionMaterializationPort>());
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
         services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>

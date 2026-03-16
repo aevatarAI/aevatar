@@ -1,9 +1,11 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptAuthorityProjectionPort
-    : MaterializationProjectionPortBase<ScriptAuthorityRuntimeLease>
+    : MaterializationProjectionPortBase<ScriptAuthorityRuntimeLease>,
+      IScriptAuthorityReadModelActivationPort
 {
     private const string ProjectionName = "script-authority-read-model";
 
@@ -27,4 +29,11 @@ public sealed class ScriptAuthorityProjectionPort
                 ProjectionKind = ProjectionName,
             },
             ct);
+
+    public async Task ActivateAsync(string actorId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        _ = await EnsureActorProjectionAsync(actorId, ct)
+            ?? throw new InvalidOperationException($"Script authority readmodel activation is disabled for actor `{actorId}`.");
+    }
 }

@@ -453,7 +453,7 @@ Workflow host 当前策略是：
 
 典型调用点：
 
-- workflow：`ProjectionWorkflowExecutionMaterializationActivationPort`
+- workflow：`WorkflowExecutionMaterializationPort`
 - scripting：`ProjectionScript*ReadModelActivationPort`
 - platform：`Service*ProjectionPort`
 - governance：`ServiceConfigurationProjectionPort`

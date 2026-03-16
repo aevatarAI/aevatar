@@ -18,10 +18,8 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        if (services.Any(x => x.ServiceType == typeof(ScriptingProjectionProviderRegistrationsMarker)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ScriptReadModelDocument, string>)))
             return services;
-
-        services.AddSingleton<ScriptingProjectionProviderRegistrationsMarker>();
 
         if (configuration == null)
         {
@@ -247,6 +245,4 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         return parsed;
     }
-
-    private sealed class ScriptingProjectionProviderRegistrationsMarker;
 }

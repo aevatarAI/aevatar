@@ -1,10 +1,12 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Configuration;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptEvolutionReadModelPort
-    : MaterializationProjectionPortBase<ScriptEvolutionMaterializationRuntimeLease>
+    : MaterializationProjectionPortBase<ScriptEvolutionMaterializationRuntimeLease>,
+      IScriptEvolutionReadModelActivationPort
 {
     private const string ProjectionName = "script-evolution-read-model";
 
@@ -29,4 +31,12 @@ public sealed class ScriptEvolutionReadModelPort
                 ProjectionKind = ProjectionName,
             },
             ct);
+
+    public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorId))
+            return false;
+
+        return await EnsureActorProjectionAsync(actorId, ct) != null;
+    }
 }

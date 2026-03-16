@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
 
-        services.AddServiceProjectionRuntime<ServiceCatalogProjectionContext, ServiceCatalogProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceCatalogProjectionContext, ProjectionMaterializationScopeGAgent<ServiceCatalogProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
                 RootActorId = rootActorId,
@@ -39,7 +39,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             });
-        services.AddServiceProjectionRuntime<ServiceDeploymentCatalogProjectionContext, ServiceDeploymentCatalogProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceDeploymentCatalogProjectionContext, ProjectionMaterializationScopeGAgent<ServiceDeploymentCatalogProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceDeploymentCatalogProjectionContext
             {
                 RootActorId = rootActorId,
@@ -55,7 +55,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             });
-        services.AddServiceProjectionRuntime<ServiceRevisionCatalogProjectionContext, ServiceRevisionCatalogProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceRevisionCatalogProjectionContext, ProjectionMaterializationScopeGAgent<ServiceRevisionCatalogProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
                 RootActorId = rootActorId,
@@ -71,7 +71,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             });
-        services.AddServiceProjectionRuntime<ServiceServingSetProjectionContext, ServiceServingSetProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceServingSetProjectionContext, ProjectionMaterializationScopeGAgent<ServiceServingSetProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceServingSetProjectionContext
             {
                 RootActorId = rootActorId,
@@ -87,7 +87,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             });
-        services.AddServiceProjectionRuntime<ServiceRolloutProjectionContext, ServiceRolloutProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceRolloutProjectionContext, ProjectionMaterializationScopeGAgent<ServiceRolloutProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceRolloutProjectionContext
             {
                 RootActorId = rootActorId,
@@ -103,7 +103,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             });
-        services.AddServiceProjectionRuntime<ServiceTrafficViewProjectionContext, ServiceTrafficViewProjectionScopeGAgent>(
+        services.AddServiceProjectionRuntime<ServiceTrafficViewProjectionContext, ProjectionMaterializationScopeGAgent<ServiceTrafficViewProjectionContext>>(
             static (rootActorId, projectionName) => new ServiceTrafficViewProjectionContext
             {
                 RootActorId = rootActorId,
