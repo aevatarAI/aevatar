@@ -14,6 +14,55 @@ public sealed class InMemoryProjectionGraphStore
     {
     }
 
+    public Task ReplaceOwnerGraphAsync(
+        ProjectionOwnedGraph graph,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ct.ThrowIfCancellationRequested();
+
+        var scope = NormalizeToken(graph.Scope);
+        var ownerId = NormalizeToken(graph.OwnerId);
+        if (scope.Length == 0 || ownerId.Length == 0)
+        {
+            throw new InvalidOperationException("Owned graph requires non-empty scope and ownerId.");
+        }
+
+        var normalizedNodes = graph.Nodes
+            .Select(x => CloneNode(x, scope, NormalizeToken(x.NodeId)))
+            .Where(x => x.NodeId.Length > 0)
+            .ToDictionary(x => x.NodeId, StringComparer.Ordinal);
+        var normalizedEdges = graph.Edges
+            .Select(x => CloneEdge(
+                x,
+                scope,
+                NormalizeToken(x.EdgeId),
+                NormalizeToken(x.FromNodeId),
+                NormalizeToken(x.ToNodeId),
+                NormalizeToken(x.EdgeType)))
+            .Where(x =>
+                x.EdgeId.Length > 0 &&
+                x.FromNodeId.Length > 0 &&
+                x.ToNodeId.Length > 0 &&
+                x.EdgeType.Length > 0)
+            .ToDictionary(x => x.EdgeId, StringComparer.Ordinal);
+
+        lock (_gate)
+        {
+            RemoveManagedEdges(scope, ownerId);
+
+            foreach (var node in normalizedNodes.Values)
+                _nodes[BuildNodeKey(scope, node.NodeId)] = node;
+
+            foreach (var edge in normalizedEdges.Values)
+                _edges[BuildEdgeKey(scope, edge.EdgeId)] = edge;
+
+            CleanupManagedNodes(scope, ownerId, normalizedNodes.Keys);
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(node);
@@ -288,6 +337,54 @@ public sealed class InMemoryProjectionGraphStore
             .Select(NormalizeToken)
             .Where(x => x.Length > 0)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private void RemoveManagedEdges(string scope, string ownerId)
+    {
+        var keys = _edges
+            .Where(x => string.Equals(x.Value.Scope, scope, StringComparison.Ordinal))
+            .Where(x => HasOwnerId(x.Value.Properties, ownerId))
+            .Select(x => x.Key)
+            .ToList();
+        foreach (var key in keys)
+            _edges.Remove(key);
+    }
+
+    private void CleanupManagedNodes(
+        string scope,
+        string ownerId,
+        IReadOnlyCollection<string> targetNodeIds)
+    {
+        var keys = _nodes
+            .Where(x => string.Equals(x.Value.Scope, scope, StringComparison.Ordinal))
+            .Where(x => HasOwnerId(x.Value.Properties, ownerId))
+            .Where(x => !targetNodeIds.Contains(x.Value.NodeId))
+            .Select(x => x.Key)
+            .ToList();
+        foreach (var key in keys)
+        {
+            var node = _nodes[key];
+            if (HasIncidentEdge(scope, node.NodeId))
+                continue;
+
+            _nodes.Remove(key);
+        }
+    }
+
+    private bool HasIncidentEdge(string scope, string nodeId)
+    {
+        return _edges.Values.Any(x =>
+            string.Equals(x.Scope, scope, StringComparison.Ordinal) &&
+            (string.Equals(x.FromNodeId, nodeId, StringComparison.Ordinal) ||
+             string.Equals(x.ToNodeId, nodeId, StringComparison.Ordinal)));
+    }
+
+    private static bool HasOwnerId(
+        IReadOnlyDictionary<string, string> properties,
+        string ownerId)
+    {
+        return properties.TryGetValue(ProjectionGraphManagedPropertyKeys.ManagedOwnerIdKey, out var value) &&
+               string.Equals(NormalizeToken(value), ownerId, StringComparison.Ordinal);
     }
 
     private string BuildNodeKey(string scope, string nodeId) => $"{scope}:{nodeId}";

@@ -110,6 +110,12 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
 
     private class NoOpGraphStore : IProjectionGraphStore
     {
+        public Task ReplaceOwnerGraphAsync(ProjectionOwnedGraph graph, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
         public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

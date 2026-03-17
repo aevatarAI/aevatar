@@ -604,3 +604,57 @@ flowchart LR
 - feature outward contract 还不够统一
 
 如果后续要继续重构，我建议优先把“装配收口 + artifact 减重 + failure ops”作为同一阶段推进，而不是只继续新增 projector。
+
+## 13. 本轮重构落地状态（2026-03-17，`projection-worktree`）
+
+这轮代码调整已经把文档里的部分问题真正压下去了，但还没有把全部 8 项一次性全部关闭。
+
+### 13.1 已明显解决或实质收敛
+
+1. `10.6 graph materialization 热点`
+   - `ProjectionGraphStoreBinding` 已删除，runtime 改为 `IProjectionGraphWriter<TReadModel> -> ReplaceOwnerGraphAsync(...)` 的 owner-level 覆盖写。
+   - Workflow graph 不再先写 `WorkflowRunGraphArtifactDocument` 再由 graph store 重扫，而是直接从 `WorkflowRunInsightReportDocument` 物化 graph。
+   - 这把原来“每次 graph upsert 都枚举 owner 现存 nodes/edges 再逐项清理”的热点从 runtime 层拿掉了。
+
+2. `10.5 artifact 写放大`
+   - Workflow durable artifact 链进一步减重：`report -> timeline/graph` 仍保留单一累积源，但 graph artifact document 已移除。
+   - Platform / Governance 中，`ServiceRevisionCatalogProjector` 与 `ServiceConfigurationProjector` 已改成基于 committed `state_root` 的覆盖写，不再回读旧文档做增量拼装。
+
+3. `10.8 feature enable / lifecycle 语义`
+   - Platform / Governance query reader 已统一遵守 `Enabled` 语义，禁用时返回 `null/[]`，不再出现“部分 feature 无 gate、部分 feature 有 gate”的明显不对称。
+
+### 13.2 仍然只解决了一部分
+
+1. `10.5`
+   - `ServiceCatalogProjector`、`ServiceRolloutProjector` 仍有增长型聚合文档问题。
+   - 这些 readmodel 依赖的权威状态还没有完全收敛到可直接覆盖复制的形态，所以这一项只能算部分完成。
+
+2. `10.8`
+   - Query disable 语义已经向 Platform / Governance 对齐，但不同 feature 的 session / materialization 是否 always-on，仍没有被统一成一个仓库级 contract。
+
+### 13.3 本轮未直接处理的项
+
+1. `10.1` 装配模板化与 outward wiring 继续收口。
+2. `10.2` `projectionKind` 从字符串协议升级为更强类型语义。
+3. `10.3` scope actor / stream fan-out 扩张模型。
+4. `10.4` failure ops 的 admin surface、后台恢复作业与告警整合。
+5. `10.7` document / graph 双写的事务化或 SLA 化补偿。
+
+### 13.4 验证状态
+
+本轮 worktree 已完成并通过：
+
+1. `dotnet build aevatar.slnx --nologo -m:1 -p:UseSharedCompilation=false`
+2. `bash tools/ci/architecture_guards.sh`
+3. `bash tools/ci/query_projection_priming_guard.sh`
+4. `bash tools/ci/projection_state_version_guard.sh`
+5. `bash tools/ci/projection_state_mirror_current_state_guard.sh`
+6. `bash tools/ci/projection_route_mapping_guard.sh`
+7. `bash tools/ci/committed_state_projection_guard.sh`
+8. `bash tools/ci/test_stability_guards.sh`
+9. `bash tools/ci/coverage_quality_guard.sh`
+
+其中覆盖率门禁结果为：
+
+- filtered line coverage = `88.4%`
+- filtered branch coverage = `72.0%`

@@ -415,6 +415,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         public IReadOnlyList<ProjectionGraphEdge> GraphEdgesResult { get; init; } = [];
         public ProjectionGraphSubgraph GraphSubgraphResult { get; init; } = new();
 
+        public Task ReplaceOwnerGraphAsync(ProjectionOwnedGraph graph, CancellationToken ct = default) => throw new NotSupportedException();
         public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default) => throw new NotSupportedException();
         public Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default) => throw new NotSupportedException();
