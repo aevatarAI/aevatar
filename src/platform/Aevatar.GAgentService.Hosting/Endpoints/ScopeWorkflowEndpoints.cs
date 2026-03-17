@@ -333,16 +333,7 @@ public static class ScopeWorkflowEndpoints
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            await WriteJsonErrorResponseAsync(
-                http,
-                StatusCodes.Status400BadRequest,
-                "INVALID_USER_WORKFLOW_REQUEST",
-                "Prompt is required.",
-                ct);
-            return;
-        }
+        prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
 
         var started = false;
 

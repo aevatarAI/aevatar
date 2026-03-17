@@ -67,12 +67,6 @@ public static class WorkflowCapabilityEndpoints
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
-        if (string.IsNullOrWhiteSpace(input.Prompt))
-        {
-            http.Response.StatusCode = StatusCodes.Status400BadRequest;
-            return;
-        }
-
         var writer = new ChatSseResponseWriter(http.Response);
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
         var loggerFactory = serviceProvider?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
@@ -150,15 +144,6 @@ public static class WorkflowCapabilityEndpoints
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
-
-        if (string.IsNullOrWhiteSpace(input.Prompt))
-        {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_PROMPT",
-                message = "Prompt is required.",
-            });
-        }
 
         var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
         if (!normalizedRequest.Succeeded)

@@ -94,18 +94,21 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleCommand_ShouldReturnBadRequest_WhenPromptMissing()
+    public async Task HandleCommand_ShouldAllowEmptyPrompt()
     {
+        var service = new FakeCommandDispatchService();
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
             new ChatInput { Prompt = " " },
-            new FakeCommandDispatchService(),
+            service,
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.Prompt.Should().BeEmpty();
     }
 
     [Fact]
@@ -151,17 +154,30 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldReturnBadRequest_WhenPromptMissing()
+    public async Task HandleChat_ShouldAllowEmptyPrompt()
     {
         var http = CreateHttpContext();
+        WorkflowChatRunRequest? lastRequest = null;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (request, _, _, _) =>
+            {
+                lastRequest = request;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.AgentNotFound));
+            },
+        };
 
         await WorkflowCapabilityEndpoints.HandleChat(
             http,
             new ChatInput { Prompt = "" },
-            new FakeCommandInteractionService(),
+            interactionService,
             CancellationToken.None);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        lastRequest.Should().NotBeNull();
+        lastRequest!.Prompt.Should().BeEmpty();
     }
 
     [Fact]

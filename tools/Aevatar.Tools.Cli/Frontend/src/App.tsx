@@ -702,6 +702,7 @@ function App() {
   const [executionTrace, setExecutionTrace] = useState<ExecutionTrace | null>(null);
   const [activeExecutionLogIndex, setActiveExecutionLogIndex] = useState<number | null>(null);
   const [executionPrompt, setExecutionPrompt] = useState('');
+  const [runModalOpen, setRunModalOpen] = useState(false);
   const [executionActionInput, setExecutionActionInput] = useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] = useState('');
   const [askAiOpen, setAskAiOpen] = useState(false);
@@ -769,27 +770,53 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const toCompactControlHint = (raw: string) => {
+      const cleaned = raw.replace(/\s+/g, ' ').replace(/[.!?]+$/g, '').trim();
+      if (!cleaned) {
+        return '';
+      }
+
+      const normalized = cleaned.toLowerCase();
+      if (normalized.startsWith('sign out')) {
+        return 'Sign out';
+      }
+      if (normalized.startsWith('sign in')) {
+        return 'Sign in';
+      }
+      if (normalized.startsWith('zoom in')) {
+        return 'Zoom in';
+      }
+      if (normalized.startsWith('zoom out')) {
+        return 'Zoom out';
+      }
+      if (normalized.startsWith('fit view')) {
+        return 'Fit view';
+      }
+
+      const words = cleaned.split(' ').filter(Boolean);
+      if (words.length <= 2) {
+        return words.join(' ');
+      }
+
+      if (['close', 'save', 'run', 'export', 'import', 'copy', 'validate', 'open', 'edit'].includes(words[0].toLowerCase())) {
+        return words[0];
+      }
+
+      return words.slice(0, 2).join(' ');
+    };
+
     const applyButtonHoverHints = () => {
-      document.querySelectorAll('button').forEach(button => {
-        const explicitHint = button.getAttribute('data-tooltip')?.trim();
-        if (explicitHint) {
-          if (button.getAttribute('title') !== explicitHint) {
-            button.setAttribute('title', explicitHint);
-          }
+      document.querySelectorAll<HTMLElement>('button, a.ghost-action, a.solid-action, a.panel-icon-button').forEach(control => {
+        const text = control.textContent?.replace(/\s+/g, ' ').trim() || '';
+        const ariaLabel = control.getAttribute('aria-label')?.trim() || '';
+        const existingTitle = control.getAttribute('title')?.trim() || '';
+        const explicitHint = control.getAttribute('data-tooltip')?.trim() || '';
+        const nextTitle = toCompactControlHint(text || ariaLabel || existingTitle || explicitHint);
+        if (!nextTitle || control.getAttribute('title') === nextTitle) {
           return;
         }
 
-        const existingTitle = button.getAttribute('title')?.trim();
-        if (existingTitle) {
-          return;
-        }
-
-        const text = button.textContent?.replace(/\s+/g, ' ').trim() || '';
-        if (!text) {
-          return;
-        }
-
-        button.setAttribute('title', text.length > 96 ? `${text.slice(0, 93)}...` : text);
+        control.setAttribute('title', nextTitle);
       });
     };
 
@@ -839,7 +866,6 @@ function App() {
   }, [
     workflowMeta.name,
     workflowMeta.description,
-    workflowMeta.closedWorldMode,
     roles,
     nodes,
     edges,
@@ -1204,14 +1230,15 @@ function App() {
     setAskAiOpen(false);
     setAskAiAnswer('');
     setAskAiGeneratedYaml('');
+    setRunModalOpen(false);
     setWorkflowMeta({
       workflowId: payload?.workflowId || null,
       directoryId: payload?.directoryId || workspaceSettings.directories[0]?.directoryId || null,
       fileName: payload?.fileName || '',
       filePath: payload?.filePath || '',
-      name: payload?.name || payload?.document?.name || payload?.rootWorkflow?.name || 'workflow_draft',
+      name: payload?.name || payload?.document?.name || payload?.rootWorkflow?.name || 'draft',
       description: payload?.document?.description || payload?.rootWorkflow?.description || '',
-      closedWorldMode: Boolean(payload?.document?.configuration?.closedWorldMode),
+      closedWorldMode: true,
       yaml: payload?.yaml || '',
       findings: Array.isArray(payload?.findings) ? payload.findings : [],
       dirty: false,
@@ -1297,9 +1324,9 @@ function App() {
         setSelectedNodeId(getPreferredSelectedNodeId(graph.nodes, preferredStepId));
         setWorkflowMeta(prev => ({
           ...prev,
-          name: parsed.document?.name || prev.name || 'workflow_draft',
+          name: parsed.document?.name || prev.name || 'draft',
           description: parsed.document?.description || '',
-          closedWorldMode: Boolean(parsed.document?.configuration?.closedWorldMode),
+          closedWorldMode: true,
           findings: revision === yamlEditRevisionRef.current ? findings : prev.findings,
           dirty: true,
           lastSavedAt: null,
@@ -1371,7 +1398,7 @@ function App() {
       const payload = await api.workspace.saveWorkflow({
         workflowId: workflowMeta.workflowId,
         directoryId,
-        workflowName: workflowMeta.name.trim() || 'workflow_draft',
+        workflowName: workflowMeta.name.trim() || 'draft',
         fileName: workflowMeta.fileName || null,
         yaml: serialized?.yaml || workflowMeta.yaml,
         layout: buildLayoutDocument(workflowMeta, nodes),
@@ -1387,13 +1414,26 @@ function App() {
 
   async function handleValidateWorkflow() {
     try {
-      const response = await api.editor.validate(
-        buildWorkflowDocument(workflowMeta, roles, nodes, edges),
-        workflowList.map(item => item.name),
-      );
+      const parsed = await api.editor.parseYaml(workflowMeta.yaml || '', workflowList.map(item => item.name));
+      const parseFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+      if (!parsed?.document) {
+        setWorkflowMeta(prev => ({
+          ...prev,
+          findings: parseFindings.length > 0 ? parseFindings : [{
+            level: 2,
+            message: 'YAML parse returned an empty document.',
+            path: '/',
+          }],
+        }));
+        toggleRightDrawer('yaml');
+        flash('Fix YAML errors before validating', 'error');
+        return;
+      }
+
+      const response = await api.editor.validate(parsed.document, workflowList.map(item => item.name));
       setWorkflowMeta(prev => ({
         ...prev,
-        findings: Array.isArray(response?.findings) ? response.findings : [],
+        findings: Array.isArray(response?.findings) ? response.findings : parseFindings,
       }));
       const errorCount = (response?.findings || []).filter((finding: ValidationFinding) => toFindingLevel(finding.level) === 'error').length;
       if (errorCount > 0) {
@@ -1450,7 +1490,7 @@ function App() {
           directoryId: workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId || null,
           name: parsed.document.name || file.name.replace(/\.ya?ml$/i, ''),
           description: parsed.document.description || '',
-          closedWorldMode: Boolean(parsed.document.configuration?.closedWorldMode),
+          closedWorldMode: true,
           yaml,
           findings: Array.isArray(parsed.findings) ? parsed.findings : [],
           dirty: true,
@@ -1483,12 +1523,13 @@ function App() {
     setExecutionDetail(null);
     setExecutionTrace(null);
     setActiveExecutionLogIndex(null);
+    setRunModalOpen(false);
     setWorkflowMeta(prev => ({
       ...prev,
       directoryId: prev.directoryId || workspaceSettings.directories[0]?.directoryId || null,
-      name: parsed.document?.name || prev.name || 'workflow_draft',
+      name: parsed.document?.name || prev.name || 'draft',
       description: parsed.document?.description || '',
-      closedWorldMode: Boolean(parsed.document?.configuration?.closedWorldMode),
+      closedWorldMode: true,
       yaml,
       findings: Array.isArray(parsed.findings) ? parsed.findings : [],
       dirty: true,
@@ -1552,16 +1593,16 @@ function App() {
     }
   }
 
-  async function handleRunWorkflow() {
-    try {
-      if (!executionPrompt.trim()) {
-        flash('Execution input is required', 'error');
-        return;
-      }
+  function handleRunWorkflow() {
+    setRunModalOpen(true);
+  }
 
+  async function handleConfirmRunWorkflow() {
+    try {
       const serialized = await serializeCurrentWorkflow();
       const errorCount = (serialized?.findings || []).filter((finding: ValidationFinding) => toFindingLevel(finding.level) === 'error').length;
       if (errorCount > 0) {
+        setRunModalOpen(false);
         toggleRightDrawer('yaml');
         setStudioView('editor');
         flash('Fix YAML errors before running', 'error');
@@ -1569,11 +1610,12 @@ function App() {
       }
 
       const detail = await api.executions.start({
-        workflowName: workflowMeta.name.trim() || 'workflow_draft',
+        workflowName: workflowMeta.name.trim() || 'draft',
         prompt: executionPrompt.trim(),
         workflowYamls: [serialized?.yaml || workflowMeta.yaml],
         runtimeBaseUrl: settingsState.runtimeBaseUrl,
       });
+      setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
       await loadExecutions(detail?.executionId || null);
@@ -2337,9 +2379,6 @@ function App() {
     background: 'var(--accent-icon-surface)',
     color: 'var(--accent)',
   } as const;
-  const accentTextStyle = {
-    color: 'var(--accent-text)',
-  } as const;
   const accentToggleStyle = {
     borderColor: 'var(--accent-border)',
     background: 'var(--accent-soft-end)',
@@ -2407,26 +2446,26 @@ function App() {
             <div className="panel-eyebrow">Catalog</div>
             <div className="panel-title !mt-0">Roles</div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => openRoleModal('catalog')}
-              className="solid-action"
-            >
-              <Plus size={14} /> Add
-            </button>
-            <button
-              onClick={handleSaveRoleCatalog}
-              className="ghost-action"
-            >
-              Save
-            </button>
-          </div>
         </header>
 
         <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
           <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="space-y-3">
+              <div className="catalog-sidebar-actions">
+                <button
+                  onClick={() => openRoleModal('catalog')}
+                  className="solid-action flex-1 justify-center"
+                >
+                  <Plus size={14} /> Add role
+                </button>
+                <button
+                  onClick={handleSaveRoleCatalog}
+                  className="ghost-action catalog-save-action"
+                >
+                  Save
+                </button>
+              </div>
+
               <div className="search-field">
                 <Search size={14} className="text-gray-400" />
                 <input
@@ -2613,26 +2652,26 @@ function App() {
             <div className="panel-eyebrow">Catalog</div>
             <div className="panel-title !mt-0">Connectors</div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => openConnectorModal('http')}
-              className="solid-action"
-            >
-              <Plus size={14} /> Add
-            </button>
-            <button
-              onClick={handleSaveConnectors}
-              className="ghost-action"
-            >
-              Save
-            </button>
-          </div>
         </header>
 
         <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
           <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="space-y-3">
+              <div className="catalog-sidebar-actions">
+                <button
+                  onClick={() => openConnectorModal('http')}
+                  className="solid-action flex-1 justify-center"
+                >
+                  <Plus size={14} /> Add connector
+                </button>
+                <button
+                  onClick={handleSaveConnectors}
+                  className="ghost-action catalog-save-action"
+                >
+                  Save
+                </button>
+              </div>
+
               <div className="search-field">
                 <Search size={14} className="text-gray-400" />
                 <input
@@ -2894,19 +2933,6 @@ function App() {
                 <div className="panel-eyebrow">Workspace</div>
                 <div className="panel-title !mt-0">Workflows</div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button onClick={handleImportWorkflow} className="ghost-action">
-                  <Upload size={14} /> Import
-                </button>
-                <button
-                  onClick={() => createNewWorkflow(workspaceSettings.directories[0]?.directoryId || workflowMeta.directoryId)}
-                  className="solid-action !w-[44px] !px-0 justify-center"
-                  title="Create workflow"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
             </header>
 
             <section className="flex-1 min-h-0 grid grid-cols-[320px_minmax(0,1fr)] bg-[#F2F1EE]">
@@ -2997,24 +3023,37 @@ function App() {
                       />
                     </div>
 
-                    <div className="inline-flex items-center gap-2 rounded-[18px] border border-[#E5E1DA] bg-white px-2 py-2 shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-                      <button
-                        type="button"
-                        onClick={() => setWorkflowLayout('grid')}
-                        data-tooltip="Show workflows in a grid."
-                        className="panel-icon-button"
-                        style={workflowLayout === 'grid' ? selectedIconSurfaceStyle : undefined}
-                      >
-                        <LayoutGrid size={15} />
+                    <div className="workflow-toolbar-actions">
+                      <div className="inline-flex items-center gap-2 rounded-[18px] border border-[#E5E1DA] bg-white px-2 py-2 shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
+                        <button
+                          type="button"
+                          onClick={() => setWorkflowLayout('grid')}
+                          data-tooltip="Show workflows in a grid."
+                          className="panel-icon-button"
+                          style={workflowLayout === 'grid' ? selectedIconSurfaceStyle : undefined}
+                        >
+                          <LayoutGrid size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWorkflowLayout('list')}
+                          data-tooltip="Show workflows in a list."
+                          className="panel-icon-button"
+                          style={workflowLayout === 'list' ? selectedIconSurfaceStyle : undefined}
+                        >
+                          <Rows3 size={15} />
+                        </button>
+                      </div>
+
+                      <button onClick={handleImportWorkflow} className="ghost-action">
+                        <Upload size={14} /> Import
                       </button>
                       <button
-                        type="button"
-                        onClick={() => setWorkflowLayout('list')}
-                        data-tooltip="Show workflows in a list."
-                        className="panel-icon-button"
-                        style={workflowLayout === 'list' ? selectedIconSurfaceStyle : undefined}
+                        onClick={() => createNewWorkflow(workspaceSettings.directories[0]?.directoryId || workflowMeta.directoryId)}
+                        className="solid-action"
+                        title="Create workflow"
                       >
-                        <Rows3 size={15} />
+                        <Plus size={16} /> New workflow
                       </button>
                     </div>
                   </div>
@@ -3026,7 +3065,7 @@ function App() {
                       <EmptyPanel
                         icon={<FileText size={18} className="text-gray-300" />}
                         title="No workflows"
-                        copy="Create a workflow from the top-right plus button."
+                        copy="Create a workflow with the New workflow button above."
                       />
                     </div>
                   ) : (
@@ -3242,7 +3281,7 @@ function App() {
                                 <div className="text-[13px] font-semibold text-gray-800 truncate">{provider.providerName}</div>
                                 <span
                                   className="text-[10px] uppercase tracking-wide text-gray-400"
-                                  style={settingsState.defaultProviderName === provider.providerName ? accentTextStyle : undefined}
+                                  style={settingsState.defaultProviderName === provider.providerName ? { color: 'var(--accent-text)' } : undefined}
                                 >
                                   {settingsState.defaultProviderName === provider.providerName ? 'default' : provider.providerType}
                                 </span>
@@ -3447,126 +3486,96 @@ function App() {
         ) : (
           <>
         <header className="studio-editor-header">
-          <div className="min-w-0 flex items-center gap-4 flex-1">
-            <div className="inline-flex p-1 rounded-[22px] bg-[#ECE8E2] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+          <div className="studio-editor-toolbar">
+            <div className="studio-view-switch">
               {(['editor', 'execution'] as StudioView[]).map(view => (
                 <button
                   key={view}
                   onClick={() => setStudioView(view)}
                   data-tooltip={view === 'editor' ? 'Edit the current workflow.' : 'Inspect past runs and logs.'}
-                  className={`px-6 py-3 rounded-[18px] text-[13px] font-semibold transition-all ${studioView === view ? 'bg-white text-gray-900 shadow-[0_10px_18px_rgba(17,24,39,0.08)]' : 'text-gray-500 hover:text-gray-700'}`}
+                  className={`studio-view-switch-button ${studioView === view ? 'active' : ''}`}
                 >
-                  {view === 'editor' ? 'Editor' : 'Execution'}
+                  {view === 'editor' ? 'Edit' : 'Runs'}
                 </button>
               ))}
             </div>
 
-            <div className="studio-title-group">
-              <input
-                className="studio-title-input"
-                value={workflowMeta.name}
-                onChange={event => {
-                  setWorkflowMeta(prev => ({ ...prev, name: event.target.value }));
-                  markDirty();
-                }}
-                placeholder="workflow_name"
-              />
-              <InfoPopover
-                title="Description"
-                align="left"
-                buttonTooltip="Edit the workflow description."
-                buttonClassName="header-help-button"
-                cardClassName="header-help-card header-description-card"
-                hideTitle
-                content={(
-                  <textarea
-                    rows={5}
-                    className="panel-textarea description-editor"
-                    value={workflowMeta.description}
-                    placeholder="Workflow description"
-                    onChange={event => {
-                      setWorkflowMeta(prev => ({ ...prev, description: event.target.value }));
-                      markDirty();
-                    }}
-                  />
-                )}
-              />
-            </div>
-            <button
-              onClick={handleSaveWorkflow}
-              data-tooltip="Save the workflow to the selected directory."
-              className="solid-action header-save-action"
-            >
-              <FileText size={14} /> Save
-            </button>
-          </div>
-
-          <div className="studio-header-actions">
-            <div className="header-input-card">
-              <div className="header-input-card-top">
-                <span className="header-input-card-label">Input</span>
+            <div className="studio-title-bar">
+              <div className="studio-title-group">
+                <input
+                  className="studio-title-input"
+                  value={workflowMeta.name}
+                  onChange={event => {
+                    setWorkflowMeta(prev => ({ ...prev, name: event.target.value }));
+                    markDirty();
+                  }}
+                  placeholder="draft"
+                  aria-label="Workflow title"
+                />
                 <InfoPopover
-                  title="Execution input"
-                  align="right"
-                  buttonTooltip="See how input is passed into the workflow."
-                  buttonClassName="header-help-button header-help-button-compact"
-                  cardClassName="header-help-card"
+                  title="Description"
+                  align="left"
+                  buttonTooltip="Edit the workflow description."
+                  buttonClassName="header-help-button"
+                  cardClassName="header-help-card header-description-card"
+                  hideTitle
                   content={(
-                    <p className="text-[12px] leading-6 text-gray-600">Mapped to the runtime prompt and workflow `$input`.</p>
+                    <textarea
+                      rows={5}
+                      className="panel-textarea description-editor"
+                      value={workflowMeta.description}
+                      placeholder="Workflow description"
+                      onChange={event => {
+                        setWorkflowMeta(prev => ({ ...prev, description: event.target.value }));
+                        markDirty();
+                      }}
+                    />
                   )}
                 />
               </div>
-              <input
-                className="header-input-card-field"
-                value={executionPrompt}
-                onChange={event => setExecutionPrompt(event.target.value)}
-                placeholder="Initial input ($input)"
-              />
+
+              <div className="studio-header-actions">
+                <button
+                  onClick={handleSaveWorkflow}
+                  data-tooltip="Save"
+                  aria-label="Save"
+                  className="panel-icon-button header-toolbar-action header-save-action"
+                >
+                  <Check size={15} />
+                </button>
+                <button
+                  onClick={handleExportWorkflow}
+                  data-tooltip="Export"
+                  aria-label="Export"
+                  className="panel-icon-button header-toolbar-action header-export-action"
+                >
+                  <Upload size={15} />
+                </button>
+                <button
+                  onClick={handleRunWorkflow}
+                  data-tooltip="Run"
+                  aria-label="Run"
+                  className="panel-icon-button header-toolbar-action header-run-action"
+                >
+                  <Play size={15} />
+                </button>
+              </div>
             </div>
-            <div
-              className="header-toggle-card"
-              style={workflowMeta.closedWorldMode ? accentToggleStyle : undefined}
-            >
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={workflowMeta.closedWorldMode}
-                  onChange={event => {
-                    setWorkflowMeta(prev => ({ ...prev, closedWorldMode: event.target.checked }));
-                    markDirty();
-                  }}
-                />
-                Deterministic
-              </label>
-              <InfoPopover
-                title="Deterministic mode"
-                align="right"
-                buttonTooltip="See what deterministic mode changes."
-                buttonClassName="header-help-button header-help-button-compact"
-                cardClassName="header-help-card"
-                content={(
-                  <p className="text-[12px] leading-6 text-gray-600">Restrict the workflow to deterministic primitives.</p>
-                )}
-              />
-            </div>
-            <button onClick={handleValidateWorkflow} data-tooltip="Validate the current workflow." className="ghost-action"><Shield size={14} /> Validate</button>
-            <button onClick={handleExportWorkflow} data-tooltip="Export the current workflow YAML." className="ghost-action"><Upload size={14} /> Export</button>
-            <button onClick={handleRunWorkflow} data-tooltip="Run the current workflow with the input above." className="solid-action"><Play size={14} /> Run</button>
           </div>
         </header>
 
         <section className="flex-1 min-h-0 relative overflow-hidden bg-[#F2F1EE]">
-          <div className="absolute left-5 top-5 z-20 flex items-center gap-2">
-            <div className="rounded-[18px] border border-[#E6E3DE] bg-white/90 backdrop-blur px-4 py-2 shadow-[0_16px_34px_rgba(17,24,39,0.06)]">
-              <div className="text-[11px] text-gray-400">{activeWorkflowDirectory?.label || 'No directory'}</div>
-              <div className="text-[13px] font-semibold text-gray-800">{nodes.length} nodes · {edges.length} edges</div>
+          <div className="canvas-overlay-stack">
+            <div className="canvas-meta-card">
+              <div className="canvas-meta-label">{activeWorkflowDirectory?.label || 'No directory'}</div>
+              <div className="canvas-meta-value">{nodes.length} nodes · {edges.length} edges</div>
             </div>
 
             {studioView === 'execution' ? (
-              <div className="rounded-[18px] border border-[#E6E3DE] bg-white/90 backdrop-blur px-4 py-2 shadow-[0_16px_34px_rgba(17,24,39,0.06)] min-w-[240px]">
-                <div className="text-[11px] text-gray-400">Run</div>
+              <div className="canvas-meta-card canvas-meta-card-wide">
+                <div className="canvas-meta-label">Run</div>
                 <select
-                  className="bg-transparent outline-none text-[13px] font-semibold text-gray-800 w-full"
+                  className="canvas-meta-select"
                   value={selectedExecutionId || ''}
                   onChange={event => {
                     if (event.target.value) {
@@ -3585,15 +3594,9 @@ function App() {
             ) : null}
           </div>
 
-          <div className="absolute right-5 top-[96px] z-20 flex items-center gap-2">
+          <div className="canvas-overlay-tools">
             {studioView === 'editor' ? (
               <>
-                <DrawerIconButton
-                  active={rightPanelOpen && rightPanelTab === 'node'}
-                  label="Node"
-                  icon={<Boxes size={16} />}
-                  onClick={() => toggleRightDrawer('node')}
-                />
                 <DrawerIconButton
                   active={rightPanelOpen && rightPanelTab === 'roles'}
                   label="Roles"
@@ -3873,16 +3876,16 @@ function App() {
             elementsSelectable
             className="studio-canvas"
           >
-            <Background color="#D9D0C4" variant={BackgroundVariant.Dots} gap={20} size={1.15} />
+            <Background color="#D8D2C8" variant={BackgroundVariant.Dots} gap={24} size={1} />
             <MiniMap
               position="bottom-left"
               zoomable
               pannable
               className="studio-minimap"
-              style={{ width: 176, height: 120, marginLeft: 18, marginBottom: 94 }}
-              maskColor="rgba(255, 255, 255, 0.72)"
-              bgColor="rgba(250, 248, 244, 0.96)"
-              nodeBorderRadius={6}
+              style={{ width: 164, height: 108, marginLeft: 16, marginBottom: 88 }}
+              maskColor="rgba(255, 255, 255, 0.76)"
+              bgColor="rgba(248, 247, 244, 0.98)"
+              nodeBorderRadius={8}
               nodeColor={node => {
                 const stepType = typeof node.data?.stepType === 'string' ? node.data.stepType : '';
                 return getCategoryForType(stepType).color;
@@ -4377,7 +4380,10 @@ function App() {
                         <div className="text-[14px] font-semibold text-gray-800">YAML</div>
                         <div className="text-[12px] text-gray-400">Edit YAML to update the canvas</div>
                       </div>
-                      <button onClick={handleCopyYaml} className="ghost-action !px-3"><Copy size={14} /> Copy</button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={handleValidateWorkflow} className="ghost-action !px-3"><Shield size={14} /> Validate</button>
+                        <button onClick={handleCopyYaml} className="ghost-action !px-3"><Copy size={14} /> Copy</button>
+                      </div>
                     </div>
 
                     <textarea
@@ -4557,6 +4563,33 @@ function App() {
           </>
         )}
       </main>
+
+      <ModalShell
+        open={runModalOpen}
+        title="Run"
+        onClose={() => setRunModalOpen(false)}
+        actions={(
+          <>
+            <button onClick={() => setRunModalOpen(false)} className="ghost-action">Cancel</button>
+            <button onClick={() => { void handleConfirmRunWorkflow(); }} className="solid-action">
+              <Play size={14} /> Run
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-[12px] text-gray-500">
+            Optional input will be passed into the workflow as `$input`.
+          </div>
+          <textarea
+            rows={6}
+            className="panel-textarea run-prompt-textarea"
+            value={executionPrompt}
+            placeholder="What should this run do?"
+            onChange={event => setExecutionPrompt(event.target.value)}
+          />
+        </div>
+      </ModalShell>
 
       <ModalShell
         open={connectorModalOpen}

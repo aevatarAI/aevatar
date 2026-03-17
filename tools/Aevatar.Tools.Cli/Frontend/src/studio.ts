@@ -237,9 +237,9 @@ export function createEmptyWorkflowMeta(): WorkflowMetaState {
     directoryId: null,
     fileName: '',
     filePath: '',
-    name: 'workflow_draft',
+    name: 'draft',
     description: '',
-    closedWorldMode: false,
+    closedWorldMode: true,
     yaml: '',
     findings: [],
     dirty: false,
@@ -632,10 +632,10 @@ export function buildWorkflowDocument(
   });
 
   return {
-    name: meta.name.trim() || 'workflow_draft',
+    name: meta.name.trim() || 'draft',
     description: meta.description.trim(),
     configuration: {
-      closedWorldMode: meta.closedWorldMode,
+      closedWorldMode: true,
     },
     roles: roles
       .filter(role => role.id.trim())
@@ -697,7 +697,7 @@ export function buildLayoutDocument(meta: WorkflowMetaState, nodes: Array<Node<S
     layoutVersion: 2,
     groups: {},
     collapsed: [],
-    entryWorkflow: meta.name.trim() || 'workflow_draft',
+    entryWorkflow: meta.name.trim() || 'draft',
   };
 }
 

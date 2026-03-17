@@ -108,12 +108,14 @@ internal static class AppBridgeEndpoints
             return;
         }
 
-        if (request == null || string.IsNullOrWhiteSpace(request.Prompt))
+        if (request == null)
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(new { code = "INVALID_REQUEST", message = "prompt is required." }, cancellationToken);
+            await context.Response.WriteAsJsonAsync(new { code = "INVALID_REQUEST", message = "request is required." }, cancellationToken);
             return;
         }
+
+        request = request with { Prompt = request.Prompt ?? string.Empty };
 
         context.Response.Headers["Content-Type"] = "text/event-stream";
         context.Response.Headers["Cache-Control"] = "no-cache";
