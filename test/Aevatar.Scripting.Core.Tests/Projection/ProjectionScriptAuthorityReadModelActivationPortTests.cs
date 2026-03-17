@@ -33,7 +33,7 @@ public sealed class ProjectionScriptAuthorityReadModelActivationPortTests
             .WithMessage("*script-definition:script-2*");
     }
 
-    private static ScriptAuthorityProjectionPortService CreateProjectionPort(
+    private static ScriptAuthorityProjectionPort CreateProjectionPort(
         StubActivationService activationService) =>
         new(
             activationService,

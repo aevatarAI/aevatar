@@ -73,7 +73,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         searchRequest.PathAndQuery.Should().EndWith("/_search");
         searchRequest.Body.Should().Contain("\"sort\"");
         searchRequest.Body.Should().Contain("\"CreatedAt\"");
-        searchRequest.Body.Should().Contain("\"_id\"");
+        searchRequest.Body.Should().Contain("\"ProjectionDocumentId\"");
     }
 
     [Fact]
@@ -143,10 +143,46 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_create/actor-1");
         handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"ProjectionDocumentId\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"type\":\"keyword\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"number_of_shards\":1");
         handler.CapturedRequests[0].Body.Should().Contain("\"projection-core-tests-alias\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
+        handler.CapturedRequests[2].Body.Should().Contain("\"ProjectionDocumentId\":\"actor-1\"");
+    }
+
+    [Fact]
+    public void Constructor_WhenStableSortFieldMappingIsNotKeyword_ShouldThrow()
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = false,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        Action act = () => _ = new ElasticsearchProjectionDocumentStore<StoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["ProjectionDocumentId"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "long",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: new ScriptedHttpMessageHandler());
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ProjectionDocumentId*keyword*");
     }
 
     [Fact]
