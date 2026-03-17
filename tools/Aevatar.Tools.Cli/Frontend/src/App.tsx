@@ -139,8 +139,10 @@ type SettingsSection = 'runtime' | 'llm' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
+type AppHostMode = 'embedded' | 'proxy';
 
 type AppContextState = {
+  hostMode: AppHostMode;
   scopeId: string | null;
   scopeResolved: boolean;
   scopeSource: string;
@@ -226,6 +228,7 @@ const DEFAULT_RUNTIME_BASE_URL =
 
 function createEmptyAppContext(): AppContextState {
   return {
+    hostMode: 'embedded',
     scopeId: null,
     scopeResolved: false,
     scopeSource: '',
@@ -968,6 +971,7 @@ function App() {
       const nextRuntime = settings?.runtimeBaseUrl || workspace?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 
       setAppContext({
+        hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
         scopeId: resolvedScopeId,
         scopeResolved: Boolean(resolvedScopeId),
         scopeSource: context?.scopeSource || '',
@@ -1231,6 +1235,7 @@ function App() {
       api.workspace.getSettings(),
     ]);
     setAppContext({
+      hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
       scopeId: context?.scopeResolved && context?.scopeId ? context.scopeId : null,
       scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
       scopeSource: context?.scopeSource || '',
@@ -1638,17 +1643,26 @@ function App() {
         return;
       }
 
+      const shouldRunPublishedWorkflow =
+        appContext.workflowStorageMode === 'scope' &&
+        Boolean(appContext.scopeId) &&
+        Boolean(workflowMeta.workflowId) &&
+        !workflowMeta.dirty;
+
       const detail = await api.executions.start({
         workflowName: workflowMeta.name.trim() || 'draft',
         prompt: executionPrompt.trim(),
         workflowYamls: [serialized?.yaml || workflowMeta.yaml],
-        runtimeBaseUrl: settingsState.runtimeBaseUrl,
+        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        scopeId: shouldRunPublishedWorkflow ? appContext.scopeId : null,
+        workflowId: shouldRunPublishedWorkflow ? workflowMeta.workflowId : null,
+        eventFormat: shouldRunPublishedWorkflow ? 'workflow' : null,
       });
       setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
       await loadExecutions(detail?.executionId || null);
-      flash('Execution started', 'success');
+      flash(shouldRunPublishedWorkflow ? 'Published workflow run started' : 'Execution started', 'success');
     } catch (error: any) {
       flash(error?.message || 'Execution failed', 'error');
     }
@@ -2063,7 +2077,7 @@ function App() {
   async function handleSaveSettings() {
     try {
       const response = await api.settings.save({
-        runtimeBaseUrl: settingsState.runtimeBaseUrl,
+        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
         appearanceTheme: settingsState.appearanceTheme,
         colorMode: settingsState.colorMode,
         defaultProviderName: settingsState.defaultProviderName || null,
@@ -2112,7 +2126,7 @@ function App() {
       });
 
       const response = await api.settings.testRuntime({
-        runtimeBaseUrl: settingsState.runtimeBaseUrl,
+        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
       });
 
       setRuntimeTestState({
@@ -3202,9 +3216,17 @@ function App() {
                     </div>
 
                     <div className="settings-section-card space-y-5">
+                      {appContext.hostMode === 'embedded' ? (
+                        <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">
+                          Embedded mode runs against the in-memory local mainnet hosted by `aevatar app`.
+                        </div>
+                      ) : null}
+
                       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
                         <div>
-                          <label className="field-label">Runtime base URL</label>
+                          <label className="field-label">
+                            {appContext.hostMode === 'embedded' ? 'Local mainnet URL' : 'Runtime base URL'}
+                          </label>
                           <input
                             className="panel-input mt-1"
                             value={settingsState.runtimeBaseUrl}
@@ -3217,6 +3239,7 @@ function App() {
                               });
                             }}
                             placeholder={DEFAULT_RUNTIME_BASE_URL}
+                            readOnly={appContext.hostMode === 'embedded'}
                           />
                         </div>
                         <button
@@ -3224,10 +3247,18 @@ function App() {
                           className="ghost-action justify-center"
                           disabled={runtimeTestState.status === 'testing'}
                         >
-                          {runtimeTestState.status === 'testing' ? 'Testing...' : 'Test connection'}
+                          {runtimeTestState.status === 'testing'
+                            ? 'Testing...'
+                            : appContext.hostMode === 'embedded'
+                              ? 'Test local mainnet'
+                              : 'Test connection'}
                         </button>
-                        <button onClick={handleSaveSettings} className="solid-action justify-center">
-                          Save runtime
+                        <button
+                          onClick={handleSaveSettings}
+                          className="solid-action justify-center"
+                          disabled={appContext.hostMode === 'embedded'}
+                        >
+                          {appContext.hostMode === 'embedded' ? 'Managed locally' : 'Save runtime'}
                         </button>
                       </div>
 

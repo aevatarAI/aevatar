@@ -7,13 +7,15 @@ namespace Aevatar.Tools.Cli.Studio.Application.Services;
 
 public sealed class ExecutionService
 {
-    private static readonly HttpClient RuntimeClient = new();
+    private const string BackendClientName = "AppBridgeBackend";
 
     private readonly IStudioWorkspaceStore _store;
+    private readonly IHttpClientFactory _httpClientFactory;
 
-    public ExecutionService(IStudioWorkspaceStore store)
+    public ExecutionService(IStudioWorkspaceStore store, IHttpClientFactory httpClientFactory)
     {
         _store = store;
+        _httpClientFactory = httpClientFactory;
     }
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -53,18 +55,12 @@ public sealed class ExecutionService
 
         await _store.SaveExecutionAsync(record, cancellationToken);
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{runtimeBaseUrl}/api/chat");
-        httpRequest.Headers.Accept.ParseAdd("text/event-stream");
-        httpRequest.Content = JsonContent.Create(new
-        {
-            prompt = request.Prompt,
-            workflow = record.WorkflowName,
-            workflowYamls = request.WorkflowYamls,
-        });
+        using var httpRequest = BuildStartExecutionRequest(runtimeBaseUrl, request, record);
+        var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
 
         try
         {
-            using var response = await RuntimeClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var response = await runtimeClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -168,7 +164,8 @@ public sealed class ExecutionService
             metadata = request.Metadata,
         });
 
-        using var response = await RuntimeClient.SendAsync(httpRequest, cancellationToken);
+        var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
+        using var response = await runtimeClient.SendAsync(httpRequest, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -316,6 +313,43 @@ public sealed class ExecutionService
 
         return "completed";
     }
+
+    private static HttpRequestMessage BuildStartExecutionRequest(
+        string runtimeBaseUrl,
+        StartExecutionRequest request,
+        StoredExecutionRecord record)
+    {
+        var normalizedBaseUrl = runtimeBaseUrl.TrimEnd('/');
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{normalizedBaseUrl}/api/chat");
+        httpRequest.Headers.Accept.ParseAdd("text/event-stream");
+
+        if (ShouldUsePublishedWorkflowRun(request))
+        {
+            var scopeId = request.ScopeId!.Trim();
+            var workflowId = request.WorkflowId!.Trim();
+            httpRequest.RequestUri = new Uri(
+                $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream",
+                UriKind.Absolute);
+            httpRequest.Content = JsonContent.Create(new
+            {
+                prompt = request.Prompt,
+                eventFormat = string.IsNullOrWhiteSpace(request.EventFormat) ? "workflow" : request.EventFormat.Trim(),
+            });
+            return httpRequest;
+        }
+
+        httpRequest.Content = JsonContent.Create(new
+        {
+            prompt = request.Prompt,
+            workflow = record.WorkflowName,
+            workflowYamls = request.WorkflowYamls,
+        });
+        return httpRequest;
+    }
+
+    private static bool ShouldUsePublishedWorkflowRun(StartExecutionRequest request) =>
+        !string.IsNullOrWhiteSpace(request.ScopeId) &&
+        !string.IsNullOrWhiteSpace(request.WorkflowId);
 
     private static string BuildStudioResumeFrame(
         string actorId,

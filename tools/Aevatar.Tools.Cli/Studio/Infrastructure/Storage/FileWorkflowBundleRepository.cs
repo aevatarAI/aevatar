@@ -107,6 +107,7 @@ internal static class StudioStorageOptionsExtensions
         {
             RootDirectory = rootDirectory,
             DefaultRuntimeBaseUrl = options.DefaultRuntimeBaseUrl,
+            ForceLocalRuntime = options.ForceLocalRuntime,
         };
     }
 }

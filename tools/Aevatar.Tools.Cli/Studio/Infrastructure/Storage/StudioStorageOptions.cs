@@ -6,4 +6,6 @@ public sealed class StudioStorageOptions
         Path.Combine(AppContext.BaseDirectory, "App_Data", "bundles");
 
     public string DefaultRuntimeBaseUrl { get; set; } = "http://127.0.0.1:5100";
+
+    public bool ForceLocalRuntime { get; set; }
 }

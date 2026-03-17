@@ -1,20 +1,17 @@
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.Scripting.Hosting.CapabilityApi;
 using Aevatar.Tools.Cli.Bridge;
 using Aevatar.Tools.Cli.Studio.Application.DependencyInjection;
 using Aevatar.Tools.Cli.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
-using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Sdk;
 using Aevatar.Workflow.Sdk.Options;
@@ -131,22 +128,27 @@ internal static class AppToolHost
         builder.Services.Configure<StudioStorageOptions>(storage =>
         {
             storage.DefaultRuntimeBaseUrl = localUrl;
+            storage.ForceLocalRuntime = embeddedWorkflowMode;
         });
 
         if (embeddedWorkflowMode)
         {
-            builder.Services.AddAevatarBootstrap(builder.Configuration);
-            builder.Services.AddAevatarAIFeatures(builder.Configuration, ai =>
+            builder.AddAevatarDefaultHost(options =>
             {
-                ai.EnableMEAIProviders = true;
-                ai.EnableMEAIToTornadoFailover = true;
-                ai.EnableReloadableProviderFactory = true;
-                ai.EnableMCPTools = true;
-                ai.EnableSkills = true;
+                options.ServiceName = "aevatar.app";
+                options.EnableWebSockets = true;
+                options.EnableConnectorBootstrap = false;
             });
-            builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
-            builder.Services.AddWorkflowCapability(builder.Configuration);
-            builder.Services.AddGAgentServiceCapability(builder.Configuration);
+            builder.AddAevatarPlatform(options =>
+            {
+                options.EnableMakerExtensions = true;
+                options.ConfigureAIFeatures = ai =>
+                {
+                    ai.EnableMEAIToTornadoFailover = true;
+                    ai.EnableReloadableProviderFactory = true;
+                };
+            });
+            builder.AddGAgentServiceCapabilityBundle();
             builder.Services.AddWorkflowBridgeExtensions();
             builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
             {
@@ -176,6 +178,9 @@ internal static class AppToolHost
         app.MapControllers();
         app.MapNyxIdAppEndpoints(nyxIdAuthEnabled);
 
+        if (embeddedWorkflowMode)
+            app.UseAevatarDefaultHost();
+
         app.MapGet(
             "/api/app/health",
             () => Results.Json(new
@@ -187,13 +192,6 @@ internal static class AppToolHost
             }));
 
         AppDemoPlaygroundEndpoints.Map(app, embeddedWorkflowMode);
-
-        if (embeddedWorkflowMode)
-        {
-            app.MapWorkflowChatInteractionEndpoints();
-            app.MapScopeWorkflowCapabilityEndpoints();
-            app.MapScriptCapabilityEndpoints();
-        }
 
         AppBridgeEndpoints.Map(app, new AppBridgeRouteOptions
         {
