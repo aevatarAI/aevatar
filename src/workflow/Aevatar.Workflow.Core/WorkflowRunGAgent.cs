@@ -22,6 +22,7 @@ public sealed class WorkflowRunGAgent
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
+    private const string StoppedStatus = "stopped";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -321,6 +322,7 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _executionItems.Clear();
+        DisableExecutionModules();
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -343,6 +345,60 @@ public sealed class WorkflowRunGAgent
         await PublishAsync(new TextMessageEndEvent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
+        }, TopologyAudience.Parent);
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowStopped(WorkflowStoppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var runId = string.IsNullOrWhiteSpace(evt.RunId)
+            ? RunId
+            : WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, runId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Ignore WorkflowStoppedEvent with mismatched run id. actor={ActorId} stateRun={StateRunId} eventRun={EventRunId}",
+                Id,
+                State.RunId,
+                runId);
+            return;
+        }
+
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogInformation(
+                "Ignore WorkflowStoppedEvent for terminal run. actor={ActorId} run={RunId} status={Status}",
+                Id,
+                runId,
+                State.Status);
+            return;
+        }
+
+        var persistedEvent = new WorkflowStoppedEvent
+        {
+            WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? State.WorkflowName : evt.WorkflowName,
+            RunId = runId,
+            Reason = evt.Reason ?? string.Empty,
+        };
+
+        await PersistDomainEventAsync(persistedEvent);
+        await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, State, CancellationToken.None);
+        await CleanupRoleAgentTreeAsync(CancellationToken.None);
+        _executionItems.Clear();
+        DisableExecutionModules();
+
+        Logger.LogInformation(
+            "Workflow run {Name} stopped: run={RunId} reason={Reason}",
+            persistedEvent.WorkflowName,
+            runId,
+            string.IsNullOrWhiteSpace(persistedEvent.Reason) ? "(none)" : persistedEvent.Reason);
+
+        await PublishAsync(new TextMessageEndEvent
+        {
+            Content = BuildStoppedMessage(persistedEvent.Reason),
         }, TopologyAudience.Parent);
     }
 
@@ -435,6 +491,16 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogDebug(
+                "Workflow run is terminal; skipping module installation for actor {ActorId} status={Status}.",
+                Id,
+                State.Status);
+            SetModules([]);
+            return;
+        }
+
         if (_moduleDependencyExpanders.Count == 0)
         {
             SetModules(
@@ -476,6 +542,8 @@ public sealed class WorkflowRunGAgent
         SetModules(workflowModules);
     }
 
+    private void DisableExecutionModules() => SetModules([]);
+
     private void ConfigureModule(IEventModule<IWorkflowExecutionContext> module)
     {
         if (_compiledWorkflow == null)
@@ -492,6 +560,7 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
+            .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
@@ -573,6 +642,19 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowStopped(WorkflowRunState current, WorkflowStoppedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = StoppedStatus;
+        next.FinalOutput = string.Empty;
+        next.FinalError = evt.Reason ?? string.Empty;
+        next.ExecutionStates.Clear();
+        next.PendingSubWorkflowInvocations.Clear();
+        next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
+        next.PendingChildRunIdsByParentRunId.Clear();
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowCompleted(WorkflowRunState current, WorkflowCompletedEvent evt)
     {
         var next = current.Clone();
@@ -581,6 +663,22 @@ public sealed class WorkflowRunGAgent
         next.FinalError = evt.Error ?? string.Empty;
         return next;
     }
+
+    private static bool IsTerminalStatus(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
+        {
+            CompletedStatus => true,
+            FailedStatus => true,
+            StoppedStatus => true,
+            _ => false,
+        };
+    }
+
+    private static string BuildStoppedMessage(string? reason) =>
+        string.IsNullOrWhiteSpace(reason)
+            ? "Workflow execution stopped."
+            : $"Workflow execution stopped: {reason}";
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
     {

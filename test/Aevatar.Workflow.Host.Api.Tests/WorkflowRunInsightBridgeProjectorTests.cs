@@ -318,6 +318,41 @@ public class WorkflowRunInsightBridgeProjectorTests
     }
 
     [Fact]
+    public async Task Projector_ShouldApplyWorkflowStoppedEvent()
+    {
+        var harness = CreateHarness();
+        var store = harness.Store;
+        var projector = harness.Projector;
+        var coordinator = new ProjectionCoordinator<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>([projector]);
+
+        var context = new WorkflowExecutionProjectionContext
+        {
+            ProjectionId = "projection-stopped",
+            CommandId = "cmd-stopped",
+            RootActorId = "root",
+            WorkflowName = "direct",
+            StartedAt = DateTimeOffset.UtcNow,
+            Input = "hello",
+        };
+
+        await coordinator.InitializeAsync(context);
+        await coordinator.ProjectAsync(context, WrapCommitted(new WorkflowStoppedEvent
+        {
+            WorkflowName = "direct",
+            RunId = "run-1",
+            Reason = "user requested stop",
+        }, version: 1));
+        await coordinator.CompleteAsync(context, []);
+
+        await store.WaitForTimelineStageAsync("root", "workflow.stopped", TimeSpan.FromSeconds(5));
+        var report = await store.GetAsync("root");
+        report.Should().NotBeNull();
+        report!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
+        report.FinalError.Should().Be("user requested stop");
+        report.Timeline.Should().ContainSingle(x => x.Stage == "workflow.stopped");
+    }
+
+    [Fact]
     public async Task Projector_ShouldUseEnvelopeTimestamp_WhenProvided()
     {
         var harness = CreateHarness(new SystemProjectionClock());

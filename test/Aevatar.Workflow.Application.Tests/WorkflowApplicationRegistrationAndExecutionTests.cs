@@ -197,6 +197,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
     }
 
     [Fact]
@@ -238,7 +241,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
-                [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
+                [WorkflowRunCommandMetadataKeys.ScopeId] = "u-1001",
             });
 
         var envelope = factory.CreateEnvelope(command, context);
@@ -251,7 +254,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
-        request.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
+        request.Metadata[WorkflowRunCommandMetadataKeys.ScopeId].Should().Be("u-1001");
         request.Metadata["source"].Should().Be("headers");
     }
 

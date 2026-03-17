@@ -4,9 +4,9 @@
 
 我们要把下面这条业务主链真正跑通：
 
-1. 每个用户有外部分配的 `UserId`
-2. 用户上传一份 workflow YAML，最终落到某个 `WorkflowGAgent` 的状态里
-3. 同一个用户可以拥有多个 workflow definition，并且外部能通过 `UserId` 查到当前生效的 definition actor
+1. 每个 scope 有外部分配的 `ScopeId`
+2. scope 上传一份 workflow YAML，最终落到某个 `WorkflowGAgent` 的状态里
+3. 同一个 scope 可以拥有多个 workflow definition，并且外部能通过 `ScopeId` 查到当前生效的 definition actor
 4. 外部可以指定某个 definition actor，创建 `WorkflowRunGAgent` 并执行
 5. 执行过程中可以实时拿到状态和事件，断线后还能继续从 readmodel 查询
 
@@ -14,9 +14,9 @@
 
 对比原始方案和当前框架现状后，最优解不是把 `user_id` 扩进 `WorkflowGAgent` 的领域事件或 `WorkflowActorBindingDocument`，而是：
 
-- `GAgentService` 负责 definition 的归属、版本、激活和用户维度索引
+- `GAgentService` 负责 definition 的归属、版本、激活和 scope 维度索引
 - `Workflow Capability` 负责 run 的创建、执行、SSE/WS 实时事件和 run readmodel 查询
-- 用户维度 API 只做一层薄编排，不直接读取 runtime state，也不在中间层维护 `UserId -> ActorId` 进程内字典
+- scope 维度 API 只做一层薄编排，不直接读取 runtime state，也不在中间层维护 `ScopeId -> ActorId` 进程内字典
 
 实现落点上，这层“用户 workflow 编排”不再放在 `workflow` 模块里，也不直接留在 `Hosting` 端点层。  
 它现在下沉到 `platform/Aevatar.GAgentService.Application`，由 `platform/Aevatar.GAgentService.Hosting` 只做 HTTP 组合与转发。  
@@ -52,7 +52,7 @@
 
 其中：
 
-- `user-scope-token` 不是原始 `UserId`，而是一个可逆需求外、内部稳定的安全 token，用来避免把任意外部 `UserId` 直接放进 `service key / actor id`
+- `scope-token` 不是原始 `ScopeId`，而是一个可逆需求外、内部稳定的安全 token，用来避免把任意外部 `ScopeId` 直接放进 `service key / actor id`
 - 当前实现采用“slug + hash”生成 token，既稳定，又能在 actor/service key 里安全使用
 
 ### 2. definition actor 的生成
@@ -73,7 +73,7 @@
 
 ### 1. 创建或更新用户 workflow definition
 
-`PUT /api/users/{userId}/workflows/{workflowId}`
+`PUT /api/scopes/{scopeId}/workflows/{workflowId}`
 
 请求体：
 
@@ -105,9 +105,9 @@
 - YAML 最终通过激活链路绑定进真正的 `WorkflowGAgent.State`
 - 返回当前 revision、definition actor prefix、预期 active actor id，以及当前 service summary
 
-### 2. 查询某个用户拥有的 workflow definitions
+### 2. 查询某个 scope 拥有的 workflow definitions
 
-`GET /api/users/{userId}/workflows`
+`GET /api/scopes/{scopeId}/workflows`
 
 内部查询：
 
@@ -125,7 +125,7 @@
 
 ### 3. 从指定 definition actor 启动 run 并以 SSE 实时返回
 
-`POST /api/users/{userId}/workflow-runs:stream`
+`POST /api/scopes/{scopeId}/workflow-runs:stream`
 
 请求体：
 
@@ -142,7 +142,7 @@
 
 内部顺序：
 
-1. 先用 `UserId + actorId` 做 ownership 校验
+1. 先用 `ScopeId + actorId` 做 ownership 校验
 2. 校验通过后，直接转发到现有 `/api/chat` 主链：
    - `Prompt -> prompt`
    - `ActorId -> agentId`
@@ -224,7 +224,7 @@ run 创建后，继续复用现有查询端点：
 
 这次先把主流程跑通了。下一步如果要继续补齐，可以按这个顺序推进：
 
-1. 增加 `GET /api/users/{userId}/workflows/{workflowId}` 单项查询
+1. 增加 `GET /api/scopes/{scopeId}/workflows/{workflowId}` 单项查询
 2. 增加用户级 `resume/signal` 包装端点
 3. 如果外部需要纯 JSON 启动而不是 SSE，再补一个 detached run 启动入口
 4. 如果后续要支持非 chat 语义的 workflow run，再扩展 `GAgentService` 的 workflow endpoint 模型，而不是把新语义塞进现有 `invoke/chat`

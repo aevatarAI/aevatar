@@ -54,6 +54,10 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/workflows/stop", HandleStop)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
     }
 
     public static async Task HandleChat(
@@ -303,6 +307,61 @@ public static class WorkflowCapabilityEndpoints
                 runId = dispatch.Receipt.RunId,
                 signalName,
                 stepId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.MarkError();
+            throw;
+        }
+    }
+
+    public static async Task<IResult> HandleStop(
+        WorkflowStopInput input,
+        [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
+        CancellationToken ct = default)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(stopService);
+
+        try
+        {
+            var actorId = (input.ActorId ?? string.Empty).Trim();
+            var runId = (input.RunId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
+            var reason = NormalizeOptional(input.Reason);
+            if (string.IsNullOrWhiteSpace(actorId) ||
+                string.IsNullOrWhiteSpace(runId))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = "actorId and runId are required." });
+            }
+
+            var dispatch = await stopService.DispatchAsync(
+                new WorkflowStopCommand(
+                    actorId,
+                    runId,
+                    commandId,
+                    reason),
+                ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
+
+            return Results.Ok(new
+            {
+                accepted = true,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
+                reason,
                 commandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
             });

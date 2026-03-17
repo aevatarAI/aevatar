@@ -2,9 +2,11 @@ using System.Net.WebSockets;
 using System.Text;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
@@ -219,6 +221,37 @@ public sealed class ChatEndpointsInternalTests
         http.Response.Headers["X-Correlation-Id"].ToString().Should().Be("corr-1");
         body.Should().Contain("aevatar.run.context");
         body.Should().Contain("\"delta\": \"hello\"");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldSerializeRawObservedWorkflowExecutionStartedPayload()
+    {
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(BuildRawObservedWorkflowExecutionStartedFrame(), ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext();
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("aevatar.raw.observed");
+        body.Should().Contain("WorkflowRunExecutionStartedEvent");
+        body.Should().Contain("\"runId\": \"run-1\"");
+        body.Should().NotContain("EXECUTION_FAILED");
     }
 
     [Fact]
@@ -630,6 +663,88 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleStop_ShouldRejectMissingFields()
+    {
+        var service = new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
+        var result = await WorkflowCapabilityEndpoints.HandleStop(
+            new WorkflowStopInput
+            {
+                ActorId = "actor-1",
+                RunId = "",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("actorId and runId are required");
+    }
+
+    [Fact]
+    public async Task HandleStop_ShouldMapRunBindingMismatch()
+    {
+        var service = new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Failure(
+                WorkflowRunControlStartError.RunBindingMismatch("actor-1", "run-other", "run-expected")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleStop(
+            new WorkflowStopInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-other",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("run-expected");
+        service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleStop_ShouldDispatchCommand_WhenRunOwnershipMatches()
+    {
+        var receipt = new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "stop-cmd-1", "corr-1");
+        var service = new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(receipt),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleStop(
+            new WorkflowStopInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                CommandId = "stop-cmd-1",
+                Reason = "user requested stop",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().CommandId.Should().Be("stop-cmd-1");
+        service.Commands.Single().Reason.Should().Be("user requested stop");
+        body.Should().Contain("user requested stop");
+        body.Should().Contain("stop-cmd-1");
+    }
+
+    [Fact]
     public async Task HandleChatWebSocket_ShouldRejectNonWebSocketRequests()
     {
         var http = CreateHttpContext();
@@ -707,6 +822,34 @@ public sealed class ChatEndpointsInternalTests
         };
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private static WorkflowRunEventEnvelope BuildRawObservedWorkflowExecutionStartedFrame()
+    {
+        var payload = new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "direct",
+            Input = "hello",
+            DefinitionActorId = "definition-actor-1",
+        };
+
+        return new WorkflowRunEventEnvelope
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = "evt-1",
+                    PayloadTypeUrl = Any.Pack(payload).TypeUrl,
+                    PublisherActorId = "definition-actor-1",
+                    CorrelationId = "corr-1",
+                    StateVersion = 1,
+                    Payload = Any.Pack(payload),
+                }),
+            },
+        };
     }
 
     private sealed class FakeCommandInteractionService

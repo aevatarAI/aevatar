@@ -57,11 +57,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
-        services.AddOptions<UserWorkflowCapabilityOptions>()
-            .Bind(configuration.GetSection(UserWorkflowCapabilityOptions.SectionName));
-        services.TryAddSingleton<UserWorkflowQueryApplicationService>();
-        services.TryAddSingleton<IUserWorkflowQueryPort>(sp => sp.GetRequiredService<UserWorkflowQueryApplicationService>());
-        services.TryAddSingleton<IUserWorkflowCommandPort, UserWorkflowCommandApplicationService>();
+        services.AddOptions<ScopeWorkflowCapabilityOptions>()
+            .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
+        services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
+        services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
+        services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         return services;
     }
 

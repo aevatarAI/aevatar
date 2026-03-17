@@ -1,0 +1,113 @@
+using Aevatar.Tools.Cli.Studio.Application.Abstractions;
+using Aevatar.Tools.Cli.Studio.Application.Contracts;
+using Aevatar.Tools.Cli.Studio.Application.Services;
+using Aevatar.Tools.Cli.Studio.Domain.Models;
+using FluentAssertions;
+
+namespace Aevatar.Tools.Cli.Tests;
+
+public class WorkspaceServiceTests
+{
+    [Fact]
+    public async Task AddDirectoryAsync_ShouldExpandTildePath()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var relativePath = $".aevatar-workflow-studio-tests/{Guid.NewGuid():N}";
+        var rawPath = $"~/{relativePath}";
+        var expectedPath = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            relativePath));
+
+        try
+        {
+            var response = await service.AddDirectoryAsync(new AddWorkflowDirectoryRequest(rawPath, "Test Root"));
+
+            response.Directories.Should().ContainSingle(directory =>
+                directory.Path == expectedPath &&
+                directory.Label == "Test Root" &&
+                directory.IsBuiltIn == false);
+            Directory.Exists(expectedPath).Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(expectedPath))
+            {
+                Directory.Delete(expectedPath, recursive: true);
+            }
+        }
+    }
+
+    private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
+    {
+        public WorkflowParseResult Parse(string yaml) => new(new WorkflowDocument(), []);
+
+        public string Serialize(WorkflowDocument document) => string.Empty;
+    }
+
+    private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore
+    {
+        private StudioWorkspaceSettings _settings = new(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [],
+            AppearanceTheme: "blue",
+            ColorMode: "light");
+
+        public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(_settings);
+
+        public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default)
+        {
+            _settings = settings;
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>([]);
+
+        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<StoredWorkflowFile?>(null);
+
+        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
+
+        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<StoredExecutionRecord?>(null);
+
+        public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord execution, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft draft, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+}

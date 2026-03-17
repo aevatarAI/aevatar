@@ -37,6 +37,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return payload != null &&
                (payload.Is(StartWorkflowEvent.Descriptor) ||
                 payload.Is(StepCompletedEvent.Descriptor) ||
+                payload.Is(WorkflowStoppedEvent.Descriptor) ||
                 payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
                 payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor));
     }
@@ -63,6 +64,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor))
         {
             await HandleRetryBackoffFiredAsync(payload.Unpack<WorkflowStepRetryBackoffFiredEvent>(), envelope, workflowContext, ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowStoppedEvent.Descriptor))
+        {
+            await HandleWorkflowStoppedAsync(payload.Unpack<WorkflowStoppedEvent>(), workflowContext, ct);
             return;
         }
 
@@ -362,6 +369,26 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         await DispatchStepAsync(next, evt.Output ?? string.Empty, state, ctx, ct);
+    }
+
+    private async Task HandleWorkflowStoppedAsync(
+        WorkflowStoppedEvent evt,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runId = NormalizeRunId(evt.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        var state = LoadState(ctx);
+        if (!IsActiveRun(state, runId))
+            return;
+
+        ctx.Logger.LogInformation(
+            "workflow_loop: stopping run={RunId} reason={Reason}",
+            runId,
+            string.IsNullOrWhiteSpace(evt.Reason) ? "(none)" : evt.Reason);
+        await CleanupRunAsync(state, ctx, ct);
     }
 
     private async Task<bool> TryRetryAsync(

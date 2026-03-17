@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -34,15 +35,18 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
             return [];
 
         var output = new List<WorkflowRunEventEnvelope>();
+        var handled = false;
         foreach (var handler in _handlers)
         {
-            if (!handler.TryMap(mappedEnvelope, out var mapped) || mapped.Count == 0)
+            if (!handler.TryMap(mappedEnvelope, out var mapped))
                 continue;
 
-            output.AddRange(mapped);
+            handled = true;
+            if (mapped.Count > 0)
+                output.AddRange(mapped);
         }
 
-        if (output.Count > 0)
+        if (handled)
             return output;
 
         var rawObservedEvent = CreateRawObservedEvent(envelope, mappedEnvelope);
@@ -93,6 +97,25 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
                 }),
             },
         };
+    }
+}
+
+public sealed class WorkflowRunExecutionStartedEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => -10;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        if (envelope.Payload?.Is(WorkflowRunExecutionStartedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        // This committed event is runtime bookkeeping only.
+        // StartWorkflowEvent remains the user-facing run-start signal.
+        events = [];
+        return true;
     }
 }
 

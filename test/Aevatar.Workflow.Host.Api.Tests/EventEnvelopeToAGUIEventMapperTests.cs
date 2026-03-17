@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -89,6 +90,20 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().ContainSingle();
         events[0].RunStarted.ThreadId.Should().Be("fallback-workflow");
+    }
+
+    [Fact]
+    public void WorkflowRunExecutionStartedEvent_ShouldBeIgnored()
+    {
+        var events = CreateMapper().Map(WrapCommitted(new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "review",
+            Input = "hello",
+            DefinitionActorId = "definition-actor-1",
+        }));
+
+        events.Should().BeEmpty();
     }
 
     [Fact]
@@ -491,6 +506,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     {
         return new EventEnvelopeToWorkflowRunEventMapper(
         [
+            new WorkflowRunExecutionStartedEnvelopeMappingHandler(),
             new StartWorkflowRunEventEnvelopeMappingHandler(),
             new StepRequestRunEventEnvelopeMappingHandler(),
             new StepCompletedRunEventEnvelopeMappingHandler(),

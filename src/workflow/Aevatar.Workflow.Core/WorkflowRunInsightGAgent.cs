@@ -83,6 +83,10 @@ public sealed class WorkflowRunInsightGAgent
         {
             ApplyWorkflowSuspended(next, payload.Unpack<WorkflowSuspendedEvent>(), sourceActorId, eventType, observedAt);
         }
+        else if (payload != null && payload.Is(WorkflowStoppedEvent.Descriptor))
+        {
+            ApplyWorkflowStopped(next, payload.Unpack<WorkflowStoppedEvent>(), sourceActorId, eventType, observedAt);
+        }
         else if (payload != null && payload.Is(WorkflowCompletedEvent.Descriptor))
         {
             ApplyWorkflowCompleted(next, payload.Unpack<WorkflowCompletedEvent>(), sourceActorId, eventType, observedAt);
@@ -199,7 +203,7 @@ public sealed class WorkflowRunInsightGAgent
         var data = new Dictionary<string, string>(StringComparer.Ordinal);
         AppendIfPresent(data, evt.Parameters, "session_id");
         AppendIfPresent(data, evt.Parameters, "channel_id");
-        AppendIfPresent(data, evt.Parameters, "user_id");
+        AppendIfPresent(data, evt.Parameters, "scope_id");
         AppendIfPresent(data, evt.Parameters, "message_id");
         AppendIfPresent(data, evt.Parameters, "correlation_id");
         AppendIfPresent(data, evt.Parameters, "idempotency_key");
@@ -335,6 +339,36 @@ public sealed class WorkflowRunInsightGAgent
             {
                 ["workflow_name"] = evt.WorkflowName ?? string.Empty,
                 ["command_id"] = state.CommandId,
+            });
+    }
+
+    private static void ApplyWorkflowStopped(
+        WorkflowRunInsightState state,
+        WorkflowStoppedEvent evt,
+        string sourceActorId,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        state.Success = null;
+        state.FinalOutput = string.Empty;
+        state.FinalError = evt.Reason ?? string.Empty;
+        state.EndedAt = observedAt;
+        state.CompletionStatus = WorkflowRunInsightCompletionStatus.Stopped;
+
+        WorkflowRunInsightStateMutations.AddTimeline(
+            state,
+            observedAt,
+            "workflow.stopped",
+            string.IsNullOrWhiteSpace(evt.Reason) ? "workflow stopped" : evt.Reason,
+            sourceActorId,
+            null,
+            null,
+            eventType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["workflow_name"] = evt.WorkflowName ?? string.Empty,
+                ["command_id"] = state.CommandId,
+                ["reason"] = evt.Reason ?? string.Empty,
             });
     }
 

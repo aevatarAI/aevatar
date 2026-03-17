@@ -93,6 +93,29 @@ aevatar app restart
 aevatar app restart --port 6690
 ```
 
+When `aevatar app` runs in proxy mode, NyxID browser login is enabled by default. The local app uses OIDC Authorization Code + PKCE against `https://nyx-api.chrono-ai.fun` and keeps a local cookie session for proxied API calls.
+
+Optional config overrides:
+
+```bash
+# disable NyxID login explicitly
+aevatar config config-json set Cli:App:NyxId:Enabled false --json
+
+# switch authority / client id when needed
+aevatar config config-json set Cli:App:NyxId:Authority https://nyx-api.chrono-ai.fun --json
+aevatar config config-json set Cli:App:NyxId:ClientId 37a93189-2734-406e-bca1-7dbdf25c5a53 --json
+aevatar config config-json set Cli:App:NyxId:Scope "openid profile email" --json
+```
+
+Relevant config keys:
+
+- `Cli:App:NyxId:Enabled`
+- `Cli:App:NyxId:Authority`
+- `Cli:App:NyxId:ClientId`
+- `Cli:App:NyxId:ClientSecret`
+- `Cli:App:NyxId:Scope`
+- `Cli:App:NyxId:CallbackPath`
+
 `aevatar app` playground now includes a **Config** button:
 
 - it calls an internal workflow to run `aevatar config ui ensure --no-browser`

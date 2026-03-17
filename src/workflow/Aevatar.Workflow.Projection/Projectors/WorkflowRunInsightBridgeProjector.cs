@@ -117,6 +117,7 @@ public sealed class WorkflowRunInsightBridgeProjector
                || payload.Is(StepRequestEvent.Descriptor)
                || payload.Is(StepCompletedEvent.Descriptor)
                || payload.Is(WorkflowSuspendedEvent.Descriptor)
+               || payload.Is(WorkflowStoppedEvent.Descriptor)
                || payload.Is(WorkflowCompletedEvent.Descriptor)
                || payload.Is(WaitingForSignalEvent.Descriptor)
                || payload.Is(WorkflowSignalBufferedEvent.Descriptor)
