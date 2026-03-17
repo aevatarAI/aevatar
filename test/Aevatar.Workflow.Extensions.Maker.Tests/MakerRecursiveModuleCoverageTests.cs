@@ -196,6 +196,8 @@ public class MakerRecursiveModuleCoverageTests
 
     private sealed class RecordingWorkflowExecutionContext : IWorkflowExecutionContext
     {
+        private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
+
         public RecordingWorkflowExecutionContext(IServiceProvider services, IAgent agent, ILogger logger)
         {
             Services = services;
@@ -214,30 +216,43 @@ public class MakerRecursiveModuleCoverageTests
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
         {
-            _ = scopeKey;
-            return new TState();
+            if (!_states.TryGetValue(scopeKey, out var packed) || !packed.Is(new TState().Descriptor))
+                return new TState();
+
+            return packed.Unpack<TState>() ?? new TState();
         }
 
         public IReadOnlyList<KeyValuePair<string, TState>> LoadStates<TState>(string scopeKeyPrefix = "")
             where TState : class, IMessage<TState>, new()
         {
-            _ = scopeKeyPrefix;
-            return [];
+            var states = new List<KeyValuePair<string, TState>>();
+            foreach (var (scopeKey, packed) in _states)
+            {
+                if (!string.IsNullOrEmpty(scopeKeyPrefix) &&
+                    !scopeKey.StartsWith(scopeKeyPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!packed.Is(new TState().Descriptor))
+                    continue;
+
+                states.Add(new KeyValuePair<string, TState>(scopeKey, packed.Unpack<TState>() ?? new TState()));
+            }
+
+            return states;
         }
 
         public Task SaveStateAsync<TState>(string scopeKey, TState state, CancellationToken ct = default)
             where TState : class, IMessage<TState>
         {
-            _ = scopeKey;
-            _ = state;
-            _ = ct;
+            _states[scopeKey] = Any.Pack(state);
             return Task.CompletedTask;
         }
 
         public Task ClearStateAsync(string scopeKey, CancellationToken ct = default)
         {
-            _ = scopeKey;
-            _ = ct;
+            _states.Remove(scopeKey);
             return Task.CompletedTask;
         }
 
