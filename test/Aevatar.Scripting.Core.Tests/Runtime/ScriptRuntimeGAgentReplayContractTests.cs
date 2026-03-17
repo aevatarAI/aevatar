@@ -137,7 +137,7 @@ public class ScriptBehaviorGAgentReplayContractTests
             new ScriptNativeProjectionBuilder(),
             codec);
         var publisher = new RecordingEventPublisher();
-        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, codec)
+        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, new ScriptReadModelMaterializationCompiler(), codec)
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(
