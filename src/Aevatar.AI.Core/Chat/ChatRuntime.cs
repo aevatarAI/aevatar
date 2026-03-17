@@ -98,13 +98,13 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userMessage, requestId: null, metadata: null, ct);
+        ChatStreamAsync(userMessage, requestId: null, headers: null, ct);
 
-    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
+    /// <summary>流式 Chat，显式传入稳定 request id 和 headers。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -135,7 +135,7 @@ public sealed class ChatRuntime
                     if (runContext.Terminate) return;
 
                     _history.Add(ChatMessage.User(runContext.UserMessage));
-                    var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
+                    var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, headers);
                     var provider = _providerFactory();
                     runContext.Items["gen_ai.provider.name"] = provider.Name;
                     var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
@@ -144,7 +144,8 @@ public sealed class ChatRuntime
                     {
                         Messages = messages,
                         RequestId = baseRequest.RequestId,
-                        Metadata = baseRequest.Metadata,
+                        CallId = baseRequest.CallId,
+                        Headers = baseRequest.Headers,
                         Tools = baseRequest.Tools,
                         Model = baseRequest.Model,
                         Temperature = baseRequest.Temperature,
@@ -253,13 +254,14 @@ public sealed class ChatRuntime
     private static LLMRequest ApplyRequestIdentity(
         LLMRequest baseRequest,
         string? requestId,
-        IReadOnlyDictionary<string, string>? metadata)
+        IReadOnlyDictionary<string, string>? headers)
     {
         return new LLMRequest
         {
             Messages = baseRequest.Messages,
             RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
-            Metadata = MergeMetadata(baseRequest.Metadata, metadata),
+            CallId = baseRequest.CallId,
+            Headers = MergeHeaders(baseRequest.Headers, headers),
             Tools = baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -267,26 +269,26 @@ public sealed class ChatRuntime
         };
     }
 
-    private static IReadOnlyDictionary<string, string>? MergeMetadata(
-        IReadOnlyDictionary<string, string>? baseMetadata,
-        IReadOnlyDictionary<string, string>? overrideMetadata)
+    private static IReadOnlyDictionary<string, string>? MergeHeaders(
+        IReadOnlyDictionary<string, string>? baseHeaders,
+        IReadOnlyDictionary<string, string>? overrideHeaders)
     {
-        if ((baseMetadata == null || baseMetadata.Count == 0) &&
-            (overrideMetadata == null || overrideMetadata.Count == 0))
+        if ((baseHeaders == null || baseHeaders.Count == 0) &&
+            (overrideHeaders == null || overrideHeaders.Count == 0))
         {
             return null;
         }
 
         var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (baseMetadata != null)
+        if (baseHeaders != null)
         {
-            foreach (var pair in baseMetadata)
+            foreach (var pair in baseHeaders)
                 merged[pair.Key] = pair.Value;
         }
 
-        if (overrideMetadata != null)
+        if (overrideHeaders != null)
         {
-            foreach (var pair in overrideMetadata)
+            foreach (var pair in overrideHeaders)
                 merged[pair.Key] = pair.Value;
         }
 
@@ -298,12 +300,8 @@ public sealed class ChatRuntime
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
-        {
-            context.Items[LLMRequestMetadataKeys.CallId] = callId;
-        }
+        if (!string.IsNullOrWhiteSpace(context.Request.CallId))
+            context.Items[LLMRequestMetadataKeys.CallId] = context.Request.CallId;
     }
 
     private static LLMStreamChunk? NormalizeStreamChunk(

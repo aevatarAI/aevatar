@@ -123,29 +123,29 @@ public sealed class ChatRuntimeStreamingBufferTests
             {
                 Messages = [],
                 RequestId = "base-request",
-                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                Headers = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["base"] = "1",
                     ["override"] = "old",
                 },
             });
 
-        var providerMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        var providerHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["override"] = "new",
             ["workflow.run_id"] = "run-1",
         };
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", providerMetadata))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", providerHeaders))
         {
         }
 
         provider.LastStreamRequest.Should().NotBeNull();
         provider.LastStreamRequest!.RequestId.Should().Be("session-42");
-        provider.LastStreamRequest.Metadata.Should().NotBeNull();
-        provider.LastStreamRequest.Metadata!["base"].Should().Be("1");
-        provider.LastStreamRequest.Metadata["override"].Should().Be("new");
-        provider.LastStreamRequest.Metadata["workflow.run_id"].Should().Be("run-1");
+        provider.LastStreamRequest.Headers.Should().NotBeNull();
+        provider.LastStreamRequest.Headers!["base"].Should().Be("1");
+        provider.LastStreamRequest.Headers["override"].Should().Be("new");
+        provider.LastStreamRequest.Headers["workflow.run_id"].Should().Be("run-1");
     }
 
     [Fact]

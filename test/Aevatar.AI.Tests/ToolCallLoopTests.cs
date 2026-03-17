@@ -88,7 +88,7 @@ public class ToolCallLoopTests
         {
             Messages = [],
             RequestId = "session-99",
-            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow.run_id"] = "run-99",
             },
@@ -99,9 +99,9 @@ public class ToolCallLoopTests
         provider.Requests.Should().HaveCount(2);
         provider.Requests[0].RequestId.Should().Be("session-99");
         provider.Requests[1].RequestId.Should().Be("session-99");
-        provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
-        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
-        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+        provider.Requests.Should().OnlyContain(x => x.Headers != null && x.Headers["workflow.run_id"] == "run-99");
+        provider.Requests[0].CallId.Should().Be("session-99");
+        provider.Requests[1].CallId.Should().Be("session-99:tool-round:2");
     }
 
     [Fact]

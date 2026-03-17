@@ -314,7 +314,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         if (request.Temperature.HasValue) { options.Temperature = (float)request.Temperature.Value; hasOptions = true; }
         if (request.MaxTokens.HasValue) { options.MaxOutputTokens = request.MaxTokens.Value; hasOptions = true; }
 
-        if (!string.IsNullOrWhiteSpace(request.RequestId) || request.Metadata is { Count: > 0 })
+        if (!string.IsNullOrWhiteSpace(request.RequestId) || request.Headers is { Count: > 0 })
         {
             options.AdditionalProperties = BuildAdditionalProperties(request);
             hasOptions = true;
@@ -341,9 +341,9 @@ public sealed class MEAILLMProvider : ILLMProvider
     {
         var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
 
-        if (request.Metadata != null)
+        if (request.Headers != null)
         {
-            foreach (var pair in request.Metadata)
+            foreach (var pair in request.Headers)
                 properties[pair.Key] = pair.Value;
         }
 

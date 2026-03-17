@@ -197,15 +197,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _chat!.ChatStreamAsync(userMessage, ct);
     }
 
-    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
+    /// <summary>流式 Chat，显式传入稳定 request id 和 headers。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
+        IReadOnlyDictionary<string, string>? headers = null,
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync(userMessage, requestId, headers, ct);
     }
 
     /// <summary>注册单个工具。</summary>
@@ -275,7 +275,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     {
         Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
         RequestId = null,
-        Metadata = null,
+        Headers = null,
         Tools = Tools.HasTools ? Tools.GetAll() : null,
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,

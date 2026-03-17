@@ -166,7 +166,7 @@ public class AIComponentCoverageTests
         var response = await provider.ChatAsync(new LLMRequest
         {
             RequestId = "session-1",
-            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow.run_id"] = "run-1",
             },
@@ -221,7 +221,7 @@ public class AIComponentCoverageTests
         await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
         {
             RequestId = "session-stream",
-            Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow.step_id"] = "llm-1",
             },
@@ -425,7 +425,7 @@ public class AIComponentCoverageTests
             new LLMRequest
             {
                 RequestId = "session-tornado",
-                Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+                Headers = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["workflow.run_id"] = "run-tornado",
                 },

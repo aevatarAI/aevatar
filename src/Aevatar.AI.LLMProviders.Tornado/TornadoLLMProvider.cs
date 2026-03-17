@@ -137,15 +137,15 @@ public sealed class TornadoLLMProvider : ILLMProvider
     private static Dictionary<string, string>? BuildMetadata(LLMRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.RequestId) &&
-            (request.Metadata == null || request.Metadata.Count == 0))
+            (request.Headers == null || request.Headers.Count == 0))
         {
             return null;
         }
 
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (request.Metadata != null)
+        if (request.Headers != null)
         {
-            foreach (var pair in request.Metadata)
+            foreach (var pair in request.Headers)
                 metadata[pair.Key] = pair.Value;
         }
 

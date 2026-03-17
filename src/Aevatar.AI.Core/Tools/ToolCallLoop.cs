@@ -49,7 +49,8 @@ public sealed class ToolCallLoop
             {
                 Messages = [..messages],
                 RequestId = baseRequest.RequestId,
-                Metadata = BuildPerCallMetadata(baseRequest.Metadata, callId),
+                CallId = callId,
+                Headers = baseRequest.Headers,
                 Tools = baseRequest.Tools,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
@@ -122,7 +123,8 @@ public sealed class ToolCallLoop
         {
             Messages = [..messages],
             RequestId = baseRequest.RequestId,
-            Metadata = BuildPerCallMetadata(baseRequest.Metadata, finalCallId),
+            CallId = finalCallId,
+            Headers = baseRequest.Headers,
             Tools = null,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -169,27 +171,6 @@ public sealed class ToolCallLoop
         return (response, llmCallContext.Terminate);
     }
 
-    private static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
-        IReadOnlyDictionary<string, string>? baseMetadata,
-        string? callId)
-    {
-        if (baseMetadata == null || baseMetadata.Count == 0)
-        {
-            if (string.IsNullOrWhiteSpace(callId))
-                return null;
-
-            return new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.CallId] = callId,
-            };
-        }
-
-        var metadata = new Dictionary<string, string>(baseMetadata, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(callId))
-            metadata[LLMRequestMetadataKeys.CallId] = callId;
-        return metadata;
-    }
-
     private static string? ComposeRoundCallId(string? baseRequestId, int round)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))
@@ -213,12 +194,8 @@ public sealed class ToolCallLoop
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
-        {
-            context.Items[LLMRequestMetadataKeys.CallId] = callId;
-        }
+        if (!string.IsNullOrWhiteSpace(context.Request.CallId))
+            context.Items[LLMRequestMetadataKeys.CallId] = context.Request.CallId;
     }
 
     private static ChatMessage BuildToolResultMessage(string callId, string toolResult)
