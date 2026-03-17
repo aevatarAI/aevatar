@@ -24,6 +24,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     private readonly string _connectorsDraftFilePath;
     private readonly string _rolesDraftFilePath;
     private readonly string _defaultRuntimeBaseUrl;
+    private readonly bool _forceLocalRuntime;
 
     public FileStudioWorkspaceStore(IOptions<StudioStorageOptions> options)
     {
@@ -32,6 +33,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
         _defaultRuntimeBaseUrl = string.IsNullOrWhiteSpace(storageOptions.DefaultRuntimeBaseUrl)
             ? "http://127.0.0.1:5100"
             : storageOptions.DefaultRuntimeBaseUrl.Trim().TrimEnd('/');
+        _forceLocalRuntime = storageOptions.ForceLocalRuntime;
         _aevatarHomeDirectory = ResolveAevatarHomeDirectory();
         _defaultWorkflowDirectory = Path.Combine(_aevatarHomeDirectory, "workflows");
         _executionsDirectory = Path.Combine(_appDataDirectory, "executions");
@@ -49,7 +51,9 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     public async Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default)
     {
         var persisted = await ReadSettingsAsync(cancellationToken);
-        var runtimeBaseUrl = string.IsNullOrWhiteSpace(persisted.RuntimeBaseUrl)
+        var runtimeBaseUrl = _forceLocalRuntime
+            ? _defaultRuntimeBaseUrl
+            : string.IsNullOrWhiteSpace(persisted.RuntimeBaseUrl)
             ? _defaultRuntimeBaseUrl
             : persisted.RuntimeBaseUrl.Trim().TrimEnd('/');
         var appearanceTheme = NormalizeAppearanceTheme(persisted.AppearanceTheme);
@@ -91,7 +95,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     {
         var persisted = new PersistedWorkspaceSettings
         {
-            RuntimeBaseUrl = settings.RuntimeBaseUrl,
+            RuntimeBaseUrl = _forceLocalRuntime ? _defaultRuntimeBaseUrl : settings.RuntimeBaseUrl,
             AppearanceTheme = NormalizeAppearanceTheme(settings.AppearanceTheme),
             ColorMode = NormalizeColorMode(settings.ColorMode),
             Directories = settings.Directories

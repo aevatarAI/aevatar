@@ -12,7 +12,10 @@ export default defineConfig({
       output: {
         inlineDynamicImports: true,
         entryFileNames: 'app.js',
-        assetFileNames: assetInfo => assetInfo.name?.endsWith('.css') ? 'app.css' : '[name][extname]',
+        assetFileNames: assetInfo => {
+          const assetName = assetInfo.name || '';
+          return assetName.slice(-4) === '.css' ? 'app.css' : '[name][extname]';
+        },
       },
     },
   },
