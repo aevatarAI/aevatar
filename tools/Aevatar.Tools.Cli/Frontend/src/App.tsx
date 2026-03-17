@@ -236,9 +236,9 @@ function createEmptyAppContext(): AppContextState {
 function createEmptyAuthSession(): AuthSessionState {
   return {
     loading: true,
-    enabled: false,
+    enabled: true,
     authenticated: false,
-    providerDisplayName: 'workspace account',
+    providerDisplayName: 'NyxID',
     loginUrl: '/auth/login',
     logoutUrl: '/auth/logout',
     name: '',
@@ -862,9 +862,9 @@ function App() {
       const session = await api.auth.getSession();
       const nextAuthSession: AuthSessionState = {
         loading: false,
-        enabled: Boolean(session?.enabled),
+        enabled: session?.enabled !== false,
         authenticated: Boolean(session?.authenticated),
-        providerDisplayName: session?.providerDisplayName || 'workspace account',
+        providerDisplayName: session?.providerDisplayName || 'NyxID',
         loginUrl: session?.loginUrl || '/auth/login',
         logoutUrl: session?.logoutUrl || '/auth/logout',
         name: session?.name || '',
@@ -2345,17 +2345,22 @@ function App() {
     background: 'var(--accent-soft-end)',
     color: 'var(--accent-text)',
   } as const;
-  const authAccountLabel = authSession.name || authSession.email || 'Account';
+  const authProviderLabel = authSession.providerDisplayName || 'NyxID';
+  const authAccountLabel = authSession.name || authSession.email || authProviderLabel;
   const authAccountSecondaryLabel = authSession.email && authSession.email !== authAccountLabel
     ? authSession.email
-    : 'Connected with NyxID';
+    : `Connected with ${authProviderLabel}`;
   const authAccountInitials = authAccountLabel
     .split(/[\s@._-]+/)
     .filter(Boolean)
     .slice(0, 2)
     .map(part => part[0]?.toUpperCase() || '')
     .join('') || 'N';
-  const authStatusWidget = authSession.enabled ? authSession.authenticated ? (
+  const authGuestStatusMessage = authSession.errorMessage
+    || (authSession.enabled
+      ? 'Sign in to load your workspace.'
+      : `${authProviderLabel} sign-in is currently unavailable.`);
+  const authStatusWidget = authSession.authenticated ? (
     <div className="header-auth-chip">
       {authSession.picture ? (
         <img
@@ -2383,21 +2388,21 @@ function App() {
   ) : (
     <div className="header-auth-guest">
       <div className="header-auth-guest-copy">
-        <div className="header-auth-label">NyxID</div>
+        <div className="header-auth-label">{authProviderLabel}</div>
         <div className="header-auth-meta">
-          {authSession.errorMessage || 'Sign in to load your workspace.'}
+          {authGuestStatusMessage}
         </div>
       </div>
       <a href={authSession.loginUrl || '/auth/login'} className="solid-action header-auth-link !no-underline">
         <Shield size={14} /> Sign in
       </a>
     </div>
-  ) : null;
+  );
 
   function renderRolesPage() {
     return (
       <>
-        <header className="h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
+        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
           <div>
             <div className="panel-eyebrow">Catalog</div>
             <div className="panel-title !mt-0">Roles</div>
@@ -2603,7 +2608,7 @@ function App() {
   function renderConnectorsPage() {
     return (
       <>
-        <header className="h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
+        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
           <div>
             <div className="panel-eyebrow">Catalog</div>
             <div className="panel-title !mt-0">Connectors</div>
@@ -2836,11 +2841,9 @@ function App() {
         }
       }}
     >
-      {authStatusWidget ? (
-        <div className="app-auth-anchor">
-          {authStatusWidget}
-        </div>
-      ) : null}
+      <div className="app-auth-anchor">
+        {authStatusWidget}
+      </div>
 
       <aside className="studio-rail">
         <div className="flex flex-col items-center gap-3">
@@ -2886,7 +2889,7 @@ function App() {
       <main className="flex-1 min-w-0 flex flex-col">
         {workspacePage === 'workflows' ? (
           <>
-            <header className="h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
+            <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
               <div>
                 <div className="panel-eyebrow">Workspace</div>
                 <div className="panel-title !mt-0">Workflows</div>

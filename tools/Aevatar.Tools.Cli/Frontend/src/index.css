@@ -466,6 +466,18 @@
   pointer-events: auto;
 }
 
+.workspace-page-header,
+.studio-editor-header {
+  padding-right: clamp(240px, 29vw, 420px);
+}
+
+@media (max-width: 1180px) {
+  .workspace-page-header,
+  .studio-editor-header {
+    padding-right: clamp(180px, 25vw, 280px);
+  }
+}
+
 .studio-title-group {
   min-width: 0;
   display: flex;
