@@ -1,7 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
+using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -37,7 +37,16 @@ public static class MainnetDistributedHostBuilderExtensions
             });
 
             if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
+            {
+                siloBuilder.ConfigureServices(services =>
+                {
+                    services.AddAevatarMassTransitStreamProvider(streamOptions =>
+                    {
+                        streamOptions.StreamNamespace = runtimeOptions.OrleansActorEventNamespace;
+                    });
+                });
                 siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
+            }
         });
 
         return builder;
