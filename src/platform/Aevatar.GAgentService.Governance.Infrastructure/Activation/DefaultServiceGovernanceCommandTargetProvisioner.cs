@@ -10,6 +10,7 @@ namespace Aevatar.GAgentService.Governance.Infrastructure.Activation;
 public sealed class DefaultServiceGovernanceCommandTargetProvisioner
     : ActorTargetProvisionerBase, IServiceGovernanceCommandTargetProvisioner
 {
+#pragma warning disable CS0618 // Legacy migration — remove after all deployments complete governance migration
     private readonly IServiceGovernanceLegacyImporter _legacyImporter;
 
     public DefaultServiceGovernanceCommandTargetProvisioner(
@@ -19,6 +20,7 @@ public sealed class DefaultServiceGovernanceCommandTargetProvisioner
     {
         _legacyImporter = legacyImporter ?? throw new ArgumentNullException(nameof(legacyImporter));
     }
+#pragma warning restore CS0618
 
     public async Task<string> EnsureConfigurationTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
     {
