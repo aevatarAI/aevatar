@@ -319,6 +319,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             Attempts = 0,
             OccurredAtUtc = evt.OccurredAtUtc?.Clone(),
         });
+        ProjectionFailureRetentionPolicy.Trim(next.Failures);
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
@@ -354,17 +355,52 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         string reason,
         EventEnvelope envelope)
     {
+        var failureId = Guid.NewGuid().ToString("N");
+        var occurredAt = DateTimeOffset.UtcNow;
+        var failureCount = Math.Min(
+            ProjectionFailureRetentionPolicy.DefaultMaxRetainedFailures,
+            State.Failures.Count + 1);
+
         await PersistDomainEventAsync(new ProjectionScopeDispatchFailedEvent
         {
-            FailureId = Guid.NewGuid().ToString("N"),
+            FailureId = failureId,
             Stage = stage,
             EventId = eventId,
             EventType = eventType,
             SourceVersion = sourceVersion,
             Reason = reason,
             Envelope = envelope.Clone(),
-            OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            OccurredAtUtc = Timestamp.FromDateTime(occurredAt.UtcDateTime),
         });
+
+        var alertSink = Services.GetService<IProjectionFailureAlertSink>();
+        if (alertSink == null)
+            return;
+
+        try
+        {
+            await alertSink.PublishAsync(
+                new ProjectionFailureAlert(
+                    BuildScopeKey(),
+                    failureId,
+                    stage,
+                    eventId,
+                    eventType,
+                    sourceVersion,
+                    reason,
+                    failureCount,
+                    occurredAt),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Projection failure alert publishing failed. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
+                Id,
+                State.ProjectionKind,
+                State.SessionId);
+        }
     }
 }
 

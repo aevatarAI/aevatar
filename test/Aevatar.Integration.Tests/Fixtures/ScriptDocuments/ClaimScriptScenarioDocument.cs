@@ -76,13 +76,12 @@ public sealed class ClaimScriptScenarioDocument
                                 RiskScore = evt.Current.RiskScore,
                                 CompliancePassed = evt.Current.CompliancePassed,
                                 LastCommandId = evt.CommandId ?? string.Empty,
-                                TraceSteps = { evt.Current.TraceSteps },
                             })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
-                            HasValue = true,
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
                             PolicyId = state.PolicyId,
                             DecisionStatus = state.DecisionStatus,
@@ -93,13 +92,12 @@ public sealed class ClaimScriptScenarioDocument
                             LastCommandId = state.LastCommandId,
                             Search = new ClaimSearchIndex
                             {
-                                LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
-                                DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
+                                LookupKey = string.Concat(state.CaseId, ":", state.PolicyId).ToLowerInvariant(),
+                                DecisionKey = state.DecisionStatus.ToLowerInvariant(),
                             },
                             Refs = new ClaimRefs
                             {
-                                PolicyId = state.PolicyId ?? string.Empty,
-                                OwnerActorId = fact.ActorId,
+                                PolicyId = state.PolicyId,
                             },
                             TraceSteps = { state.TraceSteps },
                         });
@@ -217,14 +215,13 @@ public sealed class ClaimScriptScenarioDocument
                 builder
                     .OnCommand<ClaimAnalystReviewRequested>(HandleAsync)
                     .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
                             HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
-                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
-                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                            TraceSteps = { state.TraceSteps },
                         });
             }
 
@@ -276,14 +273,13 @@ public sealed class ClaimScriptScenarioDocument
                 builder
                     .OnCommand<ClaimFraudScoringRequested>(HandleAsync)
                     .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
                             HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
-                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
-                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                            TraceSteps = { state.TraceSteps },
                         });
             }
 
@@ -335,14 +331,13 @@ public sealed class ClaimScriptScenarioDocument
                 builder
                     .OnCommand<ClaimComplianceCheckRequested>(HandleAsync)
                     .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
                             HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
-                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
-                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                            TraceSteps = { state.TraceSteps },
                         });
             }
 
@@ -394,14 +389,14 @@ public sealed class ClaimScriptScenarioDocument
                 builder
                     .OnCommand<ClaimManualReviewRequested>(HandleAsync)
                     .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
                             HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
-                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
-                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                            ManualReviewRequired = state.ManualReviewRequired,
+                            TraceSteps = { state.TraceSteps },
                         });
             }
 

@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.Configuration;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
@@ -9,10 +10,16 @@ public abstract class ServiceProjectionPortBase<TContext>
     private readonly string _projectionName;
 
     protected ServiceProjectionPortBase(
+        ServiceProjectionOptions options,
         IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>> activationService,
+        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>> releaseService,
         string projectionName)
-        : base(static () => true, activationService)
+        : base(
+            () => options?.Enabled ?? false,
+            activationService,
+            releaseService)
     {
+        ArgumentNullException.ThrowIfNull(options);
         _projectionName = projectionName ?? throw new ArgumentNullException(nameof(projectionName));
     }
 

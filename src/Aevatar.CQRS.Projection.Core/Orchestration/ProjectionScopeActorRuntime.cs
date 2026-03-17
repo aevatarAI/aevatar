@@ -21,8 +21,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
 
     public async Task EnsureExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(scopeKey);
-
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         if (!await _runtime.ExistsAsync(actorId).ConfigureAwait(false))
         {
@@ -40,7 +38,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
 
     public async Task<bool> ExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(scopeKey);
         return await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false);
     }
 
@@ -49,7 +46,6 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         Google.Protobuf.IMessage payload,
         CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(scopeKey);
         ArgumentNullException.ThrowIfNull(payload);
 
         var actorId = ProjectionScopeActorId.Build(scopeKey);

@@ -24,6 +24,7 @@ public sealed class TextNormalizationProtocolContractTests
         var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
         var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
         var commandPort = provider.GetRequiredService<IScriptRuntimeCommandPort>();
+        var queryService = provider.GetRequiredService<Aevatar.Scripting.Abstractions.Queries.IScriptReadModelQueryPort>();
         var projectionPort = provider.GetRequiredService<Aevatar.Scripting.Abstractions.Queries.IScriptExecutionProjectionPort>();
 
         const string definitionActorId = "text-normalization-definition";
@@ -56,14 +57,16 @@ public sealed class TextNormalizationProtocolContractTests
                 definitionActorId,
                 "protocol.requested",
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, "run-1", CancellationToken.None);
-
-            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
-                provider,
-                runtimeActorId,
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                "run-1",
                 CancellationToken.None);
 
-            snapshot.Should().NotBeNull();
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
+
             snapshot!.ReadModelPayload.Should().NotBeNull();
             var readModel = snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
             readModel.HasValue.Should().BeTrue();

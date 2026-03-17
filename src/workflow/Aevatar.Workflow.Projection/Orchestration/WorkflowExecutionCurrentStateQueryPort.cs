@@ -8,15 +8,18 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
 {
     private readonly IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> _currentStateReader;
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly WorkflowExecutionReadModelMapper _mapper;
     private readonly bool _enableActorQueryEndpoints;
 
     public WorkflowExecutionCurrentStateQueryPort(
         IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string> currentStateReader,
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         WorkflowExecutionReadModelMapper mapper,
         WorkflowExecutionProjectionOptions? options = null)
     {
         _currentStateReader = currentStateReader ?? throw new ArgumentNullException(nameof(currentStateReader));
+        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _enableActorQueryEndpoints = options == null || (options.Enabled && options.EnableActorQueryEndpoints);
     }
@@ -31,7 +34,11 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             return null;
 
         var currentState = await _currentStateReader.GetAsync(actorId, ct);
-        return currentState == null ? null : _mapper.ToActorSnapshot(currentState);
+        if (currentState == null)
+            return null;
+
+        var report = await _reportReader.GetAsync(actorId, ct);
+        return _mapper.ToActorSnapshot(currentState, report);
     }
 
     public async Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(
@@ -48,7 +55,14 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
                 Take = boundedTake,
             },
             ct);
-        return currentStates.Items.Select(_mapper.ToActorSnapshot).ToList();
+        var snapshots = new List<WorkflowActorSnapshot>(currentStates.Items.Count);
+        foreach (var currentState in currentStates.Items)
+        {
+            var report = await _reportReader.GetAsync(currentState.RootActorId, ct);
+            snapshots.Add(_mapper.ToActorSnapshot(currentState, report));
+        }
+
+        return snapshots;
     }
 
     public async Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(

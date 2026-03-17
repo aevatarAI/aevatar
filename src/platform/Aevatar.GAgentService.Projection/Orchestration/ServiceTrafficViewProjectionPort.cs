@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
@@ -8,8 +9,10 @@ public sealed class ServiceTrafficViewProjectionPort
       IServiceTrafficViewProjectionPort
 {
     public ServiceTrafficViewProjectionPort(
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> activationService)
-        : base(activationService, ServiceProjectionNames.Traffic)
+        ServiceProjectionOptions options,
+        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> activationService,
+        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> releaseService)
+        : base(options, activationService, releaseService, ServiceProjectionKinds.Traffic)
     {
     }
 

@@ -60,39 +60,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return readModel;
     }
 
-    public static WorkflowRunTimelineDocument CreateTimelineDocument(
-        WorkflowExecutionMaterializationContext context,
-        WorkflowRunState state,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt)
-    {
-        return new WorkflowRunTimelineDocument
-        {
-            Id = context.RootActorId,
-            RootActorId = context.RootActorId,
-            CommandId = state.LastCommandId ?? string.Empty,
-            StateVersion = stateEvent.Version,
-            LastEventId = stateEvent.EventId ?? string.Empty,
-            UpdatedAt = observedAt,
-        };
-    }
-
-    public static WorkflowRunGraphArtifactDocument CreateGraphDocument(
-        WorkflowExecutionMaterializationContext context,
-        WorkflowRunState state,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt)
-    {
-        var readModel = new WorkflowRunGraphArtifactDocument
-        {
-            Id = context.RootActorId,
-            RootActorId = context.RootActorId,
-            CommandId = state.LastCommandId ?? string.Empty,
-        };
-        ApplyGraphBase(readModel, context, state, stateEvent, observedAt);
-        return readModel;
-    }
-
     public static void ApplyReportBase(
         WorkflowRunInsightReportDocument readModel,
         WorkflowExecutionMaterializationContext context,
@@ -119,38 +86,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.StartedAt = observedAt;
         if (IsTerminalStatus(state.Status))
             readModel.EndedAt = observedAt;
-    }
-
-    public static void ApplyTimelineBase(
-        WorkflowRunTimelineDocument document,
-        WorkflowExecutionMaterializationContext context,
-        WorkflowRunState state,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt)
-    {
-        document.Id = context.RootActorId;
-        document.RootActorId = context.RootActorId;
-        document.CommandId = state.LastCommandId ?? string.Empty;
-        document.StateVersion = stateEvent.Version;
-        document.LastEventId = stateEvent.EventId ?? string.Empty;
-        document.UpdatedAt = observedAt;
-    }
-
-    public static void ApplyGraphBase(
-        WorkflowRunGraphArtifactDocument readModel,
-        WorkflowExecutionMaterializationContext context,
-        WorkflowRunState state,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt)
-    {
-        readModel.Id = context.RootActorId;
-        readModel.RootActorId = context.RootActorId;
-        readModel.CommandId = state.LastCommandId ?? string.Empty;
-        readModel.WorkflowName = ResolveWorkflowName(state, readModel.WorkflowName);
-        readModel.Input = state.Input ?? string.Empty;
-        readModel.StateVersion = stateEvent.Version;
-        readModel.LastEventId = stateEvent.EventId ?? string.Empty;
-        readModel.UpdatedAt = observedAt;
     }
 
     public static void ApplyObservedPayloadToReport(
@@ -380,78 +315,39 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         RefreshSummary(readModel);
     }
 
-    public static void ApplyObservedPayloadToTimeline(
-        WorkflowRunTimelineDocument document,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt,
-        string rootActorId)
+    public static WorkflowRunTimelineDocument BuildTimelineDocument(WorkflowRunInsightReportDocument report)
     {
-        var scratch = new WorkflowRunInsightReportDocument
+        ArgumentNullException.ThrowIfNull(report);
+
+        return new WorkflowRunTimelineDocument
         {
-            Id = rootActorId,
-            RootActorId = rootActorId,
-            CommandId = document.CommandId,
+            Id = report.Id,
+            RootActorId = report.RootActorId,
+            CommandId = report.CommandId,
+            StateVersion = report.StateVersion,
+            LastEventId = report.LastEventId,
+            UpdatedAt = report.UpdatedAt,
+            Timeline = report.Timeline.Select(CloneTimelineEvent).ToList(),
         };
-        scratch.Timeline.Clear();
-        ApplyObservedPayloadToReport(scratch, stateEvent, observedAt);
-        foreach (var item in scratch.Timeline)
-            document.Timeline.Add(item);
     }
 
-    public static void ApplyObservedPayloadToGraph(
-        WorkflowRunGraphArtifactDocument readModel,
-        StateEvent stateEvent,
-        DateTimeOffset observedAt)
+    public static WorkflowRunGraphArtifactDocument BuildGraphDocument(WorkflowRunInsightReportDocument report)
     {
-        var payload = stateEvent.EventData;
-        if (payload == null)
-            return;
+        ArgumentNullException.ThrowIfNull(report);
 
-        if (payload.Is(StepRequestEvent.Descriptor))
+        return new WorkflowRunGraphArtifactDocument
         {
-            var evt = payload.Unpack<StepRequestEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.StepId = evt.StepId ?? string.Empty;
-            step.StepType = evt.StepType ?? string.Empty;
-            step.TargetRole = evt.TargetRole ?? string.Empty;
-            ReplaceMap(step.RequestParameters, evt.Parameters);
-        }
-        else if (payload.Is(StepCompletedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<StepCompletedEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.StepId = evt.StepId ?? string.Empty;
-            step.CompletedAt = observedAt;
-            step.Success = evt.Success;
-            step.OutputPreview = Truncate(evt.Output ?? string.Empty, 240);
-            step.Error = evt.Error ?? string.Empty;
-            step.WorkerId = evt.WorkerId ?? string.Empty;
-            step.NextStepId = evt.NextStepId ?? string.Empty;
-            step.BranchKey = evt.BranchKey ?? string.Empty;
-            step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
-            step.AssignedValue = evt.AssignedValue ?? string.Empty;
-            ReplaceMap(step.CompletionAnnotations, evt.Annotations);
-        }
-        else if (payload.Is(WorkflowSuspendedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowSuspendedEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.StepId = evt.StepId ?? string.Empty;
-            step.SuspensionType = evt.SuspensionType ?? string.Empty;
-            step.SuspensionPrompt = evt.Prompt ?? string.Empty;
-            step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
-            step.RequestedVariableName = evt.VariableName ?? string.Empty;
-        }
-        else if (payload.Is(WorkflowRoleActorLinkedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowRoleActorLinkedEvent>();
-            UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
-        }
-        else if (payload.Is(SubWorkflowBindingUpsertedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<SubWorkflowBindingUpsertedEvent>();
-            UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
-        }
+            Id = report.Id,
+            RootActorId = report.RootActorId,
+            CommandId = report.CommandId,
+            WorkflowName = report.WorkflowName,
+            Input = report.Input,
+            StateVersion = report.StateVersion,
+            LastEventId = report.LastEventId,
+            UpdatedAt = report.UpdatedAt,
+            Topology = report.Topology.Select(edge => new WorkflowExecutionTopologyEdge(edge.Parent, edge.Child)).ToList(),
+            Steps = report.Steps.Select(CloneStepTrace).ToList(),
+        };
     }
 
     private static WorkflowExecutionStepTrace GetOrCreateStep(
@@ -511,6 +407,51 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             EventType = eventType ?? string.Empty,
             Data = data?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal) ?? [],
         });
+    }
+
+    private static WorkflowExecutionTimelineEvent CloneTimelineEvent(WorkflowExecutionTimelineEvent source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowExecutionTimelineEvent
+        {
+            Timestamp = source.Timestamp,
+            Stage = source.Stage,
+            Message = source.Message,
+            AgentId = source.AgentId,
+            StepId = source.StepId,
+            StepType = source.StepType,
+            EventType = source.EventType,
+            Data = source.Data.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+        };
+    }
+
+    private static WorkflowExecutionStepTrace CloneStepTrace(WorkflowExecutionStepTrace source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowExecutionStepTrace
+        {
+            StepId = source.StepId,
+            StepType = source.StepType,
+            TargetRole = source.TargetRole,
+            RequestedAt = source.RequestedAt,
+            CompletedAt = source.CompletedAt,
+            Success = source.Success,
+            WorkerId = source.WorkerId,
+            OutputPreview = source.OutputPreview,
+            Error = source.Error,
+            RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            NextStepId = source.NextStepId,
+            BranchKey = source.BranchKey,
+            AssignedVariable = source.AssignedVariable,
+            AssignedValue = source.AssignedValue,
+            SuspensionType = source.SuspensionType,
+            SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
+            RequestedVariableName = source.RequestedVariableName,
+        };
     }
 
     private static void RefreshSummary(WorkflowRunInsightReportDocument readModel)
