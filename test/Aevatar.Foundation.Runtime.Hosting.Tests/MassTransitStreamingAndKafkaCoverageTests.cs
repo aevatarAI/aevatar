@@ -112,6 +112,78 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
     }
 
     [Fact]
+    public async Task MassTransitActorEventSubscriptionProvider_ShouldReuseSingleTransportSubscription()
+    {
+        var transport = new RecordingEnvelopeTransport();
+        var provider = new MassTransitActorEventSubscriptionProvider(
+            transport,
+            new MassTransitStreamOptions
+            {
+                StreamNamespace = "aevatar.events",
+            });
+        var actor1Messages = new List<string>();
+        var actor2Messages = new List<string>();
+
+        await using var actor1Subscription = await provider.SubscribeAsync<StringValue>("actor-1", value =>
+        {
+            actor1Messages.Add(value.Value);
+            return Task.CompletedTask;
+        });
+        await using var actor2Subscription = await provider.SubscribeAsync<StringValue>("actor-2", value =>
+        {
+            actor2Messages.Add(value.Value);
+            return Task.CompletedTask;
+        });
+
+        transport.SubscribeCallCount.Should().Be(1);
+        transport.ActiveSubscriptionCount.Should().Be(1);
+
+        await transport.PushAsync(CreateRecord("actor-1", "a-1"));
+        await transport.PushAsync(CreateRecord("actor-2", "a-2"));
+        await transport.PushAsync(CreateRecord("actor-3", "a-3"));
+
+        actor1Messages.Should().ContainSingle().Which.Should().Be("a-1");
+        actor2Messages.Should().ContainSingle().Which.Should().Be("a-2");
+    }
+
+    [Fact]
+    public async Task MassTransitActorEventSubscriptionProvider_ShouldFanOutLocallyAndReleaseTransportWhenIdle()
+    {
+        var transport = new RecordingEnvelopeTransport();
+        var provider = new MassTransitActorEventSubscriptionProvider(
+            transport,
+            new MassTransitStreamOptions
+            {
+                StreamNamespace = "aevatar.events",
+            });
+        var actorMessages = new List<string>();
+
+        var subscription1 = await provider.SubscribeAsync<StringValue>("actor-1", value =>
+        {
+            actorMessages.Add("first:" + value.Value);
+            return Task.CompletedTask;
+        });
+        var subscription2 = await provider.SubscribeAsync<StringValue>("actor-1", value =>
+        {
+            actorMessages.Add("second:" + value.Value);
+            return Task.CompletedTask;
+        });
+
+        transport.SubscribeCallCount.Should().Be(1);
+        transport.ActiveSubscriptionCount.Should().Be(1);
+
+        await transport.PushAsync(CreateRecord("actor-1", "shared"));
+
+        actorMessages.Should().BeEquivalentTo("first:shared", "second:shared");
+
+        await subscription1.DisposeAsync();
+        transport.ActiveSubscriptionCount.Should().Be(1);
+
+        await subscription2.DisposeAsync();
+        transport.ActiveSubscriptionCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MassTransitKafkaEnvelopeTransport_ShouldValidateArgumentsAndWireDispatcher()
     {
         var producer = DispatchProxy.Create<ITopicProducer<KafkaStreamEnvelopeMessage>, TopicProducerProxy>();
@@ -200,12 +272,42 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
         return context;
     }
 
+    private static MassTransitEnvelopeRecord CreateRecord(string actorId, string value)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-" + actorId + "-" + value,
+            Payload = Any.Pack(new StringValue { Value = value }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+        };
+
+        return new MassTransitEnvelopeRecord
+        {
+            StreamNamespace = "aevatar.events",
+            StreamId = actorId,
+            Payload = envelope.ToByteArray(),
+        };
+    }
+
     private sealed class RecordingEnvelopeTransport : IMassTransitEnvelopeTransport
     {
         private readonly Lock _lock = new();
         private readonly List<Func<MassTransitEnvelopeRecord, Task>> _handlers = [];
 
         public List<(string streamNamespace, string streamId, byte[] payload)> Published { get; } = [];
+
+        public int SubscribeCallCount { get; private set; }
+
+        public int ActiveSubscriptionCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _handlers.Count;
+                }
+            }
+        }
 
         public Task PublishAsync(
             string streamNamespace,
@@ -227,6 +329,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
 
             lock (_lock)
             {
+                SubscribeCallCount++;
                 _handlers.Add(handler);
             }
 

@@ -8,6 +8,10 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
 {
     private readonly IMassTransitEnvelopeTransport _transport;
     private readonly MassTransitStreamOptions _options;
+    private readonly Lock _gate = new();
+    private readonly Dictionary<string, List<Subscriber>> _subscribers = new(StringComparer.Ordinal);
+    private Task<IAsyncDisposable>? _transportSubscriptionTask;
+    private int _subscriberCount;
 
     public MassTransitActorEventSubscriptionProvider(
         IMassTransitEnvelopeTransport transport,
@@ -17,7 +21,7 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
-    public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+    public async Task<IAsyncDisposable> SubscribeAsync<TMessage>(
         string actorId,
         Func<TMessage, Task> handler,
         CancellationToken ct = default)
@@ -25,37 +29,193 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(handler);
+        ct.ThrowIfCancellationRequested();
 
-        var descriptor = typeof(TMessage) == typeof(EventEnvelope) ? null : new TMessage().Descriptor;
-        return _transport.SubscribeAsync(async record =>
+        var subscriber = Subscriber.Create(handler);
+        Task<IAsyncDisposable> transportSubscriptionTask;
+
+        lock (_gate)
         {
-            if (!string.Equals(record.StreamNamespace, _options.StreamNamespace, StringComparison.Ordinal) ||
-                !string.Equals(record.StreamId, actorId, StringComparison.Ordinal) ||
-                record.Payload is not { Length: > 0 })
+            if (!_subscribers.TryGetValue(actorId, out var actorSubscribers))
+            {
+                actorSubscribers = [];
+                _subscribers[actorId] = actorSubscribers;
+            }
+
+            actorSubscribers.Add(subscriber);
+            _subscriberCount++;
+            transportSubscriptionTask = _transportSubscriptionTask ??= _transport.SubscribeAsync(DispatchRecordAsync, ct);
+        }
+
+        try
+        {
+            await transportSubscriptionTask;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                RemoveSubscriberUnsafe(actorId, subscriber);
+
+                if (ReferenceEquals(_transportSubscriptionTask, transportSubscriptionTask))
+                    _transportSubscriptionTask = null;
+            }
+
+            throw;
+        }
+
+        await ReleaseTransportSubscriptionIfIdleAsync();
+        return new SubscriptionLease(this, actorId, subscriber);
+    }
+
+    private async Task DispatchRecordAsync(MassTransitEnvelopeRecord record)
+    {
+        if (!string.Equals(record.StreamNamespace, _options.StreamNamespace, StringComparison.Ordinal) ||
+            record.Payload is not { Length: > 0 })
+        {
+            return;
+        }
+
+        Subscriber[] subscribers;
+        lock (_gate)
+        {
+            if (!_subscribers.TryGetValue(record.StreamId, out var actorSubscribers) ||
+                actorSubscribers.Count == 0)
             {
                 return;
             }
 
-            EventEnvelope envelope;
-            try
+            subscribers = actorSubscribers.ToArray();
+        }
+
+        EventEnvelope envelope;
+        try
+        {
+            envelope = EventEnvelope.Parser.ParseFrom(record.Payload);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var subscriber in subscribers)
+        {
+            await subscriber.DispatchAsync(envelope);
+        }
+    }
+
+    private async ValueTask UnsubscribeAsync(string actorId, Subscriber subscriber)
+    {
+        Task<IAsyncDisposable>? transportSubscriptionTask = null;
+
+        lock (_gate)
+        {
+            if (!RemoveSubscriberUnsafe(actorId, subscriber))
+                return;
+
+            if (_subscriberCount == 0 && _transportSubscriptionTask != null)
             {
-                envelope = EventEnvelope.Parser.ParseFrom(record.Payload);
+                if (_transportSubscriptionTask.IsCompletedSuccessfully)
+                {
+                    transportSubscriptionTask = _transportSubscriptionTask;
+                }
+
+                _transportSubscriptionTask = null;
             }
-            catch
+        }
+
+        if (transportSubscriptionTask != null)
+            await (await transportSubscriptionTask).DisposeAsync();
+    }
+
+    private async Task ReleaseTransportSubscriptionIfIdleAsync()
+    {
+        Task<IAsyncDisposable>? transportSubscriptionTask = null;
+
+        lock (_gate)
+        {
+            if (_subscriberCount != 0 ||
+                _transportSubscriptionTask is not { IsCompletedSuccessfully: true } currentTask)
             {
                 return;
             }
 
+            _transportSubscriptionTask = null;
+            transportSubscriptionTask = currentTask;
+        }
+
+        if (transportSubscriptionTask != null)
+            await (await transportSubscriptionTask).DisposeAsync();
+    }
+
+    private bool RemoveSubscriberUnsafe(string actorId, Subscriber subscriber)
+    {
+        if (!_subscribers.TryGetValue(actorId, out var actorSubscribers) ||
+            !actorSubscribers.Remove(subscriber))
+        {
+            return false;
+        }
+
+        _subscriberCount--;
+        if (actorSubscribers.Count == 0)
+            _subscribers.Remove(actorId);
+
+        return true;
+    }
+
+    private sealed class SubscriptionLease : IAsyncDisposable
+    {
+        private readonly MassTransitActorEventSubscriptionProvider _owner;
+        private readonly string _actorId;
+        private readonly Subscriber _subscriber;
+        private int _disposed;
+
+        public SubscriptionLease(
+            MassTransitActorEventSubscriptionProvider owner,
+            string actorId,
+            Subscriber subscriber)
+        {
+            _owner = owner;
+            _actorId = actorId;
+            _subscriber = subscriber;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return ValueTask.CompletedTask;
+
+            return new ValueTask(_owner.UnsubscribeAsync(_actorId, _subscriber).AsTask());
+        }
+    }
+
+    private sealed class Subscriber
+    {
+        private readonly Func<EventEnvelope, Task> _dispatchAsync;
+
+        private Subscriber(Func<EventEnvelope, Task> dispatchAsync)
+        {
+            _dispatchAsync = dispatchAsync;
+        }
+
+        public Task DispatchAsync(EventEnvelope envelope) => _dispatchAsync(envelope);
+
+        public static Subscriber Create<TMessage>(Func<TMessage, Task> handler)
+            where TMessage : class, IMessage, new()
+        {
             if (typeof(TMessage) == typeof(EventEnvelope))
             {
-                await ((Func<EventEnvelope, Task>)(object)handler)(envelope);
-                return;
+                return new Subscriber(envelope => ((Func<EventEnvelope, Task>)(object)handler)(envelope));
             }
 
-            if (envelope.Payload == null || descriptor == null || !envelope.Payload.Is(descriptor))
-                return;
+            var descriptor = new TMessage().Descriptor;
+            return new Subscriber(envelope =>
+            {
+                if (envelope.Payload == null || !envelope.Payload.Is(descriptor))
+                    return Task.CompletedTask;
 
-            await handler(envelope.Payload.Unpack<TMessage>());
-        }, ct);
+                return handler(envelope.Payload.Unpack<TMessage>());
+            });
+        }
     }
 }

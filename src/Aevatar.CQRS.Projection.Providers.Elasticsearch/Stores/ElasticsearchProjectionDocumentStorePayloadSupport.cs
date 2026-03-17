@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 {
     private const string DefaultQueryPrimarySortField = "CreatedAt";
-    private const string DefaultQueryTiebreakSortField = "_doc";
+    private const string DefaultQueryTiebreakSortField = "_id";
 
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,

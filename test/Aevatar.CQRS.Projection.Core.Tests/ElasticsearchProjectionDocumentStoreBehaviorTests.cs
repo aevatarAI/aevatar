@@ -73,7 +73,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         searchRequest.PathAndQuery.Should().EndWith("/_search");
         searchRequest.Body.Should().Contain("\"sort\"");
         searchRequest.Body.Should().Contain("\"CreatedAt\"");
-        searchRequest.Body.Should().Contain("\"_doc\"");
+        searchRequest.Body.Should().Contain("\"_id\"");
     }
 
     [Fact]
