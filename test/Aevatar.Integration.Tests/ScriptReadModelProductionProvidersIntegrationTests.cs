@@ -226,6 +226,20 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
         string documentId,
         CancellationToken ct)
     {
+        var document = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            token => TryFindSingleElasticsearchDocumentAsync(client, indexPattern, documentId, token),
+            static candidate => candidate.HasValue,
+            $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`, but no matching document was found.",
+            ct);
+        return document.Value;
+    }
+
+    private static async Task<JsonElement?> TryFindSingleElasticsearchDocumentAsync(
+        HttpClient client,
+        string indexPattern,
+        string documentId,
+        CancellationToken ct)
+    {
         var indices = indexPattern.Contains('*', StringComparison.Ordinal)
             ? await ResolveElasticsearchIndicesAsync(client, indexPattern, ct)
             : new[] { indexPattern };
@@ -248,8 +262,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             return document.RootElement.GetProperty("_source").Clone();
         }
 
-        throw new InvalidOperationException(
-            $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`, but no matching document was found.");
+        return null;
     }
 
     private static async Task DeleteElasticsearchIndicesAsync(
