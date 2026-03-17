@@ -4,28 +4,6 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
-    public WorkflowActorSnapshot ToActorSnapshot(WorkflowRunInsightReportDocument source)
-    {
-        var summary = source.Summary;
-        return new WorkflowActorSnapshot
-        {
-            ActorId = source.RootActorId,
-            WorkflowName = source.WorkflowName,
-            LastCommandId = source.CommandId,
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
-            StateVersion = source.StateVersion,
-            LastEventId = source.LastEventId,
-            LastUpdatedAt = source.UpdatedAt,
-            LastSuccess = source.Success,
-            LastOutput = source.FinalOutput,
-            LastError = source.FinalError,
-            TotalSteps = summary.TotalSteps,
-            RequestedSteps = summary.RequestedSteps,
-            CompletedSteps = summary.CompletedSteps,
-            RoleReplyCount = summary.RoleReplyCount,
-        };
-    }
-
     public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorSnapshot
@@ -45,6 +23,32 @@ public sealed class WorkflowExecutionReadModelMapper
             CompletedSteps = 0,
             RoleReplyCount = 0,
         };
+    }
+
+    public WorkflowActorSnapshot ToActorSnapshot(
+        WorkflowExecutionCurrentStateDocument source,
+        WorkflowRunInsightReportDocument? report)
+    {
+        var snapshot = ToActorSnapshot(source);
+        if (report == null)
+            return snapshot;
+
+        snapshot.WorkflowName = string.IsNullOrWhiteSpace(snapshot.WorkflowName)
+            ? report.WorkflowName
+            : snapshot.WorkflowName;
+        snapshot.CompletionStatus = MapCompletionStatus(report.CompletionStatus);
+        snapshot.LastSuccess = report.Success;
+        snapshot.LastOutput = string.IsNullOrWhiteSpace(snapshot.LastOutput)
+            ? report.FinalOutput
+            : snapshot.LastOutput;
+        snapshot.LastError = string.IsNullOrWhiteSpace(snapshot.LastError)
+            ? report.FinalError
+            : snapshot.LastError;
+        snapshot.TotalSteps = report.Summary.TotalSteps;
+        snapshot.RequestedSteps = report.Summary.RequestedSteps;
+        snapshot.CompletedSteps = report.Summary.CompletedSteps;
+        snapshot.RoleReplyCount = report.Summary.RoleReplyCount;
+        return snapshot;
     }
 
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
@@ -128,12 +132,13 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus status) =>
-        status switch
+    private static WorkflowRunCompletionStatus MapCompletionStatus(
+        WorkflowExecutionCompletionStatus status)
+    {
+        return status switch
         {
             WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
             WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
             WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
@@ -141,4 +146,5 @@ public sealed class WorkflowExecutionReadModelMapper
             WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.Running,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
+    }
 }

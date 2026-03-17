@@ -62,7 +62,7 @@ message WorkflowRunTimelineDocument {
   repeated WorkflowExecutionTimelineEvent timeline_entries = 7;
 }
 
-message WorkflowRunGraphMirrorReadModel {
+message WorkflowRunGraphArtifactDocument {
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;

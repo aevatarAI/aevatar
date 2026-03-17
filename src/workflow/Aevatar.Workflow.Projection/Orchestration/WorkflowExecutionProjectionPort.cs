@@ -7,34 +7,32 @@ using Aevatar.Workflow.Projection.Configuration;
 namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionProjectionPort
-    : EventSinkProjectionLifecyclePortServiceBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
+    : EventSinkProjectionLifecyclePortBase<IWorkflowExecutionProjectionLease, WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>,
       IWorkflowExecutionProjectionPort
 {
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
-        IProjectionPortActivationService<WorkflowExecutionRuntimeLease> activationService,
-        IProjectionPortReleaseService<WorkflowExecutionRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope> liveSinkForwarder)
+        IProjectionSessionActivationService<WorkflowExecutionRuntimeLease> activationService,
+        IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease> releaseService,
+        IProjectionSessionEventHub<WorkflowRunEventEnvelope> sessionEventHub)
         : base(
             () => options.Enabled,
             activationService,
             releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
+            sessionEventHub)
     {
     }
 
     public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
-        string workflowName,
-        string input,
         string commandId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            rootActorId,
-            workflowName,
-            input,
-            commandId,
+            new ProjectionSessionStartRequest
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
+                SessionId = commandId,
+            },
             ct);
 }

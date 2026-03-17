@@ -152,21 +152,13 @@ public sealed class GrpcToolsScriptProtoCompiler : IScriptProtoCompiler
     private static string ResolveWellKnownProtoRoot()
     {
         const string homebrewInclude = "/opt/homebrew/include";
-        if (ContainsDescriptorProto(homebrewInclude))
+        if (Directory.Exists(homebrewInclude))
             return homebrewInclude;
 
         var path = Path.Combine(ResolveGrpcToolsPackageRoot(), "build", "native", "include");
-        if (!ContainsDescriptorProto(path))
+        if (!Directory.Exists(path))
             throw new InvalidOperationException($"Grpc.Tools well-known proto include directory was not found at `{path}`.");
         return path;
-    }
-
-    private static bool ContainsDescriptorProto(string root)
-    {
-        if (!Directory.Exists(root))
-            return false;
-
-        return File.Exists(Path.Combine(root, "google", "protobuf", "descriptor.proto"));
     }
 
     private static string ResolveGrpcToolsPackageRoot()

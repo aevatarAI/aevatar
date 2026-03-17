@@ -3,13 +3,11 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptExecutionProjectionContext
-    : IProjectionContext, IProjectionStreamSubscriptionContext
+    : IProjectionSessionContext
 {
-    public required string ProjectionId { get; init; }
+    public required string SessionId { get; init; }
 
     public required string RootActorId { get; init; }
 
-    string IProjectionContext.ProjectionId => ProjectionId;
-
-    public IActorStreamSubscriptionLease? StreamSubscriptionLease { get; set; }
+    public required string ProjectionKind { get; init; }
 }

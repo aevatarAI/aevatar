@@ -6,6 +6,4 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 public interface IProjectionRuntimeLease
 {
     string RootEntityId { get; }
-
-    int GetLiveSinkSubscriptionCount();
 }

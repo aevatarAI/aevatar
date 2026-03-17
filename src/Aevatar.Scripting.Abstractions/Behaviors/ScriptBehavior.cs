@@ -47,18 +47,15 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
             : registration.Apply(currentState, domainEvent, context);
     }
 
-    public IMessage? ProjectReadModel(
+    public IMessage? BuildReadModel(
         IMessage? currentState,
-        IMessage domainEvent,
         ScriptFactContext context)
     {
-        ArgumentNullException.ThrowIfNull(domainEvent);
         ArgumentNullException.ThrowIfNull(context);
 
-        var registration = ResolveDomainEventRegistration(domainEvent);
-        return registration.Project == null
+        return Descriptor.ReadModelProjector == null
             ? null
-            : registration.Project(currentState, domainEvent, context);
+            : Descriptor.ReadModelProjector(currentState, context);
     }
 
     private ScriptBehaviorDescriptor CreateDescriptor()
@@ -86,6 +83,7 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
         private readonly Dictionary<string, ScriptCommandRegistration> _commands = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptSignalRegistration> _signals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptDomainEventRegistration> _domainEvents = new(StringComparer.Ordinal);
+        private Func<TBuilderState?, ScriptFactContext, TBuilderReadModel?>? _readModelProjector;
 
         public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnCommand<TCommand>(
             Func<TCommand, ScriptCommandContext<TBuilderState>, CancellationToken, Task> handler)
@@ -152,13 +150,9 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
         }
 
         public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> OnEvent<TEvent>(
-            Func<TBuilderState?, TEvent, ScriptFactContext, TBuilderState?>? apply = null,
-            Func<TBuilderState?, TEvent, ScriptFactContext, TBuilderReadModel?>? project = null)
+            Func<TBuilderState?, TEvent, ScriptFactContext, TBuilderState?>? apply = null)
             where TEvent : class, IMessage<TEvent>, new()
         {
-            if (apply == null && project == null)
-                throw new InvalidOperationException("At least one of apply/project must be provided for a domain event registration.");
-
             var typeUrl = ScriptMessageTypes.GetTypeUrl<TEvent>();
             if (_domainEvents.ContainsKey(typeUrl))
                 throw new InvalidOperationException($"Domain event type `{typeUrl}` is already registered.");
@@ -171,13 +165,18 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
                     : (currentState, domainEvent, factContext) => apply(
                         CastOptional<TBuilderState>(currentState),
                         CastRequired<TEvent>(domainEvent),
-                        factContext),
-                project == null
-                    ? null
-                    : (currentState, domainEvent, factContext) => project(
-                        CastOptional<TBuilderState>(currentState),
-                        CastRequired<TEvent>(domainEvent),
                         factContext));
+            return this;
+        }
+
+        public IScriptBehaviorBuilder<TBuilderState, TBuilderReadModel> ProjectState(
+            Func<TBuilderState?, ScriptFactContext, TBuilderReadModel?> project)
+        {
+            ArgumentNullException.ThrowIfNull(project);
+            if (_readModelProjector != null)
+                throw new InvalidOperationException("Read model projector is already registered.");
+
+            _readModelProjector = project;
             return this;
         }
 
@@ -195,6 +194,11 @@ public abstract class ScriptBehavior<TState, TReadModel> : IScriptBehaviorBridge
                 new Dictionary<string, ScriptCommandRegistration>(_commands, StringComparer.Ordinal),
                 new Dictionary<string, ScriptSignalRegistration>(_signals, StringComparer.Ordinal),
                 new Dictionary<string, ScriptDomainEventRegistration>(_domainEvents, StringComparer.Ordinal),
+                _readModelProjector == null
+                    ? null
+                    : (currentState, factContext) => _readModelProjector(
+                        CastOptional<TBuilderState>(currentState),
+                        factContext),
                 ByteString.Empty,
                 new ScriptRuntimeSemanticsSpec());
         }

@@ -3,6 +3,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
+using Aevatar.Scripting.Core.Materialization;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,13 +12,19 @@ namespace Aevatar.Scripting.Application.Runtime;
 public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 {
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
+    private readonly IScriptNativeProjectionBuilder _nativeProjectionBuilder;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptBehaviorDispatcher(
         IScriptBehaviorArtifactResolver artifactResolver,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
+        IScriptNativeProjectionBuilder nativeProjectionBuilder,
         IProtobufMessageCodec codec)
     {
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
+        _nativeProjectionBuilder = nativeProjectionBuilder ?? throw new ArgumentNullException(nameof(nativeProjectionBuilder));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
     }
 
@@ -82,8 +89,11 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             ValidateDomainEventContract(request, artifact.Descriptor, domainEvents);
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var materializationPlan = _materializationCompiler.GetOrCompile(
+                artifact,
+                request.ReadModelSchemaHash,
+                request.ReadModelSchemaVersion);
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
-            var factsWithEvents = new List<(IMessage DomainEvent, ScriptDomainFactCommitted Fact)>(domainEvents.Count);
             var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)
             {
@@ -110,22 +120,29 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     StateVersion = request.CurrentStateVersion + sequence,
                     OccurredAtUnixTimeMs = occurredAtUnixTimeMs,
                 };
-                committed.Add(fact);
-                factsWithEvents.Add((domainEvent, fact));
 
                 projectedState = behavior.ApplyDomainEvent(
                     projectedState,
                     domainEvent,
                     CreateFactContext(request, fact, eventTypeUrl));
-            }
 
-            foreach (var (domainEvent, fact) in factsWithEvents)
-            {
-                fact.ReadModelPayload = _codec.Pack(
-                    behavior.ProjectReadModel(
-                        projectedState,
-                        domainEvent,
-                        CreateFactContext(request, fact, fact.EventType ?? string.Empty)))?.Clone();
+                var factContext = CreateFactContext(request, fact, fact.EventType ?? string.Empty);
+                var semanticReadModel = behavior.BuildReadModel(
+                    projectedState,
+                    factContext);
+                fact.ReadModelPayload = _codec.Pack(semanticReadModel)?.Clone();
+                fact.NativeDocument = _nativeProjectionBuilder.BuildDocument(
+                    semanticReadModel,
+                    materializationPlan);
+                fact.NativeGraph = _nativeProjectionBuilder.BuildGraph(
+                    fact.ActorId ?? request.ActorId,
+                    fact.ScriptId ?? request.ScriptId,
+                    fact.DefinitionActorId ?? request.DefinitionActorId,
+                    fact.Revision ?? request.Revision,
+                    semanticReadModel,
+                    materializationPlan);
+
+                committed.Add(fact);
             }
 
             return committed;

@@ -6,7 +6,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptEvolutionRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<ScriptEvolutionSessionCompletedEvent>>,
+    : EventSinkProjectionRuntimeLeaseBase<ScriptEvolutionSessionCompletedEvent>,
       IScriptEvolutionProjectionLease,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<ScriptEvolutionSessionProjectionContext>
@@ -15,7 +15,7 @@ public sealed class ScriptEvolutionRuntimeLease
         : base(context.RootActorId)
     {
         Context = context ?? throw new ArgumentNullException(nameof(context));
-        ProposalId = context.ProposalId;
+        ProposalId = context.SessionId;
     }
 
     public string ActorId => RootEntityId;

@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 
 namespace Aevatar.Workflow.Projection.Configuration;
 
@@ -7,8 +6,7 @@ namespace Aevatar.Workflow.Projection.Configuration;
 /// Feature flags for chat projection pipeline.
 /// </summary>
 public sealed class WorkflowExecutionProjectionOptions
-    : IProjectionRuntimeOptions,
-      IProjectionDispatchCompensationOptions
+    : IProjectionRuntimeOptions
 {
 
     /// <summary>
@@ -28,9 +26,9 @@ public sealed class WorkflowExecutionProjectionOptions
     }
 
     /// <summary>
-    /// Writes run report artifacts (json/html).
+    /// Writes run report documents/export outputs (json/html).
     /// </summary>
-    public bool EnableRunReportArtifacts { get; set; } = true;
+    public bool EnableRunReportDocuments { get; set; } = true;
 
     /// <summary>
     /// Max wait time for one run projection completion signal.
@@ -52,69 +50,4 @@ public sealed class WorkflowExecutionProjectionOptions
     /// </summary>
     public bool ValidateGraphProviderOnStartup { get; set; } = true;
 
-    /// <summary>
-    /// Projection ownership lease TTL in milliseconds.
-    /// </summary>
-    public long ProjectionOwnershipLeaseTtlMs { get; set; } =
-        ProjectionOwnershipCoordinatorOptions.DefaultLeaseTtlMs;
-
-    /// <summary>
-    /// Enables durable outbox replay for projection store dispatch compensation.
-    /// </summary>
-    public bool EnableDispatchCompensationReplay { get; set; } = true;
-
-    /// <summary>
-    /// Poll interval for compensation replay worker.
-    /// </summary>
-    public int DispatchCompensationReplayPollIntervalMs { get; set; } = 1000;
-
-    /// <summary>
-    /// Max records replayed in one compensation polling cycle.
-    /// </summary>
-    public int DispatchCompensationReplayBatchSize { get; set; } = 20;
-
-    /// <summary>
-    /// Base retry delay for failed compensation replay.
-    /// </summary>
-    public int DispatchCompensationReplayBaseDelayMs { get; set; } = 1000;
-
-    /// <summary>
-    /// Max retry delay for failed compensation replay.
-    /// </summary>
-    public int DispatchCompensationReplayMaxDelayMs { get; set; } = 60_000;
-
-    /// <summary>
-    /// Enables durable replay for detached workflow cleanup.
-    /// </summary>
-    public bool EnableDetachedCleanupReplay { get; set; } = true;
-
-    /// <summary>
-    /// Poll interval for detached cleanup replay worker.
-    /// </summary>
-    public int DetachedCleanupReplayPollIntervalMs { get; set; } = 1000;
-
-    /// <summary>
-    /// Max detached cleanup records replayed in one polling cycle.
-    /// </summary>
-    public int DetachedCleanupReplayBatchSize { get; set; } = 20;
-
-    /// <summary>
-    /// Max time to wait for projection release completion acknowledgement before retrying detached cleanup.
-    /// </summary>
-    public int DetachedCleanupReleaseAckTimeoutMs { get; set; } = 5000;
-
-    /// <summary>
-    /// After this many release-ack timeouts, detached cleanup force-finalizes even if ownership still looks active.
-    /// </summary>
-    public int DetachedCleanupForceFinalizeAfterAckTimeoutAttempts { get; set; } = 3;
-
-    /// <summary>
-    /// Base retry delay for failed detached cleanup replay.
-    /// </summary>
-    public int DetachedCleanupRetryBaseDelayMs { get; set; } = 1000;
-
-    /// <summary>
-    /// Max retry delay for failed detached cleanup replay.
-    /// </summary>
-    public int DetachedCleanupRetryMaxDelayMs { get; set; } = 60_000;
 }

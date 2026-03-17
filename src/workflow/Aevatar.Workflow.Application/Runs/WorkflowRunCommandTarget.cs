@@ -15,8 +15,8 @@ internal sealed class WorkflowRunCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
+    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
-    private readonly IWorkflowRunDetachedCleanupScheduler _cleanupScheduler;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -24,8 +24,8 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowRunActorPort actorPort,
-        IWorkflowRunDetachedCleanupScheduler cleanupScheduler)
+        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
+        IWorkflowRunActorPort actorPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
@@ -33,8 +33,8 @@ internal sealed class WorkflowRunCommandTarget
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
-        _cleanupScheduler = cleanupScheduler ?? throw new ArgumentNullException(nameof(cleanupScheduler));
     }
 
     public IActor Actor { get; }
@@ -56,6 +56,9 @@ internal sealed class WorkflowRunCommandTarget
 
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
+
+    public Task<bool> ActivateMaterializationAsync(CancellationToken ct = default) =>
+        _materializationActivationPort.ActivateAsync(ActorId, ct);
 
     public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
     {
@@ -177,18 +180,6 @@ internal sealed class WorkflowRunCommandTarget
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
 
-    public async Task ReleaseDetachedSessionOwnershipAsync()
-    {
-        var projectionLease = ProjectionLease;
-        if (projectionLease == null)
-            return;
-
-        if (projectionLease is IWorkflowExecutionProjectionOwnershipLease ownershipLease)
-            await ownershipLease.StopOwnershipHeartbeatAsync();
-
-        ProjectionLease = null;
-    }
-
     private static async Task CompleteAndDisposeLiveSinkAsync(
         IEventSink<WorkflowRunEventEnvelope> sink,
         CancellationToken ct)
@@ -270,19 +261,6 @@ internal sealed class WorkflowRunCommandTarget
             return;
         }
 
-        await DetachLiveObservationAsync(ct);
-        await ScheduleDetachedCleanupAsync(receipt, ct);
-        await ReleaseDetachedSessionOwnershipAsync();
+        await ReleaseAsync(destroyCreatedActors: false, ct: ct);
     }
-
-    private Task ScheduleDetachedCleanupAsync(
-        WorkflowChatRunAcceptedReceipt receipt,
-        CancellationToken ct) =>
-        _cleanupScheduler.ScheduleAsync(
-            new WorkflowRunDetachedCleanupRequest(
-                receipt.ActorId,
-                WorkflowName,
-                receipt.CommandId,
-                CreatedActorIds),
-            ct);
 }

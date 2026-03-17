@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptReadModelProjector
-    : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
+    : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptReadModelDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -21,17 +21,8 @@ public sealed class ScriptReadModelProjector
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
-    public ValueTask InitializeAsync(
-        ScriptExecutionProjectionContext context,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
-
     public async ValueTask ProjectAsync(
-        ScriptExecutionProjectionContext context,
+        ScriptExecutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -63,14 +54,4 @@ public sealed class ScriptReadModelProjector
         await _writeDispatcher.UpsertAsync(document, ct);
     }
 
-    public ValueTask CompleteAsync(
-        ScriptExecutionProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
 }

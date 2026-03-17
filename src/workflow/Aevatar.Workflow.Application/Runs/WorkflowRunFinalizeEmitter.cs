@@ -9,11 +9,11 @@ namespace Aevatar.Workflow.Application.Runs;
 public sealed class WorkflowRunFinalizeEmitter
     : ICommandFinalizeEmitter<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus, WorkflowRunEventEnvelope>
 {
-    private readonly IWorkflowExecutionProjectionQueryPort _projectionQueryPort;
+    private readonly IWorkflowExecutionCurrentStateQueryPort _currentStateQueryPort;
 
-    public WorkflowRunFinalizeEmitter(IWorkflowExecutionProjectionQueryPort projectionQueryPort)
+    public WorkflowRunFinalizeEmitter(IWorkflowExecutionCurrentStateQueryPort currentStateQueryPort)
     {
-        _projectionQueryPort = projectionQueryPort ?? throw new ArgumentNullException(nameof(projectionQueryPort));
+        _currentStateQueryPort = currentStateQueryPort ?? throw new ArgumentNullException(nameof(currentStateQueryPort));
     }
 
     public async Task EmitAsync(
@@ -56,7 +56,7 @@ public sealed class WorkflowRunFinalizeEmitter
     {
         try
         {
-            return await _projectionQueryPort.GetActorSnapshotAsync(actorId, ct);
+            return await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -72,7 +72,7 @@ public sealed class WorkflowRunFinalizeEmitter
     {
         try
         {
-            return await _projectionQueryPort.GetActorProjectionStateAsync(actorId, ct);
+            return await _currentStateQueryPort.GetActorProjectionStateAsync(actorId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -24,6 +24,5 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="workflow_state.proto" GrpcServices="None" />
-    <Protobuf Include="workflow_run_insight.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

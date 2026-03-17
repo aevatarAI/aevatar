@@ -22,6 +22,10 @@ public sealed partial record ScriptBehaviorDispatchRequest(
 
 public sealed partial record ScriptBehaviorDispatchRequest
 {
+    public string ReadModelSchemaVersion { get; init; } = string.Empty;
+
+    public string ReadModelSchemaHash { get; init; } = string.Empty;
+
     public ScriptBehaviorDispatchRequest(
         string ActorId,
         string DefinitionActorId,

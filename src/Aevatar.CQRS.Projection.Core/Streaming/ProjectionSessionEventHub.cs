@@ -8,6 +8,7 @@ namespace Aevatar.CQRS.Projection.Core.Streaming;
 /// Generic stream-backed session event hub keyed by scope/session.
 /// </summary>
 public sealed class ProjectionSessionEventHub<TEvent> : IProjectionSessionEventHub<TEvent>
+    where TEvent : class
 {
     private readonly IStreamProvider _streamProvider;
     private readonly IProjectionSessionEventCodec<TEvent> _codec;

@@ -26,8 +26,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="projection_dispatch_compensation_messages.proto" GrpcServices="None" />
-    <Protobuf Include="projection_ownership_messages.proto" GrpcServices="None" />
+    <Protobuf Include="projection_scope_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="projection_session_event_transport.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

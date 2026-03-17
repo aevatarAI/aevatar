@@ -5,7 +5,7 @@ using Aevatar.Scripting.Projection.Orchestration;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptExecutionSessionEventProjector
-    : ProjectionSessionEventProjectorBase<ScriptExecutionProjectionContext, IReadOnlyList<string>, EventEnvelope>
+    : ProjectionSessionEventProjectorBase<ScriptExecutionProjectionContext, EventEnvelope>
 {
     public ScriptExecutionSessionEventProjector(
         IProjectionSessionEventHub<EventEnvelope> sessionEventHub)
@@ -24,7 +24,7 @@ public sealed class ScriptExecutionSessionEventProjector
         [
             new ProjectionSessionEventEntry<EventEnvelope>(
                 context.RootActorId,
-                context.RootActorId,
+                context.SessionId,
                 envelope)
         ];
     }
