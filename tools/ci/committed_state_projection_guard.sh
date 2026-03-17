@@ -13,6 +13,7 @@ legacy_projection_hits="$(
     -g '*.proto' \
     -g '!**/bin/**' \
     -g '!**/obj/**' \
+    -g '!test/Aevatar.Architecture.Tests/**' \
     || true
 )"
 
