@@ -56,7 +56,7 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status404NotFound);
     }
 
-    internal static async Task HandleChat(
+    public static async Task HandleChat(
         HttpContext http,
         ChatInput input,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,

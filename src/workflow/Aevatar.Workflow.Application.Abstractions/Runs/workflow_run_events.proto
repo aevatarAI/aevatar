@@ -209,3 +209,12 @@ message WorkflowProjectionSinkFailureCustomPayload {
   string event_type = 2;
   string reason = 3;
 }
+
+message WorkflowObservedEnvelopeCustomPayload {
+  string event_id = 1;
+  string payload_type_url = 2;
+  string publisher_actor_id = 3;
+  string correlation_id = 4;
+  int64 state_version = 5;
+  google.protobuf.Any payload = 6;
+}

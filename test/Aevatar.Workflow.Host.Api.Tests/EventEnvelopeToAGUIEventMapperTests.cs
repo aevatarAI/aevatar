@@ -458,16 +458,32 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void UnknownOrNullPayload_ShouldReturnEmpty()
+    public void UnknownPayload_ShouldFallbackToRawObservedCustomEvent()
     {
-        var unknown = CreateMapper().Map(WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
+        var unknownEnvelope = WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }, version: 7);
+
+        var unknown = CreateMapper().Map(unknownEnvelope);
+
+        unknown.Should().ContainSingle();
+        unknown[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        unknown[0].Custom.Name.Should().Be("aevatar.raw.observed");
+        var payload = unknown[0].Custom.Payload.Unpack<WorkflowObservedEnvelopeCustomPayload>();
+        payload.EventId.Should().Be(unknownEnvelope.Id);
+        payload.CorrelationId.Should().Be("cmd-1");
+        payload.StateVersion.Should().Be(7);
+        payload.PayloadTypeUrl.Should().Contain(nameof(ParentChangedEvent));
+        payload.Payload.Unpack<ParentChangedEvent>().OldParent.Should().Be("a");
+    }
+
+    [Fact]
+    public void NullPayload_ShouldReturnEmpty()
+    {
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("x", TopologyAudience.Children),
         });
 
-        unknown.Should().BeEmpty();
         nullPayload.Should().BeEmpty();
     }
 

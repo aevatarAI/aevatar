@@ -42,7 +42,11 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
             output.AddRange(mapped);
         }
 
-        return output;
+        if (output.Count > 0)
+            return output;
+
+        var rawObservedEvent = CreateRawObservedEvent(envelope, mappedEnvelope);
+        return rawObservedEvent == null ? [] : [rawObservedEvent];
     }
 
     private static EventEnvelope? ResolveMappedEnvelope(EventEnvelope envelope)
@@ -54,6 +58,41 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
         }
 
         return envelope.Payload == null ? null : envelope;
+    }
+
+    private static WorkflowRunEventEnvelope? CreateRawObservedEvent(
+        EventEnvelope sourceEnvelope,
+        EventEnvelope mappedEnvelope)
+    {
+        if (mappedEnvelope.Payload == null)
+            return null;
+
+        var eventId = mappedEnvelope.Id ?? string.Empty;
+        var stateVersion = 0L;
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(sourceEnvelope, out _, out var observedEventId, out var observedStateVersion))
+        {
+            if (!string.IsNullOrWhiteSpace(observedEventId))
+                eventId = observedEventId;
+            stateVersion = observedStateVersion;
+        }
+
+        return new WorkflowRunEventEnvelope
+        {
+            Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(mappedEnvelope.Timestamp),
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = eventId,
+                    PayloadTypeUrl = mappedEnvelope.Payload.TypeUrl ?? string.Empty,
+                    PublisherActorId = mappedEnvelope.Route?.PublisherActorId ?? string.Empty,
+                    CorrelationId = mappedEnvelope.Propagation?.CorrelationId ?? string.Empty,
+                    StateVersion = stateVersion,
+                    Payload = mappedEnvelope.Payload.Clone(),
+                }),
+            },
+        };
     }
 }
 

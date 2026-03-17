@@ -7,7 +7,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 {
     private const string DefaultQueryPrimarySortField = "CreatedAt";
-    private const string DefaultQueryTiebreakSortField = "_id";
+    private const string DefaultQueryTiebreakSortField = "Id.keyword";
 
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,
@@ -202,12 +202,16 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 
     private static object BuildTiebreakSortClause()
     {
+        var spec = new Dictionary<string, object?>
+        {
+            ["order"] = "desc",
+            ["missing"] = "_last",
+            ["unmapped_type"] = "keyword",
+        };
+
         return new Dictionary<string, object?>
         {
-            [DefaultQueryTiebreakSortField] = new Dictionary<string, object?>
-            {
-                ["order"] = "desc",
-            },
+            [DefaultQueryTiebreakSortField] = spec,
         };
     }
 

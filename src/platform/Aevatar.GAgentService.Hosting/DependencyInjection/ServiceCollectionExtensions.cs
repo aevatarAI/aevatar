@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
@@ -56,6 +57,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.AddOptions<UserWorkflowCapabilityOptions>()
+            .Bind(configuration.GetSection(UserWorkflowCapabilityOptions.SectionName));
+        services.TryAddSingleton<UserWorkflowQueryApplicationService>();
+        services.TryAddSingleton<IUserWorkflowQueryPort>(sp => sp.GetRequiredService<UserWorkflowQueryApplicationService>());
+        services.TryAddSingleton<IUserWorkflowCommandPort, UserWorkflowCommandApplicationService>();
         return services;
     }
 
