@@ -8,6 +8,7 @@ public sealed record WorkflowValidationOptions
 {
     public static WorkflowValidationOptions Default { get; } = new();
 
+    // Compatibility-only field; Studio validation no longer blocks step types by closed world mode.
     public bool? ForceClosedWorldMode { get; init; }
 
     public IReadOnlySet<string>? AvailableWorkflowNames { get; init; }
@@ -74,10 +75,9 @@ public sealed class WorkflowValidator
             }
         }
 
-        var closedWorldMode = options.ForceClosedWorldMode ?? document.Configuration.ClosedWorldMode;
         foreach (var visit in stepVisits)
         {
-            ValidateStep(visit, roleIds, stepIds, closedWorldMode, options.AvailableWorkflowNames, findings);
+            ValidateStep(visit, roleIds, stepIds, options.AvailableWorkflowNames, findings);
         }
 
         return findings;
@@ -87,7 +87,6 @@ public sealed class WorkflowValidator
         StepVisit visit,
         IReadOnlySet<string> roleIds,
         IReadOnlySet<string> stepIds,
-        bool closedWorldMode,
         IReadOnlySet<string>? availableWorkflowNames,
         ICollection<ValidationFinding> findings)
     {
@@ -183,11 +182,6 @@ public sealed class WorkflowValidator
 
         ValidateStepTypeParameters(step, stepPath, findings);
         ValidateTypeSpecificRules(step, stepPath, stepIds, availableWorkflowNames, findings);
-
-        if (closedWorldMode)
-        {
-            ValidateClosedWorldRules(step, stepPath, findings);
-        }
 
         if (visit.Index < visit.SiblingCount - 1 && string.IsNullOrWhiteSpace(step.Next) && step.Branches.Count == 0)
         {
@@ -328,34 +322,6 @@ public sealed class WorkflowValidator
                 findings.Add(ValidationFinding.Error(
                     $"{stepPath}/on_error/fallback_step",
                     $"Fallback step '{onError.FallbackStep}' does not exist."));
-            }
-        }
-    }
-
-    private void ValidateClosedWorldRules(StepModel step, string stepPath, ICollection<ValidationFinding> findings)
-    {
-        if (_profile.IsClosedWorldBlocked(step.Type))
-        {
-            findings.Add(ValidationFinding.Error(
-                $"{stepPath}/type",
-                $"Step type '{step.Type}' is blocked when `closed_world_mode=true`.",
-                code: "closed_world_blocked"));
-        }
-
-        foreach (var (key, value) in step.Parameters)
-        {
-            if (!_profile.IsStepTypeParameterKey(key))
-            {
-                continue;
-            }
-
-            var stepType = value.ToWorkflowScalarString();
-            if (_profile.IsClosedWorldBlocked(stepType))
-            {
-                findings.Add(ValidationFinding.Error(
-                    $"{stepPath}/parameters/{key}",
-                    $"Step type parameter '{key}' references blocked primitive '{stepType}' when `closed_world_mode=true`.",
-                    code: "closed_world_parameter_blocked"));
             }
         }
     }

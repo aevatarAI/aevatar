@@ -127,7 +127,7 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
-    public void Validate_WhenClosedWorldModeContainsBlockedPrimitive_ShouldReportError()
+    public void Validate_WhenClosedWorldModeContainsBlockedPrimitive_ShouldNotReportClosedWorldError()
     {
         var wf = new WorkflowDefinition
         {
@@ -148,11 +148,11 @@ public class WorkflowValidatorCoverageTests
         };
 
         var errors = WorkflowValidator.Validate(wf);
-        errors.Should().Contain(e => e.Contains("closed_world_mode"));
+        errors.Should().NotContain(e => e.Contains("closed_world_mode"));
     }
 
     [Fact]
-    public void Validate_WhenClosedWorldModeContainsDynamicWorkflow_ShouldReportError()
+    public void Validate_WhenClosedWorldModeContainsDynamicWorkflow_ShouldNotReportClosedWorldError()
     {
         var wf = new WorkflowDefinition
         {
@@ -173,7 +173,7 @@ public class WorkflowValidatorCoverageTests
         };
 
         var errors = WorkflowValidator.Validate(wf);
-        errors.Should().Contain(e => e.Contains("closed_world_mode") && e.Contains("dynamic_workflow"));
+        errors.Should().NotContain(e => e.Contains("closed_world_mode") && e.Contains("dynamic_workflow"));
     }
 
     [Fact]

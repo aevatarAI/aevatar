@@ -730,6 +730,7 @@ function App() {
   const yamlEditRevisionRef = useRef(0);
   const yamlAppliedRevisionRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
+  const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
   const workflowAuthoringMetadata = useMemo(
@@ -768,6 +769,34 @@ function App() {
   useEffect(() => {
     void bootstrap();
   }, []);
+
+  useEffect(() => {
+    saveShortcutHandlerRef.current = () => {
+      void handleSaveWorkflow();
+    };
+  });
+
+  useEffect(() => {
+    if (workspacePage !== 'studio') {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || event.shiftKey) {
+        return;
+      }
+
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') {
+        return;
+      }
+
+      event.preventDefault();
+      saveShortcutHandlerRef.current();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [workspacePage]);
 
   useEffect(() => {
     const toCompactControlHint = (raw: string) => {
@@ -1238,7 +1267,7 @@ function App() {
       filePath: payload?.filePath || '',
       name: payload?.name || payload?.document?.name || payload?.rootWorkflow?.name || 'draft',
       description: payload?.document?.description || payload?.rootWorkflow?.description || '',
-      closedWorldMode: true,
+      closedWorldMode: Boolean(payload?.document?.configuration?.closedWorldMode),
       yaml: payload?.yaml || '',
       findings: Array.isArray(payload?.findings) ? payload.findings : [],
       dirty: false,
@@ -1326,7 +1355,7 @@ function App() {
           ...prev,
           name: parsed.document?.name || prev.name || 'draft',
           description: parsed.document?.description || '',
-          closedWorldMode: true,
+          closedWorldMode: Boolean(parsed.document?.configuration?.closedWorldMode),
           findings: revision === yamlEditRevisionRef.current ? findings : prev.findings,
           dirty: true,
           lastSavedAt: null,
@@ -1490,7 +1519,7 @@ function App() {
           directoryId: workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId || null,
           name: parsed.document.name || file.name.replace(/\.ya?ml$/i, ''),
           description: parsed.document.description || '',
-          closedWorldMode: true,
+          closedWorldMode: Boolean(parsed.document.configuration?.closedWorldMode),
           yaml,
           findings: Array.isArray(parsed.findings) ? parsed.findings : [],
           dirty: true,
@@ -1529,7 +1558,7 @@ function App() {
       directoryId: prev.directoryId || workspaceSettings.directories[0]?.directoryId || null,
       name: parsed.document?.name || prev.name || 'draft',
       description: parsed.document?.description || '',
-      closedWorldMode: true,
+      closedWorldMode: Boolean(parsed.document?.configuration?.closedWorldMode),
       yaml,
       findings: Array.isArray(parsed.findings) ? parsed.findings : [],
       dirty: true,

@@ -239,7 +239,7 @@ export function createEmptyWorkflowMeta(): WorkflowMetaState {
     filePath: '',
     name: 'draft',
     description: '',
-    closedWorldMode: true,
+    closedWorldMode: false,
     yaml: '',
     findings: [],
     dirty: false,
@@ -635,7 +635,7 @@ export function buildWorkflowDocument(
     name: meta.name.trim() || 'draft',
     description: meta.description.trim(),
     configuration: {
-      closedWorldMode: true,
+      closedWorldMode: meta.closedWorldMode,
     },
     roles: roles
       .filter(role => role.id.trim())

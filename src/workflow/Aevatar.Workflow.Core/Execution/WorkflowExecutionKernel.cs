@@ -708,26 +708,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
-        if (_workflow?.Configuration.ClosedWorldMode == true &&
-            WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalStepType))
-        {
-            state.CurrentStepId = step.Id;
-            state.CurrentStepInput = input;
-            state.CurrentStepDispatchPending = false;
-            state.CurrentStepTimeoutCallbackId = string.Empty;
-            await SaveStateAsync(state, ctx, ct);
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = step.Id,
-                RunId = state.RunId,
-                Success = false,
-                Error = $"step type '{canonicalStepType}' is blocked in closed_world_mode",
-            }, TopologyAudience.Self, ct);
-            return;
-        }
-
         var request = BuildStepRequest(step, input, state, ctx);
         var timeoutCallbackId = step.TimeoutMs is > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))

@@ -971,7 +971,7 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
-    public async Task HandleAsync_WhenClosedWorldBlocksStep_ShouldFailWorkflow()
+    public async Task HandleAsync_WhenClosedWorldModeEnabled_ShouldStillDispatchStep()
     {
         var module = new WorkflowLoopModule();
         module.SetWorkflow(new WorkflowDefinition
@@ -995,16 +995,10 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var blocked = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
-        blocked.Success.Should().BeFalse();
-        blocked.Error.Should().Contain("closed_world_mode");
-
-        ctx.Published.Clear();
-        await module.HandleAsync(Envelope(blocked), ctx, CancellationToken.None);
-
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
-        completed.Success.Should().BeFalse();
-        completed.Error.Should().Contain("closed_world_mode");
+        var request = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        request.StepId.Should().Be("s1");
+        request.StepType.Should().Be("llm_call");
+        request.RunId.Should().Be(runId);
     }
 
     private static WorkflowDefinition BuildWorkflow(params StepDefinition[] steps)
