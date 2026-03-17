@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>aevatar</ToolCommandName>
     <PackageId>aevatar</PackageId>
-    <Version>0.0.1</Version>
+    <Version>1.0.2</Version>
     <Authors>Aevatar</Authors>
     <Description>Unified Aevatar CLI with config and app playground commands.</Description>
     <PackageTags>aevatar;cli;workflow;playground;config</PackageTags>
@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Sdk\Aevatar.Workflow.Sdk.csproj" />
@@ -30,6 +31,8 @@
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>

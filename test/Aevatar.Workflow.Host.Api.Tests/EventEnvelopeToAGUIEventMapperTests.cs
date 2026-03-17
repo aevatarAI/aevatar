@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -89,6 +90,20 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().ContainSingle();
         events[0].RunStarted.ThreadId.Should().Be("fallback-workflow");
+    }
+
+    [Fact]
+    public void WorkflowRunExecutionStartedEvent_ShouldBeIgnored()
+    {
+        var events = CreateMapper().Map(WrapCommitted(new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "review",
+            Input = "hello",
+            DefinitionActorId = "definition-actor-1",
+        }));
+
+        events.Should().BeEmpty();
     }
 
     [Fact]
@@ -458,16 +473,32 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void UnknownOrNullPayload_ShouldReturnEmpty()
+    public void UnknownPayload_ShouldFallbackToRawObservedCustomEvent()
     {
-        var unknown = CreateMapper().Map(WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
+        var unknownEnvelope = WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }, version: 7);
+
+        var unknown = CreateMapper().Map(unknownEnvelope);
+
+        unknown.Should().ContainSingle();
+        unknown[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        unknown[0].Custom.Name.Should().Be("aevatar.raw.observed");
+        var payload = unknown[0].Custom.Payload.Unpack<WorkflowObservedEnvelopeCustomPayload>();
+        payload.EventId.Should().Be(unknownEnvelope.Id);
+        payload.CorrelationId.Should().Be("cmd-1");
+        payload.StateVersion.Should().Be(7);
+        payload.PayloadTypeUrl.Should().Contain(nameof(ParentChangedEvent));
+        payload.Payload.Unpack<ParentChangedEvent>().OldParent.Should().Be("a");
+    }
+
+    [Fact]
+    public void NullPayload_ShouldReturnEmpty()
+    {
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("x", TopologyAudience.Children),
         });
 
-        unknown.Should().BeEmpty();
         nullPayload.Should().BeEmpty();
     }
 
@@ -475,6 +506,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     {
         return new EventEnvelopeToWorkflowRunEventMapper(
         [
+            new WorkflowRunExecutionStartedEnvelopeMappingHandler(),
             new StartWorkflowRunEventEnvelopeMappingHandler(),
             new StepRequestRunEventEnvelopeMappingHandler(),
             new StepCompletedRunEventEnvelopeMappingHandler(),

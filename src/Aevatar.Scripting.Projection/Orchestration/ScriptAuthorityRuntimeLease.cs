@@ -1,13 +1,10 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptAuthorityRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
-      IProjectionPortSessionLease,
+    : ProjectionRuntimeLeaseBase,
       IProjectionContextRuntimeLease<ScriptAuthorityProjectionContext>
 {
     public ScriptAuthorityRuntimeLease(ScriptAuthorityProjectionContext context)
@@ -17,8 +14,4 @@ public sealed class ScriptAuthorityRuntimeLease
     }
 
     public ScriptAuthorityProjectionContext Context { get; }
-
-    public string ScopeId => RootEntityId;
-
-    public string SessionId => RootEntityId;
 }

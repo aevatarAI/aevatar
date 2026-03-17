@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
 
 namespace Aevatar.AI.Projection.Appliers;
@@ -6,6 +7,7 @@ namespace Aevatar.AI.Projection.Appliers;
 public sealed class AITextMessageContentProjectionApplier<TReadModel, TContext>
     : IProjectionEventApplier<TReadModel, TContext, TextMessageContentEvent>
     where TReadModel : class, IHasProjectionTimeline
+    where TContext : class, IProjectionMaterializationContext
 {
     public bool Apply(
         TReadModel readModel,

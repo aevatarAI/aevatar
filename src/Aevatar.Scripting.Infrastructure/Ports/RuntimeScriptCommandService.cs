@@ -7,11 +7,14 @@ namespace Aevatar.Scripting.Infrastructure.Ports;
 public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
 {
     private readonly ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> _dispatchService;
+    private readonly IScriptExecutionReadModelActivationPort _readModelActivationPort;
 
     public RuntimeScriptCommandService(
-        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService)
+        ICommandDispatchService<RunScriptRuntimeCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> dispatchService,
+        IScriptExecutionReadModelActivationPort readModelActivationPort)
     {
         _dispatchService = dispatchService ?? throw new ArgumentNullException(nameof(dispatchService));
+        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
     }
 
     public async Task RunRuntimeAsync(
@@ -23,6 +26,8 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string requestedEventType,
         CancellationToken ct)
     {
+        _ = await _readModelActivationPort.ActivateAsync(runtimeActorId, ct);
+
         var result = await _dispatchService.DispatchAsync(
             new RunScriptRuntimeCommand(
                 runtimeActorId,

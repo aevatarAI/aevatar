@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
@@ -35,10 +36,10 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (!services.Any(x => x.ServiceType == typeof(IScriptEvolutionProposalPort)))
+        if (!services.Any(x => x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker)))
             services.AddScriptCapability(configuration);
 
-        if (!services.Any(x => x.ServiceType == typeof(IWorkflowCatalogPort)))
+        if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
             services.AddWorkflowCapability(configuration);
 
         services.AddOptions<GAgentServiceDemoOptions>()
@@ -60,6 +61,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.AddOptions<ScopeWorkflowCapabilityOptions>()
+            .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
+        services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
+        services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
+        services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
     }
@@ -71,10 +77,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(GAgentServiceProjectionProviderRegistrationsMarker)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)))
             return services;
-
-        services.AddSingleton<GAgentServiceProjectionProviderRegistrationsMarker>();
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
             configuration["Projection:Document:Providers:InMemory:Enabled"],
@@ -185,6 +189,4 @@ public static class ServiceCollectionExtensions
 
         return parsed;
     }
-
-    private sealed class GAgentServiceProjectionProviderRegistrationsMarker;
 }

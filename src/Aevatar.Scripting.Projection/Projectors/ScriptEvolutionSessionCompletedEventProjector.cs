@@ -6,7 +6,7 @@ using Aevatar.Scripting.Projection.Orchestration;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptEvolutionSessionCompletedEventProjector
-    : ProjectionSessionEventProjectorBase<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>, ScriptEvolutionSessionCompletedEvent>
+    : ProjectionSessionEventProjectorBase<ScriptEvolutionSessionProjectionContext, ScriptEvolutionSessionCompletedEvent>
 {
     public ScriptEvolutionSessionCompletedEventProjector(
         IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent> sessionEventHub)
@@ -27,7 +27,7 @@ public sealed class ScriptEvolutionSessionCompletedEventProjector
 
         var completed = payload.Unpack<ScriptEvolutionSessionCompletedEvent>();
         var proposalId = string.IsNullOrWhiteSpace(completed.ProposalId)
-            ? context.ProposalId
+            ? context.SessionId
             : completed.ProposalId;
         if (string.IsNullOrWhiteSpace(proposalId))
             return EmptyEntries;

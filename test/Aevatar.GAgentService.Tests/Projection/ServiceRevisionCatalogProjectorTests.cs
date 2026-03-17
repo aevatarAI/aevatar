@@ -20,8 +20,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -59,8 +59,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -104,8 +104,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -114,13 +114,6 @@ public sealed class ServiceRevisionCatalogProjectorTests
 
         (await store.ReadItemsAsync()).Should().BeEmpty();
 
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-        var initialize = () => projector.InitializeAsync(context, cts.Token).AsTask();
-        var complete = () => projector.CompleteAsync(context, [], cts.Token).AsTask();
-
-        await initialize.Should().ThrowAsync<OperationCanceledException>();
-        await complete.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -130,8 +123,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -153,8 +146,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -191,8 +184,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -222,8 +215,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
         var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -247,12 +240,11 @@ public sealed class ServiceRevisionCatalogProjectorTests
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
         where T : Google.Protobuf.IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-        };
+        BuildCommittedEnvelope(
+            evt,
+            Guid.NewGuid().ToString("N"),
+            1,
+            DateTimeOffset.UtcNow);
 
     private static EventEnvelope BuildCommittedEnvelope<T>(
         T evt,

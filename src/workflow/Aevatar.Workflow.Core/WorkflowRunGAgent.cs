@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -22,6 +23,8 @@ public sealed class WorkflowRunGAgent
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
+    private const string StoppedStatus = "stopped";
+    private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -216,6 +219,17 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
+        if (request.Metadata.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
+            !string.IsNullOrWhiteSpace(commandId))
+        {
+            await PersistDomainEventAsync(
+                new WorkflowCommandObservedEvent
+                {
+                    CommandId = commandId,
+                },
+                CancellationToken.None);
+        }
+
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
@@ -321,6 +335,7 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _executionItems.Clear();
+        DisableExecutionModules();
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -344,6 +359,79 @@ public sealed class WorkflowRunGAgent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
         }, TopologyAudience.Parent);
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowStopped(WorkflowStoppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        var runId = string.IsNullOrWhiteSpace(evt.RunId)
+            ? RunId
+            : WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, runId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Ignore WorkflowStoppedEvent with mismatched run id. actor={ActorId} stateRun={StateRunId} eventRun={EventRunId}",
+                Id,
+                State.RunId,
+                runId);
+            return;
+        }
+
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogInformation(
+                "Ignore WorkflowStoppedEvent for terminal run. actor={ActorId} run={RunId} status={Status}",
+                Id,
+                runId,
+                State.Status);
+            return;
+        }
+
+        var persistedEvent = new WorkflowStoppedEvent
+        {
+            WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? State.WorkflowName : evt.WorkflowName,
+            RunId = runId,
+            Reason = evt.Reason ?? string.Empty,
+        };
+
+        await PersistDomainEventAsync(persistedEvent);
+        await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, State, CancellationToken.None);
+        await CleanupRoleAgentTreeAsync(CancellationToken.None);
+        _executionItems.Clear();
+        DisableExecutionModules();
+
+        Logger.LogInformation(
+            "Workflow run {Name} stopped: run={RunId} reason={Reason}",
+            persistedEvent.WorkflowName,
+            runId,
+            string.IsNullOrWhiteSpace(persistedEvent.Reason) ? "(none)" : persistedEvent.Reason);
+
+        await PublishAsync(new TextMessageEndEvent
+        {
+            Content = BuildStoppedMessage(persistedEvent.Reason),
+        }, TopologyAudience.Parent);
+    }
+
+    [EventHandler]
+    public Task HandleWorkflowRunStoppedAsync(WorkflowRunStoppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (IsTerminalStatus(State.Status))
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(evt);
+    }
+
+    [AllEventHandler(Priority = 40, AllowSelfHandling = true)]
+    public async Task HandleWorkflowArtifactObservationEnvelope(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        if (TryBuildWorkflowArtifactFact(envelope, out var artifactFact))
+            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -406,6 +494,9 @@ public sealed class WorkflowRunGAgent
 
         foreach (var role in _compiledWorkflow.Roles)
         {
+            if (string.IsNullOrWhiteSpace(role.Id))
+                continue;
+
             var childActorId = BuildChildActorId(role.Id);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
@@ -413,6 +504,14 @@ public sealed class WorkflowRunGAgent
 
             await _dispatchPort.DispatchAsync(actor.Id, CreateRoleAgentInitializeEnvelope(role));
             _childAgentIds.Add(actor.Id);
+            await PersistDomainEventAsync(new WorkflowRoleActorLinkedEvent
+            {
+                RunId = string.IsNullOrWhiteSpace(State.RunId)
+                    ? WorkflowRunIdNormalizer.Normalize(Id)
+                    : WorkflowRunIdNormalizer.Normalize(State.RunId),
+                RoleId = role.Id ?? string.Empty,
+                ChildActorId = actor.Id,
+            });
         }
 
         Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
@@ -431,6 +530,16 @@ public sealed class WorkflowRunGAgent
         if (_compiledWorkflow == null)
         {
             Logger.LogDebug("Workflow run definition is not bound yet; skipping module installation for actor {ActorId}.", Id);
+            SetModules([]);
+            return;
+        }
+
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogDebug(
+                "Workflow run is terminal; skipping module installation for actor {ActorId} status={Status}.",
+                Id,
+                State.Status);
             SetModules([]);
             return;
         }
@@ -476,6 +585,8 @@ public sealed class WorkflowRunGAgent
         SetModules(workflowModules);
     }
 
+    private void DisableExecutionModules() => SetModules([]);
+
     private void ConfigureModule(IEventModule<IWorkflowExecutionContext> module)
     {
         if (_compiledWorkflow == null)
@@ -489,10 +600,13 @@ public sealed class WorkflowRunGAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
+            .On<WorkflowCommandObservedEvent>(ApplyWorkflowCommandObserved)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
+            .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
+            .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
@@ -518,6 +632,7 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
+        next.LastCommandId = string.Empty;
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -551,6 +666,13 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowCommandObserved(WorkflowRunState current, WorkflowCommandObservedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastCommandId = evt.CommandId?.Trim() ?? string.Empty;
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowExecutionStateUpserted(WorkflowRunState current, WorkflowExecutionStateUpsertedEvent evt)
     {
         var next = current.Clone();
@@ -573,6 +695,19 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowStopped(WorkflowRunState current, WorkflowStoppedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = StoppedStatus;
+        next.FinalOutput = string.Empty;
+        next.FinalError = evt.Reason ?? string.Empty;
+        next.ExecutionStates.Clear();
+        next.PendingSubWorkflowInvocations.Clear();
+        next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
+        next.PendingChildRunIdsByParentRunId.Clear();
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowCompleted(WorkflowRunState current, WorkflowCompletedEvent evt)
     {
         var next = current.Clone();
@@ -581,6 +716,132 @@ public sealed class WorkflowRunGAgent
         next.FinalError = evt.Error ?? string.Empty;
         return next;
     }
+
+    private static WorkflowRunState ApplyWorkflowRunStopped(WorkflowRunState current, WorkflowRunStoppedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = StoppedStatus;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            next.FinalError = evt.Reason;
+        return next;
+    }
+
+    private bool TryBuildWorkflowArtifactFact(EventEnvelope envelope, out IMessage artifactFact)
+    {
+        artifactFact = null!;
+        if (envelope.Payload == null)
+            return false;
+
+        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, out var roleReplyFact))
+        {
+            artifactFact = roleReplyFact;
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
+            return false;
+
+        if (envelope.Payload.Is(StepRequestEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<StepRequestEvent>();
+            return true;
+        }
+
+        if (envelope.Payload.Is(StepCompletedEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<StepCompletedEvent>();
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowSuspendedEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
+            return true;
+        }
+
+        if (envelope.Payload.Is(WaitingForSignalEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WaitingForSignalEvent>();
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowSignalBufferedEvent.Descriptor))
+        {
+            artifactFact = envelope.Payload.Unpack<WorkflowSignalBufferedEvent>();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryBuildWorkflowRoleReplyRecordedEvent(
+        EventEnvelope envelope,
+        out WorkflowRoleReplyRecordedEvent evt)
+    {
+        evt = null!;
+
+        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
+            return false;
+
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        if (published?.StateEvent?.EventData == null ||
+            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+        {
+            return false;
+        }
+
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (!IsRoleChildActor(publisherActorId))
+            return false;
+
+        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        evt = new WorkflowRoleReplyRecordedEvent
+        {
+            RunId = string.IsNullOrWhiteSpace(State.RunId)
+                ? WorkflowRunIdNormalizer.Normalize(Id)
+                : WorkflowRunIdNormalizer.Normalize(State.RunId),
+            RoleActorId = publisherActorId,
+            RoleId = ResolveRoleId(publisherActorId),
+            SessionId = completed.SessionId ?? string.Empty,
+            Content = completed.Content ?? string.Empty,
+            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            Prompt = completed.Prompt ?? string.Empty,
+            ContentEmitted = completed.ContentEmitted,
+        };
+
+        foreach (var toolCall in completed.ToolCalls)
+        {
+            evt.ToolCalls.Add(new WorkflowRoleReplyToolCall
+            {
+                ToolName = toolCall.ToolName ?? string.Empty,
+                CallId = toolCall.CallId ?? string.Empty,
+            });
+        }
+
+        return true;
+    }
+
+    private bool IsRoleChildActor(string actorId) =>
+        !string.IsNullOrWhiteSpace(actorId) &&
+        actorId.StartsWith(Id + ":", StringComparison.Ordinal);
+
+    private string ResolveRoleId(string actorId)
+    {
+        if (!IsRoleChildActor(actorId))
+            return actorId ?? string.Empty;
+
+        return actorId[(Id.Length + 1)..];
+    }
+
+    private static bool IsTerminalStatus(string? status) =>
+        string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildStoppedMessage(string? reason) =>
+        string.IsNullOrWhiteSpace(reason)
+            ? "Workflow execution stopped."
+            : $"Workflow execution stopped: {reason}";
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
     {

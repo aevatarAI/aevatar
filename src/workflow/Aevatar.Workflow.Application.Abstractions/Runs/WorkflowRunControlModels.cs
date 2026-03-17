@@ -92,6 +92,12 @@ public sealed record WorkflowSignalCommand(
     string? Payload,
     string? StepId = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
 
+public sealed record WorkflowStopCommand(
+    string ActorId,
+    string RunId,
+    string? CommandId,
+    string? Reason = null) : WorkflowRunControlCommandBase(ActorId, RunId, CommandId);
+
 public sealed record WorkflowRunControlAcceptedReceipt(
     string ActorId,
     string RunId,

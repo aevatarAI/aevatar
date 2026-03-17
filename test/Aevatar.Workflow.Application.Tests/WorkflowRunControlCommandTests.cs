@@ -94,6 +94,33 @@ public sealed class WorkflowRunControlCommandTests
     }
 
     [Fact]
+    public async Task StopResolver_ShouldResolveRunActor_WhenBindingMatches()
+    {
+        var runtime = new FakeActorRuntime();
+        runtime.StoredActors["actor-1"] = new FakeActor("actor-1");
+        var resolver = new WorkflowStopCommandTargetResolver(
+            runtime,
+            new FakeWorkflowActorBindingReader(
+                new WorkflowActorBinding(
+                    WorkflowActorKind.Run,
+                    "actor-1",
+                    "definition-1",
+                    "run-1",
+                    "direct",
+                    "yaml",
+                    new Dictionary<string, string>())));
+
+        var result = await resolver.ResolveAsync(
+            new WorkflowStopCommand("actor-1", "run-1", "cmd-1", "user requested stop"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Target.Should().NotBeNull();
+        result.Target!.ActorId.Should().Be("actor-1");
+        result.Target.RunId.Should().Be("run-1");
+    }
+
+    [Fact]
     public void ResumeEnvelopeFactory_ShouldPackWorkflowResumedEvent()
     {
         var factory = new WorkflowResumeCommandEnvelopeFactory();
@@ -163,6 +190,23 @@ public sealed class WorkflowRunControlCommandTests
             new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
 
         act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void StopEnvelopeFactory_ShouldPackWorkflowStoppedEvent()
+    {
+        var factory = new WorkflowStopCommandEnvelopeFactory();
+        var envelope = factory.CreateEnvelope(
+            new WorkflowStopCommand("actor-1", "run-1", "cmd-1", "user requested stop"),
+            new CommandContext("actor-1", "cmd-1", "cmd-1", new Dictionary<string, string>()));
+
+        var stopped = envelope.Payload.Unpack<WorkflowStoppedEvent>();
+
+        envelope.Route!.PublisherActorId.Should().Be("api.workflow.stop");
+        envelope.Route.GetTargetActorId().Should().Be("actor-1");
+        envelope.Propagation!.CorrelationId.Should().Be("cmd-1");
+        stopped.RunId.Should().Be("run-1");
+        stopped.Reason.Should().Be("user requested stop");
     }
 
     [Fact]

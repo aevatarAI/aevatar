@@ -368,7 +368,7 @@ internal static class AppDemoPlaygroundEndpoints
         bool embeddedWorkflowMode,
         CancellationToken ct)
     {
-        var prompt = string.IsNullOrWhiteSpace(input) ? "Hello, world!" : input.Trim();
+        var prompt = string.IsNullOrWhiteSpace(input) ? string.Empty : input.Trim();
 
         if (!embeddedWorkflowMode)
         {

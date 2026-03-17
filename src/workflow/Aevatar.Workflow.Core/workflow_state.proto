@@ -88,6 +88,7 @@ message WorkflowRunState
   repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 14;
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 15;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 16;
+  string last_command_id = 17;
 }
 
 enum WorkflowRuntimeCallbackBackendState

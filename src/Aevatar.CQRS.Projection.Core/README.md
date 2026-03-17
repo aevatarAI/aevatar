@@ -1,42 +1,56 @@
 # Aevatar.CQRS.Projection.Core
 
-`Aevatar.CQRS.Projection.Core` 是与业务无关的 CQRS 投影内核实现。
+`Aevatar.CQRS.Projection.Core` 是 actorized projection runtime 内核。当前框架只保留两条主链：
 
-## 项目边界
+- `Durable Materialization`
+- `Session Observation`
 
-- `Aevatar.CQRS.Projection.Core.Abstractions`
-  - 仅定义通用契约：`IProjection*`、`IActorStreamSubscriptionHub<TMessage>`。
-- `Aevatar.CQRS.Projection.Core`
-  - 通用运行时实现：
-    - `ProjectionCoordinator<TContext, TTopology>`
-    - `ProjectionDispatcher<TContext, TTopology>`
-    - `ProjectionSubscriptionRegistry<TContext>`
-    - `ProjectionLifecycleService<TContext, TCompletion>`
-    - `ProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TSink, TEvent>`
-    - `ActorStreamSubscriptionHub<TMessage>`
-    - `ProjectionAssemblyRegistration`
-    - `SystemProjectionClock`
-- 领域扩展项目
-  - 在子系统内承载具体 context/read model/projector/query adapter/DI。
+两条链路都以 `scope actor` 为唯一运行态事实源，host 侧只保留薄适配层。
 
-## 设计原则
+## 核心抽象
 
-1. 内核只处理通用编排，不绑定任何业务模型。
-2. 业务投影通过 `IProjectionProjector<,>` 扩展；主链不再提供 reducer-era 扩展点。
-3. 订阅按 `actorId` 复用底层 stream，再分发到投影上下文。
-4. 同一事件分发到多个 projector 时采用全分支尝试，最终按 projector 顺序聚合失败信息统一上报。
-5. query 语义由 feature 自己的 read adapter 直接实现，不再保留通用 query-port 基类。
+### durable materialization
 
-## 运行链路（通用）
+- [IProjectionMaterializer.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializer.cs)
+- [IProjectionMaterializerKinds.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializerKinds.cs)
+- [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionMaterializationContext.cs)
+- [ProjectionMaterializationStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionMaterializationStartRequest.cs)
+- [IProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationActivationService.cs)
+- [IProjectionMaterializationReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationReleaseService.cs)
 
-1. `ProjectionLifecycleService.StartAsync` -> `Coordinator.InitializeAsync` + `SubscriptionRegistry.RegisterAsync`
-2. actor stream 到达 `EventEnvelope` 后，`SubscriptionRegistry` 分发给 `ProjectionDispatcher.DispatchAsync`
-3. `ProjectionDispatcher` 调用 `Coordinator.ProjectAsync`
-4. `Coordinator` 按服务注册顺序调用多个 projector
-5. `ProjectionLifecycleService.CompleteAsync` -> `SubscriptionRegistry.UnregisterAsync` + `Coordinator.CompleteAsync`
+### session observation
 
-## 扩展点
+- [IProjectionProjector.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionProjector.cs)
+- [IProjectionSessionContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionSessionContext.cs)
+- [ProjectionSessionStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionSessionStartRequest.cs)
+- [IProjectionSessionActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionActivationService.cs)
+- [IProjectionSessionReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionSessionReleaseService.cs)
 
-- 外部程序集自动注册：`ProjectionAssemblyRegistration.RegisterProjectionExtensionsFromAssembly(...)`
-- 典型扩展：
-  - 新 projector：`IProjectionProjector<TContext, TTopology>`
+## 当前运行时
+
+- scope identity：
+  - [ProjectionRuntimeScopeKey.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionRuntimeScopeKey.cs)
+  - [ProjectionRuntimeMode.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionRuntimeMode.cs)
+- scope actor runtime：
+  - [ProjectionScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeGAgentBase.cs)
+  - [ProjectionMaterializationScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeGAgentBase.cs)
+  - [ProjectionSessionScopeGAgentBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeGAgentBase.cs)
+  - [ProjectionScopeActorRuntime.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeActorRuntime.cs)
+- host 侧薄适配：
+  - [ProjectionMaterializationScopeActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeActivationService.cs)
+  - [ProjectionMaterializationScopeReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionMaterializationScopeReleaseService.cs)
+  - [ProjectionSessionScopeActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeActivationService.cs)
+  - [ProjectionSessionScopeReleaseService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSessionScopeReleaseService.cs)
+  - [EventSinkProjectionLifecyclePortBase.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs)
+- session stream：
+  - [ProjectionSessionEventHub.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs)
+
+## 关键约束
+
+- scope actor 持有 projection 的存在性、处理水位、失败状态和 release 状态
+- host 侧不保留 `actorId/sessionId/scopeId -> runtime` 长期注册表
+- durable 只消费 committed observation
+- durable materializer 必须显式区分：
+  - `ICurrentStateProjectionMaterializer<TContext>`：actor-scoped current-state replica，不能依赖回读旧文档
+  - `IProjectionArtifactMaterializer<TContext>`：derived durable artifact，不再伪装成 canonical readmodel
+- session 只负责发布 session event stream，不再把 live sink 当作生命周期事实

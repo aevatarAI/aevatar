@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Metadata;
 using Aevatar.GAgentService.Projection.Orchestration;
+using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
@@ -23,96 +24,39 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceProjectionInfrastructureTests
 {
     [Fact]
-    public async Task CatalogProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task CatalogProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             });
-        IServiceCatalogProjectionPort service = new ServiceProjectionPortServices(
-            activationService,
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("actor-1");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-1", "service-catalog", string.Empty, "actor-1"));
+        activationService.Calls[0].Should().Be(("actor-1", "service-catalog"));
     }
 
     [Fact]
-    public async Task RevisionProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task RevisionProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootActorId}",
                 RootActorId = rootActorId,
+                ProjectionKind = projectionName,
             });
-        IServiceRevisionCatalogProjectionPort service = new ServiceProjectionPortServices(
-            new RecordingProjectionActivationService<ServiceCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>((_, _) => throw new NotSupportedException()),
-            activationService,
-            new RecordingProjectionActivationService<ServiceServingSetProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceRolloutProjectionContext>((_, _) => throw new NotSupportedException()),
-            new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>((_, _) => throw new NotSupportedException()));
+        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(" ");
         await service.EnsureProjectionAsync("actor-2");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("actor-2", "service-revisions", string.Empty, "actor-2"));
-    }
-
-    [Fact]
-    public async Task ActivationAndReleaseServices_ShouldCreateContext_AndStopWhenIdle()
-    {
-        var catalogLifecycle = new RecordingProjectionLifecycle<ServiceCatalogProjectionContext>();
-        var activation = new ServiceProjectionActivationService<ServiceCatalogProjectionContext>(
-            new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
-                static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
-                {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
-                    RootActorId = rootActorId,
-                },
-                static context => context.RootActorId),
-            catalogLifecycle);
-        var release = new ServiceProjectionReleaseService<ServiceCatalogProjectionContext>(catalogLifecycle);
-
-        var lease = await activation.EnsureAsync("actor-1", "service-catalog", string.Empty, "cmd-1");
-        await release.ReleaseIfIdleAsync(lease);
-
-        lease.ScopeId.Should().Be("actor-1");
-        lease.SessionId.Should().Be("actor-1");
-        catalogLifecycle.StartedContexts.Should().ContainSingle();
-        catalogLifecycle.StartedContexts[0].ProjectionId.Should().Be("service-catalog:actor-1");
-        catalogLifecycle.StoppedContexts.Should().ContainSingle();
-        catalogLifecycle.StoppedContexts[0].RootActorId.Should().Be("actor-1");
-
-        var revisionLifecycle = new RecordingProjectionLifecycle<ServiceRevisionCatalogProjectionContext>();
-        var revisionActivation = new ServiceProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
-            new ServiceProjectionDescriptor<ServiceRevisionCatalogProjectionContext>(
-                static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
-                {
-                    ProjectionId = $"{projectionName}:{rootActorId}",
-                    RootActorId = rootActorId,
-                },
-                static context => context.RootActorId),
-            revisionLifecycle);
-        var revisionRelease = new ServiceProjectionReleaseService<ServiceRevisionCatalogProjectionContext>(revisionLifecycle);
-        var revisionLease = await revisionActivation.EnsureAsync("actor-2", "service-revisions", string.Empty, "cmd-2");
-        await revisionRelease.ReleaseIfIdleAsync(revisionLease);
-
-        revisionLifecycle.StartedContexts.Should().ContainSingle();
-        revisionLifecycle.StartedContexts[0].ProjectionId.Should().Be("service-revisions:actor-2");
-        revisionLifecycle.StoppedContexts.Should().ContainSingle();
-        revisionLease.ScopeId.Should().Be("actor-2");
+        activationService.Calls[0].Should().Be(("actor-2", "service-revisions"));
     }
 
     [Fact]
@@ -148,29 +92,23 @@ public sealed class ServiceProjectionInfrastructureTests
             x.ImplementationType == typeof(ServiceRevisionCatalogQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceCatalogProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceCatalogProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceRevisionCatalogProjectionPort) &&
-            x.ImplementationFactory != null);
+            x.ImplementationType == typeof(ServiceRevisionCatalogProjectionPort));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceCatalogProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceRevisionCatalogProjector));
     }
 
     [Fact]
     public void ProjectionHelpers_ShouldGuardConstructorInputs_AndMapFallbackValues()
     {
-        var descriptorFactory = () => new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
-            null!,
-            static _ => "actor-1");
-        var descriptorSelector = () => new ServiceProjectionDescriptor<ServiceCatalogProjectionContext>(
-            static (_, _) => new ServiceCatalogProjectionContext
-            {
-                ProjectionId = "projection-1",
-                RootActorId = "actor-1",
-            },
-            null!);
         var runtimeLease = () => new ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>("actor-1", null!);
 
-        descriptorFactory.Should().Throw<ArgumentNullException>();
-        descriptorSelector.Should().Throw<ArgumentNullException>();
         runtimeLease.Should().Throw<ArgumentNullException>();
 
         var mappingType = typeof(ServiceCatalogReadModelMetadataProvider).Assembly
@@ -305,17 +243,17 @@ public sealed class ServiceProjectionInfrastructureTests
         committedArgs[3].Should().Be("evt-1");
         committedArgs[4].Should().Be(5L);
         committedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00"));
-        invalidCommittedResult.Should().BeTrue();
-        ((Any)invalidCommittedArgs[2]!).Is(CommittedStateEventPublished.Descriptor).Should().BeTrue();
-        invalidCommittedArgs[3].Should().Be("outer-2");
+        invalidCommittedResult.Should().BeFalse();
+        invalidCommittedArgs[2].Should().BeNull();
+        invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
-        invalidCommittedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T03:05:00+00:00"));
-        plainResult.Should().BeTrue();
-        ((Any)plainArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
-        plainArgs[3].Should().Be("plain-1");
+        invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
+        plainResult.Should().BeFalse();
+        plainArgs[2].Should().BeNull();
+        plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
-        plainArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T04:00:00+00:00"));
-        resolvedVersion.Should().Be(4L);
+        plainArgs[5].Should().Be(default(DateTimeOffset));
+        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]

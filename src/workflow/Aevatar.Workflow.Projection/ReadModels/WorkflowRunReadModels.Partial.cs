@@ -203,9 +203,9 @@ public sealed partial class WorkflowRunTimelineDocument
     public WorkflowRunTimelineDocument DeepClone() => Clone();
 }
 
-public sealed partial class WorkflowRunGraphMirrorReadModel
+public sealed partial class WorkflowRunGraphArtifactDocument
     : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowRunGraphMirrorReadModel>
+      IProjectionReadModelCloneable<WorkflowRunGraphArtifactDocument>
 {
     [JsonIgnore]
     public string ActorId => RootActorId;
@@ -228,7 +228,7 @@ public sealed partial class WorkflowRunGraphMirrorReadModel
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(StepEntries, value);
     }
 
-    public WorkflowRunGraphMirrorReadModel DeepClone() => Clone();
+    public WorkflowRunGraphArtifactDocument DeepClone() => Clone();
 }
 
 public sealed partial class WorkflowExecutionSummary

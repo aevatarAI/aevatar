@@ -39,12 +39,14 @@
 当前生效主链是：
 
 1. 脚本作者以 `ScriptBehavior<TState,TReadModel>` 编写强类型 `command / signal / domain event` 行为。
-2. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
-3. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
-4. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
-5. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` / `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 基于 committed observation 构建当前态与 native readmodel。
-6. 查询只通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 读取 persisted snapshot/document；read-side 不再执行 behavior query，也不再暴露 declared-query authoring/runtime 契约。
-7. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
+2. 当前态 readmodel 语义必须显式收敛为 `OnEvent(... apply: ...) + ProjectState(...)`：事件只推进 actor state，readmodel 只从当前 state 派生。
+3. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
+4. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
+5. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
+6. 写侧 dispatcher 会基于 post-event state 调 `BuildReadModel(...)`，再把 semantic/native committed fact 一并发布出去。
+7. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` / `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 基于 committed observation 构建当前态与 native readmodel。
+8. 查询只通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 读取 persisted snapshot/document；read-side 不再执行 behavior query，也不再暴露 declared-query authoring/runtime 契约。
+9. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
 
 当前 actor 边界也已经进一步收紧：
 
@@ -107,8 +109,10 @@ flowchart LR
 2. `IScriptBehaviorBuilder<TState,TReadModel>`
 3. `ScriptCommandContext<TState>`
 4. `ScriptFactContext`
+5. `ProjectState(Func<TState?, ScriptFactContext, TReadModel?>)`
 
 当前 authoring surface 已经不再包含 `OnQuery<TQuery, TResult>(...)`。
+`OnEvent<TEvent>(...)` 也不再接受 `project:` 参数。
 
 `Any` 只保留在宿主边界、持久化边界和跨 actor 边界。
 
@@ -119,7 +123,7 @@ flowchart LR
 这意味着：
 
 1. `CommittedStateEventPublished` 现在携带 `state_event + state_root`，作为 scripting current-state readmodel 的统一观察输入。
-2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态。
+2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态；每一条 committed fact 自身携带的 `read_model_payload/native_document/native_graph` 都必须对应它自己的 post-event state/version。
 3. runtime provisioning 必须显式使用 write-side 已得出的 `ScriptDefinitionSnapshot`，而不是中间层再去读 definition readmodel。
 4. native document / graph 物化计划已经前移到 write-side；projection 只消费 `ScriptDomainFactCommitted` 内的 durable `native_document/native_graph` 子契约。
 

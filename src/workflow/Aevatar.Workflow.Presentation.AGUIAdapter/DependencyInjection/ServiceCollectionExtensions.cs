@@ -9,6 +9,7 @@ public static class ServiceCollectionExtensions
     {
         services.TryAddSingleton<IEventEnvelopeToWorkflowRunEventMapper, EventEnvelopeToWorkflowRunEventMapper>();
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowRunEventEnvelopeMappingHandler, WorkflowRunExecutionStartedEnvelopeMappingHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowRunEventEnvelopeMappingHandler, StartWorkflowRunEventEnvelopeMappingHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowRunEventEnvelopeMappingHandler, StepRequestRunEventEnvelopeMappingHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowRunEventEnvelopeMappingHandler, StepCompletedRunEventEnvelopeMappingHandler>());

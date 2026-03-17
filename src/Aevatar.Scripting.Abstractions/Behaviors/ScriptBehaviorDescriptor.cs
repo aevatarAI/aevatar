@@ -13,6 +13,7 @@ public sealed record ScriptBehaviorDescriptor(
     IReadOnlyDictionary<string, ScriptCommandRegistration> Commands,
     IReadOnlyDictionary<string, ScriptSignalRegistration> Signals,
     IReadOnlyDictionary<string, ScriptDomainEventRegistration> DomainEvents,
+    Func<IMessage?, ScriptFactContext, IMessage?>? ReadModelProjector,
     ByteString? ProtocolDescriptorSet,
     ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
 {

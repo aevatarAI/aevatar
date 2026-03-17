@@ -11,7 +11,6 @@
       "src\\Aevatar.Mainnet.Host.Api\\Aevatar.Mainnet.Host.Api.csproj",
       "src\\Aevatar.Scripting.Application\\Aevatar.Scripting.Application.csproj",
       "src\\Aevatar.Scripting.Infrastructure\\Aevatar.Scripting.Infrastructure.csproj",
-      "src\\workflow\\extensions\\Aevatar.Workflow.Extensions.AIProjection\\Aevatar.Workflow.Extensions.AIProjection.csproj",
       "src\\workflow\\extensions\\Aevatar.Workflow.Extensions.Hosting\\Aevatar.Workflow.Extensions.Hosting.csproj",
       "src\\workflow\\Aevatar.Workflow.Host.Api\\Aevatar.Workflow.Host.Api.csproj",
       "tools\\Aevatar.Tools.Config\\Aevatar.Tools.Config.csproj",

@@ -1,6 +1,6 @@
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
-internal static class ServiceProjectionNames
+internal static class ServiceProjectionKinds
 {
     public const string Catalog = "service-catalog";
     public const string Deployments = "service-deployments";
