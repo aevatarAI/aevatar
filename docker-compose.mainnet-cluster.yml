@@ -65,7 +65,7 @@ services:
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
       AEVATAR_Orleans__SiloHost: mainnet-node1
-      AEVATAR_Orleans__PrimarySiloEndpoint: ""
+      AEVATAR_Orleans__PrimarySiloEndpoint: mainnet-node1:11111
       AEVATAR_Orleans__SiloPort: 11111
       AEVATAR_Orleans__GatewayPort: 30000
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"

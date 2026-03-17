@@ -29,9 +29,11 @@ public sealed class ProjectionProviderE2EIntegrationTests
                 Aliases: new Dictionary<string, object?>()),
             model => model.Id);
 
+        var id = Guid.NewGuid().ToString("N");
         var readModel = new TestProviderStoreSmokeReadModel
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = id,
+            ActorId = id,
             Value = "v1",
             UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };

@@ -73,9 +73,9 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 runtimeActorId,
                 CancellationToken.None);
             nativeDocument.GetProperty("schema_id").GetString().Should().Be("claim_case");
-            nativeDocument.GetProperty("fields").GetProperty("case_id").GetString().Should().Be("Case-ES");
-            nativeDocument.GetProperty("fields").GetProperty("policy_id").GetString().Should().Be("POLICY-ES");
-            nativeDocument.GetProperty("fields").GetProperty("search").GetProperty("lookup_key").GetString()
+            nativeDocument.GetProperty("fields_value").GetProperty("case_id").GetString().Should().Be("Case-ES");
+            nativeDocument.GetProperty("fields_value").GetProperty("policy_id").GetString().Should().Be("POLICY-ES");
+            nativeDocument.GetProperty("fields_value").GetProperty("search").GetProperty("lookup_key").GetString()
                 .Should().Be("case-es:policy-es");
         }
         finally
@@ -191,7 +191,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 $"{indexPrefix}-script-native-*",
                 runtimeActorId,
                 CancellationToken.None);
-            nativeDocument.GetProperty("fields").GetProperty("policy_id").GetString().Should().Be("POLICY-PROD");
+            nativeDocument.GetProperty("fields_value").GetProperty("policy_id").GetString().Should().Be("POLICY-PROD");
 
             var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
                 provider,

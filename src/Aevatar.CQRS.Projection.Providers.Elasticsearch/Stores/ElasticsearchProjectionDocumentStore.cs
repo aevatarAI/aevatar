@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -19,13 +20,8 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private const string ProviderName = "Elasticsearch";
     private const int MaxOptimisticWriteAttempts = 3;
 
-    private static readonly JsonFormatter s_formatter = new(
-        JsonFormatter.Settings.Default
-            .WithPreserveProtoFieldNames(true)
-            .WithFormatDefaultValues(true));
-
-    private static readonly JsonParser s_parser = new(
-        JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
+    private readonly JsonFormatter _formatter;
+    private readonly JsonParser _parser;
 
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
@@ -50,11 +46,23 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, string?>? indexScopeSelector = null,
+        TypeRegistry? typeRegistry = null,
         ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>? logger = null,
         HttpMessageHandler? httpMessageHandler = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(keySelector);
+
+        var registry = typeRegistry ?? BuildDefaultTypeRegistry();
+        _formatter = new JsonFormatter(
+            JsonFormatter.Settings.Default
+                .WithPreserveProtoFieldNames(true)
+                .WithFormatDefaultValues(true)
+                .WithTypeRegistry(registry));
+        _parser = new JsonParser(
+            JsonParser.Settings.Default
+                .WithIgnoreUnknownFields(true)
+                .WithTypeRegistry(registry));
 
         var endpoint = ElasticsearchProjectionDocumentStoreNamingSupport.ResolvePrimaryEndpoint(options.Endpoints);
         _httpClient = httpMessageHandler == null
@@ -198,7 +206,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             await EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
 
         var keyValue = ResolveReadModelKey(readModel);
-        var payload = s_formatter.Format(readModel);
+        var payload = _formatter.Format(readModel);
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
@@ -389,11 +397,11 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return keyValue;
     }
 
-    private static TReadModel? DeserializeOrNull(string json)
+    private TReadModel? DeserializeOrNull(string json)
     {
         try
         {
-            return s_parser.Parse<TReadModel>(json);
+            return _parser.Parse<TReadModel>(json);
         }
         catch
         {
@@ -432,6 +440,45 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         throw new InvalidOperationException(
             $"Elasticsearch '{operation}' is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
             "Use direct provider-native inspection/query capability for this read model type.");
+    }
+
+    private static TypeRegistry BuildDefaultTypeRegistry()
+    {
+        var descriptors = new List<MessageDescriptor>();
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic)
+                continue;
+
+            Type[] types;
+            try
+            {
+                types = assembly.GetExportedTypes();
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var type in types)
+            {
+                if (type.IsAbstract || type.IsInterface || !type.IsClass)
+                    continue;
+
+                var descriptorProperty = type.GetProperty(
+                    "Descriptor",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null,
+                    typeof(MessageDescriptor),
+                    Type.EmptyTypes,
+                    null);
+
+                if (descriptorProperty?.GetValue(null) is MessageDescriptor descriptor)
+                    descriptors.Add(descriptor);
+            }
+        }
+
+        return TypeRegistry.FromMessages(descriptors);
     }
 
     private sealed record ResolvedIndexTarget(string IndexName, DocumentIndexMetadata Metadata);

@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Google.Protobuf.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -13,7 +14,8 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
         Func<IServiceProvider, DocumentIndexMetadata> metadataFactory,
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
-        Func<TReadModel, string?>? indexScopeSelector = null)
+        Func<TReadModel, string?>? indexScopeSelector = null,
+        TypeRegistry? typeRegistry = null)
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
@@ -27,6 +29,7 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
                 keySelector,
                 keyFormatter,
                 indexScopeSelector,
+                typeRegistry,
                 provider.GetService<ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>>()));
         services.AddSingleton<IProjectionDocumentWriter<TReadModel>>(provider =>
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
