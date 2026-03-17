@@ -6,6 +6,7 @@ namespace Aevatar.CQRS.Projection.Core.Abstractions;
 /// Encodes and decodes projection session events for stream transport.
 /// </summary>
 public interface IProjectionSessionEventCodec<TEvent>
+    where TEvent : class
 {
     /// <summary>
     /// Stream channel namespace (prefix) used to isolate event families.
@@ -23,6 +24,7 @@ public interface IProjectionSessionEventCodec<TEvent>
 /// Optional compatibility contract for codecs that must keep legacy string transport readable during mixed-version rollout.
 /// </summary>
 public interface ILegacyProjectionSessionEventCodec<TEvent>
+    where TEvent : class
 {
     string? SerializeLegacy(TEvent evt);
 

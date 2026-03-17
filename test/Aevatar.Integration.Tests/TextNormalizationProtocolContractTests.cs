@@ -57,11 +57,16 @@ public sealed class TextNormalizationProtocolContractTests
                 definitionActorId,
                 "protocol.requested",
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, "run-1", CancellationToken.None);
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                "run-1",
+                CancellationToken.None);
 
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
 
-            snapshot.Should().NotBeNull();
             snapshot!.ReadModelPayload.Should().NotBeNull();
             var readModel = snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
             readModel.HasValue.Should().BeTrue();

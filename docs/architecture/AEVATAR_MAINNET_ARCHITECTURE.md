@@ -607,14 +607,14 @@ flowchart LR
 |---|---|
 | `ProjectionCoordinator` | 接收 Actor envelope 流，协调投影生命周期 |
 | `ProjectionDispatcher` | 一对多分发，将事件分发到所有注册的 Projector |
-| `WorkflowRunInsightBridgeProjector` | 将 run actor committed observation 桥接到 `WorkflowRunInsightGAgent` |
+| `WorkflowRunInsightReportArtifactProjector` | 将 root committed observation 物化为 workflow insight report artifact 文档 |
 | `WorkflowExecutionAGUIEventProjector` | 将事件转换为 AGUI 协议事件 |
 | `EventEnvelopeToAGUIEventMapper` | 事件映射器链，运行时 envelope → AGUI 事件 |
 | `IEventSink<WorkflowRunEvent>` | 实时事件通道，对接 SSE / WebSocket 端点 |
 
-当前 workflow insight/report 主链已经 actor 化：
-- `WorkflowRunInsightBridgeProjector` 负责把 committed workflow/AI events 投递给 `WorkflowRunInsightGAgent`
-- `WorkflowRunInsightReportDocumentProjector` 再从 insight actor 的 committed state 物化 `WorkflowRunInsightReportDocument`
+当前 workflow insight/report 主链已经回到 root authority：
+- `WorkflowRunGAgent` 产出 `CommittedStateEventPublished`
+- `WorkflowRunInsightReportArtifactProjector` 直接从 root committed observation 物化 `WorkflowRunInsightReportDocument`
 
 ---
 

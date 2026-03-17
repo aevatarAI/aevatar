@@ -21,8 +21,8 @@ public sealed class ServiceCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -57,8 +57,8 @@ public sealed class ServiceCatalogProjectorTests
         var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -80,8 +80,8 @@ public sealed class ServiceCatalogProjectorTests
         updatedSpec.DisplayName = "Updated Service";
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -129,34 +129,14 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
-    public async Task InitializeAndCompleteAsync_ShouldRespectCancellation()
-    {
-        var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
-        var context = new ServiceCatalogProjectionContext
-        {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
-            RootActorId = "tenant:app:default:svc",
-        };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        var initialize = () => projector.InitializeAsync(context, cts.Token).AsTask();
-        var complete = () => projector.CompleteAsync(context, [], cts.Token).AsTask();
-
-        await initialize.Should().ThrowAsync<OperationCanceledException>();
-        await complete.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    [Fact]
     public async Task ProjectAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
         var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -178,8 +158,8 @@ public sealed class ServiceCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -204,8 +184,8 @@ public sealed class ServiceCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -231,8 +211,8 @@ public sealed class ServiceCatalogProjectorTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -261,8 +241,8 @@ public sealed class ServiceCatalogProjectorTests
         var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var context = new ServiceCatalogProjectionContext
         {
-            ProjectionId = "service-catalog:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-catalog",
         };
 
         await projector.ProjectAsync(
@@ -286,12 +266,11 @@ public sealed class ServiceCatalogProjectorTests
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
         where T : Google.Protobuf.IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-        };
+        BuildCommittedEnvelope(
+            evt,
+            Guid.NewGuid().ToString("N"),
+            1,
+            DateTimeOffset.UtcNow);
 
     private static EventEnvelope BuildCommittedEnvelope<T>(
         T evt,

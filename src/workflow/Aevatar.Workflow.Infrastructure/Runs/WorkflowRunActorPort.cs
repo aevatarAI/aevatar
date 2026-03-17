@@ -106,6 +106,21 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
+    public Task MarkStoppedAsync(
+        string actorId,
+        string runId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new ArgumentException("Actor id is required.", nameof(actorId));
+
+        return _dispatchPort.DispatchAsync(
+            actorId,
+            CreateWorkflowRunStoppedEnvelope(actorId, runId, reason),
+            ct);
+    }
+
     public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -349,6 +364,27 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        };
+
+    private static EventEnvelope CreateWorkflowRunStoppedEnvelope(
+        string actorId,
+        string runId,
+        string reason) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new WorkflowRunStoppedEvent
+            {
+                RunId = runId ?? string.Empty,
+                Reason = reason ?? string.Empty,
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = actorId ?? string.Empty,
+                CausationEventId = "workflow_run_stopped",
             },
         };
 

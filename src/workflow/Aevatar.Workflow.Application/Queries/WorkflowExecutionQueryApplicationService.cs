@@ -7,23 +7,26 @@ namespace Aevatar.Workflow.Application.Queries;
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
     private readonly IWorkflowDefinitionRegistry _workflowRegistry;
-    private readonly IWorkflowExecutionProjectionQueryPort _projectionPort;
+    private readonly IWorkflowExecutionCurrentStateQueryPort _currentStateQueryPort;
+    private readonly IWorkflowExecutionArtifactQueryPort _artifactQueryPort;
     private readonly IWorkflowCatalogPort _workflowCatalogPort;
     private readonly IWorkflowCapabilitiesPort _workflowCapabilitiesPort;
 
     public WorkflowExecutionQueryApplicationService(
         IWorkflowDefinitionRegistry workflowRegistry,
-        IWorkflowExecutionProjectionQueryPort projectionPort,
+        IWorkflowExecutionCurrentStateQueryPort currentStateQueryPort,
+        IWorkflowExecutionArtifactQueryPort artifactQueryPort,
         IWorkflowCatalogPort workflowCatalogPort,
         IWorkflowCapabilitiesPort workflowCapabilitiesPort)
     {
-        _workflowRegistry = workflowRegistry;
-        _projectionPort = projectionPort;
+        _workflowRegistry = workflowRegistry ?? throw new ArgumentNullException(nameof(workflowRegistry));
+        _currentStateQueryPort = currentStateQueryPort ?? throw new ArgumentNullException(nameof(currentStateQueryPort));
+        _artifactQueryPort = artifactQueryPort ?? throw new ArgumentNullException(nameof(artifactQueryPort));
         _workflowCatalogPort = workflowCatalogPort ?? throw new ArgumentNullException(nameof(workflowCatalogPort));
         _workflowCapabilitiesPort = workflowCapabilitiesPort ?? throw new ArgumentNullException(nameof(workflowCapabilitiesPort));
     }
 
-    public bool ActorQueryEnabled => _projectionPort.EnableActorQueryEndpoints;
+    public bool ActorQueryEnabled => _currentStateQueryPort.EnableActorQueryEndpoints;
 
     public async Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
     {
@@ -31,7 +34,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         if (!ActorQueryEnabled)
             return [];
 
-        var snapshots = await _projectionPort.ListActorSnapshotsAsync(ct: ct);
+        var snapshots = await _currentStateQueryPort.ListActorSnapshotsAsync(ct: ct);
         return snapshots
             .Select(snapshot => new WorkflowAgentSummary(
                 snapshot.ActorId,
@@ -61,7 +64,7 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         if (!ActorQueryEnabled)
             return null;
 
-        return await _projectionPort.GetActorSnapshotAsync(actorId, ct);
+        return await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
     }
 
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
@@ -69,10 +72,10 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         int take = 200,
         CancellationToken ct = default)
     {
-        if (!ActorQueryEnabled)
+        if (!_artifactQueryPort.EnableActorQueryEndpoints)
             return [];
 
-        return await _projectionPort.ListActorTimelineAsync(actorId, take, ct);
+        return await _artifactQueryPort.ListActorTimelineAsync(actorId, take, ct);
     }
 
     public async Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
@@ -81,10 +84,10 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
-        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+        if (!_artifactQueryPort.EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
             return [];
 
-        return await _projectionPort.GetActorGraphEdgesAsync(actorId, take, options, ct);
+        return await _artifactQueryPort.GetActorGraphEdgesAsync(actorId, take, options, ct);
     }
 
     public async Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
@@ -94,25 +97,12 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         WorkflowActorGraphQueryOptions? options = null,
         CancellationToken ct = default)
     {
-        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
+        if (!_artifactQueryPort.EnableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
             return new WorkflowActorGraphSubgraph
             {
                 RootNodeId = actorId ?? string.Empty,
             };
 
-        return await _projectionPort.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
-    }
-
-    public async Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(
-        string actorId,
-        int depth = 2,
-        int take = 200,
-        WorkflowActorGraphQueryOptions? options = null,
-        CancellationToken ct = default)
-    {
-        if (!ActorQueryEnabled || string.IsNullOrWhiteSpace(actorId))
-            return null;
-
-        return await _projectionPort.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, options, ct);
+        return await _artifactQueryPort.GetActorGraphSubgraphAsync(actorId, depth, take, options, ct);
     }
 }

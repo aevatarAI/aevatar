@@ -185,10 +185,10 @@ public class ClaimReplayTests
             })
             .ToArray();
 
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "projection-claim-readmodel",
             RootActorId = runtimeActorId,
+            ProjectionKind = "script-execution-materialization",
         };
 
         var projectionNow = DateTimeOffset.UtcNow;
@@ -196,7 +196,6 @@ public class ClaimReplayTests
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
             new FixedProjectionClock(projectionNow));
-        await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel1 = await dispatcher1.GetAsync(runtimeActorId, CancellationToken.None);
@@ -205,7 +204,6 @@ public class ClaimReplayTests
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
             new FixedProjectionClock(projectionNow));
-        await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel2 = await dispatcher2.GetAsync(runtimeActorId, CancellationToken.None);
@@ -234,8 +232,27 @@ public class ClaimReplayTests
                             DecisionStatus = evt.Current.DecisionStatus,
                             AiSummary = evt.Current.AiSummary,
                             LastCommandId = evt.CommandId ?? string.Empty,
-                        },
-                        project: static (_, evt, _) => evt.Current);
+                        })
+                    .ProjectState(static (state, _) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
+                            CaseId = state.CaseId,
+                            PolicyId = state.PolicyId,
+                            DecisionStatus = state.DecisionStatus,
+                            AiSummary = state.AiSummary,
+                            LastCommandId = state.LastCommandId,
+                            Search = new ClaimSearchIndex
+                            {
+                                LookupKey = string.Concat(state.CaseId, ":", state.PolicyId).ToLowerInvariant(),
+                                DecisionKey = state.DecisionStatus.ToLowerInvariant(),
+                            },
+                            Refs = new ClaimRefs
+                            {
+                                PolicyId = state.PolicyId,
+                            },
+                        });
             }
 
             private static Task HandleAsync(

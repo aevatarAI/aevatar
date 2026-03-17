@@ -40,7 +40,7 @@
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具事件 |
-| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportDocumentProjector`、`WorkflowRunTimelineReadModelProjector`、`WorkflowRunGraphMirrorProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到多个 readmodel 的物化 + 实时事件分发 |
+| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
 关键代码锚点：
@@ -71,9 +71,9 @@ flowchart TB
     ACT --> EVT["Actor Envelope Stream"]
     EVT --> COOR["ProjectionCoordinator"]
     COOR --> RM1["WorkflowExecutionCurrentStateProjector"]
-    COOR --> RM2["WorkflowRunInsightReportDocumentProjector"]
-    COOR --> RM3["WorkflowRunTimelineReadModelProjector"]
-    COOR --> RM4["WorkflowRunGraphMirrorProjector"]
+    COOR --> RM2["WorkflowRunInsightReportArtifactProjector"]
+    COOR --> RM3["WorkflowRunTimelineArtifactProjector"]
+    COOR --> RM4["WorkflowRunGraphArtifactProjector"]
     COOR --> AGP["WorkflowExecutionAGUIEventProjector"]
     AGP --> MAP["EventEnvelopeToAGUIEventMapper"]
     MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
@@ -234,9 +234,9 @@ flowchart LR
     EV["EventEnvelope"] --> DIS["ProjectionDispatcher"]
     DIS --> CO["ProjectionCoordinator"]
     CO --> P1["WorkflowExecutionCurrentStateProjector"]
-    CO --> P2["WorkflowRunInsightReportDocumentProjector"]
-    CO --> P3["WorkflowRunTimelineReadModelProjector"]
-    CO --> P4["WorkflowRunGraphMirrorProjector"]
+    CO --> P2["WorkflowRunInsightReportArtifactProjector"]
+    CO --> P3["WorkflowRunTimelineArtifactProjector"]
+    CO --> P4["WorkflowRunGraphArtifactProjector"]
     CO --> P5["WorkflowExecutionAGUIEventProjector"]
     P1 --> STORE["IProjectionStoreDispatcher"]
     P2 --> STORE

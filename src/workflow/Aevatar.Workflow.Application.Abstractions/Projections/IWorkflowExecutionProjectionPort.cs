@@ -7,8 +7,6 @@ public interface IWorkflowExecutionProjectionPort
 {
     Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
         string rootActorId,
-        string workflowName,
-        string input,
         string commandId,
         CancellationToken ct = default);
 }

@@ -87,6 +87,16 @@ if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|Ex
   exit 1
 fi
 
+if rg -n "ProjectReadModel\(" src test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy event-driven scripting readmodel projection is forbidden. Use ProjectState(...) and BuildReadModel(...)."
+  exit 1
+fi
+
+if rg -n "project:\s*static|project:\s*\(" test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy OnEvent(..., project: ...) scripting authoring is forbidden. Register ProjectState(...) explicitly."
+  exit 1
+fi
+
 if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
   echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
   exit 1
@@ -477,7 +487,6 @@ fi
 
 stateful_replay_contract_requirements=(
   "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
-  "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -668,15 +677,17 @@ if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/
   exit 1
 fi
 
-if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
+if [ -f "src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs" ] && \
+  rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
   echo "ProjectionSubscriptionRegistry must not keep in-memory dictionary state."
   exit 1
 fi
 
 lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
-query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
+current_state_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionCurrentStateQueryPort.cs"
+artifact_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionArtifactQueryPort.cs"
 
-if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then
+if [ ! -f "${lifecycle_port}" ] || [ ! -f "${current_state_query_port}" ] || [ ! -f "${artifact_query_port}" ]; then
   echo "Workflow projection ports must be split into lifecycle/query contracts."
   exit 1
 fi
@@ -694,9 +705,24 @@ if ! rg -n "IWorkflowExecutionProjectionLease" "${lifecycle_port}" >/dev/null; t
 fi
 
 if rg -n "EnsureActorProjectionAsync|AttachLiveSinkAsync|DetachLiveSinkAsync|ReleaseActorProjectionAsync" \
-  "${query_port}"
+  "${current_state_query_port}" \
+  "${artifact_query_port}"
 then
   echo "Workflow projection query port must not include lifecycle operations."
+  exit 1
+fi
+
+if rg -n "ListActorTimelineAsync|GetActorGraphEdgesAsync|GetActorGraphSubgraphAsync" \
+  "${current_state_query_port}"
+then
+  echo "Workflow current-state query port must not include artifact queries."
+  exit 1
+fi
+
+if rg -n "GetActorSnapshotAsync|ListActorSnapshotsAsync|GetActorProjectionStateAsync" \
+  "${artifact_query_port}"
+then
+  echo "Workflow artifact query port must not include current-state queries."
   exit 1
 fi
 

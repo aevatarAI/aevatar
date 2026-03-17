@@ -23,6 +23,7 @@ public sealed partial class ScriptReadModelDocument
     public ScriptReadModelDocument DeepClone() => Clone();
 }
 
+[JsonConverter(typeof(ScriptDefinitionSnapshotDocumentJsonConverter))]
 public sealed partial class ScriptDefinitionSnapshotDocument
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptDefinitionSnapshotDocument>
@@ -47,6 +48,7 @@ public sealed partial class ScriptDefinitionSnapshotDocument
     public ScriptDefinitionSnapshotDocument DeepClone() => Clone();
 }
 
+[JsonConverter(typeof(ScriptCatalogEntryDocumentJsonConverter))]
 public sealed partial class ScriptCatalogEntryDocument
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptCatalogEntryDocument>
@@ -78,6 +80,7 @@ public sealed partial class ScriptCatalogEntryDocument
     public ScriptCatalogEntryDocument DeepClone() => Clone();
 }
 
+[JsonConverter(typeof(ScriptEvolutionReadModelJsonConverter))]
 public sealed partial class ScriptEvolutionReadModel
     : IProjectionReadModel,
       IProjectionReadModelCloneable<ScriptEvolutionReadModel>

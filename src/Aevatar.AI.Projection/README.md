@@ -1,15 +1,12 @@
 # Aevatar.AI.Projection
 
-`Aevatar.AI.Projection` 提供 AI 通用事件的读侧 applier 组件，避免在业务投影里重复解析同类事件。
+`Aevatar.AI.Projection` 提供 AI 通用事件的 durable artifact applier 组件，避免在业务物化链路里重复解析同类事件。
 
 ## 核心模式
 
-- `AIProjectionReadModelBase`
-  - 作为 AI 层 ReadModel 基类，可被业务层 ReadModel 继承
-  - 声明 `IHasProjectionTimeline` / `IHasProjectionRoleReplies` 能力契约
-  - 不内置集合字段，避免给业务 ReadModel 增加冗余存储
-- `IAIProjectionContext`
-  - 约束 AI 默认 applier 需要的最小上下文（当前仅 `RootActorId`）
+- `IProjectionMaterializationContext`
+  - AI 默认 applier 只依赖 actor-scoped durable materialization 上下文
+  - 不依赖 session/live sink 语义
 - 内置默认 applier：
   - `AITextMessageStartProjectionApplier`
   - `AITextMessageContentProjectionApplier`
@@ -19,7 +16,7 @@
 
 ## DI 接入
 
-推荐按“AI 分层”一次性注册默认 applier：
+推荐按 durable artifact 物化链路一次性注册默认 applier：
 
 ```csharp
 services.AddAIDefaultProjectionAppliers<TReadModel, TContext>();
@@ -29,6 +26,6 @@ services.AddAIDefaultProjectionAppliers<TReadModel, TContext>();
 
 ## 设计约束
 
-- 仅包含通用 AI 事件读侧逻辑。
+- 仅包含通用 AI 事件 durable artifact 逻辑。
 - 不依赖具体业务读模型实现项目。
 - 不包含 Host/API 协议适配代码。

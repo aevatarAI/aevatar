@@ -128,6 +128,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldDispatchRunScriptRequestedEnvelope_WhenRuntimeActorExists()
     {
         RunScriptRequestedEvent? captured = null;
+        var activationPort = new NoOpScriptExecutionProjectionPort();
         var runtime = new TestActorRuntime();
         runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
         {
@@ -135,7 +136,7 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }));
-        var service = CreateRuntimeCommandService(runtime);
+        var service = CreateRuntimeCommandService(runtime, activationPort);
 
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -734,6 +735,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var targetResolver = new ScriptEvolutionCommandTargetResolver(
             actorAccessor,
             addressResolver,
+            projectionPort,
             projectionPort);
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
@@ -785,13 +787,16 @@ public class RuntimeScriptInfrastructurePortsTests
             "1",
             "schema-hash");
 
-    private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
+    private static RuntimeScriptCommandService CreateRuntimeCommandService(
+        TestActorRuntime runtime,
+        IScriptExecutionReadModelActivationPort? readModelActivationPort = null)
     {
         return new RuntimeScriptCommandService(
             CreateDispatchService(
                 runtime,
                 new RunScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
-                new RunScriptRuntimeCommandEnvelopeFactory()));
+                new RunScriptRuntimeCommandEnvelopeFactory()),
+            readModelActivationPort ?? new NoOpScriptExecutionProjectionPort());
     }
 
     private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(
@@ -1233,7 +1238,9 @@ public class RuntimeScriptInfrastructurePortsTests
         public string ProposalId { get; } = proposalId;
     }
 
-    private sealed class TestProjectionPort : IScriptEvolutionProjectionPort
+    private sealed class TestProjectionPort
+        : IScriptEvolutionProjectionPort,
+          IScriptEvolutionReadModelActivationPort
     {
         private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
             new(StringComparer.Ordinal);
@@ -1257,6 +1264,9 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.FromResult<IScriptEvolutionProjectionLease?>(
                 new TestProjectionLease(sessionActorId, proposalId));
         }
+
+        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
+            await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
         public Task AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,
@@ -1297,7 +1307,9 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
-    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    private sealed class NoOpScriptExecutionProjectionPort
+        : IScriptExecutionProjectionPort,
+          IScriptExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled => true;
 
@@ -1308,6 +1320,9 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
         }
+
+        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
+            await EnsureActorProjectionAsync(actorId, ct) != null;
 
         public Task AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,

@@ -31,11 +31,16 @@ internal sealed class WorkflowRunCommandTargetBinder
 
         try
         {
+            if (!await target.ActivateMaterializationAsync(ct))
+            {
+                await target.RollbackCreatedActorsAsync(CancellationToken.None);
+                return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
+                    WorkflowChatRunStartError.ProjectionDisabled);
+            }
+
             var projectionLease = await _projectionPort.EnsureAndAttachAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
-                    target.WorkflowName,
-                    command.Prompt,
                     context.CommandId,
                     token),
                 sink,
