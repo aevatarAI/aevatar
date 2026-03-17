@@ -9,8 +9,8 @@ A Claude Code Team that autonomously discovers architectural issues, fixes them 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Collaboration model | Pipeline autonomous | Teammates self-organize via DM + shared TaskList; Lead only handles startup, PR submission, and summary |
-| Implementer count | 2 (parallel) | Parallel fix is the biggest acceleration; 2 avoids excessive merge conflicts |
-| Implementer persistence | Persistent + EnterWorktree per task | Can be DM'd for rework without re-spawn; worktree provides isolation |
+| Implementer count | 1 (serial) | Avoids worktree conflicts, branch collisions, and merge complexity |
+| Implementer persistence | One-shot per issue with worktree | New implementer spawned per issue with `isolation: "worktree"`; rework handled by review lead DM within same worktree session |
 | Review panel | 5 reviewers (2 arch + 2 quality + 1 CI) | Ensemble review counters LLM attention drift |
 | Model mix | Opus + Sonnet per review category | Cross-model diversity catches more issues |
 | Review coordinator | arch-reviewer-opus (review lead) | Collects all reviewer verdicts, makes pass/fail decision, DMs implementer for rework |
@@ -44,21 +44,21 @@ A Claude Code Team that autonomously discovers architectural issues, fixes them 
 - Creates a Task per issue (severity-ranked)
 - DMs Lead when done
 
-### Implementer × 2
+### Implementer (one per issue)
 
 | Field | Value |
 |-------|-------|
-| Name | `impl-1`, `impl-2` |
+| Name | `implementer` |
 | Model | opus |
 | Type | general-purpose |
-| Persistence | Persistent (can be DM'd for rework) |
-| Isolation | EnterWorktree per task from Lead |
+| Persistence | One-shot per issue (new spawn with worktree per task) |
+| Isolation | `isolation: "worktree"` on Agent spawn |
 
-- Poll TaskList → claim unassigned `pending` tasks (lowest ID first)
+- Spawned by Lead for each issue with `isolation: "worktree"`
 - Fix in isolated worktree → build → test → CI guard → commit → push
 - DM `arch-reviewer-opus`: "Issue #X fixed, branch `refactor/xxx`, please review"
-- On rework DM from review lead: fix in same worktree → push → DM review lead again
-- After 3 failed rounds: mark Task as skipped, claim next task
+- On rework DM from review lead: fix in same worktree session → push → DM review lead again
+- After 3 failed rounds: review lead marks Task as skipped
 
 ### Review Lead (arch-reviewer-opus)
 
@@ -140,8 +140,8 @@ Lead
   ├─ Spawn impl-1, impl-2 (persistent, idle until tasks exist)
   ├─ Spawn 5 reviewers (persistent, idle until DM'd)
   │
-  │  ┌─── impl-1 ────────────────────────────────────────┐
-  │  │ Poll TaskList → claim task → EnterWorktree         │
+  │  FOR EACH ISSUE (serial):
+  │  ┌─── implementer (worktree) ────────────────────────┐
   │  │ Fix → build → test → commit → push                │
   │  │ DM arch-reviewer-opus: "ready for review"         │
   │  │    ┌─── arch-reviewer-opus (review lead) ───────┐  │
@@ -149,14 +149,9 @@ Lead
   │  │    │ Collect 5 verdicts                          │  │
   │  │    │ Convergence:                                │  │
   │  │    │   APPROVED → DM Lead                        │  │
-  │  │    │   CHANGES_REQUESTED → DM impl               │  │
+  │  │    │   CHANGES_REQUESTED → DM implementer        │  │
   │  │    └────────────────────────────────────────────┘  │
   │  │ Rework if needed (max 3 rounds)                    │
-  │  │ Then claim next task                               │
-  │  └────────────────────────────────────────────────────┘
-  │
-  │  ┌─── impl-2 (same flow, different tasks) ───────────┐
-  │  │ ...parallel with impl-1...                         │
   │  └────────────────────────────────────────────────────┘
   │
   ├─ Lead receives "APPROVED" DMs → gh pr create per issue

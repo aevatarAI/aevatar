@@ -4,9 +4,9 @@ description: Orchestrate a fully automated multi-agent team to audit, fix, revie
 argument-hint: [max-issues]
 ---
 
-# Automated Refactoring Team — Pipeline Autonomous Mode
+# Automated Refactoring Team — Pipeline Mode
 
-You are the **Team Lead** orchestrating a Claude Code Team that audits the codebase, fixes issues in parallel, and submits PRs. The team uses pipeline-style autonomous collaboration where teammates communicate directly via DM.
+You are the **Team Lead** orchestrating a Claude Code Team that audits the codebase, fixes issues serially, and submits PRs. The team uses pipeline-style collaboration where the implementer works in an isolated worktree and the review lead coordinates all reviewers autonomously.
 
 **Max issues this run:** $ARGUMENTS (default: 5 if not specified)
 
@@ -14,10 +14,11 @@ You are the **Team Lead** orchestrating a Claude Code Team that audits the codeb
 
 ## Your Role as Lead
 
-You handle **startup, PR submission, and summary only**. The review cycle is fully autonomous:
-- Implementers claim tasks and DM the review lead when done
+You handle **startup, PR submission, and summary only**. The review cycle is autonomous:
+- Implementer fixes one issue at a time in a worktree, then DMs the review lead
 - Review lead coordinates all reviewers and makes pass/fail decisions
 - Review lead DMs you only when an issue is APPROVED or skipped
+- After each issue completes, you spawn a new implementer (with worktree) for the next issue
 
 ---
 
@@ -88,40 +89,15 @@ TaskCreate(
 
 ---
 
-## Phase 2: Spawn Persistent Teammates
+## Phase 2: Spawn Persistent Reviewers
 
-Read ALL prompt files first:
-- `.claude/skills/refactor-team/implementer-prompt.md`
+Read ALL reviewer prompt files first:
 - `.claude/skills/refactor-team/review-lead-prompt.md`
 - `.claude/skills/refactor-team/arch-reviewer-prompt.md`
 - `.claude/skills/refactor-team/quality-reviewer-prompt.md`
 - `.claude/skills/refactor-team/ci-guard-runner-prompt.md`
 
-Then spawn ALL 7 persistent teammates. Launch as many in parallel as possible:
-
-**Implementer 1:**
-```
-Agent(
-  subagent_type: "general-purpose",
-  model: "opus",
-  name: "impl-1",
-  team_name: "refactor-team",
-  prompt: <implementer-prompt.md contents>
-    + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nYou are impl-1. Poll TaskList for pending tasks, claim lowest ID first.\nWhen fix is ready, DM `arch-reviewer-opus` with the branch name and changed files."
-)
-```
-
-**Implementer 2:**
-```
-Agent(
-  subagent_type: "general-purpose",
-  model: "opus",
-  name: "impl-2",
-  team_name: "refactor-team",
-  prompt: <implementer-prompt.md contents>
-    + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nYou are impl-2. Poll TaskList for pending tasks, claim lowest ID first.\nWhen fix is ready, DM `arch-reviewer-opus` with the branch name and changed files."
-)
-```
+Then spawn ALL 5 persistent reviewers in parallel:
 
 **Review Lead (arch-reviewer-opus):**
 ```
@@ -131,7 +107,7 @@ Agent(
   name: "arch-reviewer-opus",
   team_name: "refactor-team",
   prompt: <review-lead-prompt.md contents>
-    + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nYou are the review lead. Wait for DMs from implementers."
+    + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nYou are the review lead. Wait for DMs from the implementer."
 )
 ```
 
@@ -180,6 +156,7 @@ Agent(
   model: "sonnet",
   name: "ci-guard-runner",
   team_name: "refactor-team",
+  isolation: "worktree",
   prompt: <ci-guard-runner-prompt.md contents>
     + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nWait for review requests from `arch-reviewer-opus`. Check out the implementer branch, run guards, reply with your VERDICT."
 )
@@ -187,13 +164,35 @@ Agent(
 
 ---
 
-## Phase 3: Wait for Results
+## Phase 3: Issue Processing Loop
 
-The pipeline is now autonomous. You (Lead) wait for DMs from `arch-reviewer-opus`.
+For each issue (up to max_issues), process serially:
 
-### On receiving "APPROVED" DM:
+### Step 3.1: Spawn Implementer with Worktree
 
-1. Extract branch name and review record from the message
+Read `.claude/skills/refactor-team/implementer-prompt.md`, then spawn a **new implementer per issue** with worktree isolation:
+
+```
+Agent(
+  subagent_type: "general-purpose",
+  model: "opus",
+  name: "implementer",
+  team_name: "refactor-team",
+  isolation: "worktree",
+  prompt: <implementer-prompt.md contents>
+    + "\n\n## Task to Fix\n\n" + <issue details from task>
+    + "\n\n## Team Context\n\nIntegration branch: $INTEGRATION_BRANCH\nYou are the implementer. Fix this single issue, commit, push, then DM `arch-reviewer-opus` with the branch name and changed files."
+    + "\n\n## Relevant CLAUDE.md Rules\n\n" + <relevant rules>
+)
+```
+
+### Step 3.2: Wait for Review Lead Decision
+
+The implementer DMs `arch-reviewer-opus`. The review lead coordinates all 5 reviewers autonomously and DMs you back with either:
+
+**On "APPROVED" DM from review lead:**
+
+1. Extract branch name and review record
 2. Create PR:
 
 ```bash
@@ -235,16 +234,18 @@ PREOF
 3. TaskUpdate the issue to `completed`
 4. Increment `issues_succeeded`
 
-### On receiving "skipped" DM:
+**On "skipped" DM from review lead:**
 
-1. TaskUpdate the issue to `completed` with skip reason in description
+1. TaskUpdate the issue to `completed` with skip reason
 2. Increment `issues_skipped`
 
-### Completion Check
+**On "CHANGES_REQUESTED" (review lead handles rework internally):**
 
-After each DM, check: have all tasks been completed (succeeded or skipped)?
-- If yes → proceed to Phase 4
-- If no → continue waiting
+The review lead DMs the implementer directly for rework (max 3 rounds). You only receive the final APPROVED or skipped DM.
+
+### Step 3.3: Next Issue
+
+Increment `issues_processed`. If `issues_processed < max_issues` and issues remain → go to Step 3.1 with next issue (spawn a new implementer with worktree).
 
 ---
 
@@ -255,13 +256,11 @@ After each DM, check: have all tasks been completed (succeeded or skipped)?
 Send shutdown request to all active teammates:
 
 ```
-SendMessage(to: "impl-1", message: "shutdown")
-SendMessage(to: "impl-2", message: "shutdown")
-SendMessage(to: "arch-reviewer-opus", message: "shutdown")
-SendMessage(to: "arch-reviewer-sonnet", message: "shutdown")
-SendMessage(to: "quality-reviewer-opus", message: "shutdown")
-SendMessage(to: "quality-reviewer-sonnet", message: "shutdown")
-SendMessage(to: "ci-guard-runner", message: "shutdown")
+SendMessage(to: "arch-reviewer-opus", message: {type: "shutdown_request"})
+SendMessage(to: "arch-reviewer-sonnet", message: {type: "shutdown_request"})
+SendMessage(to: "quality-reviewer-opus", message: {type: "shutdown_request"})
+SendMessage(to: "quality-reviewer-sonnet", message: {type: "shutdown_request"})
+SendMessage(to: "ci-guard-runner", message: {type: "shutdown_request"})
 ```
 
 ### 4.2 Delete Team
@@ -278,8 +277,8 @@ TeamDelete()
 **Date:** YYYY-MM-DD
 **Integration branch:** refactor/YYYY-MM-DD_auto-audit
 **Base branch:** <original working branch>
-**Team:** refactor-team (8 agents: 1 auditor + 2 impl + 5 reviewers)
-**Mode:** Pipeline autonomous (review lead: arch-reviewer-opus)
+**Team:** refactor-team (7 agents: 1 auditor + 1 impl per issue + 5 reviewers)
+**Mode:** Pipeline (serial impl + autonomous review)
 
 ### Results
 
