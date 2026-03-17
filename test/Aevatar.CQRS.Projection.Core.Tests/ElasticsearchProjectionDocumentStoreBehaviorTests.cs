@@ -134,6 +134,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         await store.UpsertAsync(new TestStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             Value = "v1",
         });
 
@@ -157,7 +158,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
-            """{"_seq_no":7,"_primary_term":3,"_source":{"Id":"actor-1","ActorId":"actor-1","StateVersion":1,"LastEventId":"evt-1","UpdatedAt":"2026-03-16T00:00:00Z","Value":"v1"}}"""));
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"result":"updated"}"""));
@@ -172,6 +173,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         await store.UpsertAsync(new TestStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             StateVersion = 2,
             LastEventId = "evt-2",
             UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z"),
@@ -216,11 +218,13 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         await store.UpsertAsync(new TestDynamicStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             DocumentIndexScope = "dynamic-alpha",
         });
         await store.UpsertAsync(new TestDynamicStoreReadModel
         {
             Id = "actor-2",
+            ActorId = "actor-2",
             DocumentIndexScope = "dynamic-beta",
         });
 
