@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -99,5 +100,72 @@ public sealed class ServiceCatalogQueryReaderTests
         _ = await reader.QueryByScopeAsync("tenant", "app", "default", take: 5000);
 
         store.LastQueryTake.Should().Be(1000);
+    }
+
+    [Fact]
+    public async Task QueryAllAsync_ShouldClampTakeBounds_AndMapSnapshots()
+    {
+        var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc-a",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc-a",
+            DisplayName = "Service A",
+        });
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc-b",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc-b",
+            DisplayName = "Service B",
+        });
+        var reader = new ServiceCatalogQueryReader(
+            store,
+            new ServiceProjectionOptions
+            {
+                Enabled = true,
+            });
+
+        var boundedToMinimum = await reader.QueryAllAsync(take: 0);
+        store.LastQueryTake.Should().Be(1);
+        boundedToMinimum.Should().ContainSingle();
+        boundedToMinimum[0].ServiceKey.Should().Be("tenant:app:default:svc-a");
+
+        var boundedToMaximum = await reader.QueryAllAsync(take: 20_000);
+        store.LastQueryTake.Should().Be(10_000);
+        boundedToMaximum.Select(x => x.ServiceKey).Should().Equal("tenant:app:default:svc-a", "tenant:app:default:svc-b");
+    }
+
+    [Fact]
+    public async Task QueryReader_ShouldReturnNullOrEmpty_WhenProjectionDisabled()
+    {
+        var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceCatalogReadModel
+        {
+            Id = "tenant:app:default:svc",
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        });
+        var reader = new ServiceCatalogQueryReader(
+            store,
+            new ServiceProjectionOptions
+            {
+                Enabled = false,
+            });
+
+        var snapshot = await reader.GetAsync(GAgentServiceTestKit.CreateIdentity());
+        var all = await reader.QueryAllAsync();
+        var scoped = await reader.QueryByScopeAsync("tenant", "app", "default");
+
+        snapshot.Should().BeNull();
+        all.Should().BeEmpty();
+        scoped.Should().BeEmpty();
     }
 }

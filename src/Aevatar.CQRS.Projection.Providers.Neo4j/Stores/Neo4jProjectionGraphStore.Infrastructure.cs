@@ -68,6 +68,19 @@ public sealed partial class Neo4jProjectionGraphStore
         ct.ThrowIfCancellationRequested();
     }
 
+    private async Task ExecuteWriteTransactionAsync(
+        string cypher,
+        IReadOnlyDictionary<string, object?> parameters,
+        CancellationToken ct)
+    {
+        await using var session = CreateSession(AccessMode.Write);
+        await using var transaction = await session.BeginTransactionAsync();
+        var cursor = await transaction.RunAsync(cypher, parameters);
+        await cursor.ConsumeAsync();
+        await transaction.CommitAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
     private async Task<IReadOnlyList<IReadOnlyDictionary<string, object>>> ExecuteReadAsync(
         string cypher,
         IReadOnlyDictionary<string, object?> parameters,
