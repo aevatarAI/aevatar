@@ -160,7 +160,7 @@ public sealed class ScriptNativeProjectionBuilderCoverageTests
             "rev-1",
             ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
             ScriptSources.StructuredProfileBehaviorHash));
-        return new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        return new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             "structured-schema",
             "3");
@@ -174,7 +174,7 @@ public sealed class ScriptNativeProjectionBuilderCoverageTests
             "rev-claim-1",
             ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
             ClaimScriptSources.DecisionBehaviorHash));
-        return new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        return new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             "claim-schema",
             "3");

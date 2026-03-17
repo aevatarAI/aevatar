@@ -267,7 +267,7 @@ public sealed class ScriptNativeGraphProjectorTests
             "rev-claim-1",
             ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
             ClaimScriptSources.DecisionBehaviorHash));
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             "claim-schema",
             "3");

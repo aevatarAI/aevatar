@@ -118,7 +118,7 @@ public sealed class ScriptNativeDocumentProjectorTests
             "rev-1",
             ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
             ScriptSources.StructuredProfileBehaviorHash));
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             "structured-schema",
             "3");

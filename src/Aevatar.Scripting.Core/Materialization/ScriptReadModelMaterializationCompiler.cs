@@ -6,10 +6,7 @@ namespace Aevatar.Scripting.Core.Materialization;
 
 public sealed class ScriptReadModelMaterializationCompiler : IScriptReadModelMaterializationCompiler
 {
-    private readonly Lock _gate = new();
-    private readonly Dictionary<string, ScriptReadModelMaterializationPlan> _plans = new(StringComparer.Ordinal);
-
-    public ScriptReadModelMaterializationPlan GetOrCompile(
+    public ScriptReadModelMaterializationPlan Compile(
         ScriptBehaviorArtifact artifact,
         string schemaHash,
         string schemaVersion)
@@ -35,21 +32,8 @@ public sealed class ScriptReadModelMaterializationCompiler : IScriptReadModelMat
         var normalizedSchemaHash = string.IsNullOrWhiteSpace(schemaHash)
             ? BuildFallbackSchemaHash(extraction.SchemaSpec)
             : schemaHash.Trim().ToLowerInvariant();
-        var cacheKey = string.Concat(
-            artifact.Descriptor.ReadModelTypeUrl ?? string.Empty,
-            "|",
-            normalizedSchemaHash,
-            "|",
-            extraction.SchemaVersion ?? string.Empty);
-        lock (_gate)
-        {
-            if (_plans.TryGetValue(cacheKey, out var cached))
-                return cached;
 
-            var compiled = CompileCore(artifact, extraction, normalizedSchemaHash, schemaVersion);
-            _plans[cacheKey] = compiled;
-            return compiled;
-        }
+        return CompileCore(artifact, extraction, normalizedSchemaHash, schemaVersion);
     }
 
     private static ScriptReadModelMaterializationPlan CompileCore(
