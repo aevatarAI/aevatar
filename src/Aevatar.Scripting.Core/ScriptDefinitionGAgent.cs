@@ -69,7 +69,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                     compilation.Artifact.Descriptor,
                     out extracted))
             {
-                _ = _materializationCompiler.GetOrCompile(
+                _ = _materializationCompiler.Compile(
                     compilation.Artifact,
                     extracted.SchemaHash,
                     extracted.SchemaVersion);
