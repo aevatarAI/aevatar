@@ -46,17 +46,13 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void ProjectReadModel_ShouldReturnNull_WhenProjectHandlerIsMissing()
+    public void BuildReadModel_ShouldReturnNull_WhenStateProjectorIsMissing()
     {
         var behavior = new ApplyOnlyBehavior();
         var current = new SimpleTextState { Value = "current" };
 
-        var result = behavior.ProjectReadModel(
+        var result = behavior.BuildReadModel(
             current,
-            new SimpleTextEvent
-            {
-                Current = new SimpleTextReadModel { Value = "next", HasValue = true },
-            },
             CreateFactContext());
 
         result.Should().BeNull();
@@ -72,12 +68,12 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void Descriptor_ShouldRejectEventWithoutApplyOrProject()
+    public void Descriptor_ShouldRejectDuplicateStateProjection()
     {
-        var act = () => _ = new MissingEventHandlerBehavior().Descriptor;
+        var act = () => _ = new DuplicateStateProjectionBehavior().Descriptor;
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*At least one of apply/project must be provided*");
+            .WithMessage("*Read model projector is already registered*");
     }
 
     [Fact]
@@ -241,6 +237,7 @@ public sealed class ScriptBehaviorAbstractionsTests
             new Dictionary<string, ScriptCommandRegistration>(StringComparer.Ordinal),
             new Dictionary<string, ScriptSignalRegistration>(StringComparer.Ordinal),
             new Dictionary<string, ScriptDomainEventRegistration>(StringComparer.Ordinal),
+            ReadModelProjector: null,
             ProtocolDescriptorSet: null,
             RuntimeSemantics: null);
 
@@ -380,8 +377,14 @@ public sealed class ScriptBehaviorAbstractionsTests
             builder
                 .OnCommand<SimpleTextCommand>((_, _, _) => Task.CompletedTask)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
     }
 
@@ -389,8 +392,15 @@ public sealed class ScriptBehaviorAbstractionsTests
     {
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            builder.OnEvent<SimpleTextEvent>(
-                project: static (_, evt, _) => evt.Current);
+            builder
+                .OnEvent<SimpleTextEvent>()
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
     }
 
@@ -412,11 +422,12 @@ public sealed class ScriptBehaviorAbstractionsTests
         }
     }
 
-    private sealed class MissingEventHandlerBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    private sealed class DuplicateStateProjectionBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            builder.OnEvent<SimpleTextEvent>();
+            builder.ProjectState(static (_, _) => new SimpleTextReadModel());
+            builder.ProjectState(static (_, _) => new SimpleTextReadModel());
         }
     }
 
@@ -425,7 +436,7 @@ public sealed class ScriptBehaviorAbstractionsTests
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder.OnEvent<SimpleTextEvent>(apply: static (_, _, _) => new SimpleTextState());
-            builder.OnEvent<SimpleTextEvent>(project: static (_, evt, _) => evt.Current);
+            builder.OnEvent<SimpleTextEvent>(apply: static (_, _, _) => new SimpleTextState());
         }
     }
 

@@ -64,8 +64,3 @@ message WorkflowActorGraphSubgraph {
   repeated WorkflowActorGraphNode nodes = 2;
   repeated WorkflowActorGraphEdge edges = 3;
 }
-
-message WorkflowActorGraphEnrichedSnapshot {
-  WorkflowActorSnapshot snapshot = 1;
-  WorkflowActorGraphSubgraph subgraph = 2;
-}

@@ -8,7 +8,7 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptNativeGraphProjector
-    : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
+    : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel> _graphWriteDispatcher;
     private readonly IScriptNativeGraphMaterializer _materializer;
@@ -21,17 +21,8 @@ public sealed class ScriptNativeGraphProjector
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
     }
 
-    public ValueTask InitializeAsync(
-        ScriptExecutionProjectionContext context,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
-
     public async ValueTask ProjectAsync(
-        ScriptExecutionProjectionContext context,
+        ScriptExecutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
@@ -64,14 +55,4 @@ public sealed class ScriptNativeGraphProjector
         await _graphWriteDispatcher.UpsertAsync(graphReadModel, ct);
     }
 
-    public ValueTask CompleteAsync(
-        ScriptExecutionProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
 }

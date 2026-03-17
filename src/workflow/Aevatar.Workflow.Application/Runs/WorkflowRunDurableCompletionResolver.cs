@@ -8,12 +8,12 @@ namespace Aevatar.Workflow.Application.Runs;
 internal sealed class WorkflowRunDurableCompletionResolver
     : ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>
 {
-    private readonly IWorkflowExecutionProjectionQueryPort _projectionQueryPort;
+    private readonly IWorkflowExecutionCurrentStateQueryPort _currentStateQueryPort;
 
     public WorkflowRunDurableCompletionResolver(
-        IWorkflowExecutionProjectionQueryPort projectionQueryPort)
+        IWorkflowExecutionCurrentStateQueryPort currentStateQueryPort)
     {
-        _projectionQueryPort = projectionQueryPort ?? throw new ArgumentNullException(nameof(projectionQueryPort));
+        _currentStateQueryPort = currentStateQueryPort ?? throw new ArgumentNullException(nameof(currentStateQueryPort));
     }
 
     public async Task<CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>> ResolveAsync(
@@ -27,7 +27,7 @@ internal sealed class WorkflowRunDurableCompletionResolver
 
         try
         {
-            var snapshot = await _projectionQueryPort.GetActorSnapshotAsync(actorId, ct);
+            var snapshot = await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
             return MapSnapshot(snapshot);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

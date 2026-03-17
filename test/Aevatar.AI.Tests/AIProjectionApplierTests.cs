@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Projection.Appliers;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
 using FluentAssertions;
@@ -13,12 +14,12 @@ public class AIProjectionApplierTests
     public void TextMessageContentApplier_ShouldAppendTimelineWithDeltaLength()
     {
         var readModel = new TimelineReadModel();
-        var applier = new AITextMessageContentProjectionApplier<TimelineReadModel, object?>();
+        var applier = new AITextMessageContentProjectionApplier<TimelineReadModel, TestProjectionContext>();
         var envelope = Envelope(publisherId: "agent-1", typeUrl: "type://content");
 
         var applied = applier.Apply(
             readModel,
-            null,
+            new TestProjectionContext(),
             envelope,
             new TextMessageContentEvent
             {
@@ -41,12 +42,12 @@ public class AIProjectionApplierTests
     public void TextMessageStartApplier_ShouldUseFallbackPublisherAndSession()
     {
         var readModel = new TimelineReadModel();
-        var applier = new AITextMessageStartProjectionApplier<TimelineReadModel, object?>();
+        var applier = new AITextMessageStartProjectionApplier<TimelineReadModel, TestProjectionContext>();
         var envelope = Envelope(publisherId: " ", typeUrl: "type://start");
 
         var applied = applier.Apply(
             readModel,
-            null,
+            new TestProjectionContext(),
             envelope,
             new TextMessageStartEvent
             {
@@ -67,12 +68,12 @@ public class AIProjectionApplierTests
     public void ToolCallApplier_ShouldAppendToolMetadata()
     {
         var readModel = new TimelineReadModel();
-        var applier = new AIToolCallProjectionApplier<TimelineReadModel, object?>();
+        var applier = new AIToolCallProjectionApplier<TimelineReadModel, TestProjectionContext>();
         var envelope = Envelope(publisherId: "agent-2", typeUrl: "type://tool-call");
 
         var applied = applier.Apply(
             readModel,
-            null,
+            new TestProjectionContext(),
             envelope,
             new ToolCallEvent
             {
@@ -95,12 +96,12 @@ public class AIProjectionApplierTests
     public void ToolResultApplier_ShouldAppendResultMetadataWithNullFallbacks()
     {
         var readModel = new TimelineReadModel();
-        var applier = new AIToolResultProjectionApplier<TimelineReadModel, object?>();
+        var applier = new AIToolResultProjectionApplier<TimelineReadModel, TestProjectionContext>();
         var envelope = Envelope(publisherId: "agent-3", typeUrl: "type://tool-result");
 
         var applied = applier.Apply(
             readModel,
-            null,
+            new TestProjectionContext(),
             envelope,
             new ToolResultEvent
             {
@@ -141,5 +142,12 @@ public class AIProjectionApplierTests
         {
             Timeline.Add(timelineEvent);
         }
+    }
+
+    private sealed class TestProjectionContext : IProjectionMaterializationContext
+    {
+        public string RootActorId { get; init; } = "root-1";
+
+        public string ProjectionKind { get; init; } = "ai-tests";
     }
 }

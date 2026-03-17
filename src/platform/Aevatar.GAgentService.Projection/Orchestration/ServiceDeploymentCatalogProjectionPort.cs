@@ -1,0 +1,18 @@
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Projection.Contexts;
+
+namespace Aevatar.GAgentService.Projection.Orchestration;
+
+public sealed class ServiceDeploymentCatalogProjectionPort
+    : ServiceProjectionPortBase<ServiceDeploymentCatalogProjectionContext>,
+      IServiceDeploymentCatalogProjectionPort
+{
+    public ServiceDeploymentCatalogProjectionPort(
+        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>> activationService)
+        : base(activationService, ServiceProjectionNames.Deployments)
+    {
+    }
+
+    public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) =>
+        EnsureProjectionCoreAsync(actorId, ct);
+}

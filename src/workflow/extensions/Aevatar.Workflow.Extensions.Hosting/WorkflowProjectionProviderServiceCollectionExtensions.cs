@@ -19,12 +19,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(WorkflowProjectionProviderRegistrationsMarker)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>)))
             return services;
 
         EnsureLegacyProviderOptionsNotUsed(configuration);
-
-        services.AddSingleton<WorkflowProjectionProviderRegistrationsMarker>();
 
         var enableElasticsearchDocument = ResolveElasticsearchDocumentEnabled(configuration);
         var enableNeo4jGraph = ResolveNeo4jGraphEnabled(configuration);
@@ -93,6 +91,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
+            optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>>().Metadata,
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>>().Metadata,
@@ -116,6 +119,11 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             keySelector: static report => report.RootActorId,
             keyFormatter: static key => key,
             defaultSortSelector: static report => report.CreatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
+            keySelector: static document => document.RootActorId,
+            keyFormatter: static key => key,
+            defaultSortSelector: static document => document.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
             keySelector: static document => document.Id,
@@ -250,6 +258,4 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
 
         return parsed;
     }
-
-    private sealed class WorkflowProjectionProviderRegistrationsMarker;
 }

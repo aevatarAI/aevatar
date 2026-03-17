@@ -3,9 +3,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Shared projector template for mapping one envelope into zero-or-more session events.
 /// </summary>
-public abstract class ProjectionSessionEventProjectorBase<TContext, TTopology, TEvent>
-    : IProjectionProjector<TContext, TTopology>
-    where TContext : class
+public abstract class ProjectionSessionEventProjectorBase<TContext, TEvent>
+    : IProjectionProjector<TContext>
+    where TContext : class, IProjectionSessionContext
     where TEvent : class
 {
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
@@ -13,13 +13,6 @@ public abstract class ProjectionSessionEventProjectorBase<TContext, TTopology, T
     protected ProjectionSessionEventProjectorBase(IProjectionSessionEventHub<TEvent> sessionEventHub)
     {
         _sessionEventHub = sessionEventHub ?? throw new ArgumentNullException(nameof(sessionEventHub));
-    }
-
-    public virtual ValueTask InitializeAsync(TContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -50,14 +43,6 @@ public abstract class ProjectionSessionEventProjectorBase<TContext, TTopology, T
                 entry.Event,
                 ct);
         }
-    }
-
-    public virtual ValueTask CompleteAsync(TContext context, TTopology topology, CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     protected abstract IReadOnlyList<ProjectionSessionEventEntry<TEvent>> ResolveSessionEventEntries(

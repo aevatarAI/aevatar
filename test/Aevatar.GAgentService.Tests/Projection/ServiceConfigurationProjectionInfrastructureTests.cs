@@ -20,33 +20,16 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceConfigurationProjectionInfrastructureTests
 {
     [Fact]
-    public async Task ConfigurationProjectionPortService_ShouldIgnoreBlankActorId_AndEnsureLease()
+    public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPortService(activationService);
+        var service = new ServiceConfigurationProjectionPort(activationService);
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("config-actor");
 
         activationService.Calls.Should().ContainSingle();
-        activationService.Calls[0].Should().Be(("config-actor", "service-configuration", string.Empty, "config-actor"));
-    }
-
-    [Fact]
-    public async Task ActivationAndReleaseServices_ShouldCreateContextLeaseAndStopWhenIdle()
-    {
-        var lifecycle = new RecordingConfigurationLifecycle();
-        var activation = new ServiceConfigurationProjectionActivationService(lifecycle);
-        var release = new ServiceConfigurationProjectionReleaseService(lifecycle);
-        var lease = await activation.EnsureAsync("config-actor", "service-configuration", string.Empty, "cmd-config");
-        await release.ReleaseIfIdleAsync(lease);
-
-        lease.ScopeId.Should().Be("config-actor");
-        lease.SessionId.Should().Be("config-actor");
-        lifecycle.StartedContexts.Should().ContainSingle();
-        lifecycle.StartedContexts[0].ProjectionId.Should().Be("service-configuration:config-actor");
-        lifecycle.StoppedContexts.Should().ContainSingle();
-        ((IProjectionContext)lease.Context).ProjectionId.Should().Be("service-configuration:config-actor");
+        activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
     }
 
     [Fact]
@@ -76,7 +59,10 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
             x.ServiceType == typeof(IServiceConfigurationQueryReader) &&
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionProjector<ServiceConfigurationProjectionContext, IReadOnlyList<string>>) &&
+            x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
+            x.ImplementationType == typeof(ServiceConfigurationProjector));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>) &&
             x.ImplementationType == typeof(ServiceConfigurationProjector));
     }
 
@@ -161,17 +147,17 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         committedArgs[3].Should().Be("evt-1");
         committedArgs[4].Should().Be(8L);
         committedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T01:00:00+00:00"));
-        plainResult.Should().BeTrue();
-        ((Any)plainArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
-        plainArgs[3].Should().Be("plain-1");
+        plainResult.Should().BeFalse();
+        plainArgs[2].Should().BeNull();
+        plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
-        plainArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T03:00:00+00:00"));
-        invalidCommittedResult.Should().BeTrue();
-        ((Any)invalidCommittedArgs[2]!).Is(CommittedStateEventPublished.Descriptor).Should().BeTrue();
-        invalidCommittedArgs[3].Should().Be("outer-2");
+        plainArgs[5].Should().Be(default(DateTimeOffset));
+        invalidCommittedResult.Should().BeFalse();
+        invalidCommittedArgs[2].Should().BeNull();
+        invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
-        invalidCommittedArgs[5].Should().Be(DateTimeOffset.Parse("2026-03-16T05:00:00+00:00"));
-        resolvedVersion.Should().Be(1L);
+        invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
+        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]
@@ -182,48 +168,20 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    private sealed class RecordingConfigurationActivationService : IProjectionPortActivationService<ServiceConfigurationRuntimeLease>
+    private sealed class RecordingConfigurationActivationService : IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>
     {
-        public List<(string rootEntityId, string projectionName, string input, string commandId)> Calls { get; } = [];
+        public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
         public Task<ServiceConfigurationRuntimeLease> EnsureAsync(
-            string rootEntityId,
-            string projectionName,
-            string input,
-            string commandId,
+            ProjectionMaterializationStartRequest request,
             CancellationToken ct = default)
         {
-            Calls.Add((rootEntityId, projectionName, input, commandId));
+            Calls.Add((request.RootActorId, request.ProjectionKind));
             return Task.FromResult(new ServiceConfigurationRuntimeLease(new ServiceConfigurationProjectionContext
             {
-                ProjectionId = $"{projectionName}:{rootEntityId}",
-                RootActorId = rootEntityId,
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
             }));
         }
-    }
-
-    private sealed class RecordingConfigurationLifecycle : IProjectionLifecycleService<ServiceConfigurationProjectionContext, IReadOnlyList<string>>
-    {
-        public List<ServiceConfigurationProjectionContext> StartedContexts { get; } = [];
-
-        public List<ServiceConfigurationProjectionContext> StoppedContexts { get; } = [];
-
-        public Task StartAsync(ServiceConfigurationProjectionContext context, CancellationToken ct = default)
-        {
-            StartedContexts.Add(context);
-            return Task.CompletedTask;
-        }
-
-        public Task ProjectAsync(ServiceConfigurationProjectionContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task StopAsync(ServiceConfigurationProjectionContext context, CancellationToken ct = default)
-        {
-            StoppedContexts.Add(context);
-            return Task.CompletedTask;
-        }
-
-        public Task CompleteAsync(ServiceConfigurationProjectionContext context, IReadOnlyList<string> completion, CancellationToken ct = default) =>
-            Task.CompletedTask;
     }
 }

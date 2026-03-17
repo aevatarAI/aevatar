@@ -354,11 +354,10 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         var configuration = new ConfigurationBuilder().Build();
 
         services.AddWorkflowProjectionReadModelProviders(configuration);
+        var afterFirstRegistration = services.Count;
         services.AddWorkflowProjectionReadModelProviders(configuration);
 
-        services.Count(x => x.ServiceType.Name.Contains("WorkflowProjectionProviderRegistrationsMarker", StringComparison.Ordinal))
-            .Should()
-            .Be(1);
+        services.Count.Should().Be(afterFirstRegistration);
     }
 
     [Fact]

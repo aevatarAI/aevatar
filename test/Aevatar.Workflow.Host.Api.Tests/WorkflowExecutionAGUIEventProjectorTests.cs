@@ -130,8 +130,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             new StaticMapper([BuildRunFinished("actor-1", "done")]),
             streamHub);
 
-        var context = BuildContext();
-        context.CommandId = string.Empty;
+        var context = BuildContext(string.Empty);
         var sink = new RecordingSink();
 
         await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-fallback", evt => sink.PushAsync(evt));
@@ -161,8 +160,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
             new StaticMapper([BuildRunFinished("actor-1", "done")]),
             streamHub);
 
-        var context = BuildContext();
-        context.CommandId = string.Empty;
+        var context = BuildContext(string.Empty);
         var sink = new RecordingSink();
 
         await using var subscription = await streamHub.SubscribeAsync("actor-1", "cmd-1", evt => sink.PushAsync(evt));
@@ -176,14 +174,11 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
         sink.SnapshotEvents().Should().BeEmpty();
     }
 
-    private static WorkflowExecutionProjectionContext BuildContext() => new()
+    private static WorkflowExecutionProjectionContext BuildContext(string sessionId = "cmd-1") => new()
     {
-        ProjectionId = "actor-1",
-        CommandId = "cmd-1",
+        SessionId = sessionId,
         RootActorId = "actor-1",
-        WorkflowName = "direct",
-        Input = "hello",
-        StartedAt = DateTimeOffset.UtcNow,
+        ProjectionKind = "workflow-execution",
     };
 
     private static WorkflowRunEventEnvelope BuildRunFinished(string threadId, string output) =>

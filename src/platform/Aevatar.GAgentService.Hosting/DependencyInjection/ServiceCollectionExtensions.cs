@@ -66,10 +66,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(GAgentServiceProjectionProviderRegistrationsMarker)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)))
             return services;
-
-        services.AddSingleton<GAgentServiceProjectionProviderRegistrationsMarker>();
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
             configuration["Projection:Document:Providers:InMemory:Enabled"],
@@ -180,6 +178,4 @@ public static class ServiceCollectionExtensions
 
         return parsed;
     }
-
-    private sealed class GAgentServiceProjectionProviderRegistrationsMarker;
 }

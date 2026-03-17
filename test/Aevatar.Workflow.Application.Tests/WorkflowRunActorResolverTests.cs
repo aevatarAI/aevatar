@@ -603,6 +603,13 @@ public sealed class WorkflowRunActorResolverTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

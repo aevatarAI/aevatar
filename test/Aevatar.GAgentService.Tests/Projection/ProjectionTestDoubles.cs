@@ -92,8 +92,8 @@ internal sealed class RecordingDocumentStore<TReadModel> :
 }
 
 internal sealed class RecordingProjectionActivationService<TContext>
-    : IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>
-    where TContext : class, IProjectionContext
+    : IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>>
+    where TContext : class, IProjectionMaterializationContext
 {
     private readonly Func<string, string, TContext> _contextFactory;
 
@@ -102,45 +102,15 @@ internal sealed class RecordingProjectionActivationService<TContext>
         _contextFactory = contextFactory;
     }
 
-    public List<(string rootEntityId, string projectionName, string input, string commandId)> Calls { get; } = [];
+    public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
     public Task<ServiceProjectionRuntimeLease<TContext>> EnsureAsync(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
+        ProjectionMaterializationStartRequest request,
         CancellationToken ct = default)
     {
-        Calls.Add((rootEntityId, projectionName, input, commandId));
+        Calls.Add((request.RootActorId, request.ProjectionKind));
         return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
-            rootEntityId,
-            _contextFactory(rootEntityId, projectionName)));
+            request.RootActorId,
+            _contextFactory(request.RootActorId, request.ProjectionKind)));
     }
-}
-
-internal sealed class RecordingProjectionLifecycle<TContext>
-    : IProjectionLifecycleService<TContext, IReadOnlyList<string>>
-    where TContext : class, IProjectionContext
-{
-    public List<TContext> StartedContexts { get; } = [];
-
-    public List<TContext> StoppedContexts { get; } = [];
-
-    public Task StartAsync(TContext context, CancellationToken ct = default)
-    {
-        StartedContexts.Add(context);
-        return Task.CompletedTask;
-    }
-
-    public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-        Task.CompletedTask;
-
-    public Task StopAsync(TContext context, CancellationToken ct = default)
-    {
-        StoppedContexts.Add(context);
-        return Task.CompletedTask;
-    }
-
-    public Task CompleteAsync(TContext context, IReadOnlyList<string> completion, CancellationToken ct = default) =>
-        Task.CompletedTask;
 }

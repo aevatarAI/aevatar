@@ -6,8 +6,6 @@ using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using Aevatar.Workflow.Core;
-using Aevatar.Foundation.Abstractions.Deduplication;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -16,8 +14,6 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using System.Reflection;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Projection.DependencyInjection;
 
@@ -26,10 +22,6 @@ namespace Aevatar.Workflow.Projection.DependencyInjection;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
-    private static readonly Type ProjectionProjectorContract = typeof(IProjectionProjector<,>);
-    private static readonly Type WorkflowExecutionProjectorContract = typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>);
-    private static readonly Type WorkflowRunInsightProjectorContract = typeof(IProjectionProjector<WorkflowRunInsightProjectionContext, bool>);
-
     public static IServiceCollection AddWorkflowExecutionProjectionCQRS(
         this IServiceCollection services,
         Action<WorkflowExecutionProjectionOptions>? configure = null)
@@ -39,213 +31,155 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(options));
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
-        services.TryAddSingleton<IProjectionDispatchCompensationOptions>(sp =>
-            sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
-        services.TryAddSingleton<IEventDeduplicator, PassthroughEventDeduplicator>();
         services.AddProjectionReadModelRuntime();
-        services.TryAddSingleton<IProjectionDispatchCompensationOutbox, ActorProjectionDispatchCompensationOutbox>();
-        services.TryAddSingleton<IProjectionStoreDispatchCompensator<WorkflowRunInsightReportDocument>, DurableProjectionDispatchCompensator<WorkflowRunInsightReportDocument>>();
-        services.Replace(ServiceDescriptor.Singleton<IWorkflowRunDetachedCleanupScheduler, ActorWorkflowRunDetachedCleanupOutbox>());
-        services.TryAddSingleton<IWorkflowRunDetachedCleanupOutbox>(sp =>
-            (ActorWorkflowRunDetachedCleanupOutbox)sp.GetRequiredService<IWorkflowRunDetachedCleanupScheduler>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>, WorkflowRunTimelineDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>, WorkflowRunGraphArtifactDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton<IWorkflowExecutionProjectionContextFactory, DefaultWorkflowExecutionProjectionContextFactory>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
-        services.TryAddSingleton<IWorkflowRunInsightActorPort, ActorWorkflowRunInsightPort>();
-        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunGraphMirrorReadModel>, WorkflowRunGraphMirrorMaterializer>();
-        RegisterFromAssembly(services, typeof(ServiceCollectionExtensions).Assembly);
-        services.TryAddSingleton<IProjectionSessionEventCodec<EventEnvelope>, WorkflowBindingSessionEventCodec>();
-        services.TryAddSingleton<IProjectionSessionEventHub<EventEnvelope>, ProjectionSessionEventHub<EventEnvelope>>();
-        services.AddEventSinkProjectionRuntimeCore<
+        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunGraphArtifactDocument>, WorkflowRunGraphArtifactMaterializer>();
+        services.AddProjectionMaterializationRuntimeCore<
+            WorkflowExecutionMaterializationContext,
+            WorkflowExecutionMaterializationRuntimeLease>();
+        services.AddProjectionMaterializationRuntimeCore<
             WorkflowBindingProjectionContext,
-            IReadOnlyList<string>,
-            WorkflowBindingRuntimeLease,
-            EventEnvelope>();
+            WorkflowBindingRuntimeLease>();
         services.AddEventSinkProjectionRuntimeCore<
             WorkflowExecutionProjectionContext,
-            IReadOnlyList<WorkflowExecutionTopologyEdge>,
             WorkflowExecutionRuntimeLease,
-            WorkflowRunEventEnvelope,
-            WorkflowProjectionSinkFailurePolicy>();
-        services.TryAddSingleton<IProjectionDispatchFailureReporter<WorkflowExecutionProjectionContext>, WorkflowProjectionDispatchFailureReporter>();
-        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
-        services.TryAddSingleton(sp => new ProjectionOwnershipCoordinatorOptions
-        {
-            LeaseTtlMs = sp.GetRequiredService<WorkflowExecutionProjectionOptions>().ProjectionOwnershipLeaseTtlMs,
-        });
-        services.TryAddSingleton<IProjectionOwnershipCoordinator, ActorProjectionOwnershipCoordinator>();
+            WorkflowRunEventEnvelope>();
         services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowRunEventEnvelope>, WorkflowRunEventSessionCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
-        services.TryAddSingleton<IProjectionSessionEventCodec<WorkflowProjectionControlEvent>, WorkflowProjectionControlEventSessionCodec>();
-        services.TryAddSingleton<IProjectionSessionEventHub<WorkflowProjectionControlEvent>, ProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
-        services.TryAddSingleton<IProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>, ProjectionCoordinator<WorkflowRunInsightProjectionContext, bool>>();
-        services.TryAddSingleton<IProjectionDispatcher<WorkflowRunInsightProjectionContext>, ProjectionDispatcher<WorkflowRunInsightProjectionContext, bool>>();
-        services.TryAddSingleton<IProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>, ProjectionSubscriptionRegistry<WorkflowRunInsightProjectionContext>>();
-        services.TryAddSingleton<IProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>, ProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>>();
-        services.TryAddSingleton<IProjectionPortActivationService<WorkflowExecutionRuntimeLease>>(sp =>
-        {
-            var lifecycle = sp.GetRequiredService<IProjectionLifecycleService<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-            var clock = sp.GetRequiredService<IProjectionClock>();
-            var contextFactory = sp.GetRequiredService<IWorkflowExecutionProjectionContextFactory>();
-            var ownershipCoordinator = sp.GetRequiredService<IProjectionOwnershipCoordinator>();
-            var ownershipOptions = sp.GetRequiredService<ProjectionOwnershipCoordinatorOptions>();
-            var projectionControlHub = sp.GetService<IProjectionSessionEventHub<WorkflowProjectionControlEvent>>();
-            var runtimeLeaseLogger = sp.GetService<ILogger<WorkflowExecutionRuntimeLease>>();
-
-            return new ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>(
-                lifecycle,
-                (rootEntityId, workflowName, input, commandId, _) => contextFactory.Create(
-                    rootEntityId,
-                    commandId,
-                    rootEntityId,
-                    workflowName,
-                    input,
-                    clock.UtcNow),
-                context => new WorkflowExecutionRuntimeLease(
-                    context,
-                    ownershipCoordinator,
-                    ownershipOptions,
-                    lifecycle,
-                    projectionControlHub,
-                    runtimeLeaseLogger),
-                acquireBeforeStart: (rootEntityId, _, _, commandId, ct) =>
-                    ownershipCoordinator.AcquireAsync(rootEntityId, commandId, ct),
-                onRuntimeLeaseCreated: async (_, _, _, runtimeLease, ct) =>
+        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowExecutionProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<WorkflowExecutionProjectionContext>(scopeKey =>
+                new WorkflowExecutionProjectionContext
                 {
-                    try
-                    {
-                        await runtimeLease.WaitForProjectionReleaseListenerReadyAsync(ct);
-                    }
-                    catch
-                    {
-                        await TryStopRuntimeLeaseAsync(runtimeLease);
-                        throw;
-                    }
-                },
-                cleanupOnStartFailure: (rootEntityId, commandId) =>
-                    TryReleaseProjectionOwnershipAsync(ownershipCoordinator, rootEntityId, commandId));
-        });
-        services.TryAddSingleton<IProjectionPortActivationService<WorkflowRunInsightRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<WorkflowRunInsightRuntimeLease, WorkflowRunInsightProjectionContext, bool>(
-                sp.GetRequiredService<IProjectionLifecycleService<WorkflowRunInsightProjectionContext, bool>>(),
-                (rootEntityId, _, _, _, _) => new WorkflowRunInsightProjectionContext
+                    SessionId = scopeKey.SessionId,
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowExecutionMaterializationContext>>(
+            _ => new ProjectionScopeContextFactory<WorkflowExecutionMaterializationContext>(scopeKey =>
+                new WorkflowExecutionMaterializationContext
                 {
-                    ProjectionId = $"{rootEntityId}:insight",
-                    RootActorId = WorkflowRunInsightGAgent.BuildActorId(rootEntityId),
-                    RunActorId = rootEntityId,
-                },
-                context => new WorkflowRunInsightRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<WorkflowExecutionRuntimeLease>, ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>();
-        services.TryAddSingleton<IProjectionPortActivationService<WorkflowBindingRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<WorkflowBindingRuntimeLease, WorkflowBindingProjectionContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<WorkflowBindingProjectionContext, IReadOnlyList<string>>>(),
-                (rootEntityId, _, _, _, _) => new WorkflowBindingProjectionContext
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<WorkflowBindingProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<WorkflowBindingProjectionContext>(scopeKey =>
+                new WorkflowBindingProjectionContext
                 {
-                    ProjectionId = $"{rootEntityId}:binding",
-                    RootActorId = rootEntityId,
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionSessionActivationService<WorkflowExecutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeActivationService<
+                WorkflowExecutionRuntimeLease,
+                WorkflowExecutionProjectionContext,
+                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new WorkflowExecutionProjectionContext
+                {
+                    SessionId = request.SessionId,
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
                 },
-                context => new WorkflowBindingRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<WorkflowBindingRuntimeLease>, ContextProjectionReleaseService<WorkflowBindingRuntimeLease, WorkflowBindingProjectionContext, IReadOnlyList<string>>>();
-        services.TryAddSingleton<WorkflowProjectionQueryReader>();
+                static (_, context) => new WorkflowExecutionRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeReleaseService<
+                WorkflowExecutionRuntimeLease,
+                ProjectionSessionScopeGAgent<WorkflowExecutionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.SessionObservation,
+                    lease.Context.SessionId),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                WorkflowExecutionMaterializationRuntimeLease,
+                WorkflowExecutionMaterializationContext,
+                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new WorkflowExecutionMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                },
+                static (_, context) => new WorkflowExecutionMaterializationRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                WorkflowExecutionMaterializationRuntimeLease,
+                ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationActivationService<WorkflowBindingRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                WorkflowBindingRuntimeLease,
+                WorkflowBindingProjectionContext,
+                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new WorkflowBindingProjectionContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                },
+                static (_, context) => new WorkflowBindingRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<WorkflowBindingRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                WorkflowBindingRuntimeLease,
+                ProjectionMaterializationScopeGAgent<WorkflowBindingProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
+        services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
+        services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<IWorkflowActorBindingReader, ProjectionWorkflowActorBindingReader>();
+        services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionMaterializationPort>());
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
-        services.TryAddSingleton<IWorkflowExecutionProjectionQueryPort>(sp =>
-            sp.GetRequiredService<WorkflowProjectionQueryReader>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ProjectionDispatchCompensationReplayHostedService>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowRunDetachedCleanupReplayHostedService>());
+        services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
+        services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>,
-            WorkflowActorBindingProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>,
-            WorkflowExecutionCurrentStateProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
-            WorkflowRunInsightReportDocumentProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
-            WorkflowRunTimelineReadModelProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<WorkflowRunInsightProjectionContext, bool>,
-            WorkflowRunGraphMirrorProjector>());
+        services.AddProjectionArtifactMaterializer<
+            WorkflowBindingProjectionContext,
+            WorkflowActorBindingProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowExecutionCurrentStateProjector>();
+        services.AddProjectionArtifactMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowRunInsightReportArtifactProjector>();
+        services.AddProjectionArtifactMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowRunTimelineArtifactProjector>();
+        services.AddProjectionArtifactMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowRunGraphArtifactProjector>();
         return services;
-    }
-
-    /// <summary>
-    /// Registers a custom projector from another assembly/module.
-    /// </summary>
-    public static IServiceCollection AddWorkflowRunInsightBridgeProjector<TProjector>(this IServiceCollection services)
-        where TProjector : class, IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
-    {
-        services.TryAddEnumerable(ServiceDescriptor.Singleton(
-            typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>),
-            typeof(TProjector)));
-        return services;
-    }
-
-    private static void RegisterFromAssembly(IServiceCollection services, Assembly assembly)
-    {
-        ProjectionAssemblyRegistration.RegisterProjectorExtensionsFromAssembly(
-            services,
-            assembly,
-            WorkflowExecutionProjectorContract,
-            ProjectionProjectorContract);
-        ProjectionAssemblyRegistration.RegisterProjectorExtensionsFromAssembly(
-            services,
-            assembly,
-            WorkflowRunInsightProjectorContract,
-            ProjectionProjectorContract);
-    }
-
-    private static async Task TryReleaseProjectionOwnershipAsync(
-        IProjectionOwnershipCoordinator ownershipCoordinator,
-        string rootActorId,
-        string commandId)
-    {
-        try
-        {
-            await ownershipCoordinator.ReleaseAsync(rootActorId, commandId, CancellationToken.None);
-        }
-        catch
-        {
-            // Best effort cleanup: ownership may already be released or unavailable.
-        }
-    }
-
-    private static async Task TryStopRuntimeLeaseAsync(WorkflowExecutionRuntimeLease runtimeLease)
-    {
-        try
-        {
-            await runtimeLease.StopProjectionReleaseListenerAsync();
-        }
-        catch
-        {
-            // Preserve the activation failure.
-        }
-
-        try
-        {
-            await runtimeLease.StopOwnershipHeartbeatAsync();
-        }
-        catch
-        {
-            // Preserve the activation failure.
-        }
-    }
-
-    private sealed class PassthroughEventDeduplicator : IEventDeduplicator
-    {
-        public Task<bool> TryRecordAsync(string eventId)
-        {
-            _ = eventId;
-            return Task.FromResult(true);
-        }
     }
 }

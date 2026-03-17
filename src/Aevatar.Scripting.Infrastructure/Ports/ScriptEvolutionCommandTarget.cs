@@ -7,6 +7,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Evolution;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
@@ -17,17 +18,20 @@ public sealed class ScriptEvolutionCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IScriptEvolutionProjectionPort _projectionPort;
+    private readonly IScriptEvolutionReadModelActivationPort _readModelActivationPort;
 
     public ScriptEvolutionCommandTarget(
         IActor actor,
         string proposalId,
-        IScriptEvolutionProjectionPort projectionPort)
+        IScriptEvolutionProjectionPort projectionPort,
+        IScriptEvolutionReadModelActivationPort readModelActivationPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         ProposalId = string.IsNullOrWhiteSpace(proposalId)
             ? throw new ArgumentException("Proposal id is required.", nameof(proposalId))
             : proposalId;
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _readModelActivationPort = readModelActivationPort ?? throw new ArgumentNullException(nameof(readModelActivationPort));
     }
 
     public IActor Actor { get; }
@@ -47,6 +51,9 @@ public sealed class ScriptEvolutionCommandTarget
 
     public IEventSink<ScriptEvolutionSessionCompletedEvent> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Script evolution live sink is not bound.");
+
+    public Task<bool> ActivateReadModelAsync(CancellationToken ct = default) =>
+        _readModelActivationPort.ActivateAsync(SessionActorId, ct);
 
     public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
         ReleaseAsync(ct);

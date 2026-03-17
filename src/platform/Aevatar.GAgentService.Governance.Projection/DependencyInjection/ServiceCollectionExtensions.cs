@@ -22,23 +22,50 @@ public static class ServiceCollectionExtensions
 
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
 
-        services.AddEventSinkProjectionRuntimeCore<
+        services.AddProjectionMaterializationRuntimeCore<
             ServiceConfigurationProjectionContext,
-            IReadOnlyList<string>,
-            ServiceConfigurationRuntimeLease,
-            EventEnvelope>();
+            ServiceConfigurationRuntimeLease>();
+        services.TryAddSingleton<IProjectionScopeContextFactory<ServiceConfigurationProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<ServiceConfigurationProjectionContext>(scopeKey =>
+                new ServiceConfigurationProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
 
-        services.TryAddSingleton<IProjectionPortActivationService<ServiceConfigurationRuntimeLease>, ServiceConfigurationProjectionActivationService>();
-        services.TryAddSingleton<IProjectionPortReleaseService<ServiceConfigurationRuntimeLease>, ServiceConfigurationProjectionReleaseService>();
-        services.TryAddSingleton<ServiceConfigurationProjectionPortService>();
-        services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPortService>());
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                ServiceConfigurationRuntimeLease,
+                ServiceConfigurationProjectionContext,
+                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                static request => new ServiceConfigurationProjectionContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                },
+                static (_, context) => new ServiceConfigurationRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ServiceConfigurationRuntimeLease,
+                ProjectionMaterializationScopeGAgent<ServiceConfigurationProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<ServiceConfigurationProjectionPort>();
+        services.TryAddSingleton<IServiceConfigurationProjectionPort>(sp => sp.GetRequiredService<ServiceConfigurationProjectionPort>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>, ServiceConfigurationReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceConfigurationQueryReader, ServiceConfigurationQueryReader>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ServiceConfigurationProjectionContext, IReadOnlyList<string>>,
-            ServiceConfigurationProjector>());
+        services.AddProjectionArtifactMaterializer<
+            ServiceConfigurationProjectionContext,
+            ServiceConfigurationProjector>();
 
         return services;
     }

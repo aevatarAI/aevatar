@@ -22,8 +22,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceDeploymentCatalogProjectionContext
         {
-            ProjectionId = "service-deployments:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-deployments",
         };
 
         await projector.ProjectAsync(context, BuildEnvelope(new ServiceDeploymentHealthChangedEvent
@@ -70,16 +70,9 @@ public sealed class ServiceServingProjectorAndQueryTests
         var reader = new ServiceDeploymentCatalogQueryReader(store);
         var context = new ServiceDeploymentCatalogProjectionContext
         {
-            ProjectionId = "service-deployments:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-deployments",
         };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await FluentActions.Invoking(() => projector.InitializeAsync(context, cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
-        await FluentActions.Invoking(() => projector.CompleteAsync(context, [], cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
     }
 
@@ -87,13 +80,13 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task ServingSetProjectorAndQueryReader_ShouldProjectAndSortTargets()
     {
         var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id);
-        var projector = new ServiceServingSetProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var reader = new ServiceServingSetQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceServingSetProjectionContext
         {
-            ProjectionId = "service-serving:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-serving",
         };
 
         await projector.ProjectAsync(context, BuildEnvelope(new ServiceServingSetUpdatedEvent
@@ -125,20 +118,13 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task ServingSetProjector_ShouldRespectCancellation_AndReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id);
-        var projector = new ServiceServingSetProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceServingSetQueryReader(store);
         var context = new ServiceServingSetProjectionContext
         {
-            ProjectionId = "service-serving:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-serving",
         };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await FluentActions.Invoking(() => projector.InitializeAsync(context, cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
-        await FluentActions.Invoking(() => projector.CompleteAsync(context, [], cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
     }
 
@@ -151,8 +137,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRolloutProjectionContext
         {
-            ProjectionId = "service-rollout:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
         };
         var baseline = CreateTarget("dep-base", "r0", "actor-base", 100, "run");
 
@@ -247,16 +233,9 @@ public sealed class ServiceServingProjectorAndQueryTests
         var reader = new ServiceRolloutQueryReader(store);
         var context = new ServiceRolloutProjectionContext
         {
-            ProjectionId = "service-rollout:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
         };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await FluentActions.Invoking(() => projector.InitializeAsync(context, cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
-        await FluentActions.Invoking(() => projector.CompleteAsync(context, [], cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
     }
 
@@ -269,8 +248,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRolloutProjectionContext
         {
-            ProjectionId = "service-rollout:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
         };
 
         await projector.ProjectAsync(
@@ -310,8 +289,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         var projector = new ServiceRolloutProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRolloutProjectionContext
         {
-            ProjectionId = "service-rollout:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-rollout",
         };
 
         await projector.ProjectAsync(
@@ -344,13 +323,13 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task TrafficViewProjectorAndQueryReader_ShouldGroupEndpointsAndSortTargets()
     {
         var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id);
-        var projector = new ServiceTrafficViewProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var reader = new ServiceTrafficViewQueryReader(store);
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceTrafficViewProjectionContext
         {
-            ProjectionId = "service-traffic:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-traffic",
         };
 
         await projector.ProjectAsync(context, BuildEnvelope(new ServiceServingSetUpdatedEvent
@@ -381,31 +360,23 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task TrafficViewProjector_ShouldRespectCancellation_AndReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id);
-        var projector = new ServiceTrafficViewProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var reader = new ServiceTrafficViewQueryReader(store);
         var context = new ServiceTrafficViewProjectionContext
         {
-            ProjectionId = "service-traffic:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-traffic",
         };
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await FluentActions.Invoking(() => projector.InitializeAsync(context, cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
-        await FluentActions.Invoking(() => projector.CompleteAsync(context, [], cts.Token).AsTask())
-            .Should().ThrowAsync<OperationCanceledException>();
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
     }
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
         where T : IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-        };
+        BuildCommittedEnvelope(
+            evt,
+            Guid.NewGuid().ToString("N"),
+            1,
+            DateTimeOffset.UtcNow);
 
     private static EventEnvelope BuildCommittedEnvelope<T>(
         T evt,

@@ -127,8 +127,7 @@ internal static class ClaimIntegrationTestKit
                 ct);
 
             var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, runId, ct);
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct);
-            snapshot.Should().NotBeNull();
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(provider, runtimeActorId, ct);
             return (committed, snapshot!);
         }
         finally

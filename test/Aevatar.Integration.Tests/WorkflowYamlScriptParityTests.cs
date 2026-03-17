@@ -169,8 +169,10 @@ public class WorkflowYamlScriptParityTests
                 "run-parity",
                 CancellationToken.None);
 
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
-            snapshot.Should().NotBeNull();
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
+                provider,
+                runtimeActorId,
+                CancellationToken.None);
             return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>().NormalizedText;
         }
         finally

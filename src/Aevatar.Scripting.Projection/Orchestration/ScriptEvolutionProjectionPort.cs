@@ -14,16 +14,14 @@ public sealed class ScriptEvolutionProjectionPort
 
     public ScriptEvolutionProjectionPort(
         ScriptEvolutionProjectionOptions options,
-        IProjectionPortActivationService<ScriptEvolutionRuntimeLease> activationService,
-        IProjectionPortReleaseService<ScriptEvolutionRuntimeLease> releaseService,
-        IEventSinkProjectionSubscriptionManager<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent> sinkSubscriptionManager,
-        IEventSinkProjectionLiveForwarder<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionCompletedEvent> liveSinkForwarder)
+        IProjectionSessionActivationService<ScriptEvolutionRuntimeLease> activationService,
+        IProjectionSessionReleaseService<ScriptEvolutionRuntimeLease> releaseService,
+        IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent> sessionEventHub)
         : base(
             () => options?.Enabled ?? false,
             activationService,
             releaseService,
-            sinkSubscriptionManager,
-            liveSinkForwarder)
+            sessionEventHub)
     {
     }
 
@@ -32,9 +30,11 @@ public sealed class ScriptEvolutionProjectionPort
         string proposalId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            sessionActorId,
-            ProjectionName,
-            input: string.Empty,
-            commandId: proposalId,
+            new ProjectionSessionStartRequest
+            {
+                RootActorId = sessionActorId,
+                ProjectionKind = ProjectionName,
+                SessionId = proposalId,
+            },
             ct);
 }

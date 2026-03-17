@@ -89,8 +89,11 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             ValidateDomainEventContract(request, artifact.Descriptor, domainEvents);
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var materializationPlan = _materializationCompiler.GetOrCompile(
+                artifact,
+                request.ReadModelSchemaHash,
+                request.ReadModelSchemaVersion);
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
-            var factsWithEvents = new List<(IMessage DomainEvent, ScriptDomainFactCommitted Fact)>(domainEvents.Count);
             var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)
             {
@@ -117,26 +120,16 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     StateVersion = request.CurrentStateVersion + sequence,
                     OccurredAtUnixTimeMs = occurredAtUnixTimeMs,
                 };
-                committed.Add(fact);
-                factsWithEvents.Add((domainEvent, fact));
 
                 projectedState = behavior.ApplyDomainEvent(
                     projectedState,
                     domainEvent,
                     CreateFactContext(request, fact, eventTypeUrl));
-            }
 
-            var materializationPlan = _materializationCompiler.GetOrCompile(
-                artifact,
-                request.ReadModelSchemaHash,
-                request.ReadModelSchemaVersion);
-
-            foreach (var (domainEvent, fact) in factsWithEvents)
-            {
-                var semanticReadModel = behavior.ProjectReadModel(
+                var factContext = CreateFactContext(request, fact, fact.EventType ?? string.Empty);
+                var semanticReadModel = behavior.BuildReadModel(
                     projectedState,
-                    domainEvent,
-                    CreateFactContext(request, fact, fact.EventType ?? string.Empty));
+                    factContext);
                 fact.ReadModelPayload = _codec.Pack(semanticReadModel)?.Clone();
                 fact.NativeDocument = _nativeProjectionBuilder.BuildDocument(
                     semanticReadModel,
@@ -148,6 +141,8 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     fact.Revision ?? request.Revision,
                     semanticReadModel,
                     materializationPlan);
+
+                committed.Add(fact);
             }
 
             return committed;

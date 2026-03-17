@@ -76,8 +76,33 @@ public sealed class ClaimScriptScenarioDocument
                                 RiskScore = evt.Current.RiskScore,
                                 CompliancePassed = evt.Current.CompliancePassed,
                                 LastCommandId = evt.CommandId ?? string.Empty,
+                                TraceSteps = { evt.Current.TraceSteps },
+                            })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = true,
+                            CaseId = state.CaseId,
+                            PolicyId = state.PolicyId,
+                            DecisionStatus = state.DecisionStatus,
+                            ManualReviewRequired = state.ManualReviewRequired,
+                            AiSummary = state.AiSummary,
+                            RiskScore = state.RiskScore,
+                            CompliancePassed = state.CompliancePassed,
+                            LastCommandId = state.LastCommandId,
+                            Search = new ClaimSearchIndex
+                            {
+                                LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
+                                DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
                             },
-                        project: static (_, evt, _) => evt.Current);
+                            Refs = new ClaimRefs
+                            {
+                                PolicyId = state.PolicyId ?? string.Empty,
+                                OwnerActorId = fact.ActorId,
+                            },
+                            TraceSteps = { state.TraceSteps },
+                        });
             }
 
             private static async Task HandleAsync(
@@ -191,7 +216,16 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimAnalystReviewRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current);
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
+                            CaseId = state.CaseId,
+                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
+                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                        });
             }
 
             private static Task HandleAsync(
@@ -241,7 +275,16 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimFraudScoringRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current);
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
+                            CaseId = state.CaseId,
+                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
+                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                        });
             }
 
             private static Task HandleAsync(
@@ -291,7 +334,16 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimComplianceCheckRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current);
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
+                            CaseId = state.CaseId,
+                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
+                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                        });
             }
 
             private static Task HandleAsync(
@@ -341,7 +393,16 @@ public sealed class ClaimScriptScenarioDocument
             {
                 builder
                     .OnCommand<ClaimManualReviewRequested>(HandleAsync)
-                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId }, project: static (_, evt, _) => evt.Current);
+                    .OnEvent<ClaimDecisionRecorded>(apply: static (_, evt, _) => evt.Current == null ? new ClaimCaseState() : new ClaimCaseState { CaseId = evt.Current.CaseId })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
+                            CaseId = state.CaseId,
+                            Search = new ClaimSearchIndex { LookupKey = (state.CaseId ?? string.Empty).ToLowerInvariant() },
+                            Refs = new ClaimRefs { OwnerActorId = fact.ActorId },
+                        });
             }
 
             private static Task HandleAsync(

@@ -12,7 +12,7 @@ namespace Aevatar.Workflow.Presentation.AGUIAdapter;
 /// Projects workflow execution envelopes directly to workflow run event envelopes.
 /// </summary>
 public sealed class WorkflowExecutionRunEventProjector
-    : ProjectionSessionEventProjectorBase<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>, WorkflowRunEventEnvelope>
+    : ProjectionSessionEventProjectorBase<WorkflowExecutionProjectionContext, WorkflowRunEventEnvelope>
 {
     private readonly IEventEnvelopeToWorkflowRunEventMapper _mapper;
 
@@ -31,9 +31,9 @@ public sealed class WorkflowExecutionRunEventProjector
         // Keep streaming pinned to the projection session command id.
         // Resume/signal events may arrive without (or with a different) correlation id,
         // but they still belong to the same live run session.
-        var commandId = string.IsNullOrWhiteSpace(context.CommandId)
+        var commandId = string.IsNullOrWhiteSpace(context.SessionId)
             ? envelope.Propagation?.CorrelationId
-            : context.CommandId;
+            : context.SessionId;
         if (string.IsNullOrWhiteSpace(commandId))
             return EmptyEntries;
 

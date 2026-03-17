@@ -31,75 +31,214 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(new ScriptExecutionProjectionOptions());
         services.TryAddSingleton(new ScriptEvolutionProjectionOptions());
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton(typeof(IActorStreamSubscriptionHub<>), typeof(ActorStreamSubscriptionHub<>));
         services.TryAddSingleton<IProjectionSessionEventCodec<EventEnvelope>, ScriptExecutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<EventEnvelope>, ProjectionSessionEventHub<EventEnvelope>>();
+        services.AddProjectionMaterializationRuntimeCore<
+            ScriptExecutionMaterializationContext,
+            ScriptExecutionMaterializationRuntimeLease>();
         services.AddEventSinkProjectionRuntimeCore<
             ScriptExecutionProjectionContext,
-            IReadOnlyList<string>,
             ScriptExecutionRuntimeLease,
             EventEnvelope>();
-        services.AddEventSinkProjectionRuntimeCore<
+        services.AddProjectionMaterializationRuntimeCore<
             ScriptAuthorityProjectionContext,
-            IReadOnlyList<string>,
-            ScriptAuthorityRuntimeLease,
-            EventEnvelope>();
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptExecutionRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<ScriptExecutionProjectionContext, IReadOnlyList<string>>>(),
-                (rootEntityId, _, _, _, _) => new ScriptExecutionProjectionContext
+            ScriptAuthorityRuntimeLease>();
+        services.TryAddSingleton<IProjectionScopeContextFactory<ScriptExecutionProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<ScriptExecutionProjectionContext>(scopeKey =>
+                new ScriptExecutionProjectionContext
                 {
-                    ProjectionId = $"{rootEntityId}:read-model",
-                    RootActorId = rootEntityId,
+                    SessionId = scopeKey.SessionId,
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<ScriptExecutionMaterializationContext>>(
+            _ => new ProjectionScopeContextFactory<ScriptExecutionMaterializationContext>(scopeKey =>
+                new ScriptExecutionMaterializationContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<ScriptAuthorityProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<ScriptAuthorityProjectionContext>(scopeKey =>
+                new ScriptAuthorityProjectionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<ScriptEvolutionSessionProjectionContext>>(
+            _ => new ProjectionScopeContextFactory<ScriptEvolutionSessionProjectionContext>(scopeKey =>
+                new ScriptEvolutionSessionProjectionContext
+                {
+                    SessionId = scopeKey.SessionId,
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionScopeContextFactory<ScriptEvolutionMaterializationContext>>(
+            _ => new ProjectionScopeContextFactory<ScriptEvolutionMaterializationContext>(scopeKey =>
+                new ScriptEvolutionMaterializationContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                }));
+        services.TryAddSingleton<IProjectionSessionActivationService<ScriptExecutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeActivationService<
+                ScriptExecutionRuntimeLease,
+                ScriptExecutionProjectionContext,
+                ProjectionSessionScopeGAgent<ScriptExecutionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new ScriptExecutionProjectionContext
+                {
+                    SessionId = request.SessionId,
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
                 },
-                context => new ScriptExecutionRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptExecutionRuntimeLease>, ContextProjectionReleaseService<ScriptExecutionRuntimeLease, ScriptExecutionProjectionContext, IReadOnlyList<string>>>();
+                static (_, context) => new ScriptExecutionRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionSessionReleaseService<ScriptExecutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeReleaseService<
+                ScriptExecutionRuntimeLease,
+                ProjectionSessionScopeGAgent<ScriptExecutionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.SessionObservation,
+                    lease.Context.SessionId),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ScriptExecutionProjectionPort>();
         services.TryAddSingleton<IScriptExecutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptExecutionProjectionPort>());
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptAuthorityRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<ScriptAuthorityRuntimeLease, ScriptAuthorityProjectionContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<ScriptAuthorityProjectionContext, IReadOnlyList<string>>>(),
-                (rootEntityId, _, _, _, _) => new ScriptAuthorityProjectionContext
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ScriptExecutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                ScriptExecutionMaterializationRuntimeLease,
+                ScriptExecutionMaterializationContext,
+                ProjectionMaterializationScopeGAgent<ScriptExecutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new ScriptExecutionMaterializationContext
                 {
-                    ProjectionId = $"{rootEntityId}:authority",
-                    RootActorId = rootEntityId,
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
                 },
-                context => new ScriptAuthorityRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptAuthorityRuntimeLease>, ContextProjectionReleaseService<ScriptAuthorityRuntimeLease, ScriptAuthorityProjectionContext, IReadOnlyList<string>>>();
+                static (_, context) => new ScriptExecutionMaterializationRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptExecutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ScriptExecutionMaterializationRuntimeLease,
+                ProjectionMaterializationScopeGAgent<ScriptExecutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<ScriptExecutionReadModelPort>();
+        services.TryAddSingleton<IScriptExecutionReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptExecutionReadModelPort>());
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                ScriptAuthorityRuntimeLease,
+                ScriptAuthorityProjectionContext,
+                ProjectionMaterializationScopeGAgent<ScriptAuthorityProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new ScriptAuthorityProjectionContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                },
+                static (_, context) => new ScriptAuthorityRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ScriptAuthorityRuntimeLease,
+                ProjectionMaterializationScopeGAgent<ScriptAuthorityProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ScriptAuthorityProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<ScriptEvolutionSessionCompletedEvent>, ScriptEvolutionSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>, ProjectionSessionEventHub<ScriptEvolutionSessionCompletedEvent>>();
+        services.AddProjectionMaterializationRuntimeCore<
+            ScriptEvolutionMaterializationContext,
+            ScriptEvolutionMaterializationRuntimeLease>();
         services.AddEventSinkProjectionRuntimeCore<
             ScriptEvolutionSessionProjectionContext,
-            IReadOnlyList<string>,
             ScriptEvolutionRuntimeLease,
             ScriptEvolutionSessionCompletedEvent>();
-        services.TryAddSingleton<IProjectionPortActivationService<ScriptEvolutionRuntimeLease>>(sp =>
-            new ContextProjectionActivationService<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>(
-                sp.GetRequiredService<IProjectionLifecycleService<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>(),
-                (rootEntityId, _, _, commandId, _) =>
+        services.TryAddSingleton<IProjectionSessionActivationService<ScriptEvolutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeActivationService<
+                ScriptEvolutionRuntimeLease,
+                ScriptEvolutionSessionProjectionContext,
+                ProjectionSessionScopeGAgent<ScriptEvolutionSessionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new ScriptEvolutionSessionProjectionContext
                 {
-                    ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
-                    return new ScriptEvolutionSessionProjectionContext
-                    {
-                        ProjectionId = rootEntityId,
-                        RootActorId = rootEntityId,
-                        ProposalId = commandId,
-                    };
+                    SessionId = request.SessionId,
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
                 },
-                context => new ScriptEvolutionRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionPortReleaseService<ScriptEvolutionRuntimeLease>, ContextProjectionReleaseService<ScriptEvolutionRuntimeLease, ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>>();
+                static (_, context) => new ScriptEvolutionRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionSessionReleaseService<ScriptEvolutionRuntimeLease>>(sp =>
+            new ProjectionSessionScopeReleaseService<
+                ScriptEvolutionRuntimeLease,
+                ProjectionSessionScopeGAgent<ScriptEvolutionSessionProjectionContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.SessionObservation,
+                    lease.Context.SessionId),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         services.TryAddSingleton<ScriptEvolutionProjectionPort>();
         services.TryAddSingleton<IScriptEvolutionProjectionPort>(sp =>
             sp.GetRequiredService<ScriptEvolutionProjectionPort>());
+        services.TryAddSingleton<IProjectionMaterializationActivationService<ScriptEvolutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeActivationService<
+                ScriptEvolutionMaterializationRuntimeLease,
+                ScriptEvolutionMaterializationContext,
+                ProjectionMaterializationScopeGAgent<ScriptEvolutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                request => new ScriptEvolutionMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                },
+                static (_, context) => new ScriptEvolutionMaterializationRuntimeLease(context),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<IProjectionMaterializationReleaseService<ScriptEvolutionMaterializationRuntimeLease>>(sp =>
+            new ProjectionMaterializationScopeReleaseService<
+                ScriptEvolutionMaterializationRuntimeLease,
+                ProjectionMaterializationScopeGAgent<ScriptEvolutionMaterializationContext>>(
+                sp.GetRequiredService<IActorRuntime>(),
+                sp.GetRequiredService<IActorDispatchPort>(),
+                lease => new ProjectionRuntimeScopeKey(
+                    lease.Context.RootActorId,
+                    lease.Context.ProjectionKind,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+        services.TryAddSingleton<ScriptEvolutionReadModelPort>();
+        services.TryAddSingleton<IScriptEvolutionReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptEvolutionReadModelPort>());
         services.TryAddSingleton<IScriptEvolutionDecisionReadPort, ProjectionScriptEvolutionDecisionReadPort>();
         services.TryAddSingleton<ScriptReadModelQueryReader>();
         services.TryAddSingleton<IScriptReadModelQueryPort>(sp =>
             sp.GetRequiredService<ScriptReadModelQueryReader>());
         services.TryAddSingleton<IScriptDefinitionSnapshotPort, ProjectionScriptDefinitionSnapshotPort>();
         services.TryAddSingleton<IScriptCatalogQueryPort, ProjectionScriptCatalogQueryPort>();
-        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort, ProjectionScriptAuthorityReadModelActivationPort>();
+        services.TryAddSingleton<IScriptAuthorityReadModelActivationPort>(sp =>
+            sp.GetRequiredService<ScriptAuthorityProjectionPort>());
         services.TryAddSingleton<IScriptNativeDocumentMaterializer, ScriptNativeDocumentMaterializer>();
         services.TryAddSingleton<ScriptNativeGraphMaterializer>();
         services.TryAddSingleton<IScriptNativeGraphMaterializer>(sp =>
@@ -112,29 +251,29 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptEvolutionReadModel>, ScriptEvolutionReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ScriptNativeDocumentReadModel>, ScriptNativeDocumentReadModelMetadataProvider>();
 
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptReadModelProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptNativeDocumentProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptExecutionMaterializationContext,
+            ScriptNativeGraphProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
-            ScriptReadModelProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
-            ScriptNativeDocumentProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
-            ScriptNativeGraphProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>,
+            IProjectionProjector<ScriptExecutionProjectionContext>,
             ScriptExecutionSessionEventProjector>());
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptAuthorityProjectionContext,
+            ScriptDefinitionSnapshotProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptAuthorityProjectionContext,
+            ScriptCatalogEntryProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            ScriptEvolutionMaterializationContext,
+            ScriptEvolutionReadModelProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>,
-            ScriptDefinitionSnapshotProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>,
-            ScriptCatalogEntryProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>,
-            ScriptEvolutionReadModelProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptEvolutionSessionProjectionContext, IReadOnlyList<string>>,
+            IProjectionProjector<ScriptEvolutionSessionProjectionContext>,
             ScriptEvolutionSessionCompletedEventProjector>());
 
         return services;

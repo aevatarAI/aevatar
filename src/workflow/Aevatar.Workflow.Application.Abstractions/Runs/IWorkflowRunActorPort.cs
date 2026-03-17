@@ -94,5 +94,11 @@ public interface IWorkflowRunActorPort
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         CancellationToken ct = default);
 
+    Task MarkStoppedAsync(
+        string actorId,
+        string runId,
+        string reason,
+        CancellationToken ct = default);
+
     Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default);
 }

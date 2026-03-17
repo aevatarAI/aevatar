@@ -6,8 +6,12 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Presentation.AGUIAdapter.DependencyInjection;
 using Aevatar.Workflow.Projection.DependencyInjection;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.ReadModels;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Workflow.Infrastructure.DependencyInjection;
 
@@ -21,7 +25,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowExecutionProjectionCQRS(options =>
             configuration.GetSection("WorkflowExecutionProjection").Bind(options));
         services.AddWorkflowExecutionAGUIAdapter();
-        services.AddWorkflowRunInsightBridgeProjector<WorkflowExecutionRunEventProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext>,
+            WorkflowExecutionRunEventProjector>());
         services.AddWorkflowApplication();
         services.AddWorkflowDefinitionFileSource(options =>
         {

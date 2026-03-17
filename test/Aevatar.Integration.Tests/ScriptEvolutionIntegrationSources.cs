@@ -22,8 +22,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<TextNormalizationRequested>(HandleAsync)
                     .OnEvent<TextNormalizationCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static Task HandleAsync(
@@ -89,8 +89,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<ScriptOnlyEvolutionRequested>(HandleAsync)
                     .OnEvent<ScriptOnlyEvolutionCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -217,8 +217,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<MultiScriptEvolutionRequested>(HandleAsync)
                     .OnEvent<MultiScriptEvolutionCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -460,8 +460,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<SelfEvolutionV1Requested>(HandleAsync)
                     .OnEvent<SelfEvolutionV1Completed>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -568,8 +568,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<SelfEvolutionV2Requested>(HandleAsync)
                     .OnEvent<SelfEvolutionV2Completed>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -649,8 +649,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<CatalogControlRequested>(HandleAsync)
                     .OnEvent<CatalogControlCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -758,8 +758,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<InteractionUpsertRequested>(HandleAsync)
                     .OnEvent<InteractionUpsertCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(
@@ -856,8 +856,8 @@ internal static class ScriptEvolutionIntegrationSources
                 builder
                     .OnCommand<OrleansClusterRequested>(HandleAsync)
                     .OnEvent<OrleansClusterCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static async Task HandleAsync(

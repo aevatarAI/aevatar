@@ -32,8 +32,8 @@ internal static class TextNormalizationProtocolSampleActors
                 builder
                     .OnCommand<TextNormalizationRequested>(HandleRequestedAsync)
                     .OnEvent<TextNormalizationCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static Task HandleRequestedAsync(
@@ -238,14 +238,17 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private const string ScriptRevision = "rev-1";
 
     private readonly IScriptRuntimeCommandPort _commandPort;
+    private readonly IServiceProvider _serviceProvider;
     private readonly IScriptReadModelQueryApplicationService _queryService;
     private readonly IScriptExecutionProjectionPort _projectionPort;
 
     public TextNormalizationScriptingProtocolGAgent(
+        IServiceProvider serviceProvider,
         IScriptRuntimeCommandPort commandPort,
         IScriptReadModelQueryApplicationService queryService,
         IScriptExecutionProjectionPort projectionPort)
     {
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
@@ -278,8 +281,10 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
                 runId,
                 CancellationToken.None);
 
-            var snapshot = await _queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None)
-                ?? throw new InvalidOperationException("Text normalization script read model snapshot was not produced.");
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
+                _serviceProvider,
+                runtimeActorId,
+                CancellationToken.None);
 
             await PersistDomainEventAsync(new TextNormalizationCompleted
             {

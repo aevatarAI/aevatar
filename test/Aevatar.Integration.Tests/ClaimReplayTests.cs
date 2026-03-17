@@ -185,10 +185,10 @@ public class ClaimReplayTests
             })
             .ToArray();
 
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "projection-claim-readmodel",
             RootActorId = runtimeActorId,
+            ProjectionKind = "script-execution-read-model",
         };
 
         var projectionNow = DateTimeOffset.UtcNow;
@@ -196,7 +196,6 @@ public class ClaimReplayTests
         var projector1 = new ScriptReadModelProjector(
             dispatcher1,
             new FixedProjectionClock(projectionNow));
-        await projector1.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector1.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel1 = await dispatcher1.GetAsync(runtimeActorId, CancellationToken.None);
@@ -205,7 +204,6 @@ public class ClaimReplayTests
         var projector2 = new ScriptReadModelProjector(
             dispatcher2,
             new FixedProjectionClock(projectionNow));
-        await projector2.InitializeAsync(context, CancellationToken.None);
         foreach (var envelope in committedEvents)
             await projector2.ProjectAsync(context, envelope, CancellationToken.None);
         var readModel2 = await dispatcher2.GetAsync(runtimeActorId, CancellationToken.None);
@@ -232,10 +230,36 @@ public class ClaimReplayTests
                             CaseId = evt.Current.CaseId,
                             PolicyId = evt.Current.PolicyId,
                             DecisionStatus = evt.Current.DecisionStatus,
+                            ManualReviewRequired = evt.Current.ManualReviewRequired,
                             AiSummary = evt.Current.AiSummary,
+                            RiskScore = evt.Current.RiskScore,
+                            CompliancePassed = evt.Current.CompliancePassed,
                             LastCommandId = evt.CommandId ?? string.Empty,
-                        },
-                        project: static (_, evt, _) => evt.Current);
+                        })
+                    .ProjectState(static (state, fact) => state == null
+                        ? new ClaimCaseReadModel()
+                        : new ClaimCaseReadModel
+                        {
+                            HasValue = true,
+                            CaseId = state.CaseId,
+                            PolicyId = state.PolicyId,
+                            DecisionStatus = state.DecisionStatus,
+                            ManualReviewRequired = state.ManualReviewRequired,
+                            AiSummary = state.AiSummary,
+                            RiskScore = state.RiskScore,
+                            CompliancePassed = state.CompliancePassed,
+                            LastCommandId = state.LastCommandId,
+                            Search = new ClaimSearchIndex
+                            {
+                                LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
+                                DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
+                            },
+                            Refs = new ClaimRefs
+                            {
+                                PolicyId = state.PolicyId ?? string.Empty,
+                                OwnerActorId = fact.ActorId,
+                            },
+                        });
             }
 
             private static Task HandleAsync(
