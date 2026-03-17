@@ -229,8 +229,6 @@ internal sealed class FakeActorRuntime : IActorRuntime
     public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-    public Task RestoreAllAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
 internal sealed class FakeActor : IActor

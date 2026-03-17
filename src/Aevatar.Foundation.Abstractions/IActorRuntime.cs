@@ -37,7 +37,4 @@ public interface IActorRuntime
 
     /// <summary>Removes the parent-child link for childId.</summary>
     Task UnlinkAsync(string childId, CancellationToken ct = default);
-
-    /// <summary>Restores previously created agents from persistence (for process restart).</summary>
-    Task RestoreAllAsync(CancellationToken ct = default);
 }

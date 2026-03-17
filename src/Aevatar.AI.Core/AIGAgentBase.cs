@@ -1,51 +1,57 @@
 // ─────────────────────────────────────────────────────────────
-// AIGAgentBase / AIAgentConfig — AI GAgent 基类（组合器）
+// AIGAgentBase — AI GAgent 基类（组合器）
 // 组合 ChatRuntime + ToolManager + ChatHistory + HookPipeline
-// 不是上帝类——实际逻辑在四个独立组件中
+// Config 由子类通过 State 子消息持有，走 Protobuf 统一持久化
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Hooks.BuiltIn;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Core;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Core;
 
-/// <summary>AI Agent 配置。Provider、Model、Prompt、历史与 Tool 轮数等。</summary>
-public sealed class AIAgentConfig
-{
-    /// <summary>LLM Provider 名称。</summary>
-    public string ProviderName { get; set; } = "deepseek";
-
-    /// <summary>模型名称，可选，覆盖 Provider 默认。</summary>
-    public string? Model { get; set; }
-
-    /// <summary>System Prompt。</summary>
-    public string SystemPrompt { get; set; } = "";
-
-    /// <summary>温度参数。</summary>
-    public double? Temperature { get; set; }
-
-    /// <summary>最大生成 Token 数。</summary>
-    public int? MaxTokens { get; set; }
-
-    /// <summary>单轮 Chat 最大 Tool Calling 轮数。</summary>
-    public int MaxToolRounds { get; set; } = 10;
-
-    /// <summary>历史消息上限。</summary>
-    public int MaxHistoryMessages { get; set; } = 100;
-}
-
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline。</summary>
-/// <typeparam name="TState">Agent 状态类型，须为 Protobuf IMessage。</typeparam>
-public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
+/// <typeparam name="TState">Agent 状态类型，须为 Protobuf IMessage，内含 AIAgentConfigProto 子消息。</typeparam>
+public abstract class AIGAgentBase<TState> : GAgentBase<TState>
     where TState : class, IMessage<TState>, new()
 {
+    private const int DefaultMaxToolRounds = 10;
+    private const int DefaultMaxHistoryMessages = 100;
+
+    // ─── Config 抽象契约 ───
+
+    /// <summary>从 State 中提取 config 子消息。</summary>
+    protected abstract AIAgentConfigProto GetConfigFromState();
+
+    /// <summary>将 config 子消息写入 State。</summary>
+    protected abstract void SetConfigToState(AIAgentConfigProto config);
+
+    /// <summary>当前 config（只读快捷属性）。</summary>
+    public AIAgentConfigProto Config => GetConfigFromState();
+
+    /// <summary>更新 config 并触发变更回调。</summary>
+    public async Task ConfigureAsync(AIAgentConfigProto config, CancellationToken ct = default)
+    {
+        SetConfigToState(config);
+        await OnConfigChangedAsync(config, ct);
+    }
+
+    /// <summary>配置变更回调。默认重建 Runtime。子类可覆盖。</summary>
+    protected virtual async Task OnConfigChangedAsync(AIAgentConfigProto config, CancellationToken ct)
+    {
+        History.MaxMessages = EffectiveMaxHistoryMessages;
+        await RegisterToolsFromSourcesAsync(ct);
+        RebuildRuntime();
+    }
+
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
     protected ToolManager Tools { get; } = new();
@@ -58,18 +64,16 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
     // ─── 初始化 ───
 
+    private int EffectiveMaxHistoryMessages =>
+        Config.MaxHistoryMessages > 0 ? Config.MaxHistoryMessages : DefaultMaxHistoryMessages;
+
+    private int EffectiveMaxToolRounds =>
+        Config.MaxToolRounds > 0 ? Config.MaxToolRounds : DefaultMaxToolRounds;
+
     /// <summary>激活时初始化历史上限并重建 Runtime。</summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        History.MaxMessages = Config.MaxHistoryMessages;
-        await RegisterToolsFromSourcesAsync(ct);
-        RebuildRuntime();
-    }
-
-    /// <summary>配置变更时更新历史上限并重建 Runtime。</summary>
-    protected override async Task OnConfigChangedAsync(AIAgentConfig config, CancellationToken ct)
-    {
-        History.MaxMessages = config.MaxHistoryMessages;
+        History.MaxMessages = EffectiveMaxHistoryMessages;
         await RegisterToolsFromSourcesAsync(ct);
         RebuildRuntime();
     }
@@ -77,19 +81,13 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     // ─── Chat 快捷方法 ───
 
     /// <summary>单轮 Chat（含 Tool Calling 循环）。</summary>
-    /// <param name="userMessage">用户输入。</param>
-    /// <param name="ct">取消令牌。</param>
-    /// <returns>LLM 最终回复文本，或 null。</returns>
     protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, Config.MaxToolRounds, ct);
+        return _chat!.ChatAsync(userMessage, EffectiveMaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat。</summary>
-    /// <param name="userMessage">用户输入。</param>
-    /// <param name="ct">取消令牌。</param>
-    /// <returns>增量文本的异步序列。</returns>
     protected IAsyncEnumerable<string> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
@@ -97,24 +95,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     }
 
     /// <summary>注册单个工具。</summary>
-    /// <param name="tool">要注册的工具。</param>
     protected void RegisterTool(IAgentTool tool) => Tools.Register(tool);
 
     /// <summary>清空对话历史。</summary>
     protected void ClearHistory() => History.Clear();
 
-    // ─── Hook 双通道说明 ───
-    // 1. Foundation 级（Event Handler hooks）：由 GAgentBase._hooks pipeline 驱动
-    //    → RebuildRuntime 中通过 RegisterHook() 注册 built-in IAIGAgentExecutionHook 到 Foundation pipeline
-    //    → IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 可以调用 OnEventHandlerStart/End/OnError
-    // 2. AI 级（LLM / Tool hooks）：由 AIGAgentBase._hooks (AgentHookPipeline) 驱动
-    //    → ChatRuntime / ToolCallLoop 在 LLM/Tool 前后调用 AI pipeline
-
     // ─── 内部构建 ───
 
     private void RebuildRuntime()
     {
-        // 构建 AI Hook Pipeline（内置 + DI 注入）
         var hooks = new List<IAIGAgentExecutionHook>
         {
             new ExecutionTraceHook(Logger),
@@ -125,12 +114,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         hooks.AddRange(additional);
         _hooks = new AgentHookPipeline(hooks, Logger);
 
-        // 注册 AI hooks 到 Foundation 的 IGAgentExecutionHook pipeline
-        // IAIGAgentExecutionHook : IGAgentExecutionHook，所以 Foundation 层能调用 Event Handler hooks
         foreach (var hook in hooks)
             RegisterHook(hook);
 
-        // 构建 Chat Runtime
         var toolLoop = new ToolCallLoop(Tools, _hooks);
         _chat = new ChatRuntime(
             providerFactory: GetLLMProvider,
@@ -143,17 +129,22 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private ILLMProvider GetLLMProvider()
     {
         var factory = Services.GetRequiredService<ILLMProviderFactory>();
-        return string.IsNullOrEmpty(Config.ProviderName) ? factory.GetDefault() : factory.GetProvider(Config.ProviderName);
+        var name = Config.ProviderName;
+        return string.IsNullOrEmpty(name) ? factory.GetDefault() : factory.GetProvider(name);
     }
 
-    private LLMRequest BuildRequest() => new()
+    private LLMRequest BuildRequest()
     {
-        Messages = History.BuildMessages(Config.SystemPrompt),
-        Tools = Tools.HasTools ? Tools.GetAll() : null,
-        Model = Config.Model,
-        Temperature = Config.Temperature,
-        MaxTokens = Config.MaxTokens,
-    };
+        var cfg = Config;
+        return new LLMRequest
+        {
+            Messages = History.BuildMessages(cfg.SystemPrompt),
+            Tools = Tools.HasTools ? Tools.GetAll() : null,
+            Model = string.IsNullOrEmpty(cfg.Model) ? null : cfg.Model,
+            Temperature = cfg.Temperature != 0 ? cfg.Temperature : null,
+            MaxTokens = cfg.MaxTokens != 0 ? cfg.MaxTokens : null,
+        };
+    }
 
     private void EnsureRuntime()
     {

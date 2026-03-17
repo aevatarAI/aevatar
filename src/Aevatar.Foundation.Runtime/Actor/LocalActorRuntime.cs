@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // LocalActorRuntime - IActorRuntime implementation.
-// Create / Get / Destroy / Link / Unlink / RestoreAll
+// Create / Get / Destroy / Link / Unlink
 // ─────────────────────────────────────────────────────────────
 
 using System.Collections.Concurrent;
@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Actors;
 
-/// <summary>Local actor runtime: creates, destroys, links actors, and manages manifest persistence.</summary>
+/// <summary>Local actor runtime: creates, destroys, and links actors.</summary>
 public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
@@ -34,7 +34,7 @@ public sealed class LocalActorRuntime : IActorRuntime
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
         CreateAsync(typeof(TAgent), id, ct);
 
-    /// <summary>Creates actor by type, injects dependencies, and persists manifest.</summary>
+    /// <summary>Creates actor by type and injects dependencies.</summary>
     public async Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
     {
         var actorId = id ?? AgentId.New(agentType);
@@ -49,30 +49,19 @@ public sealed class LocalActorRuntime : IActorRuntime
         if (!_actors.TryAdd(actorId, actor))
             throw new InvalidOperationException($"Actor {actorId} already exists");
 
-        // Persist manifest
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore != null)
-        {
-            var manifest = await manifestStore.LoadAsync(actorId, ct) ?? new AgentManifest { AgentId = actorId };
-            manifest.AgentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
-            await manifestStore.SaveAsync(actorId, manifest, ct);
-        }
-
         await actor.ActivateAsync(ct);
         AgentMetrics.ActiveActors.Add(1);
         _logger.LogInformation("Actor {Id} ({Type}) created", actorId, agentType.Name);
         return actor;
     }
 
-    /// <summary>Destroys actor and cleans up stream and manifest.</summary>
+    /// <summary>Destroys actor and cleans up stream.</summary>
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         if (!_actors.TryRemove(id, out var actor)) return;
         await actor.DeactivateAsync(ct);
         AgentMetrics.ActiveActors.Add(-1);
         if (_streams is InMemoryStreamProvider msp) msp.RemoveStream(id);
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore != null) await manifestStore.DeleteAsync(id, ct);
         _logger.LogInformation("Actor {Id} destroyed", id);
     }
 
@@ -105,21 +94,6 @@ public sealed class LocalActorRuntime : IActorRuntime
         await child.UnsubscribeFromParentAsync();
     }
 
-    /// <summary>Restores all unloaded actors from manifest.</summary>
-    public async Task RestoreAllAsync(CancellationToken ct = default)
-    {
-        var manifestStore = _services.GetService<IAgentManifestStore>();
-        if (manifestStore == null) return;
-        var manifests = await manifestStore.ListAsync(ct);
-        foreach (var m in manifests)
-        {
-            if (_actors.ContainsKey(m.AgentId)) continue;
-            var agentType = System.Type.GetType(m.AgentTypeName);
-            if (agentType == null) { _logger.LogWarning("Failed to resolve type {Type}", m.AgentTypeName); continue; }
-            await CreateAsync(agentType, m.AgentId, ct);
-        }
-    }
-
     private LocalActor GetRequired(string id) =>
         _actors.GetValueOrDefault(id) ?? throw new InvalidOperationException($"Actor {id} does not exist");
 
@@ -137,7 +111,6 @@ public sealed class LocalActorRuntime : IActorRuntime
         gab.EventPublisher = publisher;
         gab.Logger = logger;
         gab.Services = _services;
-        gab.ManifestStore = _services.GetService<IAgentManifestStore>();
         InjectStateStore(agent);
     }
 

@@ -36,11 +36,11 @@ Aevatar.Foundation.Abstractions/
 
 - `IAgent` / `IAgent<TState>`：生命周期、事件处理、订阅类型、强类型状态
 - `IActor`：Agent 包装容器，父子关系与事件分发入口
-- `IActorRuntime`：Actor 创建、销毁、链接、恢复
+- `IActorRuntime`：Actor 创建、销毁、链接
 - `IEventPublisher`：按方向发布或点对点发送事件
 - `IEventModule`：可插拔事件处理模块（含优先级）
 - `IConnector` / `IConnectorRegistry`：命名 connector 调用契约与注册表
-- `IStateStore<TState>` / `IEventStore` / `IAgentManifestStore`：状态、事件、manifest 持久化
+- `IStateStore<TState>` / `IEventStore`：状态、事件持久化
 
 ## Proto 说明
 

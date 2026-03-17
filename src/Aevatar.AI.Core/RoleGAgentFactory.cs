@@ -16,6 +16,7 @@
 //         to: llm_handler
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,12 +51,12 @@ public static class RoleGAgentFactory
         if (!string.IsNullOrEmpty(config.Name))
             agent.SetRoleName(config.Name);
 
-        await agent.ConfigureAsync(new AIAgentConfig
+        await agent.ConfigureAsync(new AIAgentConfigProto
         {
             SystemPrompt = config.SystemPrompt ?? "",
             ProviderName = config.Provider ?? "deepseek",
-            Model = config.Model,
-            Temperature = config.Temperature,
+            Model = config.Model ?? "",
+            Temperature = config.Temperature ?? 0,
         });
 
         // ─── EventModules 创建 ───

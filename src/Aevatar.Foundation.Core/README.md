@@ -13,7 +13,6 @@
 
 - `GAgentBase`：无状态基类，统一事件分发、模块管理、Hook 生命周期
 - `GAgentBase<TState>`：状态型基类，集成 `IStateStore<TState>`
-- `GAgentBase<TState, TConfig>`：配置型基类，配置持久化到 manifest
 - `StateGuard`：限制状态写入时机
 - `EventPipelineBuilder`：合并并排序静态/动态处理器
 - `RunManager`：latest-wins 的运行上下文管理
@@ -22,7 +21,7 @@
 ## 典型流程
 
 1. Runtime 创建 Agent 并注入依赖
-2. Agent 激活时恢复模块、状态和配置
+2. Agent 激活时恢复状态
 3. 事件到达后构建统一 Pipeline
 4. 按优先级依次执行处理器，并触发 Hook
 5. Agent 停用时保存状态

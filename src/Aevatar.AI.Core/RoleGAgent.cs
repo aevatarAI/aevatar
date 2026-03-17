@@ -28,14 +28,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Sets role name.</summary>
     public void SetRoleName(string name) => RoleName = name;
 
+    protected override AIAgentConfigProto GetConfigFromState()
+        => State.Config ?? new AIAgentConfigProto();
+
+    protected override void SetConfigToState(AIAgentConfigProto config)
+        => State.Config = config;
+
     Task IRoleAgent.ConfigureAsync(RoleAgentConfig config, CancellationToken ct) =>
-        ConfigureAsync(new AIAgentConfig
+        ConfigureAsync(new AIAgentConfigProto
         {
             ProviderName = config.ProviderName,
-            Model = config.Model,
+            Model = config.Model ?? "",
             SystemPrompt = config.SystemPrompt,
-            Temperature = config.Temperature,
-            MaxTokens = config.MaxTokens,
+            Temperature = config.Temperature ?? 0,
+            MaxTokens = config.MaxTokens ?? 0,
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
         }, ct);

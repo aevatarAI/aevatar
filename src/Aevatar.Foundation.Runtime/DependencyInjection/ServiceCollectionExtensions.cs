@@ -42,7 +42,6 @@ public static class ServiceCollectionExtensions
         // Persistence
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
-        services.TryAddSingleton<IAgentManifestStore, InMemoryManifestStore>();
 
         // Deduplication
         services.TryAddSingleton<IEventDeduplicator, MemoryCacheDeduplicator>();
