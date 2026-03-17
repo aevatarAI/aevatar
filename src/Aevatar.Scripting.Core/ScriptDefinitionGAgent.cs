@@ -5,7 +5,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
@@ -21,16 +20,13 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
     private readonly IScriptBehaviorCompiler _compiler;
-    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
     public ScriptDefinitionGAgent(
         IScriptBehaviorCompiler compiler,
-        IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
-        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _schemaActivationPolicy = schemaActivationPolicy ?? throw new ArgumentNullException(nameof(schemaActivationPolicy));
         InitializeId();
     }
@@ -69,10 +65,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                     compilation.Artifact.Descriptor,
                     out extracted))
             {
-                _ = _materializationCompiler.Compile(
-                    compilation.Artifact,
-                    extracted.SchemaHash,
-                    extracted.SchemaVersion);
                 hasReadModelSchema = true;
                 readModelSchema = extracted.SchemaPayload.Clone();
                 readModelSchemaHash = extracted.SchemaHash;
