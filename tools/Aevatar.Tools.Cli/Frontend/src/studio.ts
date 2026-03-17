@@ -195,7 +195,8 @@ export type ExecutionLogItem = {
   tone: 'started' | 'completed' | 'failed' | 'run' | 'pending';
   title: string;
   meta: string;
-  copy: string;
+  previewText: string;
+  clipboardText: string;
   timestamp: string;
   stepId: string | null;
   interaction: ExecutionInteractionState | null;
@@ -832,7 +833,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         tone: 'started',
         title: `${stepId} started`,
         meta: [customPayload?.stepType, customPayload?.targetRole].filter(Boolean).join(' · '),
-        copy: buildExecutionLogCopy(customPayload?.input),
+        previewText: buildExecutionLogPreview(customPayload?.input),
+        clipboardText: buildExecutionLogText(customPayload?.input),
         timestamp,
         stepId,
         interaction: null,
@@ -873,7 +875,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
           interaction.variableName ? `variable ${interaction.variableName}` : null,
           timeoutSeconds ? `timeout ${timeoutSeconds}s` : null,
         ].filter(Boolean).join(' · '),
-        copy: buildExecutionLogCopy(interaction.prompt),
+        previewText: buildExecutionLogPreview(interaction.prompt),
+        clipboardText: buildExecutionLogText(interaction.prompt),
         timestamp,
         stepId,
         interaction,
@@ -908,7 +911,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
           customPayload?.branchKey ? `branch ${customPayload.branchKey}` : null,
           customPayload?.nextStepId ? `next ${customPayload.nextStepId}` : null,
         ].filter(Boolean).join(' · '),
-        copy: buildExecutionLogCopy(customPayload?.error || customPayload?.output),
+        previewText: buildExecutionLogPreview(customPayload?.error || customPayload?.output),
+        clipboardText: buildExecutionLogText(customPayload?.error || customPayload?.output),
         timestamp,
         stepId,
         interaction: null,
@@ -935,7 +939,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         meta: interactionKind === 'human_approval'
           ? `human approval · ${approved ? 'approved' : 'rejected'}`
           : 'human input submitted',
-        copy: buildExecutionLogCopy(customPayload?.userInput),
+        previewText: buildExecutionLogPreview(customPayload?.userInput),
+        clipboardText: buildExecutionLogText(customPayload?.userInput),
         timestamp,
         stepId,
         interaction: null,
@@ -948,7 +953,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         tone: 'failed',
         title: 'Run failed',
         meta: parsed.runError.code || '',
-        copy: parsed.runError.message,
+        previewText: buildExecutionLogPreview(parsed.runError.message),
+        clipboardText: buildExecutionLogText(parsed.runError.message),
         timestamp,
         stepId: latestStepId,
         interaction: null,
@@ -961,7 +967,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         tone: 'run',
         title: 'Run finished',
         meta: '',
-        copy: '',
+        previewText: '',
+        clipboardText: '',
         timestamp,
         stepId: latestStepId,
         interaction: null,
@@ -974,7 +981,8 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         tone: 'run',
         title: 'Run started',
         meta: customPayload?.workflowName || detail.workflowName || '',
-        copy: '',
+        previewText: '',
+        clipboardText: '',
         timestamp,
         stepId: null,
         interaction: null,
@@ -1159,12 +1167,17 @@ function safeJsonParse(value: string) {
   }
 }
 
-function buildExecutionLogCopy(value: unknown) {
-  const text = String(value || '').trim();
+function buildExecutionLogText(value: unknown) {
+  const text = formatParameterValue(value).trim();
   if (!text) {
     return '';
   }
 
+  return text;
+}
+
+function buildExecutionLogPreview(value: unknown) {
+  const text = buildExecutionLogText(value);
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 

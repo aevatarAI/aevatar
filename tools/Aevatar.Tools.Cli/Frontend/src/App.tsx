@@ -85,6 +85,7 @@ import {
   toRoleState,
   toFindingLevel,
   type ConnectorState,
+  type ExecutionLogItem,
   type ExecutionInteractionState,
   type ExecutionTrace,
   type RightPanelTab,
@@ -439,6 +440,25 @@ function formatDurationBetween(startValue: string | null | undefined, endValue: 
   return `${hours}h ${remainderMinutes}m`;
 }
 
+function formatExecutionLogClipboard(log: ExecutionLogItem) {
+  const lines = [`[${formatDateTime(log.timestamp)}] ${log.title}`];
+  if (log.meta) {
+    lines.push(log.meta);
+  }
+  if (log.clipboardText) {
+    lines.push(log.clipboardText);
+  }
+  return lines.join('\n');
+}
+
+function formatExecutionLogsClipboard(trace: ExecutionTrace | null) {
+  if (!trace?.logs?.length) {
+    return '';
+  }
+
+  return trace.logs.map(log => formatExecutionLogClipboard(log)).join('\n\n---\n\n');
+}
+
 function createEmptyStudioSettings(): StudioSettingsState {
   return {
     runtimeBaseUrl: DEFAULT_RUNTIME_BASE_URL,
@@ -701,6 +721,8 @@ function App() {
   const [executionDetail, setExecutionDetail] = useState<any>(null);
   const [executionTrace, setExecutionTrace] = useState<ExecutionTrace | null>(null);
   const [activeExecutionLogIndex, setActiveExecutionLogIndex] = useState<number | null>(null);
+  const [copiedExecutionLogIndex, setCopiedExecutionLogIndex] = useState<number | null>(null);
+  const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = useState(false);
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [runModalOpen, setRunModalOpen] = useState(false);
   const [executionActionInput, setExecutionActionInput] = useState('');
@@ -730,6 +752,8 @@ function App() {
   const yamlEditRevisionRef = useRef(0);
   const yamlAppliedRevisionRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
+  const executionLogCopyTimerRef = useRef<number | null>(null);
+  const executionActionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
@@ -770,11 +794,35 @@ function App() {
     void bootstrap();
   }, []);
 
+  useEffect(() => () => {
+    if (executionLogCopyTimerRef.current) {
+      window.clearTimeout(executionLogCopyTimerRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     saveShortcutHandlerRef.current = () => {
       void handleSaveWorkflow();
     };
   });
+
+  useEffect(() => {
+    setExecutionActionInput('');
+    if (!activeExecutionInteraction) {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      executionActionInputRef.current?.focus();
+      executionActionInputRef.current?.select();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeExecutionInteraction?.kind,
+    activeExecutionInteraction?.runId,
+    activeExecutionInteraction?.stepId,
+  ]);
 
   useEffect(() => {
     if (workspacePage !== 'studio') {
@@ -1105,6 +1153,56 @@ function App() {
       setStatusMessage(null);
       toastTimerRef.current = null;
     }, 2600);
+  }
+
+  function showExecutionLogCopyFeedback(mode: 'single' | 'all', index?: number) {
+    if (executionLogCopyTimerRef.current) {
+      window.clearTimeout(executionLogCopyTimerRef.current);
+    }
+
+    setCopiedExecutionLogIndex(mode === 'single' ? index ?? null : null);
+    setCopiedAllExecutionLogs(mode === 'all');
+    executionLogCopyTimerRef.current = window.setTimeout(() => {
+      setCopiedExecutionLogIndex(null);
+      setCopiedAllExecutionLogs(false);
+      executionLogCopyTimerRef.current = null;
+    }, 1600);
+  }
+
+  async function copyTextToClipboard(text: string) {
+    if (!text.trim()) {
+      flash('Nothing to copy', 'info');
+      return false;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      flash('Clipboard is unavailable in this browser context', 'error');
+      return false;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error: any) {
+      flash(error?.message || 'Failed to copy to clipboard', 'error');
+      return false;
+    }
+  }
+
+  async function handleExecutionLogClick(log: ExecutionLogItem, index: number) {
+    setActiveExecutionLogIndex(index);
+    const copied = await copyTextToClipboard(formatExecutionLogClipboard(log));
+    if (copied) {
+      showExecutionLogCopyFeedback('single', index);
+    }
+  }
+
+  async function handleCopyAllExecutionLogs() {
+    const copied = await copyTextToClipboard(formatExecutionLogsClipboard(executionTrace));
+    if (copied) {
+      showExecutionLogCopyFeedback('all');
+      flash('Execution logs copied', 'success');
+    }
   }
 
   function invalidateYamlSync() {
@@ -4453,19 +4551,34 @@ function App() {
 
         {studioView === 'execution' ? (
           <section className={`execution-logs ${logsCollapsed ? 'collapsed' : ''}`}>
-            <button
-              type="button"
-              onClick={() => setLogsCollapsed(value => !value)}
-              className="execution-logs-header"
-            >
+            <div className="execution-logs-header">
               <div>
                 <div className="text-[11px] text-gray-400 uppercase tracking-[0.16em]">Execution</div>
                 <div className="text-[14px] font-semibold text-gray-800">Logs</div>
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-[12px] text-gray-500">{executionSummaryLabel}</span>
+              <div className="execution-logs-header-actions">
+                {executionTrace?.logs?.length ? (
+                  <button
+                    type="button"
+                    className={`panel-icon-button execution-logs-copy-action ${copiedAllExecutionLogs ? 'active' : ''}`}
+                    title="Copy all execution logs."
+                    aria-label="Copy all execution logs."
+                    onClick={() => void handleCopyAllExecutionLogs()}
+                  >
+                    {copiedAllExecutionLogs ? <Check size={14} /> : <Copy size={14} />}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setLogsCollapsed(value => !value)}
+                  className="execution-logs-collapse-action"
+                  aria-expanded={!logsCollapsed}
+                >
+                  <span className="text-[12px] text-gray-500">{executionSummaryLabel}</span>
+                  <ChevronDown size={16} className={`execution-logs-collapse-icon ${logsCollapsed ? 'collapsed' : ''}`} />
+                </button>
               </div>
-            </button>
+            </div>
 
             {!logsCollapsed ? (
               <div className="execution-logs-body">
@@ -4496,15 +4609,23 @@ function App() {
                     {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
                       <button
                         key={`${log.timestamp}-${index}`}
-                        onClick={() => setActiveExecutionLogIndex(index)}
+                        onClick={() => void handleExecutionLogClick(log, index)}
                         className={`execution-log-card tone-${log.tone} ${activeExecutionLogIndex === index ? 'active' : ''}`}
+                        title="Click to copy this log."
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="execution-log-card-head">
                           <div className="text-[12px] font-semibold text-gray-800">{log.title}</div>
-                          <div className="text-[11px] text-gray-400">{formatDateTime(log.timestamp)}</div>
+                          <div className="execution-log-card-meta">
+                            {copiedExecutionLogIndex === index ? (
+                              <span className="execution-log-card-copied">
+                                <Check size={12} /> Copied
+                              </span>
+                            ) : null}
+                            <div className="text-[11px] text-gray-400">{formatDateTime(log.timestamp)}</div>
+                          </div>
                         </div>
                         {log.meta ? <div className="text-[11px] text-gray-400 mt-1">{log.meta}</div> : null}
-                        {log.copy ? <div className="text-[11px] text-gray-600 mt-2 whitespace-pre-wrap break-words">{log.copy}</div> : null}
+                        {log.previewText ? <div className="execution-log-card-preview">{log.previewText}</div> : null}
                       </button>
                     )) : (
                       <EmptyPanel
@@ -4517,31 +4638,70 @@ function App() {
 
                   {activeExecutionInteraction ? (
                     <div className="execution-action-panel">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-[11px] text-gray-400 uppercase tracking-[0.14em]">Action</div>
-                          <div className="text-[15px] font-semibold text-gray-800 mt-1">
-                            {activeExecutionInteraction.kind === 'human_approval' ? 'Human approval' : 'Human input'}
+                      <div className="execution-action-intro">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[11px] text-gray-400 uppercase tracking-[0.14em]">Action required</div>
+                            <div className="text-[15px] font-semibold text-gray-800 mt-1">
+                              {activeExecutionInteraction.kind === 'human_approval' ? 'Human approval' : 'Human input'}
+                            </div>
+                            <div className="execution-action-subtitle">
+                              {activeExecutionInteraction.kind === 'human_approval'
+                                ? 'Review the pending gate and approve or reject the run.'
+                                : 'Provide the missing value to resume this workflow step.'}
+                            </div>
                           </div>
+                          <span className="execution-action-badge">
+                            {activeExecutionInteraction.stepId}
+                          </span>
                         </div>
-                        <span className="execution-action-badge">
-                          {activeExecutionInteraction.stepId}
-                        </span>
+
+                        <div className="execution-action-meta">
+                          <span className="execution-action-chip">
+                            <User size={12} /> Human required
+                          </span>
+                          {activeExecutionInteraction.variableName ? (
+                            <span className="execution-action-chip">
+                              stores as {activeExecutionInteraction.variableName}
+                            </span>
+                          ) : null}
+                          {activeExecutionInteraction.timeoutSeconds ? (
+                            <span className="execution-action-chip">
+                              timeout {activeExecutionInteraction.timeoutSeconds}s
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
 
                       {activeExecutionInteraction.prompt ? (
-                        <div className="execution-action-prompt">
-                          {activeExecutionInteraction.prompt}
+                        <div className="execution-action-block">
+                          <div className="execution-action-block-label">Prompt</div>
+                          <div className="execution-action-prompt">
+                            {activeExecutionInteraction.prompt}
+                          </div>
                         </div>
                       ) : null}
 
-                      <div>
-                        <label className="field-label">
+                      <div className="execution-action-block">
+                        <div className="execution-action-field-head">
+                          <label className="field-label">
+                            {activeExecutionInteraction.kind === 'human_approval'
+                              ? 'Feedback'
+                              : activeExecutionInteraction.variableName || 'Input'}
+                          </label>
+                          <span className={`execution-action-requirement ${activeExecutionInteraction.kind === 'human_approval' ? 'optional' : 'required'}`}>
+                            {activeExecutionInteraction.kind === 'human_approval' ? 'Optional note' : 'Required'}
+                          </span>
+                        </div>
+                        <div className="execution-action-helper">
                           {activeExecutionInteraction.kind === 'human_approval'
-                            ? 'Feedback'
-                            : activeExecutionInteraction.variableName || 'Input'}
-                        </label>
+                            ? 'Add context for the operator if needed, then approve or reject this gate.'
+                            : activeExecutionInteraction.variableName
+                              ? `The submitted value will resume the run and be available as ${activeExecutionInteraction.variableName}.`
+                              : 'This response resumes the workflow immediately.'}
+                        </div>
                         <textarea
+                          ref={executionActionInputRef}
                           className="panel-textarea execution-action-textarea mt-1"
                           value={executionActionInput}
                           placeholder={activeExecutionInteraction.kind === 'human_approval'
@@ -4560,7 +4720,7 @@ function App() {
                               disabled={executionActionPendingKey === `${executionActionKeyBase}:reject`}
                               onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'reject')}
                             >
-                              <X size={14} /> Reject
+                              <X size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:reject` ? 'Rejecting...' : 'Reject'}
                             </button>
                             <button
                               type="button"
@@ -4568,7 +4728,7 @@ function App() {
                               disabled={executionActionPendingKey === `${executionActionKeyBase}:approve`}
                               onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'approve')}
                             >
-                              <Check size={14} /> Approve
+                              <Check size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:approve` ? 'Approving...' : 'Approve'}
                             </button>
                           </>
                         ) : (
@@ -4578,7 +4738,7 @@ function App() {
                             disabled={executionActionPendingKey === `${executionActionKeyBase}:submit`}
                             onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'submit')}
                           >
-                            <Play size={14} /> Submit input
+                            <Play size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:submit` ? 'Submitting...' : 'Submit input'}
                           </button>
                         )}
                       </div>
