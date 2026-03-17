@@ -377,7 +377,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task SubscribeAsync_ShouldCreateLease_AndDisposeUnderlyingSubscription()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
         var received = new List<string>();
 
@@ -400,7 +400,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task SubscribeAsync_ShouldThrow_WhenActorIdIsBlank()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
         Func<Task> act = () => hub.SubscribeAsync("   ", _ => ValueTask.CompletedTask, CancellationToken.None);
@@ -411,7 +411,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task SubscribeAsync_ShouldThrow_WhenHandlerIsNull()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
         Func<Task> act = () => hub.SubscribeAsync("actor-1", null!, CancellationToken.None);
@@ -422,7 +422,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task SubscribeAsync_ShouldThrow_WhenHubDisposed()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
         await hub.DisposeAsync();
 
@@ -434,7 +434,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task SubscribeAsync_ShouldSwallowHandlerExceptions()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
         await hub.SubscribeAsync(
@@ -450,7 +450,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task LeaseDispose_ShouldSwallowUnderlyingDisposeExceptions()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         provider.Stream.Subscription.ThrowOnDispose = true;
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
@@ -463,7 +463,7 @@ public class ActorStreamSubscriptionHubTests
     [Fact]
     public async Task DisposeAsync_ShouldBeIdempotent()
     {
-        var provider = new FakeStreamProvider();
+        var provider = new FakeActorEventSubscriptionProvider();
         var hub = new ActorStreamSubscriptionHub<EventEnvelope>(provider);
 
         await hub.DisposeAsync();
@@ -765,11 +765,19 @@ internal sealed class FakeLease : IActorStreamSubscriptionLease
     }
 }
 
-internal sealed class FakeStreamProvider : IStreamProvider
+internal sealed class FakeActorEventSubscriptionProvider : IActorEventSubscriptionProvider
 {
     public FakeStream Stream { get; } = new();
 
-    public IStream GetStream(string actorId) => Stream;
+    public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+        string actorId,
+        Func<TMessage, Task> handler,
+        CancellationToken ct = default)
+        where TMessage : class, IMessage, new()
+    {
+        _ = actorId;
+        return Stream.SubscribeAsync(handler, ct);
+    }
 }
 
 internal sealed class FakeStream : IStream

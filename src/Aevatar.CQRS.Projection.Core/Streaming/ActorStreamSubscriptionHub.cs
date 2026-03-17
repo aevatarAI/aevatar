@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
@@ -10,15 +11,15 @@ namespace Aevatar.CQRS.Projection.Core.Streaming;
 public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscriptionHub<TMessage>, IAsyncDisposable, IDisposable
     where TMessage : class, IMessage, new()
 {
-    private readonly IStreamProvider _streams;
+    private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly ILogger<ActorStreamSubscriptionHub<TMessage>>? _logger;
     private int _disposed;
 
     public ActorStreamSubscriptionHub(
-        IStreamProvider streams,
+        IActorEventSubscriptionProvider subscriptions,
         ILogger<ActorStreamSubscriptionHub<TMessage>>? logger = null)
     {
-        _streams = streams;
+        _subscriptions = subscriptions;
         _logger = logger;
     }
 
@@ -32,8 +33,8 @@ public sealed class ActorStreamSubscriptionHub<TMessage> : IActorStreamSubscript
         ArgumentNullException.ThrowIfNull(handler);
         ThrowIfDisposed();
 
-        var stream = _streams.GetStream(actorId);
-        var streamSubscription = await stream.SubscribeAsync<TMessage>(
+        var streamSubscription = await _subscriptions.SubscribeAsync<TMessage>(
+            actorId,
             message => DispatchAsync(actorId, handler, message),
             ct);
 

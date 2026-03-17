@@ -1,5 +1,7 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -37,6 +39,7 @@ public static class EventSinkProjectionRuntimeRegistration
         services.TryAddSingleton<IProjectionDispatcher<TContext>, ProjectionDispatcher<TContext, TTopology>>();
         services.TryAddSingleton<IProjectionSubscriptionRegistry<TContext>, ProjectionSubscriptionRegistry<TContext>>();
         services.TryAddSingleton<IProjectionLifecycleService<TContext, TTopology>, ProjectionLifecycleService<TContext, TTopology>>();
+        services.TryAddSingleton<IActorEventSubscriptionProvider, StreamProviderActorEventSubscriptionProvider>();
         services.TryAddSingleton<IEventSinkProjectionSubscriptionManager<TRuntimeLease, TEvent>,
             EventSinkProjectionSessionSubscriptionManager<TRuntimeLease, TEvent>>();
         services.TryAddSingleton<IEventSinkProjectionFailurePolicy<TRuntimeLease, TEvent>, TSinkFailurePolicy>();

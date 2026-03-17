@@ -542,7 +542,8 @@ public class WorkflowExecutionProjectionServiceTests
             new InMemoryStreamOptions(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             forwardingRegistry);
-        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(
+            new TestActorEventSubscriptionProvider(streams));
         reportStore = new ObservableWorkflowExecutionDocumentStore();
         timelineStore = new ObservableWorkflowRunTimelineDocumentStore();
         var currentStateStore = CreateCurrentStateStore();
