@@ -525,7 +525,10 @@ If the implementer times out → log as skipped, increment `issues_skipped`, con
 If the implementer returns FAILED (build/test failure) AND this is round < 3:
 - This counts as consuming one review round
 - Increment round counter
-- Re-spawn the Implementer with the failure details appended, instructing it to fix the build/test issues on the SAME branch
+- Re-spawn the Implementer with `isolation: "worktree"` (fresh worktree). Include in the prompt:
+  - "This is a RETRY round. First recover prior work: `git fetch origin && git checkout <impl-branch>` to continue from the previous attempt."
+  - The failure details (build/test error output)
+  - Instruction to fix the issues and push to the SAME `<impl-branch>`
 - If it fails again on round 3 → log as "skipped: implementer failed after 3 attempts", continue to next issue
 
 If the implementer returns SUCCESS, record the branch name and commit hash from the output.
@@ -608,7 +611,10 @@ Apply convergence logic:
 3. **Decision**:
    - If must-fix issues exist AND this is round < 3:
      - Compile merged fix list
-     - Re-spawn Implementer with the SAME branch name, the merged fix list, and instruction to continue fixing on that branch (do NOT create a new worktree/branch)
+     - Re-spawn Implementer with `isolation: "worktree"` (fresh worktree is fine). Include in the prompt:
+       - "This is a RETRY round. First recover prior work: `git fetch origin && git checkout <impl-branch>` to continue from the previous attempt."
+       - The merged fix list from reviewers
+       - Instruction to commit and push to the SAME `<impl-branch>` (not a new branch)
      - After Implementer completes, re-invoke ALL 5 reviewers on the full cumulative diff
      - Increment round counter
    - If must-fix issues exist AND this is round 3:
