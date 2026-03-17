@@ -1,3 +1,5 @@
+using Google.Protobuf;
+
 namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public interface IProjectionReadModel
@@ -11,4 +13,9 @@ public interface IProjectionReadModel
     string LastEventId { get; }
 
     DateTimeOffset UpdatedAt { get; }
+}
+
+public interface IProjectionReadModel<TSelf> : IProjectionReadModel, IMessage<TSelf>
+    where TSelf : class, IProjectionReadModel<TSelf>, IMessage<TSelf>, new()
+{
 }

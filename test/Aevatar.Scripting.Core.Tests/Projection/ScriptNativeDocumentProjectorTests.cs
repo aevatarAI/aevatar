@@ -140,7 +140,7 @@ public sealed class ScriptNativeDocumentProjectorTests
         public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.DeepClone();
+            LastUpsert = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

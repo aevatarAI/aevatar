@@ -1,43 +1,34 @@
-using System.Text.Json.Serialization;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
-public sealed partial class WorkflowActorBindingDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowActorBindingDocument>
+public sealed partial class WorkflowActorBindingDocument : IProjectionReadModel<WorkflowActorBindingDocument>
 {
-    [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
         get => WorkflowActorBindingDocumentSupport.ToDateTimeOffset(CreatedAtUtcValue);
         set => CreatedAtUtcValue = WorkflowActorBindingDocumentSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => WorkflowActorBindingDocumentSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = WorkflowActorBindingDocumentSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
     public WorkflowActorKind ActorKind
     {
         get => (WorkflowActorKind)ActorKindValue;
         set => ActorKindValue = (int)value;
     }
 
-    [JsonIgnore]
     public IDictionary<string, string> InlineWorkflowYamls
     {
         get => InlineWorkflowYamlEntries;
         set => WorkflowActorBindingDocumentSupport.ReplaceMap(InlineWorkflowYamlEntries, value);
     }
-
-    public WorkflowActorBindingDocument DeepClone() => Clone();
 }
 
 internal static class WorkflowActorBindingDocumentSupport

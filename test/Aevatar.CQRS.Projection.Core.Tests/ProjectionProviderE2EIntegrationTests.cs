@@ -20,7 +20,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
             RequestTimeoutMs = 10000,
         };
         var indexScope = "projection-provider-e2e-" + Guid.NewGuid().ToString("N");
-        using var store = new ElasticsearchProjectionDocumentStore<ProviderStoreSmokeReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<TestProviderStoreSmokeReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: indexScope,
@@ -29,7 +29,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
                 Aliases: new Dictionary<string, object?>()),
             model => model.Id);
 
-        var readModel = new ProviderStoreSmokeReadModel
+        var readModel = new TestProviderStoreSmokeReadModel
         {
             Id = Guid.NewGuid().ToString("N"),
             Value = "v1",
@@ -59,24 +59,4 @@ public sealed class ProjectionProviderE2EIntegrationTests
         throw new InvalidOperationException($"Environment variable '{name}' is required.");
     }
 
-    private sealed class ProviderStoreSmokeReadModel : IProjectionReadModel
-    {
-        public string Id { get; set; } = "";
-
-        public string ActorId => Id;
-
-        public long StateVersion { get; set; }
-
-        public string LastEventId { get; set; } = "";
-
-        public string Value { get; set; } = "";
-
-        public long UpdatedAtEpochMs { get; set; }
-
-        public DateTimeOffset UpdatedAt
-        {
-            get => DateTimeOffset.FromUnixTimeMilliseconds(UpdatedAtEpochMs);
-            set => UpdatedAtEpochMs = value.ToUnixTimeMilliseconds();
-        }
-    }
 }

@@ -14,7 +14,7 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
         Func<TReadModel, TKey> keySelector,
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, string?>? indexScopeSelector = null)
-        where TReadModel : class, IProjectionReadModel
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         ArgumentNullException.ThrowIfNull(optionsFactory);
         ArgumentNullException.ThrowIfNull(metadataFactory);

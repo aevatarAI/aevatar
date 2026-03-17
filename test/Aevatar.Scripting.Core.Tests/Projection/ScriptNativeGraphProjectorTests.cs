@@ -295,7 +295,7 @@ public sealed class ScriptNativeGraphProjectorTests
         public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.DeepClone();
+            LastUpsert = readModel.Clone();
             return Task.CompletedTask;
         }
     }

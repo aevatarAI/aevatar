@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,7 +11,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>
-    where TReadModel : class, IProjectionReadModel
+    where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private const string ProviderName = "InMemory";
     private readonly object _gate = new();
@@ -467,12 +468,5 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         throw new InvalidOperationException("Invalid InMemory projection document query cursor.");
     }
 
-    private TReadModel Clone(TReadModel source)
-    {
-        if (source is IProjectionReadModelCloneable<TReadModel> cloneable)
-            return cloneable.DeepClone();
-
-        throw new InvalidOperationException(
-            $"Read model '{typeof(TReadModel).FullName}' must implement '{typeof(IProjectionReadModelCloneable<TReadModel>).FullName}' for InMemory projection storage.");
-    }
+    private static TReadModel Clone(TReadModel source) => source.Clone();
 }

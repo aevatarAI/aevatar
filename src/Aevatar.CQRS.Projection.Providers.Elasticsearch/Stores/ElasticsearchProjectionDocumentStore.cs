@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,10 +14,18 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
       IDisposable
-    where TReadModel : class, IProjectionReadModel
+    where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private const string ProviderName = "Elasticsearch";
     private const int MaxOptimisticWriteAttempts = 3;
+
+    private static readonly JsonFormatter s_formatter = new(
+        JsonFormatter.Settings.Default
+            .WithPreserveProtoFieldNames(true)
+            .WithFormatDefaultValues(true));
+
+    private static readonly JsonParser s_parser = new(
+        JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
     private readonly HttpClient _httpClient;
     private readonly Func<TReadModel, TKey> _keySelector;
@@ -32,10 +41,6 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     private readonly Func<TReadModel, string?>? _indexScopeSelector;
     private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
     private readonly SemaphoreSlim _indexInitializationLock = new(1, 1);
-    private readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
     private readonly Lock _dynamicIndexStateGate = new();
     private readonly HashSet<string> _initializedIndices = new(StringComparer.Ordinal);
 
@@ -193,7 +198,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             await EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
 
         var keyValue = ResolveReadModelKey(readModel);
-        var payload = JsonSerializer.Serialize(readModel, _jsonOptions);
+        var payload = s_formatter.Format(readModel);
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
@@ -384,15 +389,16 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         return keyValue;
     }
 
-    private TReadModel? DeserializeOrNull(string json)
+    private static TReadModel? DeserializeOrNull(string json)
     {
-        var value = JsonSerializer.Deserialize<TReadModel>(json, _jsonOptions);
-        if (value == null)
+        try
+        {
+            return s_parser.Parse<TReadModel>(json);
+        }
+        catch
+        {
             return null;
-
-        // Defensive copy to isolate caller-side mutation from cache/shared references.
-        var copyPayload = JsonSerializer.Serialize(value, _jsonOptions);
-        return JsonSerializer.Deserialize<TReadModel>(copyPayload, _jsonOptions);
+        }
     }
 
     public void Dispose()

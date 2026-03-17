@@ -142,7 +142,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
             Content = "answer",
             ContentLength = 6,
         });
-        var clone = report.DeepClone();
+        var clone = report.Clone();
 
         report.CreatedAt.Offset.Should().Be(TimeSpan.Zero);
         report.UpdatedAt.Offset.Should().Be(TimeSpan.Zero);
@@ -186,7 +186,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
         currentState.Success.Should().BeNull();
         currentState.UpdatedAt = utcTime;
         currentState.Success = false;
-        currentState.DeepClone().Success.Should().BeFalse();
+        currentState.Clone().Success.Should().BeFalse();
 
         var timeline = new WorkflowRunTimelineDocument
         {
@@ -207,7 +207,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
             },
         ];
         timeline.UpdatedAt = utcTime;
-        timeline.DeepClone().Timeline.Should().ContainSingle();
+        timeline.Clone().Timeline.Should().ContainSingle();
         timeline.Timeline = null!;
         timeline.Timeline.Should().BeEmpty();
 
@@ -229,7 +229,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
             },
         ];
         graph.UpdatedAt = utcTime;
-        graph.DeepClone().Topology.Should().ContainSingle();
+        graph.Clone().Topology.Should().ContainSingle();
         graph.Topology = null!;
         graph.Steps = null!;
         graph.Topology.Should().BeEmpty();

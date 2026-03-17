@@ -41,7 +41,7 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             return;
 
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
-        var readModel = existing?.DeepClone() ??
+        var readModel = existing?.Clone() ??
                         WorkflowExecutionArtifactMaterializationSupport.CreateReportDocument(
                             context,
                             state,

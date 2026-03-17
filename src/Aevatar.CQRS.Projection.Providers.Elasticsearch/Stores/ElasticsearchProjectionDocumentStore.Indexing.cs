@@ -23,8 +23,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             }
 
             var payload = ElasticsearchProjectionDocumentStorePayloadSupport.BuildIndexInitializationPayload(
-                metadata,
-                _jsonOptions);
+                metadata);
             using var request = new HttpRequestMessage(HttpMethod.Put, indexName)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),

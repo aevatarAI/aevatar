@@ -1,118 +1,81 @@
-using System.Text.Json.Serialization;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Projection.ReadModels;
 
-[JsonConverter(typeof(ScriptReadModelDocumentJsonConverter))]
-public sealed partial class ScriptReadModelDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptReadModelDocument>
+public sealed partial class ScriptReadModelDocument : IProjectionReadModel<ScriptReadModelDocument>
 {
-    [JsonIgnore]
     public string ActorId => Id;
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
-
-    public ScriptReadModelDocument DeepClone() => Clone();
 }
 
-[JsonConverter(typeof(ScriptDefinitionSnapshotDocumentJsonConverter))]
-public sealed partial class ScriptDefinitionSnapshotDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptDefinitionSnapshotDocument>
+public sealed partial class ScriptDefinitionSnapshotDocument : IProjectionReadModel<ScriptDefinitionSnapshotDocument>
 {
-    [JsonIgnore]
     public string ActorId => DefinitionActorId;
 
-    [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
         set => CreatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
-
-    public ScriptDefinitionSnapshotDocument DeepClone() => Clone();
 }
 
-[JsonConverter(typeof(ScriptCatalogEntryDocumentJsonConverter))]
-public sealed partial class ScriptCatalogEntryDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptCatalogEntryDocument>
+public sealed partial class ScriptCatalogEntryDocument : IProjectionReadModel<ScriptCatalogEntryDocument>
 {
-    [JsonIgnore]
     public string ActorId => CatalogActorId;
 
-    [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(CreatedAtUtcValue);
         set => CreatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
 
-    [JsonIgnore]
     public IList<string> RevisionHistory
     {
         get => RevisionHistoryEntries;
         set => ScriptProjectionReadModelSupport.ReplaceCollection(RevisionHistoryEntries, value);
     }
-
-    public ScriptCatalogEntryDocument DeepClone() => Clone();
 }
 
-[JsonConverter(typeof(ScriptEvolutionReadModelJsonConverter))]
-public sealed partial class ScriptEvolutionReadModel
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptEvolutionReadModel>
+public sealed partial class ScriptEvolutionReadModel : IProjectionReadModel<ScriptEvolutionReadModel>
 {
-    [JsonIgnore]
     public IList<string> Diagnostics
     {
         get => DiagnosticsEntries;
         set => ScriptProjectionReadModelSupport.ReplaceCollection(DiagnosticsEntries, value);
     }
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
-
-    public ScriptEvolutionReadModel DeepClone() => Clone();
 }
 
-[JsonConverter(typeof(ScriptNativeDocumentReadModelJsonConverter))]
-public sealed partial class ScriptNativeDocumentReadModel
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptNativeDocumentReadModel>
+public sealed partial class ScriptNativeDocumentReadModel : IProjectionReadModel<ScriptNativeDocumentReadModel>
 {
     private IDictionary<string, object?>? _fieldsCache;
 
-    [JsonIgnore]
     public string ActorId => Id;
 
-    [JsonIgnore]
     public IDictionary<string, object?> Fields
     {
         get => _fieldsCache ??= ScriptProjectionReadModelSupport.ToDictionary(FieldsValue);
@@ -125,31 +88,22 @@ public sealed partial class ScriptNativeDocumentReadModel
         }
     }
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
-
-    public ScriptNativeDocumentReadModel DeepClone() => Clone();
 }
 
-public sealed partial class ScriptNativeGraphReadModel
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<ScriptNativeGraphReadModel>
+public sealed partial class ScriptNativeGraphReadModel : IProjectionReadModel<ScriptNativeGraphReadModel>
 {
-    [JsonIgnore]
     public string ActorId => Id;
 
-    [JsonIgnore]
     public DateTimeOffset UpdatedAt
     {
         get => ScriptProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
         set => UpdatedAtUtcValue = ScriptProjectionReadModelSupport.ToTimestamp(value);
     }
-
-    public ScriptNativeGraphReadModel DeepClone() => Clone();
 }
 
 internal static class ScriptProjectionReadModelSupport
@@ -255,67 +209,6 @@ internal static class ScriptProjectionReadModelSupport
             EdgeType = edge.EdgeType,
             Properties = new Dictionary<string, string>(edge.Properties, StringComparer.Ordinal),
             UpdatedAt = ToDateTimeOffset(edge.UpdatedAtUtcValue),
-        };
-    }
-
-    public static object? CloneObjectGraph(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => text,
-            bool boolean => boolean,
-            byte byteValue => byteValue,
-            sbyte signedByte => signedByte,
-            short shortValue => shortValue,
-            ushort ushortValue => ushortValue,
-            int intValue => intValue,
-            uint uintValue => uintValue,
-            long longValue => longValue,
-            ulong ulongValue => ulongValue,
-            float floatValue => floatValue,
-            double doubleValue => doubleValue,
-            decimal decimalValue => decimalValue,
-            DateTimeOffset dateTimeOffset => dateTimeOffset,
-            IReadOnlyDictionary<string, object?> readonlyDictionary => readonlyDictionary.ToDictionary(
-                static pair => pair.Key,
-                static pair => CloneObjectGraph(pair.Value),
-                StringComparer.Ordinal),
-            IDictionary<string, object?> dictionary => dictionary.ToDictionary(
-                static pair => pair.Key,
-                static pair => CloneObjectGraph(pair.Value),
-                StringComparer.Ordinal),
-            IEnumerable<object?> sequence => sequence.Select(CloneObjectGraph).ToList(),
-            System.Collections.IEnumerable sequence when value is not string => sequence
-                .Cast<object?>()
-                .Select(CloneObjectGraph)
-                .ToList(),
-            _ => value,
-        };
-    }
-
-    public static object? ReadJsonValue(System.Text.Json.JsonElement element)
-    {
-        return element.ValueKind switch
-        {
-            System.Text.Json.JsonValueKind.Object => element.EnumerateObject()
-                .ToDictionary(
-                    static property => property.Name,
-                    static property => ReadJsonValue(property.Value),
-                    StringComparer.Ordinal),
-            System.Text.Json.JsonValueKind.Array => element.EnumerateArray()
-                .Select(ReadJsonValue)
-                .ToList(),
-            System.Text.Json.JsonValueKind.String => element.TryGetDateTimeOffset(out var dateTimeOffset)
-                ? dateTimeOffset
-                : element.GetString(),
-            System.Text.Json.JsonValueKind.Number => element.TryGetInt64(out var longValue)
-                ? longValue
-                : element.GetDouble(),
-            System.Text.Json.JsonValueKind.True => true,
-            System.Text.Json.JsonValueKind.False => false,
-            System.Text.Json.JsonValueKind.Null => null,
-            _ => null,
         };
     }
 

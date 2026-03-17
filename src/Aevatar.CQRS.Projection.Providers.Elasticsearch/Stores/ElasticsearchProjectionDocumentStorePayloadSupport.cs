@@ -67,8 +67,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
     }
 
     internal static string BuildIndexInitializationPayload(
-        DocumentIndexMetadata indexMetadata,
-        JsonSerializerOptions jsonOptions)
+        DocumentIndexMetadata indexMetadata)
     {
         var mappings = indexMetadata.Mappings.Count == 0
             ? new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -96,7 +95,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                 StringComparer.Ordinal);
         }
 
-        return JsonSerializer.Serialize(root, jsonOptions);
+        return JsonSerializer.Serialize(root);
     }
 
     private static object BuildFilterSpec(ProjectionDocumentQuery query)

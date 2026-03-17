@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.projection.readmodels;
+
+option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
+
+import "google/protobuf/timestamp.proto";
+
+// --- ServiceCatalogReadModel ---
+
+message ServiceCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string tenant_id = 5;
+  string app_id = 6;
+  string namespace = 7;
+  string service_id = 8;
+  string display_name = 9;
+  string default_serving_revision_id = 10;
+  string active_serving_revision_id = 11;
+  string deployment_id = 12;
+  string primary_actor_id = 13;
+  string deployment_status = 14;
+  google.protobuf.Timestamp updated_at_utc_value = 15;
+  repeated ServiceCatalogEndpointReadModel endpoint_entries = 16;
+  repeated string policy_id_entries = 17;
+}
+
+message ServiceCatalogEndpointReadModel {
+  string endpoint_id = 1;
+  string display_name = 2;
+  string kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+}
+
+// --- ServiceDeploymentCatalogReadModel ---
+
+message ServiceDeploymentCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  repeated ServiceDeploymentReadModel deployment_entries = 6;
+}
+
+message ServiceDeploymentReadModel {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  string status = 4;
+  google.protobuf.Timestamp activated_at_utc_value = 5;
+  google.protobuf.Timestamp updated_at_utc_value = 6;
+}
+
+// --- ServiceRevisionCatalogReadModel ---
+
+message ServiceRevisionCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  repeated ServiceRevisionEntryReadModel revision_entries = 6;
+}
+
+message ServiceRevisionEntryReadModel {
+  string revision_id = 1;
+  string implementation_kind = 2;
+  string status = 3;
+  string artifact_hash = 4;
+  string failure_reason = 5;
+  google.protobuf.Timestamp created_at_utc_value = 6;
+  google.protobuf.Timestamp prepared_at_utc_value = 7;
+  google.protobuf.Timestamp published_at_utc_value = 8;
+  google.protobuf.Timestamp retired_at_utc_value = 9;
+  repeated ServiceCatalogEndpointReadModel endpoint_entries = 10;
+}
+
+// --- ServiceRolloutReadModel ---
+
+message ServiceRolloutReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string rollout_id = 5;
+  string display_name = 6;
+  string status = 7;
+  int32 current_stage_index = 8;
+  string failure_reason = 9;
+  google.protobuf.Timestamp started_at_utc_value = 10;
+  google.protobuf.Timestamp updated_at_utc_value = 11;
+  repeated ServiceRolloutStageReadModel stage_entries = 12;
+  repeated ServiceServingTargetReadModel baseline_target_entries = 13;
+}
+
+message ServiceRolloutStageReadModel {
+  string stage_id = 1;
+  int32 stage_index = 2;
+  repeated ServiceServingTargetReadModel target_entries = 3;
+}
+
+// --- ServiceServingSetReadModel ---
+
+message ServiceServingSetReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  int64 generation = 5;
+  string active_rollout_id = 6;
+  google.protobuf.Timestamp updated_at_utc_value = 7;
+  repeated ServiceServingTargetReadModel target_entries = 8;
+}
+
+message ServiceServingTargetReadModel {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  int32 allocation_weight = 4;
+  string serving_state = 5;
+  repeated string enabled_endpoint_id_entries = 6;
+}
+
+// --- ServiceTrafficViewReadModel ---
+
+message ServiceTrafficViewReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  int64 generation = 5;
+  string active_rollout_id = 6;
+  google.protobuf.Timestamp updated_at_utc_value = 7;
+  repeated ServiceTrafficEndpointReadModel endpoint_entries = 8;
+}
+
+message ServiceTrafficEndpointReadModel {
+  string endpoint_id = 1;
+  repeated ServiceTrafficTargetReadModel target_entries = 2;
+}
+
+message ServiceTrafficTargetReadModel {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  int32 allocation_weight = 4;
+  string serving_state = 5;
+}
