@@ -6,6 +6,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Governance.Hosting.Migration;
 
+/// <summary>
+/// Startup-time hosted service that drives the one-time legacy governance migration.
+/// Iterates all known services and invokes <see cref="IServiceGovernanceLegacyImporter"/>
+/// to consolidate legacy actor streams into the unified ServiceConfiguration model.
+/// <para>
+/// Remove this hosted service once all deployments have completed the legacy
+/// governance migration.
+/// </para>
+/// </summary>
+[Obsolete("Legacy migration hosted service. Remove after all deployments complete governance migration.")]
+#pragma warning disable CS0618 // Self-referencing obsolete migration types
 public sealed class ServiceGovernanceLegacyMigrationHostedService : IHostedService
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
