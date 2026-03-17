@@ -56,7 +56,8 @@ public class WorkflowRunInsightBridgeProjectorTests
             new InMemoryStreamOptions(),
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             forwardingRegistry);
-        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(streams);
+        var subscriptionHub = new ActorStreamSubscriptionHub<EventEnvelope>(
+            new TestActorEventSubscriptionProvider(streams));
 
         var runtimeServices = new ServiceCollection();
         runtimeServices.AddSingleton<IStreamProvider>(streams);

@@ -99,6 +99,10 @@ public static class ServiceCollectionExtensions
             if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
             {
                 ConfigureMassTransitTransport(services, options);
+                services.AddAevatarMassTransitStreamProvider(streamOptions =>
+                {
+                    streamOptions.StreamNamespace = options.OrleansActorEventNamespace;
+                });
                 services.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
                 return services;
             }
