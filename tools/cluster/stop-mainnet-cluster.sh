@@ -6,5 +6,6 @@ cd "${ROOT_DIR}"
 
 docker compose \
   -f docker-compose.yml \
+  -f docker-compose.projection-providers.yml \
   -f docker-compose.mainnet-cluster.yml \
   down

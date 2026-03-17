@@ -1,19 +1,19 @@
 using System.Net;
 using System.Net.Sockets;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
-using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
+using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
-using Aevatar.Scripting.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
@@ -27,12 +27,15 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     [Orleans3ClusterIntegrationFact]
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
+        var kafkaBootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
-        var sharedProjectionStores = new SharedScriptingProjectionStores();
         var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
         var serviceId = $"aevatar-script-service-{Guid.NewGuid():N}";
         var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
         var actorEventNamespace = $"aevatar.script.cluster.{Guid.NewGuid():N}";
+        var kafkaTopicName = $"aevatar-script-cluster-topic-{Guid.NewGuid():N}";
+        var consumerGroupPrefix = $"aevatar-script-cluster-consumer-{Guid.NewGuid():N}";
+        var projectionIndexPrefix = $"aevatar-script-cluster-{Guid.NewGuid():N}";
 
         var node1SiloPort = ReserveTcpPort();
         var node1GatewayPort = ReserveTcpPort();
@@ -51,7 +54,10 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node1GatewayPort,
             null,
             garnetConnectionString,
-            sharedProjectionStores);
+            kafkaBootstrapServers,
+            kafkaTopicName,
+            $"{consumerGroupPrefix}-node1",
+            projectionIndexPrefix);
         var node2 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -61,7 +67,10 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node2GatewayPort,
             primaryEndpoint,
             garnetConnectionString,
-            sharedProjectionStores);
+            kafkaBootstrapServers,
+            kafkaTopicName,
+            $"{consumerGroupPrefix}-node2",
+            projectionIndexPrefix);
         var node3 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -71,7 +80,10 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node3GatewayPort,
             primaryEndpoint,
             garnetConnectionString,
-            sharedProjectionStores);
+            kafkaBootstrapServers,
+            kafkaTopicName,
+            $"{consumerGroupPrefix}-node3",
+            projectionIndexPrefix);
 
         try
         {
@@ -317,9 +329,15 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         int gatewayPort,
         IPEndPoint? primarySiloEndpoint,
         string garnetConnectionString,
-        SharedScriptingProjectionStores sharedProjectionStores)
+        string kafkaBootstrapServers,
+        string kafkaTopicName,
+        string kafkaConsumerGroup,
+        string projectionIndexPrefix)
     {
         var host = Host.CreateDefaultBuilder()
+            .ConfigureAppConfiguration(configurationBuilder =>
+                configurationBuilder.AddInMemoryCollection(
+                    BuildProjectionConfigurationValues(projectionIndexPrefix)))
             .UseOrleans(siloBuilder =>
             {
                 siloBuilder.UseLocalhostClustering(
@@ -330,19 +348,25 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     clusterId);
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
-                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendInMemory;
+                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter;
                     options.StreamProviderName = streamProviderName;
                     options.ActorEventNamespace = actorEventNamespace;
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
                     options.GarnetConnectionString = garnetConnectionString;
                 });
+                siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
                 siloBuilder.ConfigureServices(services =>
                     services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer()));
             })
-            .ConfigureServices(services =>
+            .ConfigureServices((context, services) =>
             {
-                sharedProjectionStores.Register(services);
-                services.AddScriptCapability();
+                services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(options =>
+                {
+                    options.BootstrapServers = kafkaBootstrapServers;
+                    options.TopicName = kafkaTopicName;
+                    options.ConsumerGroup = kafkaConsumerGroup;
+                });
+                services.AddScriptCapability(context.Configuration);
             })
             .Build();
 
@@ -403,48 +427,31 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 
-    private sealed class SharedScriptingProjectionStores
-    {
-        private readonly InMemoryProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string> _definitionSnapshots =
-            new(
-                static readModel => readModel.Id,
-                static key => key,
-                static readModel => readModel.UpdatedAt);
-        private readonly InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument, string> _catalogEntries =
-            new(
-                static readModel => readModel.Id,
-                static key => key,
-                static readModel => readModel.UpdatedAt);
-        private readonly InMemoryProjectionDocumentStore<ScriptReadModelDocument, string> _scriptReadModels =
-            new(
-                static readModel => readModel.Id,
-                static key => key,
-                static readModel => readModel.UpdatedAt);
-        private readonly InMemoryProjectionDocumentStore<ScriptEvolutionReadModel, string> _evolutionReadModels =
-            new(
-                static readModel => readModel.Id,
-                static key => key,
-                static readModel => readModel.UpdatedAt);
-        private readonly InMemoryProjectionDocumentStore<ScriptNativeDocumentReadModel, string> _nativeDocuments =
-            new(
-                static readModel => readModel.Id,
-                static key => key,
-                static readModel => readModel.UpdatedAt);
-        private readonly InMemoryProjectionGraphStore _graphStore = new();
+    private static string RequireKafkaBootstrapServers() =>
+        Environment.GetEnvironmentVariable("AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS")
+        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS.");
 
-        public void Register(IServiceCollection services)
+    private static Dictionary<string, string?> BuildProjectionConfigurationValues(string indexPrefix)
+    {
+        return new Dictionary<string, string?>(StringComparer.Ordinal)
         {
-            services.AddSingleton<IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>>(_definitionSnapshots);
-            services.AddSingleton<IProjectionDocumentWriter<ScriptDefinitionSnapshotDocument>>(_definitionSnapshots);
-            services.AddSingleton<IProjectionDocumentReader<ScriptCatalogEntryDocument, string>>(_catalogEntries);
-            services.AddSingleton<IProjectionDocumentWriter<ScriptCatalogEntryDocument>>(_catalogEntries);
-            services.AddSingleton<IProjectionDocumentReader<ScriptReadModelDocument, string>>(_scriptReadModels);
-            services.AddSingleton<IProjectionDocumentWriter<ScriptReadModelDocument>>(_scriptReadModels);
-            services.AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(_evolutionReadModels);
-            services.AddSingleton<IProjectionDocumentWriter<ScriptEvolutionReadModel>>(_evolutionReadModels);
-            services.AddSingleton<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>(_nativeDocuments);
-            services.AddSingleton<IProjectionDocumentWriter<ScriptNativeDocumentReadModel>>(_nativeDocuments);
-            services.AddSingleton<IProjectionGraphStore>(_graphStore);
-        }
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = bool.TrueString,
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = RequireEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT"),
+            ["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = indexPrefix,
+            ["Projection:Document:Providers:Elasticsearch:AutoCreateIndex"] = bool.TrueString,
+            ["Projection:Document:Providers:InMemory:Enabled"] = bool.FalseString,
+            ["Projection:Graph:Providers:Neo4j:Enabled"] = bool.TrueString,
+            ["Projection:Graph:Providers:Neo4j:Uri"] = RequireEnvironmentVariable("AEVATAR_TEST_NEO4J_URI"),
+            ["Projection:Graph:Providers:Neo4j:Username"] = RequireEnvironmentVariable("AEVATAR_TEST_NEO4J_USERNAME"),
+            ["Projection:Graph:Providers:Neo4j:Password"] = RequireEnvironmentVariable("AEVATAR_TEST_NEO4J_PASSWORD"),
+            ["Projection:Graph:Providers:InMemory:Enabled"] = bool.FalseString,
+            ["Projection:Policies:Environment"] = "Production",
+            ["Projection:Policies:DenyInMemoryDocumentReadStore"] = bool.TrueString,
+            ["Projection:Policies:DenyInMemoryGraphFactStore"] = bool.TrueString,
+        };
     }
+
+    private static string RequireEnvironmentVariable(string name) =>
+        Environment.GetEnvironmentVariable(name)
+        ?? throw new InvalidOperationException($"Missing {name}.");
 }

@@ -17,4 +17,4 @@ Elasticsearch Document Provider。
 
 - `Projection:Document:Providers:Elasticsearch:*`
 - 至少配置 `Endpoints`
-- 默认查询排序由 `DefaultSortField` 控制，未配置时回退到 `CreatedAt desc, _id desc`
+- 默认查询排序由 `DefaultSortField` 控制，未配置时回退到 `CreatedAt desc`，并追加 `Id.keyword desc` / `id.keyword desc` 作为稳定 tie-break

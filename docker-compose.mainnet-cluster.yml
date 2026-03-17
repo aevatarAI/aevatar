@@ -46,6 +46,10 @@ services:
         condition: service_healthy
       garnet:
         condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
@@ -67,6 +71,15 @@ services:
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19081:8080"
     restart: unless-stopped
@@ -80,6 +93,10 @@ services:
       kafka:
         condition: service_healthy
       garnet:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
@@ -102,6 +119,15 @@ services:
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19082:8080"
     restart: unless-stopped
@@ -115,6 +141,10 @@ services:
       kafka:
         condition: service_healthy
       garnet:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
@@ -137,6 +167,15 @@ services:
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19083:8080"
     restart: unless-stopped

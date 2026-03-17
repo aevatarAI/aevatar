@@ -7,7 +7,11 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 {
     private const string DefaultQueryPrimarySortField = "CreatedAt";
-    private const string DefaultQueryTiebreakSortField = "_id";
+    private static readonly string[] DefaultQueryTiebreakSortFields =
+    [
+        "Id.keyword",
+        "id.keyword",
+    ];
 
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,
@@ -164,17 +168,18 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             var primarySortField = string.IsNullOrWhiteSpace(defaultSortField)
                 ? DefaultQueryPrimarySortField
                 : defaultSortField.Trim();
-            return
-            [
+            var defaultClauses = new List<object>
+            {
                 BuildSortClause(primarySortField, ProjectionDocumentSortDirection.Desc, includeMissingHints: true),
-                BuildTiebreakSortClause(),
-            ];
+            };
+            defaultClauses.AddRange(BuildTiebreakSortClauses());
+            return defaultClauses.ToArray();
         }
 
         var clauses = query.Sorts
             .Select(sort => BuildSortClause(sort.FieldPath, sort.Direction, includeMissingHints: false))
             .ToList();
-        clauses.Add(BuildTiebreakSortClause());
+        clauses.AddRange(BuildTiebreakSortClauses());
         return clauses.ToArray();
     }
 
@@ -200,15 +205,17 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         };
     }
 
-    private static object BuildTiebreakSortClause()
+    private static IEnumerable<object> BuildTiebreakSortClauses()
     {
-        return new Dictionary<string, object?>
+        return DefaultQueryTiebreakSortFields.Select(static fieldPath => new Dictionary<string, object?>
         {
-            [DefaultQueryTiebreakSortField] = new Dictionary<string, object?>
+            [fieldPath] = new Dictionary<string, object?>
             {
                 ["order"] = "desc",
+                ["missing"] = "_last",
+                ["unmapped_type"] = "keyword",
             },
-        };
+        });
     }
 
     private static string ResolveRangeOperator(ProjectionDocumentFilterOperator filterOperator)
