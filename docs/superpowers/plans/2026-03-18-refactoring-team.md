@@ -4,7 +4,7 @@
 
 **Goal:** Create a Claude Code skill (`/refactor-team`) that orchestrates a fully automated multi-agent team to audit, fix, review, and PR architectural issues.
 
-**Architecture:** A single skill entry point (`.claude/skills/refactor-team/SKILL.md`) contains the Team Lead orchestration logic. Supporting markdown files define prompts for each agent role (Auditor, Implementer, 4 Reviewers, CI-Guard-Runner). The skill uses Claude Code's Agent tool with `subagent_type`, `model`, and `isolation` parameters to spawn agents.
+**Architecture:** A single skill entry point (`.claude/skills/refactor-team/SKILL.md`) contains the Team Lead orchestration logic. It uses `TeamCreate` to establish a Claude Code Team with shared task list, then spawns named team members via `Agent` tool with `team_name`, `subagent_type`, `model`, and `isolation` parameters. Supporting markdown files define prompts for each agent role (Auditor, Implementer, 4 Reviewers, CI-Guard-Runner). Team is cleaned up with `TeamDelete` on completion.
 
 **Tech Stack:** Claude Code skills (YAML frontmatter + markdown), Agent tool, git, `gh` CLI, `dotnet` CLI, bash CI guard scripts.
 
