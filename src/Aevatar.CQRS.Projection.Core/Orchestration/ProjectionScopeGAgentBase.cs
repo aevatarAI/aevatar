@@ -12,8 +12,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
     where TContext : class, IProjectionMaterializationContext
 {
-    private IAsyncDisposable? _observationSubscription;
-    private readonly SemaphoreSlim _subscriptionGate = new(1, 1);
+    private readonly ProjectionObservationSubscriber _subscriber = new();
     private ILogger _logger = NullLogger.Instance;
 
     protected abstract ProjectionRuntimeMode RuntimeMode { get; }
@@ -25,12 +24,13 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released)
             return Task.CompletedTask;
 
-        return EnsureObservationAttachedAsync(persistState: false, ct);
+        var streamProvider = Services.GetRequiredService<IStreamProvider>();
+        return _subscriber.EnsureAttachedAsync(streamProvider, State.RootActorId, ForwardObservationAsync, ct);
     }
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
     {
-        await DetachObservationAsync(ct);
+        await _subscriber.DetachAsync(ct);
         await base.OnDeactivateAsync(ct);
     }
 
@@ -51,7 +51,17 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             });
         }
 
-        await EnsureObservationAttachedAsync(persistState: !State.ObservationAttached, CancellationToken.None);
+        var streamProvider = Services.GetRequiredService<IStreamProvider>();
+        var attached = await _subscriber.EnsureAttachedAsync(
+            streamProvider, State.RootActorId, ForwardObservationAsync, CancellationToken.None);
+        if (attached && !State.ObservationAttached)
+        {
+            await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
+            {
+                Attached = true,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+        }
     }
 
     [EventHandler]
@@ -76,7 +86,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             });
         }
 
-        await DetachObservationAsync(CancellationToken.None);
+        await _subscriber.DetachAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -87,37 +97,25 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released || State.Failures.Count == 0)
             return;
 
-        var maxItems = Math.Max(1, command.MaxItems);
-        var failures = State.Failures.Take(maxItems).ToList();
+        var failures = ProjectionScopeFailureLog.GetPendingFailures(State, command.MaxItems);
         foreach (var failure in failures)
         {
-            var envelope = failure.Envelope;
-            if (envelope == null)
+            if (failure.Envelope == null)
                 continue;
 
             try
             {
-                var result = await DispatchObservationAsync(envelope, CancellationToken.None);
+                var result = await DispatchObservationAsync(failure.Envelope, CancellationToken.None);
                 if (result.Handled)
                 {
-                    await PersistDomainEventAsync(new ProjectionScopeFailureReplayedEvent
-                    {
-                        FailureId = failure.FailureId,
-                        Succeeded = true,
-                        Reason = string.Empty,
-                        OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-                    });
+                    await PersistDomainEventAsync(
+                        ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, true));
                 }
             }
             catch (Exception ex)
             {
-                await PersistDomainEventAsync(new ProjectionScopeFailureReplayedEvent
-                {
-                    FailureId = failure.FailureId,
-                    Succeeded = false,
-                    Reason = ex.Message ?? ex.GetType().Name,
-                    OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
+                await PersistDomainEventAsync(
+                    ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, false, ex.Message));
             }
         }
     }
@@ -148,12 +146,12 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     protected override ProjectionScopeState TransitionState(ProjectionScopeState current, Google.Protobuf.IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<ProjectionScopeStartedEvent>(ApplyStarted)
-            .On<ProjectionObservationAttachmentUpdatedEvent>(ApplyAttachmentUpdated)
-            .On<ProjectionScopeReleasedEvent>(ApplyReleased)
-            .On<ProjectionScopeWatermarkAdvancedEvent>(ApplyWatermarkAdvanced)
-            .On<ProjectionScopeDispatchFailedEvent>(ApplyDispatchFailed)
-            .On<ProjectionScopeFailureReplayedEvent>(ApplyFailureReplayed)
+            .On<ProjectionScopeStartedEvent>(ProjectionScopeStateApplier.ApplyStarted)
+            .On<ProjectionObservationAttachmentUpdatedEvent>(ProjectionScopeStateApplier.ApplyAttachmentUpdated)
+            .On<ProjectionScopeReleasedEvent>(ProjectionScopeStateApplier.ApplyReleased)
+            .On<ProjectionScopeWatermarkAdvancedEvent>(ProjectionScopeStateApplier.ApplyWatermarkAdvanced)
+            .On<ProjectionScopeDispatchFailedEvent>(ProjectionScopeStateApplier.ApplyDispatchFailed)
+            .On<ProjectionScopeFailureReplayedEvent>(ProjectionScopeStateApplier.ApplyFailureReplayed)
             .OrCurrent();
 
     protected ProjectionRuntimeScopeKey BuildScopeKey() =>
@@ -192,52 +190,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         return factory.Create(BuildScopeKey());
     }
 
-    private async Task EnsureObservationAttachedAsync(bool persistState, CancellationToken ct)
-    {
-        await _subscriptionGate.WaitAsync(ct);
-        try
-        {
-            if (_observationSubscription != null)
-                return;
-
-            var streamProvider = Services.GetRequiredService<IStreamProvider>();
-            var stream = streamProvider.GetStream(State.RootActorId);
-            _observationSubscription = await stream.SubscribeAsync<EventEnvelope>(
-                envelope => ForwardObservationAsync(envelope),
-                ct);
-
-            if (persistState)
-            {
-                await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
-                {
-                    Attached = true,
-                    OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-                });
-            }
-        }
-        finally
-        {
-            _subscriptionGate.Release();
-        }
-    }
-
-    private async Task DetachObservationAsync(CancellationToken ct)
-    {
-        await _subscriptionGate.WaitAsync(ct);
-        try
-        {
-            if (_observationSubscription == null)
-                return;
-
-            await _observationSubscription.DisposeAsync();
-            _observationSubscription = null;
-        }
-        finally
-        {
-            _subscriptionGate.Release();
-        }
-    }
-
     private async Task ForwardObservationAsync(EventEnvelope envelope)
     {
         try
@@ -259,94 +211,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
     }
 
-    private static ProjectionScopeState ApplyStarted(ProjectionScopeState current, ProjectionScopeStartedEvent evt)
-    {
-        var next = current.Clone();
-        next.RootActorId = evt.RootActorId;
-        next.ProjectionKind = evt.ProjectionKind;
-        next.SessionId = evt.SessionId;
-        next.Mode = evt.Mode;
-        next.Active = true;
-        next.Released = false;
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
-    private static ProjectionScopeState ApplyAttachmentUpdated(
-        ProjectionScopeState current,
-        ProjectionObservationAttachmentUpdatedEvent evt)
-    {
-        var next = current.Clone();
-        next.ObservationAttached = evt.Attached;
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
-    private static ProjectionScopeState ApplyReleased(ProjectionScopeState current, ProjectionScopeReleasedEvent evt)
-    {
-        var next = current.Clone();
-        next.Released = true;
-        next.ObservationAttached = false;
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
-    private static ProjectionScopeState ApplyWatermarkAdvanced(
-        ProjectionScopeState current,
-        ProjectionScopeWatermarkAdvancedEvent evt)
-    {
-        var next = current.Clone();
-        next.LastObservedVersion = Math.Max(current.LastObservedVersion, evt.LastObservedVersion);
-        next.LastSuccessfulVersion = Math.Max(current.LastSuccessfulVersion, evt.LastSuccessfulVersion);
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
-    private static ProjectionScopeState ApplyDispatchFailed(
-        ProjectionScopeState current,
-        ProjectionScopeDispatchFailedEvent evt)
-    {
-        var next = current.Clone();
-        next.Failures.Add(new ProjectionScopeFailure
-        {
-            FailureId = evt.FailureId,
-            Stage = evt.Stage,
-            EventId = evt.EventId,
-            EventType = evt.EventType,
-            SourceVersion = evt.SourceVersion,
-            Reason = evt.Reason,
-            Envelope = evt.Envelope?.Clone(),
-            Attempts = 0,
-            OccurredAtUtc = evt.OccurredAtUtc?.Clone(),
-        });
-        ProjectionFailureRetentionPolicy.Trim(next.Failures);
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
-    private static ProjectionScopeState ApplyFailureReplayed(
-        ProjectionScopeState current,
-        ProjectionScopeFailureReplayedEvent evt)
-    {
-        var next = current.Clone();
-        var existing = next.Failures.FirstOrDefault(x => string.Equals(x.FailureId, evt.FailureId, StringComparison.Ordinal));
-        if (existing == null)
-            return next;
-
-        if (evt.Succeeded)
-        {
-            next.Failures.Remove(existing);
-        }
-        else
-        {
-            existing.Attempts += 1;
-            existing.Reason = evt.Reason ?? existing.Reason;
-        }
-
-        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
-        return next;
-    }
-
     protected async ValueTask RecordDispatchFailureAsync(
         string stage,
         string eventId,
@@ -355,23 +219,9 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         string reason,
         EventEnvelope envelope)
     {
-        var failureId = Guid.NewGuid().ToString("N");
-        var occurredAt = DateTimeOffset.UtcNow;
-        var failureCount = Math.Min(
-            ProjectionFailureRetentionPolicy.DefaultMaxRetainedFailures,
-            State.Failures.Count + 1);
-
-        await PersistDomainEventAsync(new ProjectionScopeDispatchFailedEvent
-        {
-            FailureId = failureId,
-            Stage = stage,
-            EventId = eventId,
-            EventType = eventType,
-            SourceVersion = sourceVersion,
-            Reason = reason,
-            Envelope = envelope.Clone(),
-            OccurredAtUtc = Timestamp.FromDateTime(occurredAt.UtcDateTime),
-        });
+        var evt = ProjectionScopeFailureLog.BuildFailureEvent(
+            stage, eventId, eventType, sourceVersion, reason, envelope);
+        await PersistDomainEventAsync(evt);
 
         var alertSink = Services.GetService<IProjectionFailureAlertSink>();
         if (alertSink == null)
@@ -382,14 +232,14 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             await alertSink.PublishAsync(
                 new ProjectionFailureAlert(
                     BuildScopeKey(),
-                    failureId,
+                    evt.FailureId,
                     stage,
                     eventId,
                     eventType,
                     sourceVersion,
                     reason,
-                    failureCount,
-                    occurredAt),
+                    Math.Min(ProjectionFailureRetentionPolicy.DefaultMaxRetainedFailures, State.Failures.Count + 1),
+                    DateTimeOffset.UtcNow),
                 CancellationToken.None);
         }
         catch (Exception ex)

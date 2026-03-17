@@ -315,7 +315,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
 
             var property = current.GetType().GetProperty(
                 segment,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                BindingFlags.Instance | BindingFlags.Public);
             if (property == null)
                 return null;
 
@@ -330,20 +330,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         string key,
         out object? value)
     {
-        if (dictionary.TryGetValue(key, out value))
-            return true;
-
-        foreach (var pair in dictionary)
-        {
-            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                value = pair.Value;
-                return true;
-            }
-        }
-
-        value = null;
-        return false;
+        return dictionary.TryGetValue(key, out value);
     }
 
     private static bool TryGetDictionaryValue(
@@ -351,14 +338,10 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         string key,
         out object? value)
     {
-        foreach (DictionaryEntry entry in dictionary)
+        if (dictionary.Contains(key))
         {
-            if (entry.Key is string stringKey &&
-                string.Equals(stringKey, key, StringComparison.OrdinalIgnoreCase))
-            {
-                value = entry.Value;
-                return true;
-            }
+            value = dictionary[key];
+            return true;
         }
 
         value = null;
