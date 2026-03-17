@@ -5,6 +5,7 @@
 
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 
 namespace Aevatar.Foundation.Abstractions.EventModules;
 
@@ -12,21 +13,30 @@ namespace Aevatar.Foundation.Abstractions.EventModules;
 /// Event handler context exposed during event processing.
 /// </summary>
 public interface IEventHandlerContext
+    : IEventContext
 {
-    /// <summary>Current agent ID.</summary>
-    string AgentId { get; }
-
     /// <summary>Current agent instance.</summary>
     IAgent Agent { get; }
 
-    /// <summary>Service provider used for dependency resolution.</summary>
-    IServiceProvider Services { get; }
+    /// <summary>Schedules a durable self timeout callback.</summary>
+    Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default);
 
-    /// <summary>Logger.</summary>
-    ILogger Logger { get; }
+    /// <summary>Schedules a durable self timer callback.</summary>
+    Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default);
 
-    /// <summary>Publishes an event with the specified direction.</summary>
-    /// <typeparam name="TEvent">Event type, must implement Protobuf IMessage.</typeparam>
-    Task PublishAsync<TEvent>(TEvent evt, EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default) where TEvent : IMessage;
+    /// <summary>Cancels a durable callback using lease/CAS semantics.</summary>
+    Task CancelDurableCallbackAsync(
+        RuntimeCallbackLease lease,
+        CancellationToken ct = default);
 }

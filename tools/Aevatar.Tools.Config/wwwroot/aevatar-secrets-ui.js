@@ -24,6 +24,7 @@
     selectedId: "",
     selectedProviderType: "",
     nameEdited: false,
+    reuseKeyExplicit: false,
     search: "",
     keyShown: false,
     // If user starts typing a new key, we should not overwrite the input while refreshing details.
@@ -744,15 +745,15 @@
 
   async function loadAgentsList() {
     try {
-      const res = await fetch("/api/agents");
+      const res = await fetch("/api/workflows");
       const json = await res.json().catch(() => null);
       if (!json || json.ok !== true) {
-        setAgentsMsg("Failed to load agents.", "err");
+        setAgentsMsg("Failed to load workflows.", "err");
         return;
       }
-      state.agents = json.agents || [];
+      state.agents = json.workflows || json.agents || [];
       renderAgentsList();
-      setAgentsMsg(json.exists ? `Found ${state.agents.length} agent file(s).` : "Directory does not exist yet.", "ok");
+      setAgentsMsg(json.exists ? `Found ${state.agents.length} workflow file(s).` : "Directory does not exist yet.", "ok");
     } catch (e) {
       setAgentsMsg(e && e.message ? e.message : String(e), "err");
     }
@@ -766,7 +767,7 @@
     if (state.agents.length === 0) {
       const placeholder = document.createElement("div");
       placeholder.className = "item placeholder";
-      placeholder.innerHTML = '<div class="item-main"><div class="item-desc">No agent files found. Click + New to create one.</div></div>';
+      placeholder.innerHTML = '<div class="item-main"><div class="item-desc">No workflow files found. Click + New to create one.</div></div>';
       list.appendChild(placeholder);
       return;
     }
@@ -799,25 +800,22 @@
       $("agentDeleteBtn").style.display = "";
       await loadAgentContent(filename);
     } else {
-      $("agentEditTitle").textContent = "New Agent";
+      $("agentEditTitle").textContent = "New Workflow";
       $("agentFilenameInput").value = "";
       $("agentFilenameInput").readOnly = false;
-      $("agentYamlInput").value = `id: my-agent
-name: My Agent
-provider: default
-model: null
-temperature: 0.7
-
-persona:
-  role: "Assistant"
-  expertise: []
-  style: "helpful"
-
-tools: []
-skills: []
-
-system_prompt: |
-  You are a helpful assistant.
+      $("agentYamlInput").value = `name: my-workflow
+description: Workflow created from aevatar config tool
+configuration:
+  closed_world_mode: true
+roles:
+  - id: coordinator
+    name: Coordinator
+    system_prompt: Coordinate this workflow.
+steps:
+  - id: start
+    type: emit
+    parameters:
+      event_name: workflow_started
 `;
       $("agentDeleteBtn").style.display = "none";
     }
@@ -825,10 +823,10 @@ system_prompt: |
 
   async function loadAgentContent(filename) {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`);
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`);
       const json = await res.json().catch(() => null);
       if (!json || json.ok !== true) {
-        setAgentEditMsg("Failed to load agent file.", "err");
+        setAgentEditMsg("Failed to load workflow file.", "err");
         return;
       }
       $("agentYamlInput").value = json.content || "";
@@ -853,7 +851,7 @@ system_prompt: |
     }
 
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
@@ -879,7 +877,7 @@ system_prompt: |
     if (!confirm(`Delete ${filename}?`)) return;
 
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`, {
         method: "DELETE",
       });
       const json = await res.json().catch(() => null);
@@ -898,6 +896,7 @@ system_prompt: |
     const key = safeText($("apiKeyInput").value).trim();
     const model = safeText($("modelSelect").value).trim();
     const reuseFrom = safeText($("reuseKeySelect") ? $("reuseKeySelect").value : "").trim();
+    const hasExplicitReuse = state.reuseKeyExplicit && !isEmpty(reuseFrom);
 
     const isConfiguredInstance = state.instances.some(
       (x) => safeText(x.name || "").trim().toLowerCase() === pn.toLowerCase()
@@ -908,7 +907,7 @@ system_prompt: |
     // - But allow saving Endpoint/Model settings even without changing API key.
     const keyOk = state.isNewKeyDraft
       ? !isEmpty(key)
-      : (isConfiguredInstance || !isEmpty(reuseFrom));
+      : (isConfiguredInstance || hasExplicitReuse);
 
     $("submitBtn").disabled = isEmpty(pn) || isEmpty(model) || isEmpty(state.selectedProviderType) || !keyOk;
 
@@ -918,7 +917,7 @@ system_prompt: |
     // - user is typing a new key draft (no persistence; probe endpoints are used)
     const canUseDraftKey = state.isNewKeyDraft && !isEmpty(key);
     const canUseStoredKey = state.hasExistingKey || isConfiguredInstance;
-    const canUseReuseKey = !isEmpty(reuseFrom);
+    const canUseReuseKey = hasExplicitReuse;
     const canProbe = canUseDraftKey || canUseStoredKey || canUseReuseKey;
 
     $("testBtn").disabled = !canProbe;
@@ -955,18 +954,18 @@ system_prompt: |
 
     const pt = safeText(providerType || "").trim();
     const curName = safeText(currentProviderName || "").trim();
-    const prior = safeText(sel.value || "").trim();
+    const prior = state.reuseKeyExplicit ? safeText(sel.value || "").trim() : "";
 
     const candidates = pt
       ? state.instances.filter((x) => safeText(x.providerType || "").trim().toLowerCase() === pt.toLowerCase())
       : [];
 
-    // Preserve current selection if still valid; otherwise default to first candidate for convenience.
+    // Preserve prior explicit user selection only.
+    // Do NOT auto-select another instance by default; this can silently route
+    // Test/Fetch models to the wrong provider/endpoint.
     let selected = prior;
     const exists = (v) => candidates.some((x) => safeText(x.name || "").trim().toLowerCase() === safeText(v).trim().toLowerCase());
-    if (isEmpty(selected) || !exists(selected)) {
-      selected = candidates.length > 0 ? safeText(candidates[0].name || "").trim() : "";
-    }
+    if (isEmpty(selected) || !exists(selected)) selected = "";
 
     // Rebuild options
     try { sel.innerHTML = ""; } catch {}
@@ -985,6 +984,7 @@ system_prompt: |
     }
 
     sel.value = exists(selected) ? selected : "";
+    state.reuseKeyExplicit = !isEmpty(sel.value);
 
     if (!isEmpty(sel.value)) {
       meta.textContent = `Will copy API key from: ${sel.value} (server-side; key is not shown)`;
@@ -1100,6 +1100,7 @@ system_prompt: |
     state.selectedId = id;
     state.keyShown = false;
     state.isNewKeyDraft = false;
+    state.reuseKeyExplicit = false;
     state.hasExistingKey = false;
     state.existingKeyMasked = "";
     state.existingKeyFull = "";
@@ -1777,7 +1778,8 @@ system_prompt: |
       // Key source rules:
       // - If user is typing a new key draft -> send ApiKey.
       // - Else, if reuseFrom is selected -> send CopyApiKeyFrom (even if apiKey input shows a masked existing key).
-      const copyApiKeyFrom = !state.isNewKeyDraft && !isEmpty(reuseFrom) ? reuseFrom : "";
+      const useExplicitReuse = !state.isNewKeyDraft && state.reuseKeyExplicit && !isEmpty(reuseFrom);
+      const copyApiKeyFrom = useExplicitReuse ? reuseFrom : "";
       const payload = {
         providerName,
         providerType,
@@ -1785,6 +1787,7 @@ system_prompt: |
         endpoint,
         apiKey: state.isNewKeyDraft ? apiKey : "",
         copyApiKeyFrom,
+        forceCopyApiKeyFrom: useExplicitReuse,
       };
 
       const res = await fetch("/api/llm/instance", {
@@ -1802,6 +1805,7 @@ system_prompt: |
       setConnectMsg("Saved. You can now Test / Fetch models.", "ok");
       $("apiKeyInput").value = "";
       state.isNewKeyDraft = false;
+      state.reuseKeyExplicit = false;
 
       try {
         if (window.parent && window.parent !== window) {
@@ -1833,7 +1837,7 @@ system_prompt: |
       const providerType = safeText(state.selectedProviderType || "").trim();
       const endpoint = safeText($("endpointInput").value).trim();
 
-      const useReuse = !isEmpty(reuseFrom);
+      const useReuse = state.reuseKeyExplicit && !isEmpty(reuseFrom);
       const useDraft = state.isNewKeyDraft && !isEmpty(apiKey) && !useReuse;
 
       let res;
@@ -1857,7 +1861,11 @@ system_prompt: |
         const cnt = typeof json.modelsCount === "number" ? json.modelsCount : null;
         setConnectMsg(`OK${ms != null ? ` · ${ms}ms` : ""}${cnt != null ? ` · models=${cnt}` : ""}`, "ok");
       } else {
-        setConnectMsg(`Test failed: ${safeText(json.error || "unknown error")}`, "err");
+        const endpointHint = safeText(json.endpoint || "").trim();
+        setConnectMsg(
+          `Test failed${endpointHint ? ` (${endpointHint})` : ""}: ${safeText(json.error || "unknown error")}`,
+          "err"
+        );
       }
     } catch (e) {
       setConnectMsg(e && e.message ? e.message : String(e), "err");
@@ -1875,7 +1883,7 @@ system_prompt: |
     const providerType = safeText(state.selectedProviderType || "").trim();
     const endpoint = safeText($("endpointInput").value).trim();
 
-    const useReuse = !isEmpty(reuseFrom);
+    const useReuse = state.reuseKeyExplicit && !isEmpty(reuseFrom);
     const useDraft = state.isNewKeyDraft && !isEmpty(apiKey) && !useReuse;
     const sourceName = useReuse ? reuseFrom : providerName;
 
@@ -1936,7 +1944,11 @@ system_prompt: |
 
         updateSubmitEnabled();
       } else {
-        setConnectMsg(`Fetch models failed: ${safeText(json.error || "unknown error")}`, "err");
+        const endpointHint = safeText(json.endpoint || "").trim();
+        setConnectMsg(
+          `Fetch models failed${endpointHint ? ` (${endpointHint})` : ""}: ${safeText(json.error || "unknown error")}`,
+          "err"
+        );
       }
     } catch (e) {
       setConnectMsg(e && e.message ? e.message : String(e), "err");
@@ -2168,6 +2180,7 @@ system_prompt: |
     }, 60));
     $("reuseKeySelect").addEventListener("change", debounce(() => {
       const v = safeText($("reuseKeySelect").value).trim();
+      state.reuseKeyExplicit = !isEmpty(v);
       $("reuseKeyMeta").textContent = v
         ? `Will copy API key from: ${v} (server-side; key is not shown)`
         : "Enter a new API key (or pick an existing instance above).";
@@ -2202,6 +2215,7 @@ system_prompt: |
           $("toggleKeyBtn").textContent = "Show";
 
           // Draft key overrides reuse mode.
+          state.reuseKeyExplicit = false;
           try { $("reuseKeySelect").value = ""; } catch {}
           try { $("reuseKeyMeta").textContent = "Enter a new API key (or pick an existing instance above)."; } catch {}
 

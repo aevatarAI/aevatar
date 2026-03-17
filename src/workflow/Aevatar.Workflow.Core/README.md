@@ -1,42 +1,77 @@
 # Aevatar.Workflow.Core
 
-`Aevatar.Workflow.Core` 提供 Workflow 领域核心：`WorkflowGAgent`、工作流 DSL、执行模块与模块装配策略。
+工作流领域内核。当前职责边界是：
 
-## 职责
+- `WorkflowGAgent`：definition actor，只承载 workflow 定义事实。
+- `WorkflowRunGAgent`：run actor，一次 run 一个 actor，承载全部执行事实。
+- `IEventModule<IWorkflowExecutionContext>`：workflow step 模块统一抽象。
+- `WorkflowExecutionBridgeModule`：把 `IEventModule<IWorkflowExecutionContext>` 适配进 `Foundation` 的 `IEventModule<IEventHandlerContext>` 管线。
+- `WorkflowExecutionKernel`：run actor 内的执行内核，负责主循环、推进、完成与失败收敛。
 
-- `WorkflowGAgent`：持有 YAML、构建角色树、发布执行事件。
-- `Primitives/*`：`WorkflowDefinition`、`StepDefinition`、Parser。
-- `Validation/*`：工作流结构与语义校验。
-- `Modules/*`：`workflow_loop`、`llm_call`、`parallel_fanout`、`connector_call` 等执行模块。
-- `Connectors/*`：命名 connector 注册与调用桥接。
+## 核心对象
 
-## 模块装配（OCP）
+- `WorkflowGAgent`
+  - 绑定 `WorkflowYaml`
+  - 维护 `WorkflowName / InlineWorkflowYamls / Compiled / CompilationError / Version`
+  - 不再直接执行 workflow
+- `WorkflowRunGAgent`
+  - 持有 `WorkflowRunState`
+  - 安装 workflow modules
+  - 创建 run-scoped `RoleGAgent` 子 actor
+  - 处理 `ChatRequestEvent`、`ReplaceWorkflowDefinitionAndExecuteEvent`、`WorkflowCompletedEvent`
+  - 通过 event sourcing 持久化 run lifecycle 与 `ExecutionStates`
+- `SubWorkflowOrchestrator`
+  - 管理 `workflow_call` 的子 run 创建、绑定、完成与对账
 
-`WorkflowGAgent` 不再内嵌模块推断/特化分支，而是通过组合策略扩展：
+## 运行态持久化
 
-- `IWorkflowModuleDependencyExpander`
-  - 负责根据 workflow 推导所需模块集合。
-  - 默认实现：
-    - `WorkflowLoopModuleDependencyExpander`（始终引入 `workflow_loop`）
-    - `WorkflowStepTypeModuleDependencyExpander`（按 step/type 推导）
-    - `WorkflowImplicitModuleDependencyExpander`（补齐隐式依赖，如 `parallel -> llm_call`）
-- `IWorkflowModuleConfigurator`
-  - 负责模块实例级配置。
-  - 默认实现：`WorkflowLoopModuleConfigurator`（向 `WorkflowLoopModule` 注入编译后的 workflow）。
+`WorkflowRunState` 是 run actor 的唯一事实源，当前至少包含：
 
-新增模块规则时，优先“新增策略 + DI 注册”，避免修改 `WorkflowGAgent`。
+- `DefinitionActorId`
+- `WorkflowYaml / WorkflowName / InlineWorkflowYamls`
+- `RunId / Status / Input / FinalOutput / FinalError`
+- `ExecutionStates`
+- 子工作流 binding / invocation 关系
 
-## DI 入口
+模块运行态通过 `IWorkflowExecutionContext.LoadState/SaveState/ClearState` 读写 `WorkflowRunState.ExecutionStates`。这意味着：
 
-- `AddAevatarWorkflow()`
-  - 注册默认模块描述器、模块工厂、connector registry。
-  - 同时注册默认 expander/configurator 组合。
-- `AddWorkflowModule<TModule>("name", "alias")`
-  - 扩展新模块与别名。
+- 模块状态跟随 run actor replay
+- callback fired 事件能在 actor 内完成对账
+- 不再依赖模块私有 `Dictionary/HashSet`
 
-## 依赖
+## 关键模块语义
 
-- `Aevatar.AI.Abstractions`
-- `Google.Protobuf` / `Grpc.Tools`
-- `YamlDotNet`
-- `Microsoft.Extensions.*.Abstractions`
+- `WorkflowExecutionKernel`
+  - 主循环、current step、variables、retry、timeout 都在 actor-owned execution state 中
+- `DelayModule`
+  - 仅调度 durable timeout，pending lease 保存在 run actor
+- `WaitSignalModule`
+  - pending signal waiters 与 timeout lease 保存在 run actor
+- `HumanInputModule` / `HumanApprovalModule`
+  - pending human tasks 保存在 run actor
+- `LLMCallModule` / `EvaluateModule` / `ReflectModule`
+  - 外部调用 correlation 与 watchdog 状态保存在 run actor
+- `ParallelFanOutModule` / `ForEachModule` / `MapReduceModule` / `RaceModule`
+  - 聚合中间态保存在 run actor
+
+## 目录要点
+
+- `WorkflowGAgent.cs`
+  - definition actor
+- `WorkflowRunGAgent.cs`
+  - run actor
+- `Execution/`
+  - workflow execution context adapter、bridge module、execution kernel
+- `Modules/`
+  - 所有内置步骤模块
+- `Primitives/`
+  - workflow definition / parser / role / step primitives
+- `Composition/`
+  - 模块依赖推导与配置装配
+
+## 约束
+
+- callback 线程只能发内部事件，不能直接推进业务状态
+- 模块不能在私有字段中持有 `run/step/session` 权威状态
+- 业务推进必须在 run actor 事件处理线程内完成
+- 新增 actor 只按事实源边界，不按模块数量切分

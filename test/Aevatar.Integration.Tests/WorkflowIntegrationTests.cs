@@ -13,17 +13,19 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
-using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -73,8 +75,8 @@ public class WorkflowIntegrationTests
         services.AddSingleton<ILLMProvider>(mockLlm);
         services.AddSingleton<ILLMProviderFactory>(mockLlm);
 
-        // 注册 Cognitive Module Factory
-        services.AddSingleton<IEventModuleFactory, WorkflowModuleFactory>();
+        // 注册 Workflow 核心模块 pack 与统一模块工厂
+        services.AddAevatarWorkflow();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
 
         var sp = services.BuildServiceProvider();
@@ -143,6 +145,51 @@ public class WorkflowIntegrationTests
         errors.Should().Contain(e => e.Contains("重复"));
     }
 
+    [Fact(DisplayName = "给定子步骤 next 指向不存在步骤时，Validator 应报错")]
+    [Trait("Feature", "WorkflowValidation")]
+    public void Scenario1d_ChildStepNextShouldBeValidated()
+    {
+        var yaml = """
+            name: nested_bad_workflow
+            roles:
+              - id: r1
+                name: Role1
+            steps:
+              - id: root
+                type: parallel
+                children:
+                  - id: child1
+                    type: llm_call
+                    target_role: r1
+                    next: missing_step
+            """;
+
+        var workflow = new WorkflowParser().Parse(yaml);
+        var errors = WorkflowValidator.Validate(workflow);
+
+        errors.Should().Contain(e => e.Contains("missing_step"));
+    }
+
+    [Fact(DisplayName = "给定包含未知字段的 YAML，Parser 应 fail-fast")]
+    [Trait("Feature", "WorkflowParsing")]
+    public void Scenario1e_UnknownYamlFieldShouldFailFast()
+    {
+        var yaml = """
+            name: invalid_workflow
+            roles:
+              - id: r1
+                name: Role1
+                unknown_field: not_allowed
+            steps:
+              - id: step1
+                type: llm_call
+                target_role: r1
+            """;
+
+        Action act = () => new WorkflowParser().Parse(yaml);
+        act.Should().Throw<Exception>();
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  Scenario 2: WorkflowGAgent 创建 Agent 树
     // ═══════════════════════════════════════════════════════════
@@ -155,13 +202,45 @@ public class WorkflowIntegrationTests
         var (sp, runtime, _) = BuildTestEnvironment();
         using var _ = sp;
 
-        // 创建 WorkflowGAgent 并手动设置 workflow YAML
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
-        var wfAgent = (WorkflowGAgent)actor.Agent;
+        // 创建 WorkflowGAgent 并通过配置事件注入 YAML
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-1");
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-1-run");
+        await definitionActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowDefinitionEvent
+            {
+                WorkflowYaml = ResearchWorkflowYaml,
+                WorkflowName = "research_workflow",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
 
-        // 直接设置 State 中的 YAML（模拟初始化）
-        // 由于 State 只能在 handler scope 修改，我们通过发送事件触发
-        var chatEnvelope = new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = ResearchWorkflowYaml,
+                WorkflowName = "research_workflow",
+                RunId = "wf-1-run",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        // 触发一次 ChatRequest，驱动 WorkflowRunGAgent 创建子角色树
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
@@ -170,57 +249,29 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠的最新进展",
                 SessionId = "test-session",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
-        };
-
-        // 先手动编译 workflow（通过反射设置 State，因为在测试中）
-        // WorkflowGAgent 需要 State.WorkflowYaml 在激活时有值
-        // 但我们在 CreateAsync 之后才能操作...
-        // 更好的方式：重新创建一个预配置了 YAML 的 WorkflowGAgent
-
-        // 验证 Agent 树创建：检查 runtime 中的所有 actors
-        // WorkflowGAgent 在 HandleChatRequest 中会调用 EnsureAgentTreeAsync
-        // 但由于 _compiledWorkflow 是 null（State.WorkflowYaml 为空），会返回"未编译"
-        // 所以需要另一种方式来测试
-
-        // 让我们直接测试 WorkflowParser + Runtime 的组合
-        var parser = new WorkflowParser();
-        var workflow = parser.Parse(ResearchWorkflowYaml);
-
-        // 手动模拟 WorkflowGAgent 创建子 Agent 的逻辑
-        var childIds = new List<string>();
-        foreach (var role in workflow.Roles)
-        {
-            var childActor = await runtime.CreateAsync<RoleGAgent>(role.Id);
-            if (childActor.Agent is RoleGAgent roleAgent)
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
             {
-                roleAgent.SetRoleName(role.Name);
-                await roleAgent.ConfigureAsync(new AIAgentConfigProto
-                {
-                    SystemPrompt = role.SystemPrompt,
-                    ProviderName = "mock",
-                });
-            }
-            await runtime.LinkAsync("wf-1", childActor.Id);
-            childIds.Add(childActor.Id);
-        }
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
 
         // Then
-        childIds.Should().HaveCount(3);
-
-        var allActors = await runtime.GetAllAsync();
-        allActors.Should().HaveCount(4); // 1 WorkflowGAgent + 3 RoleGAgent
+        (await runtime.ExistsAsync("wf-1")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:researcher")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:reviewer")).Should().BeTrue();
+        (await runtime.ExistsAsync("wf-1-run:writer")).Should().BeTrue();
 
         // 验证层级
-        var children = await actor.GetChildrenIdsAsync();
+        var children = await runActor.GetChildrenIdsAsync();
         children.Should().HaveCount(3);
-        children.Should().Contain("researcher");
-        children.Should().Contain("reviewer");
-        children.Should().Contain("writer");
+        children.Should().Contain("wf-1-run:researcher");
+        children.Should().Contain("wf-1-run:reviewer");
+        children.Should().Contain("wf-1-run:writer");
 
         // 验证每个 RoleGAgent 的配置
-        var researcherActor = await runtime.GetAsync("researcher");
+        var researcherActor = await runtime.GetAsync("wf-1-run:researcher");
         researcherActor.Should().NotBeNull();
         var researcher = (RoleGAgent)researcherActor!.Agent;
         researcher.RoleName.Should().Be("Researcher");
@@ -250,13 +301,13 @@ public class WorkflowIntegrationTests
             """;
 
         // When
-        await RoleGAgentFactory.ConfigureFromYaml(agent, yaml, sp);
+        await RoleGAgentFactory.InitializeFromYaml(agent, yaml, sp);
 
         // Then
         agent.RoleName.Should().Be("Expert Analyst");
-        agent.Config.SystemPrompt.Should().Contain("金融分析专家");
-        agent.Config.ProviderName.Should().Be("mock");
-        agent.Config.Model.Should().Be("gpt-4");
+        agent.EffectiveConfig.SystemPrompt.Should().Contain("金融分析专家");
+        agent.EffectiveConfig.ProviderName.Should().Be("mock");
+        agent.EffectiveConfig.Model.Should().Be("gpt-4");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -273,8 +324,9 @@ public class WorkflowIntegrationTests
 
         var actor = await runtime.CreateAsync<RoleGAgent>("llm-test-1");
         var agent = (RoleGAgent)actor.Agent;
-        await agent.ConfigureAsync(new AIAgentConfigProto
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleName = "Researcher",
             SystemPrompt = "你是一个 researcher",
             ProviderName = "mock",
         });
@@ -302,8 +354,7 @@ public class WorkflowIntegrationTests
                 Prompt = "分析量子纠缠",
                 SessionId = "test",
             }),
-            PublisherId = "test",
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Children),
         };
 
         await actor.HandleEventAsync(envelope);
@@ -332,10 +383,18 @@ public class WorkflowIntegrationTests
         var r1 = await runtime.CreateAsync<RoleGAgent>("r1");
         var r2 = await runtime.CreateAsync<RoleGAgent>("r2");
 
-        ((RoleGAgent)r1.Agent).SetRoleName("Agent-R1");
-        ((RoleGAgent)r2.Agent).SetRoleName("Agent-R2");
-        await ((RoleGAgent)r1.Agent).ConfigureAsync(new AIAgentConfigProto { ProviderName = "mock", SystemPrompt = "r1" });
-        await ((RoleGAgent)r2.Agent).ConfigureAsync(new AIAgentConfigProto { ProviderName = "mock", SystemPrompt = "r2" });
+        await ((RoleGAgent)r1.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R1",
+            ProviderName = "mock",
+            SystemPrompt = "r1",
+        });
+        await ((RoleGAgent)r2.Agent).HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "Agent-R2",
+            ProviderName = "mock",
+            SystemPrompt = "r2",
+        });
 
         await runtime.LinkAsync("root", "r1");
         await runtime.LinkAsync("root", "r2");
@@ -416,18 +475,17 @@ public class WorkflowIntegrationTests
     //  Scenario 7: WorkflowModuleFactory 创建所有模块
     // ═══════════════════════════════════════════════════════════
 
-    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有 13 种核心原语模块")]
+    [Fact(DisplayName = "WorkflowModuleFactory 应能创建所有核心原语模块")]
     [Trait("Feature", "ModuleFactory")]
     public void Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
         services.AddAevatarWorkflow();
         using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<IEventModuleFactory>();
+        var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
 
         // ─── 流程控制 ───
-        factory.TryCreate("workflow_loop", out var m).Should().BeTrue(); m!.Name.Should().Be("workflow_loop");
-        factory.TryCreate("conditional", out m).Should().BeTrue(); m!.Name.Should().Be("conditional");
+        factory.TryCreate("conditional", out var m).Should().BeTrue(); m!.Name.Should().Be("conditional");
         factory.TryCreate("while", out m).Should().BeTrue(); m!.Name.Should().Be("while");
         factory.TryCreate("workflow_call", out m).Should().BeTrue(); m!.Name.Should().Be("workflow_call");
         factory.TryCreate("checkpoint", out m).Should().BeTrue(); m!.Name.Should().Be("checkpoint");
@@ -456,7 +514,7 @@ public class WorkflowIntegrationTests
 
         // ─── 不存在的类型 ───
         factory.TryCreate("nonexistent", out m).Should().BeFalse();
-        factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker_vote moved to sample-scoped factory
+        factory.TryCreate("maker_vote", out m).Should().BeFalse(); // maker module pack is not registered in this test scope
         m.Should().BeNull();
     }
 }

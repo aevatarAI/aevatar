@@ -1,0 +1,26 @@
+name: mixed_step_json_pick_then_role_template
+description: |
+  Mixed pipeline demo (step -> role).
+  Step module demo_json_pick extracts incident.owner.team from JSON input,
+  then role event module demo_template formats deterministic role output.
+
+roles:
+  - id: template_role
+    name: Template Role
+    system_prompt: |
+      Fallback assistant. Should be bypassed by role event module.
+    event_modules: "demo_template"
+    event_routes: |
+      - when: event.type == "ChatRequestEvent"
+        to: demo_template
+
+steps:
+  - id: extract_team
+    type: demo_json_pick
+    parameters:
+      path: "incident.owner.team"
+    next: role_wrap
+
+  - id: role_wrap
+    type: llm_call
+    role: template_role

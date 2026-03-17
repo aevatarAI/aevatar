@@ -8,11 +8,13 @@ sealed record UpsertLLMInstanceRequest(
     string? Model,
     string? Endpoint,
     string? ApiKey,
-    string? CopyApiKeyFrom);
+    string? CopyApiKeyFrom,
+    bool? ForceCopyApiKeyFrom);
 sealed record ProbeLLMRequest(string? ProviderType, string? Endpoint, string? ApiKey);
 sealed record RawSecretsRequest(string? Json);
 sealed record SetSecretRequest(string? Key, string? Value);
 sealed record RemoveSecretRequest(string? Key);
+sealed record WorkflowFileRequest(string? Content);
 sealed record AgentFileRequest(string? Content);
 
 enum LLMProviderKind

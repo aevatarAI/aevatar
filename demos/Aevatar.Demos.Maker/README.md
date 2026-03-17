@@ -51,6 +51,8 @@ WorkflowGAgent (maker-root)
 demos/Aevatar.Demos.Maker/
 ├── Aevatar.Demos.Maker.csproj  # 可运行 Console 项目
 ├── Program.cs                    # 入口：装配运行时、加载 YAML、执行 workflow
+├── Reporting/
+│   └── MakerRunProjectionAccumulator.cs # Demo 运行报告累加器与 JSON/HTML 写出
 ├── workflows/
 │   └── maker_analysis.yaml       # MAKER 工作流定义
 ├── connectors/
@@ -59,6 +61,9 @@ demos/Aevatar.Demos.Maker/
 │   ├── coordinator.yaml          # 协调者角色配置
 │   └── worker.yaml               # 分析 Worker 角色配置
 └── README.md                     # 本文件
+
+src/maker/
+└── Aevatar.Workflow.Extensions.Maker # maker_vote / maker_recursive 插件模块与工厂
 ```
 
 ## 运行方式
@@ -66,7 +71,15 @@ demos/Aevatar.Demos.Maker/
 ```bash
 # 在仓库根目录
 cd demos/Aevatar.Demos.Maker
-dotnet run
+
+# 可复现全流程验证模式（推荐验收基线，不依赖外部 API Key）
+dotnet run -- --mode deterministic
+
+# 真实 LLM 模式（默认）
+dotnet run -- --mode llm
+
+# 真实 LLM + 自定义输入
+dotnet run -- --mode llm -- "Your paper text here..."
 ```
 
 每次执行都会自动在仓库根目录生成本次运行报告：
@@ -74,7 +87,35 @@ dotnet run
 - `artifacts/maker/maker-run-<timestamp>.json`
 - `artifacts/maker/maker-run-<timestamp>.html`
 
-JSON 包含完整时间线与结构化步骤数据；HTML 用于可视化查看执行细节（包含 `atomic / decompose / recursion / vote / red_flag` 等阶段）。
+JSON 包含完整时间线、结构化步骤数据与自动校验结果；HTML 用于可视化查看执行细节（包含 `atomic / decompose / recursion / vote / red_flag` 等阶段），并显示 Verification 判定卡片。
+
+报告中的 `verification` 字段会输出：
+
+- `fullFlowPassed`：是否覆盖 MAKER 关键流程并通过一致性校验
+- `checks[]`：逐项校验明细（通过/失败 + evidence）
+- `failedChecks[]`：失败项名称
+- `warnings[]`：非阻断性告警
+
+当前内置校验项：
+
+- `recursive_stage_coverage`：是否同时出现 `maker.stage=leaf` 与 `maker.stage=composed`
+- `internal_vote_step_coverage`：是否出现 `_atomic_vote/_decompose_vote/_leaf_vote/_compose_vote`
+- `child_recursion_presence`：是否出现至少一个 `*_child_*` 递归节点
+- `summary_vote_steps_consistency`：`summary.voteSteps` 是否与 `maker_vote` 实际步数一致
+- `summary_red_flag_consistency`：`summary.totalRedFlaggedCandidates` 是否与明细求和一致
+- `timeline_stage_coverage`：timeline 是否包含 `maker.recursive/maker.vote/maker.red_flag/connector.call`
+
+## 流程正确性验证
+
+推荐验收顺序：
+
+```bash
+# 1) 跑可复现全流程 demo（期望 report.verification.fullFlowPassed=true）
+dotnet run --project demos/Aevatar.Demos.Maker -- --mode deterministic
+
+# 2) 跑集成测试（覆盖 full-flow 正例 + atomic-only 负例）
+dotnet test test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj --nologo
+```
 
 `maker_analysis.yaml` 包含两个关键步骤：
 
@@ -102,9 +143,9 @@ dotnet run
 - 输入：`StepRequestEvent.Input`
 - 路由：`parameters.connector` 选择命名 connector
 - 容错：支持 `on_missing=skip` / `on_error=continue`
-- 观测：统一输出到 `StepCompletedEvent.Metadata`
+- 观测：统一输出到 `StepCompletedEvent.Annotations`
 
-### MakerVoteModule (`maker_vote`, demo-scoped)
+### MakerVoteModule (`maker_vote`, Workflow.Extensions.Maker)
 
 实现论文 Algorithm 2 的投票逻辑：
 
@@ -134,7 +175,7 @@ dotnet run
 
 > 当前递归流程已改为 `maker_recursive`，`foreach` 仍是通用框架能力，不再是 MAKER 主流程必需路径。
 
-### MakerRecursiveModule (`maker_recursive`, demo-scoped)
+### MakerRecursiveModule (`maker_recursive`, Workflow.Extensions.Maker)
 
 实现递归 MAKER 主流程：
 

@@ -13,8 +13,6 @@ system_prompt: |
   - Keep decomposition balanced and non-overlapping.
   - Prefer concise, factual language over verbose explanation.
 
-provider: deepseek
-model: deepseek-chat
 temperature: 0.3
 connectors:
   - maker_post_processor

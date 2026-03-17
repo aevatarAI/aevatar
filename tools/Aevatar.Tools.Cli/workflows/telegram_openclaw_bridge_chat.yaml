@@ -1,0 +1,172 @@
+name: telegram_openclaw_bridge_chat
+description: |
+  Use Telegram group itself as the shared stream:
+  Aevatar bot sends prompt -> OpenClaw bot replies in the same group ->
+  Aevatar bot polls group stream and captures the reply (no OpenClaw callback).
+
+roles: []
+
+steps:
+  - id: bootstrap_telegram_login
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      timeout_ms: "30000"
+      prompt_prefix: "Ensure Telegram user session is ready."
+    on_error:
+      strategy: fallback
+      fallback_step: route_bootstrap_login_error
+    next: collect_openclaw_request
+
+  - id: route_bootstrap_login_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_telegram_verification_code
+    type: human_input
+    parameters:
+      prompt: "Input Telegram login verification code."
+      variable: "telegram_verification_code"
+      timeout: "600"
+      on_timeout: "fail"
+    next: retry_telegram_login_with_code
+
+  - id: retry_telegram_login_with_code
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      telegram.verification_code: "${collect_telegram_verification_code}"
+      timeout_ms: "30000"
+      prompt_prefix: "Retry Telegram login with verification code."
+    on_error:
+      strategy: fallback
+      fallback_step: route_retry_login_error
+    next: collect_openclaw_request
+
+  - id: route_retry_login_error
+    type: conditional
+    parameters:
+      condition: "SESSION_PASSWORD_NEEDED"
+    branches:
+      true: collect_telegram_2fa_password
+      false: route_retry_phone_code_error
+
+  - id: route_retry_phone_code_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_telegram_2fa_password
+    type: human_input
+    parameters:
+      prompt: "Input Telegram 2FA password."
+      variable: "telegram_2fa_password"
+      timeout: "600"
+      on_timeout: "fail"
+    next: retry_telegram_login_with_2fa
+
+  - id: retry_telegram_login_with_2fa
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /ensureLogin
+      chat_id: "${telegram.chat_id}"
+      telegram.verification_code: "${collect_telegram_verification_code}"
+      telegram.2fa_password: "${collect_telegram_2fa_password}"
+      timeout_ms: "30000"
+      prompt_prefix: "Retry Telegram login with 2FA password."
+    on_error:
+      strategy: fallback
+      fallback_step: route_retry_2fa_error
+    next: collect_openclaw_request
+
+  - id: route_retry_2fa_error
+    type: conditional
+    parameters:
+      condition: "PHONE_CODE"
+    branches:
+      true: collect_telegram_verification_code
+      false: send_step_failed
+
+  - id: collect_openclaw_request
+    type: human_input
+    parameters:
+      prompt: "Input full request body for OpenClaw (without @username). If wait step uses correlation marker, include [AEVATAR_STREAM_REPLY] requirement in your text."
+      variable: "openclaw_user_request"
+      timeout: "600"
+      on_timeout: "fail"
+    next: send_to_openclaw_group
+
+  - id: send_to_openclaw_group
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /sendMessage
+      chat_id: "${telegram.chat_id}"
+      parse_mode: Markdown
+      telegram.timeout_ms: "12000"
+      timeout_ms: "30000"
+      prompt_prefix: |
+        [AEVATAR -> OPENCLAW]
+        @${telegram.openclaw_bot_username}
+    retry:
+      max_attempts: 2
+      backoff: fixed
+      delay_ms: 1500
+    on_error:
+      strategy: fallback
+      fallback_step: send_step_failed
+    next: wait_openclaw_group_stream
+
+  - id: wait_openclaw_group_stream
+    type: llm_call
+    parameters:
+      agent_type: TelegramUserBridgeGAgent
+      connector: telegram_user
+      operation: /waitReply
+      chat_id: "${telegram.chat_id}"
+      expected_from_username: "${telegram.openclaw_bot_username}"
+      correlation_contains: "${telegram.correlation_contains}"
+      collect_all_replies: "true"
+      settle_polls_after_match: "2"
+      wait_timeout_ms: "120000"
+      poll_timeout_sec: "8"
+      start_from_latest: "true"
+      timeout_ms: "130000"
+      prompt_prefix: "Waiting OpenClaw reply from Telegram group stream."
+    on_error:
+      strategy: fallback
+      fallback_step: timeout_fallback
+    next: finalize_reply
+
+  - id: finalize_reply
+    type: transform
+    parameters:
+      op: trim
+
+  - id: timeout_fallback
+    type: assign
+    parameters:
+      target: openclaw_timeout
+      value: "$input"
+
+  - id: send_step_failed
+    type: assign
+    parameters:
+      target: openclaw_send_error
+      value: "$input"

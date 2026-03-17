@@ -60,8 +60,9 @@ public class InMemoryEventStoreTests
             },
         };
 
-        var version = await store.AppendAsync("agent-1", events, 0);
-        version.ShouldBe(2);
+        var commitResult = await store.AppendAsync("agent-1", events, 0);
+        commitResult.LatestVersion.ShouldBe(2);
+        commitResult.CommittedEvents.Count.ShouldBe(2);
 
         var loaded = await store.GetEventsAsync("agent-1");
         loaded.Count.ShouldBe(2);
@@ -118,5 +119,41 @@ public class InMemoryEventStoreTests
         fromV3.Count.ShouldBe(2);
         fromV3[0].Version.ShouldBe(4);
         fromV3[1].Version.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task DeleteEventsUpToAsync_ShouldDeleteHistoryButKeepStreamVersion()
+    {
+        var store = new InMemoryEventStore();
+        var events = Enumerable.Range(1, 5).Select(i => new StateEvent
+        {
+            EventId = $"e{i}",
+            Version = i,
+            AgentId = "a1",
+        }).ToList();
+
+        await store.AppendAsync("a1", events, 0);
+
+        var deleted = await store.DeleteEventsUpToAsync("a1", 4);
+        deleted.ShouldBe(4);
+
+        var version = await store.GetVersionAsync("a1");
+        version.ShouldBe(5);
+
+        var remained = await store.GetEventsAsync("a1");
+        remained.Count.ShouldBe(1);
+        remained[0].Version.ShouldBe(5);
+
+        await store.AppendAsync("a1",
+        [
+            new StateEvent
+            {
+                EventId = "e6",
+                Version = 6,
+                AgentId = "a1",
+            },
+        ], 5);
+
+        (await store.GetVersionAsync("a1")).ShouldBe(6);
     }
 }

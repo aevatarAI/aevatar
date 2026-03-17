@@ -4,123 +4,104 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowExecutionReadModelMapper
 {
-    public WorkflowRunSummary ToSummary(WorkflowExecutionReport report)
+    public WorkflowActorSnapshot ToActorSnapshot(WorkflowExecutionCurrentStateDocument source)
     {
-        return new WorkflowRunSummary(
-            report.RunId,
-            report.WorkflowName,
-            report.RootActorId,
-            report.StartedAt,
-            report.EndedAt,
-            report.DurationMs,
-            report.Success,
-            report.Summary.TotalSteps,
-            MapProjectionScope(report.ProjectionScope),
-            MapCompletionStatus(report.CompletionStatus));
-    }
-
-    public WorkflowRunReport ToReport(WorkflowExecutionReport source)
-    {
-        return new WorkflowRunReport
+        return new WorkflowActorSnapshot
         {
-            ReportVersion = source.ReportVersion,
-            ProjectionScope = MapProjectionScope(source.ProjectionScope),
-            TopologySource = MapTopologySource(source.TopologySource),
-            CompletionStatus = MapCompletionStatus(source.CompletionStatus),
+            ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
-            RootActorId = source.RootActorId,
-            RunId = source.RunId,
-            StartedAt = source.StartedAt,
-            EndedAt = source.EndedAt,
-            DurationMs = source.DurationMs,
-            Success = source.Success,
-            Input = source.Input,
-            FinalOutput = source.FinalOutput,
-            FinalError = source.FinalError,
-            Topology = source.Topology
-                .Select(x => new WorkflowRunTopologyEdge(x.Parent, x.Child))
-                .ToList(),
-            Steps = source.Steps
-                .Select(x => new WorkflowRunStepTrace
-                {
-                    StepId = x.StepId,
-                    StepType = x.StepType,
-                    RunId = x.RunId,
-                    TargetRole = x.TargetRole,
-                    RequestedAt = x.RequestedAt,
-                    CompletedAt = x.CompletedAt,
-                    Success = x.Success,
-                    WorkerId = x.WorkerId,
-                    OutputPreview = x.OutputPreview,
-                    Error = x.Error,
-                    RequestParameters = new Dictionary<string, string>(x.RequestParameters, StringComparer.Ordinal),
-                    CompletionMetadata = new Dictionary<string, string>(x.CompletionMetadata, StringComparer.Ordinal),
-                })
-                .ToList(),
-            RoleReplies = source.RoleReplies
-                .Select(x => new WorkflowRunRoleReply
-                {
-                    Timestamp = x.Timestamp,
-                    RoleId = x.RoleId,
-                    SessionId = x.SessionId,
-                    Content = x.Content,
-                    ContentLength = x.ContentLength,
-                })
-                .ToList(),
-            Timeline = source.Timeline
-                .Select(x => new WorkflowRunTimelineEvent
-                {
-                    Timestamp = x.Timestamp,
-                    Stage = x.Stage,
-                    Message = x.Message,
-                    AgentId = x.AgentId,
-                    StepId = x.StepId,
-                    StepType = x.StepType,
-                    EventType = x.EventType,
-                    Data = new Dictionary<string, string>(x.Data, StringComparer.Ordinal),
-                })
-                .ToList(),
-            Summary = new WorkflowRunStatistics
-            {
-                TotalSteps = source.Summary.TotalSteps,
-                RequestedSteps = source.Summary.RequestedSteps,
-                CompletedSteps = source.Summary.CompletedSteps,
-                RoleReplyCount = source.Summary.RoleReplyCount,
-                StepTypeCounts = new Dictionary<string, int>(source.Summary.StepTypeCounts, StringComparer.Ordinal),
-            },
+            LastCommandId = source.CommandId,
+            CompletionStatus = MapCompletionStatus(source.Status),
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
+            LastSuccess = source.Success,
+            LastOutput = source.FinalOutput,
+            LastError = source.FinalError,
+            TotalSteps = 0,
+            RequestedSteps = 0,
+            CompletedSteps = 0,
+            RoleReplyCount = 0,
         };
     }
 
-    private static WorkflowRunProjectionScope MapProjectionScope(WorkflowExecutionProjectionScope value)
+    public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
-        return value switch
+        return new WorkflowActorProjectionState
         {
-            WorkflowExecutionProjectionScope.ActorShared => WorkflowRunProjectionScope.ActorShared,
-            WorkflowExecutionProjectionScope.RunIsolated => WorkflowRunProjectionScope.RunIsolated,
-            _ => WorkflowRunProjectionScope.Unknown,
+            ActorId = source.RootActorId,
+            LastCommandId = source.CommandId,
+            StateVersion = source.StateVersion,
+            LastEventId = source.LastEventId,
+            LastUpdatedAt = source.UpdatedAt,
         };
     }
 
-    private static WorkflowRunTopologySource MapTopologySource(WorkflowExecutionTopologySource value)
+    public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
     {
-        return value switch
+        var item = new WorkflowActorTimelineItem
         {
-            WorkflowExecutionTopologySource.RuntimeSnapshot => WorkflowRunTopologySource.RuntimeSnapshot,
-            _ => WorkflowRunTopologySource.Unknown,
+            Timestamp = source.Timestamp,
+            Stage = source.Stage,
+            Message = source.Message,
+            AgentId = source.AgentId,
+            StepId = source.StepId,
+            StepType = source.StepType,
+            EventType = source.EventType,
         };
+        item.Data.Add(source.Data);
+        return item;
     }
 
-    private static WorkflowRunCompletionStatus MapCompletionStatus(WorkflowExecutionCompletionStatus value)
+    public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
     {
-        return value switch
+        var node = new WorkflowActorGraphNode
         {
-            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
-            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
-            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
-            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
-            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
-            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
-            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
+            NodeId = source.NodeId,
+            NodeType = source.NodeType,
+            UpdatedAt = source.UpdatedAt,
+        };
+        node.Properties.Add(source.Properties);
+        return node;
+    }
+
+    public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
+    {
+        var edge = new WorkflowActorGraphEdge
+        {
+            EdgeId = source.EdgeId,
+            FromNodeId = source.FromNodeId,
+            ToNodeId = source.ToNodeId,
+            EdgeType = source.EdgeType,
+            UpdatedAt = source.UpdatedAt,
+        };
+        edge.Properties.Add(source.Properties);
+        return edge;
+    }
+
+    public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
+        string rootNodeId,
+        ProjectionGraphSubgraph source)
+    {
+        var subgraph = new WorkflowActorGraphSubgraph
+        {
+            RootNodeId = rootNodeId,
+        };
+        subgraph.Nodes.Add(source.Nodes.Select(ToActorGraphNode));
+        subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
+        return subgraph;
+    }
+
+    private static WorkflowRunCompletionStatus MapCompletionStatus(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
+        {
+            "running" => WorkflowRunCompletionStatus.Running,
+            "completed" => WorkflowRunCompletionStatus.Completed,
+            "failed" => WorkflowRunCompletionStatus.Failed,
+            "stopped" => WorkflowRunCompletionStatus.Stopped,
+            "not_found" => WorkflowRunCompletionStatus.NotFound,
+            "disabled" => WorkflowRunCompletionStatus.Disabled,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }

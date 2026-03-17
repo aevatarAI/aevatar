@@ -17,4 +17,10 @@ public sealed class InMemoryStreamOptions
     /// Whether to rethrow subscriber exceptions and stop stream processing.
     /// </summary>
     public bool ThrowOnSubscriberError { get; set; }
+
+    /// <summary>
+    /// Dispatch subscriber callbacks on background tasks instead of awaiting inline on reader loop.
+    /// When false, one stream preserves subscriber callback order by awaiting handlers sequentially.
+    /// </summary>
+    public bool DispatchSubscribersConcurrently { get; set; }
 }

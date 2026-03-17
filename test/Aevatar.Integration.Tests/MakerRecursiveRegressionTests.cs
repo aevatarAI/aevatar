@@ -5,9 +5,10 @@ using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Core;
-using Aevatar.Foundation.Runtime.DependencyInjection;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Aevatar.Demos.Maker;
+using Aevatar.Workflow.Extensions.Maker;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,8 +34,8 @@ public class MakerRecursiveRegressionTests
 
         recursiveResults.Should().ContainSingle(x => x.StepId == "solve_root");
         var root = recursiveResults.Single(x => x.StepId == "solve_root");
-        root.Metadata["maker.stage"].Should().Be("leaf");
-        root.Metadata["maker.atomic_decision"].Should().Be("True");
+        root.Annotations["maker.stage"].Should().Be("leaf");
+        root.Annotations["maker.atomic_decision"].Should().Be("True");
         recursiveResults.Should().NotContain(x => x.StepId.StartsWith("solve_root_child_", StringComparison.Ordinal));
 
         provider.StageCounters["decompose"].Should().Be(0);
@@ -60,18 +61,18 @@ public class MakerRecursiveRegressionTests
         provider.StageCounters["compose"].Should().BeGreaterThan(0);
 
         var root = recursiveResults.Single(x => x.StepId == "solve_root");
-        root.Metadata["maker.stage"].Should().Be("composed");
-        root.Metadata["maker.atomic_decision"].Should().Be("False");
+        root.Annotations["maker.stage"].Should().Be("composed");
+        root.Annotations["maker.atomic_decision"].Should().Be("False");
 
         var childResults = recursiveResults
             .Where(x => x.StepId.StartsWith("solve_root_child_", StringComparison.Ordinal))
             .ToList();
         childResults.Should().HaveCount(2);
-        childResults.Should().OnlyContain(x => x.Metadata["maker.stage"] == "leaf");
+        childResults.Should().OnlyContain(x => x.Annotations["maker.stage"] == "leaf");
     }
 
     private static bool IsRecursiveResult(StepCompletedEvent step) =>
-        step.Metadata.TryGetValue("maker.recursive", out var value) && value == "true";
+        step.Annotations.TryGetValue("maker.recursive", out var value) && value == "true";
 
     private static TestEnvironment BuildEnvironment(DeterministicMakerProvider provider)
     {
@@ -79,7 +80,7 @@ public class MakerRecursiveRegressionTests
         services.AddAevatarRuntime();
         services.AddAevatarWorkflow();
         services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-        services.AddSingleton<IEventModuleFactory, MakerModuleFactory>();
+        services.AddWorkflowMakerExtensions();
         services.AddSingleton<ILLMProvider>(provider);
         services.AddSingleton<ILLMProviderFactory>(provider);
 
@@ -94,11 +95,44 @@ public class MakerRecursiveRegressionTests
         string workflowYaml,
         string input)
     {
-        var actor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-" + Guid.NewGuid().ToString("N")[..8]);
-        var wf = (WorkflowGAgent)actor.Agent;
-        wf.ConfigureWorkflow(workflowYaml, "maker_regression");
+        var definitionActor = await runtime.CreateAsync<WorkflowGAgent>("wf-maker-definition-" + Guid.NewGuid().ToString("N")[..8]);
+        var runActor = await runtime.CreateAsync<WorkflowRunGAgent>("wf-maker-run-" + Guid.NewGuid().ToString("N")[..8]);
 
-        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(actor.Id);
+        await definitionActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowDefinitionEvent
+            {
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "maker_regression",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        await runActor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = definitionActor.Id,
+                WorkflowYaml = workflowYaml,
+                WorkflowName = "maker_regression",
+                RunId = "maker-regression-run",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+            },
+        });
+
+        var stream = provider.GetRequiredService<IStreamProvider>().GetStream(runActor.Id);
         var stepCompletions = new List<StepCompletedEvent>();
         var workflowCompleted = new TaskCompletionSource<WorkflowCompletedEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -115,18 +149,18 @@ public class MakerRecursiveRegressionTests
             return Task.CompletedTask;
         });
 
-        await actor.HandleEventAsync(new EventEnvelope
+        await runActor.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(new ChatRequestEvent { Prompt = input, SessionId = "maker-regression" }),
-            PublisherId = "test",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var completed = await workflowCompleted.Task.WaitAsync(timeout.Token);
-        await runtime.DestroyAsync(actor.Id);
+        await runtime.DestroyAsync(runActor.Id);
+        await runtime.DestroyAsync(definitionActor.Id);
         return new WorkflowRunResult(completed, stepCompletions);
     }
 

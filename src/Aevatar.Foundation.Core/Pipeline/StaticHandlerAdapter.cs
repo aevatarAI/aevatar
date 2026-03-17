@@ -1,12 +1,15 @@
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Pipeline;
 
-internal sealed class StaticHandlerAdapter : IEventModule
+internal sealed class StaticHandlerAdapter : IEventModule<IEventHandlerContext>
 {
     private readonly EventHandlerMetadata _meta;
     private readonly IAgent _agent;
@@ -26,8 +29,8 @@ internal sealed class StaticHandlerAdapter : IEventModule
     public bool CanHandle(EventEnvelope envelope)
     {
         if (_meta.IsAllEventHandler) return true;
-        if (!_meta.AllowSelfHandling && envelope.PublisherId == _agent.Id) return false;
-        if (_meta.OnlySelfHandling && envelope.Direction != EventDirection.Self) return false;
+        if (!_meta.AllowSelfHandling && envelope.Route?.PublisherActorId == _agent.Id) return false;
+        if (_meta.OnlySelfHandling && envelope.Route.GetTopologyAudience() != TopologyAudience.Self) return false;
         if (envelope.Payload == null) return false;
         return envelope.Payload.TypeUrl == GetTypeUrl(_meta.ParameterType);
     }
@@ -36,8 +39,16 @@ internal sealed class StaticHandlerAdapter : IEventModule
     {
         object? arg = _meta.IsAllEventHandler ? envelope : Unpack(envelope);
         if (arg == null) return;
-        var result = _meta.Method.Invoke(_agent, [arg]);
-        if (result is Task task) await task;
+        try
+        {
+            var result = _meta.Method.Invoke(_agent, [arg]);
+            if (result is Task task) await task;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
     }
 
     private object? Unpack(EventEnvelope envelope)

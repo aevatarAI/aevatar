@@ -7,40 +7,335 @@ on:
       - main
       - dev
       - refactor/**
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Framework fallback reads these names via Environment.GetEnvironmentVariable(...)
+  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  AEVATAR_LLM_API_KEY: ${{ secrets.AEVATAR_LLM_API_KEY }}
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  # Optional test overrides for real OpenAI integration test.
+  AEVATAR_TEST_OPENAI_BASE_URL: ${{ secrets.AEVATAR_TEST_OPENAI_BASE_URL }}
+  AEVATAR_TEST_OPENAI_MODEL: ${{ secrets.AEVATAR_TEST_OPENAI_MODEL }}
 
 jobs:
-  build-test:
+  changes:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    outputs:
+      core_code: ${{ steps.filter.outputs.core_code }}
+      projection_provider: ${{ steps.filter.outputs.projection_provider }}
+      kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
+      event_sourcing: ${{ steps.filter.outputs.event_sourcing }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core_code:
+              - 'src/**'
+              - 'test/**'
+              - 'aevatar.slnx'
+              - 'aevatar.*.slnf'
+              - '.editorconfig'
+              - 'CodeMetricsConfig.txt'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'global.json'
+              - 'tools/Aevatar.Tools.CodeMetrics/**'
+              - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            projection_provider:
+              - 'docker-compose.projection-providers.yml'
+              - 'src/Aevatar.CQRS.Projection.*/**'
+              - 'src/Aevatar.CQRS.Projection.Core/**'
+              - 'src/workflow/Aevatar.Workflow.Projection/**'
+              - 'src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/**'
+              - 'src/workflow/Aevatar.Workflow.Infrastructure/DependencyInjection/WorkflowCapabilityServiceCollectionExtensions.cs'
+              - 'test/Aevatar.CQRS.Projection.Core.Tests/**'
+              - 'test/Aevatar.Workflow.Host.Api.Tests/**'
+              - 'tools/ci/projection_provider_e2e_smoke.sh'
+              - '.github/workflows/ci.yml'
+            kafka_runtime:
+              - 'docker-compose.yml'
+              - 'src/Aevatar.Foundation.Runtime*/**'
+              - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'tools/ci/kafka_transport_integration_smoke.sh'
+              - '.github/workflows/ci.yml'
+            event_sourcing:
+              - 'src/Aevatar.Foundation.Core/**'
+              - 'src/Aevatar.Foundation.Runtime/**'
+              - 'src/Aevatar.Foundation.Runtime.Implementations.Orleans/**'
+              - 'src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/**'
+              - 'test/Aevatar.Foundation.Core.Tests/**'
+              - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'tools/ci/event_sourcing_regression.sh'
+              - 'tools/ci/orleans_garnet_persistence_smoke.sh'
+              - 'tools/ci/architecture_guards.sh'
+              - '.github/workflows/ci.yml'
+
+  fast-gates:
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
         with:
-          global-json-file: global.json
+          setup-dotnet: "false"
+          cache-nuget: "false"
+          install-ripgrep: "true"
 
-      - name: Restore
-        run: dotnet restore aevatar.slnx --nologo
+      - name: Architecture Guards (full-scan + projection route mapping)
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: bash tools/ci/architecture_guards.sh
 
-      - name: Build
-        run: dotnet build aevatar.slnx --nologo --no-restore --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+      - name: Test Stability Guards
+        run: bash tools/ci/test_stability_guards.sh
 
-      - name: Test
-        run: dotnet test aevatar.slnx --nologo --no-build --tl:off -m:1 -p:UseSharedCompilation=false -p:NuGetAudit=false
+  code-metrics-analyzers:
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Architecture Guards
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Code Metrics Analyzer Guard
+        run: bash tools/ci/code_metrics_analyzer_guard.sh
+
+  split-test-guards:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        solution_filter:
+          - aevatar.foundation.slnf
+          - aevatar.ai.slnf
+          - aevatar.cqrs.slnf
+          - aevatar.workflow.slnf
+          - aevatar.hosting.slnf
+          - aevatar.distributed.slnf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Run split test guard (${{ matrix.solution_filter }})
         run: |
-          if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
-            echo "Found sync-over-async usage."
-            exit 1
-          fi
+          dotnet test "${{ matrix.solution_filter }}" \
+            --nologo \
+            --tl:off \
+            -m:1 \
+            -p:UseSharedCompilation=false \
+            -p:NuGetAudit=false
 
-          if rg -n "TypeUrl\.Contains|typeUrl\.Contains\(" src demos; then
-            echo "Found string-based event type matching."
-            exit 1
-          fi
+  slow-test-guards:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
 
-          if rg -n "Aevatar\.AI\.Core\.csproj" src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj; then
-            echo "Workflows.Core must not reference AI.Core."
-            exit 1
-          fi
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Run slow test guard
+        run: bash tools/ci/slow_test_guards.sh
+
+  projection-provider-e2e:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.projection_provider == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
+
+      - name: Projection Provider E2E Smoke Test
+        run: bash tools/ci/projection_provider_e2e_smoke.sh
+
+  kafka-transport-integration:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.kafka_runtime == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Kafka Transport Integration Smoke Test
+        run: bash tools/ci/kafka_transport_integration_smoke.sh
+
+  event-sourcing-regression:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.event_sourcing == 'true'
+      )
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
+
+      - name: EventSourcing Regression
+        run: bash tools/ci/event_sourcing_regression.sh
+
+  coverage-quality:
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Restore and Build
+        run: bash tools/ci/restore_and_build.sh
+
+      - name: Coverage Quality Guard
+        env:
+          COVERAGE_LINE_THRESHOLD: "85"
+          COVERAGE_BRANCH_THRESHOLD: "72"
+        run: bash tools/ci/coverage_quality_guard.sh
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-quality-report
+          path: artifacts/coverage
+          if-no-files-found: error
+
+      - name: Upload coverage to Codecov
+        if: ${{ success() && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./artifacts/coverage/**/report/Cobertura.xml
+          disable_search: true
+          fail_ci_if_error: true
+          flags: ci
+          name: coverage-quality
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ env.CODECOV_TOKEN }}
+
+  code-metrics-report:
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Generate Code Metrics Reports
+        shell: pwsh
+        run: ./tools/ci/code_metrics_report.ps1
+
+      - name: Upload Code Metrics Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-metrics-reports
+          path: artifacts/code-metrics
+          if-no-files-found: error
+
+  distributed-3node-smoke:
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: 3-Node Distributed Smoke Test
+        run: bash tools/ci/distributed_3node_smoke.sh
+
+  distributed-mixed-version-smoke:
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Mixed-Version Distributed Smoke Test
+        run: bash tools/ci/distributed_mixed_version_smoke.sh

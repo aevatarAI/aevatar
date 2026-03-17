@@ -1,0 +1,139 @@
+syntax = "proto3";
+package aevatar.workflow;
+option csharp_namespace = "Aevatar.Workflow.Abstractions";
+
+import "google/protobuf/any.proto";
+
+message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
+message BindWorkflowRunDefinitionEvent
+{
+  string definition_actor_id = 1;
+  string workflow_name = 2;
+  string workflow_yaml = 3;
+  map<string, string> inline_workflow_yamls = 4;
+  string run_id = 5;
+}
+message BindWorkflowDefinitionEvent
+{
+  string workflow_name = 1;
+  string workflow_yaml = 2;
+  map<string, string> inline_workflow_yamls = 3;
+}
+message WorkflowRunExecutionStartedEvent
+{
+  string run_id = 1;
+  string workflow_name = 2;
+  string input = 3;
+  string definition_actor_id = 4;
+}
+message WorkflowCommandObservedEvent { string command_id = 1; }
+message WorkflowExecutionStateUpsertedEvent
+{
+  string scope_key = 1;
+  google.protobuf.Any state = 2;
+}
+message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
+message WorkflowCompletedEvent { string workflow_name = 1; bool success = 2; string output = 3; string error = 4; string run_id = 5; }
+message StepRequestEvent      { string step_id = 1; string step_type = 2; string input = 3; string target_role = 4; map<string, string> parameters = 5; string run_id = 6; }
+message StepCompletedEvent {
+  string step_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string worker_id = 5;
+  map<string, string> annotations = 6;
+  string run_id = 7;
+  string next_step_id = 8;
+  string branch_key = 9;
+  string assigned_variable = 10;
+  string assigned_value = 11;
+}
+message SubWorkflowInvokeRequestedEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string input = 5;
+  string lifecycle = 6;
+  string requested_by_actor_id = 7;
+}
+message SubWorkflowBindingUpsertedEvent
+{
+  string workflow_name = 1;
+  string child_actor_id = 2;
+  string lifecycle = 3;
+}
+message SubWorkflowInvocationRegisteredEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string child_actor_id = 5;
+  string child_run_id = 6;
+  string lifecycle = 7;
+}
+message SubWorkflowInvocationCompletedEvent
+{
+  string invocation_id = 1;
+  string child_run_id = 2;
+  bool success = 3;
+  string output = 4;
+  string error = 5;
+}
+message WorkflowSuspendedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string suspension_type = 3;
+  string prompt = 4;
+  int32 timeout_seconds = 5;
+  string variable_name = 6;
+  map<string, string> metadata = 7;
+}
+message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
+message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
+message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
+message WorkflowRoleActorLinkedEvent
+{
+  string run_id = 1;
+  string role_id = 2;
+  string child_actor_id = 3;
+}
+message WorkflowRoleReplyToolCall
+{
+  string tool_name = 1;
+  string call_id = 2;
+}
+message WorkflowRoleReplyRecordedEvent
+{
+  string run_id = 1;
+  string role_actor_id = 2;
+  string role_id = 3;
+  string session_id = 4;
+  string content = 5;
+  string reasoning_content = 6;
+  string prompt = 7;
+  bool content_emitted = 8;
+  repeated WorkflowRoleReplyToolCall tool_calls = 9;
+}
+
+// Replaces an existing workflow actor's definition using runtime-provided YAML and starts execution immediately.
+message ReplaceWorkflowDefinitionAndExecuteEvent { string workflow_yaml = 1; string input = 2; }
+
+message WaitingForSignalEvent { string step_id = 1; string signal_name = 2; string prompt = 3; int32 timeout_ms = 4; string run_id = 5; }
+message SignalReceivedEvent   { string signal_name = 1; string payload = 2; string run_id = 3; string step_id = 4; }
+message WaitSignalTimeoutFiredEvent { string run_id = 1; string step_id = 2; string signal_name = 3; int32 timeout_ms = 4; }
+message WorkflowStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 timeout_ms = 3; }
+message WorkflowStepRetryBackoffFiredEvent { string run_id = 1; string step_id = 2; int32 delay_ms = 3; int32 next_attempt = 4; }
+message DelayStepTimeoutFiredEvent { string run_id = 1; string step_id = 2; int32 duration_ms = 3; }
+message LlmCallWatchdogTimeoutFiredEvent { string run_id = 1; string step_id = 2; string session_id = 3; int32 timeout_ms = 4; }
+message WorkflowSignalBufferedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string signal_name = 3;
+  string payload = 4;
+  int64 received_at_unix_time_ms = 5;
+}

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.GAgentService.Abstractions</AssemblyName>
+    <RootNamespace>Aevatar.GAgentService.Abstractions</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos/service_endpoint.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_definition.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_artifact.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_revision.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_deployment.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
+  </ItemGroup>
+</Project>

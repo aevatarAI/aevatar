@@ -31,6 +31,11 @@ public sealed class WorkflowDefinition
     public required List<StepDefinition> Steps { get; init; }
 
     /// <summary>
+    /// 工作流运行配置。
+    /// </summary>
+    public WorkflowRuntimeConfiguration Configuration { get; init; } = new();
+
+    /// <summary>
     /// 入口步骤 ID，即第一个步骤的 ID；若无步骤则为 null。
     /// </summary>
     public string? EntryStepId => Steps.Count > 0 ? Steps[0].Id : null;
@@ -48,13 +53,41 @@ public sealed class WorkflowDefinition
     /// </summary>
     /// <param name="currentId">当前步骤 ID。</param>
     /// <returns>后继步骤定义，若无则返回 null。</returns>
-    public StepDefinition? GetNextStep(string currentId)
+    public StepDefinition? GetNextStep(string currentId) => GetNextStep(currentId, branchKey: null);
+
+    /// <summary>
+    /// 获取后继步骤，支持 switch/conditional 分支。
+    /// 当 <paramref name="branchKey"/> 非空时，优先从 <c>Branches[branchKey]</c> 查找目标步骤，
+    /// 找不到则尝试 <c>Branches["_default"]</c>，最后回退到 <see cref="GetNextStep(string)"/>。
+    /// </summary>
+    public StepDefinition? GetNextStep(string currentId, string? branchKey)
     {
         var s = GetStep(currentId);
-        if (s?.Next != null) return GetStep(s.Next);
+        if (s == null) return null;
+
+        if (!string.IsNullOrEmpty(branchKey) && s.Branches is { Count: > 0 })
+        {
+            if (s.Branches.TryGetValue(branchKey, out var target) && GetStep(target) is { } found)
+                return found;
+            if (s.Branches.TryGetValue("_default", out var def) && GetStep(def) is { } defFound)
+                return defFound;
+        }
+
+        if (s.Next != null) return GetStep(s.Next);
         var idx = Steps.FindIndex(x => x.Id == currentId);
         return idx >= 0 && idx + 1 < Steps.Count ? Steps[idx + 1] : null;
     }
+}
+
+/// <summary>
+/// Workflow-level runtime options.
+/// </summary>
+public sealed class WorkflowRuntimeConfiguration
+{
+    /// <summary>
+    /// When true, only the closed-world primitive subset is allowed.
+    /// </summary>
+    public bool ClosedWorldMode { get; init; }
 }
 
 /// <summary>
@@ -88,9 +121,39 @@ public sealed class RoleDefinition
     public string? Model { get; init; }
 
     /// <summary>
+    /// 采样温度。
+    /// </summary>
+    public double? Temperature { get; init; }
+
+    /// <summary>
+    /// 单次请求最大输出 token 数。
+    /// </summary>
+    public int? MaxTokens { get; init; }
+
+    /// <summary>
+    /// 单次请求工具调用最大轮数。
+    /// </summary>
+    public int? MaxToolRounds { get; init; }
+
+    /// <summary>
+    /// 会话中保留的历史消息上限。
+    /// </summary>
+    public int? MaxHistoryMessages { get; init; }
+
+    /// <summary>
+    /// 流式缓冲区容量。
+    /// </summary>
+    public int? StreamBufferCapacity { get; init; }
+
+    /// <summary>
     /// 该角色绑定的事件模块列表（逗号分隔）。
     /// </summary>
     public string? EventModules { get; init; }
+
+    /// <summary>
+    /// 该角色绑定的事件路由规则（DSL 或 YAML list）。
+    /// </summary>
+    public string? EventRoutes { get; init; }
 
     /// <summary>
     /// 该角色允许使用的 Connector 名称列表（中心化配置在 ~/.aevatar/connectors.json）。

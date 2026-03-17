@@ -5,27 +5,27 @@ namespace Aevatar.AI.Abstractions;
 /// </summary>
 public static class ChatSessionKeys
 {
-    public static string CreateWorkflowStepSessionId(string runId, string stepId)
+    public static string CreateWorkflowStepSessionId(string scopeId, string stepId)
     {
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
+        if (string.IsNullOrWhiteSpace(stepId))
+            throw new ArgumentException("StepId is required.", nameof(stepId));
+
+        return $"{scopeId}:{stepId}";
+    }
+
+    public static string CreateWorkflowStepSessionId(string scopeId, string runId, string stepId, int attempt = 1)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (string.IsNullOrWhiteSpace(runId))
             throw new ArgumentException("RunId is required.", nameof(runId));
         if (string.IsNullOrWhiteSpace(stepId))
             throw new ArgumentException("StepId is required.", nameof(stepId));
+        if (attempt < 1)
+            throw new ArgumentOutOfRangeException(nameof(attempt), attempt, "Attempt must be >= 1.");
 
-        return $"{runId}:{stepId}";
-    }
-
-    public static bool TryParseWorkflowRunId(string? sessionId, out string? runId)
-    {
-        runId = null;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return false;
-
-        var separatorIndex = sessionId.IndexOf(':');
-        if (separatorIndex <= 0)
-            return false;
-
-        runId = sessionId[..separatorIndex];
-        return !string.IsNullOrWhiteSpace(runId);
+        return $"{scopeId}:{runId}:{stepId}:a{attempt}";
     }
 }

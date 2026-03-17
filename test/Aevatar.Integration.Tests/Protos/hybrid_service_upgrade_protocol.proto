@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package aevatar.protocols;
+
+option csharp_namespace = "Aevatar.Integration.Tests.Protocols";
+
+message HybridServiceTrace {
+  string request_id = 1;
+  string input_text = 2;
+  string workflow_output = 3;
+  string scripting_output = 4;
+  string final_output = 5;
+  string active_scripting_actor_id = 6;
+}
+
+message HybridServiceSnapshot {
+  int32 processed_count = 1;
+  string workflow_actor_id = 2;
+  string scripting_actor_id = 3;
+  repeated HybridServiceTrace traces = 4;
+}
+
+message ConfigureHybridServiceRequested {
+  string workflow_actor_id = 1;
+  string scripting_actor_id = 2;
+}
+
+message HybridServiceConfigured {
+  string workflow_actor_id = 1;
+  string scripting_actor_id = 2;
+}
+
+message ReplaceHybridScriptingImplementationRequested {
+  string scripting_actor_id = 1;
+}
+
+message HybridServiceScriptingImplementationReplaced {
+  string scripting_actor_id = 1;
+}
+
+message HybridServiceRequested {
+  string request_id = 1;
+  string input_text = 2;
+}
+
+message HybridServiceProcessed {
+  string request_id = 1;
+  HybridServiceSnapshot current = 2;
+}
+
+message HybridServiceQueryRequested {
+  string request_id = 1;
+  string reply_stream_id = 2;
+}
+
+message HybridServiceQueryResponded {
+  string request_id = 1;
+  HybridServiceSnapshot current = 2;
+}

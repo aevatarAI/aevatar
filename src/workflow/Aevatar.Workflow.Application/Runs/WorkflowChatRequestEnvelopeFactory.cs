@@ -1,29 +1,58 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal sealed class WorkflowChatRequestEnvelopeFactory : IWorkflowChatRequestEnvelopeFactory
+internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFactory<WorkflowChatRunRequest>
 {
-    public EventEnvelope Create(string prompt, string runId)
+    public EventEnvelope CreateEnvelope(WorkflowChatRunRequest command, CommandContext context)
     {
+        var sessionId = !string.IsNullOrWhiteSpace(command.SessionId)
+            ? command.SessionId
+            : context.CorrelationId;
+
         var chatRequest = new ChatRequestEvent
         {
-            Prompt = prompt,
-            SessionId = CreateInternalChatSessionId(),
+            Prompt = command.Prompt,
+            SessionId = sessionId,
         };
-        chatRequest.Metadata[ChatRequestMetadataKeys.RunId] = runId;
+        AppendMetadata(chatRequest.Metadata, context.Headers);
+        AppendMetadata(chatRequest.Metadata, command.Metadata);
+        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
+        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
-        return new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(chatRequest),
-            PublisherId = "api",
-            Direction = EventDirection.Self,
+            Route = EnvelopeRouteSemantics.CreateDirect("api", context.TargetId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = context.CorrelationId,
+            },
         };
+        return envelope;
     }
 
-    private static string CreateInternalChatSessionId() => $"chat-{Guid.NewGuid():N}";
+    private static void AppendMetadata(
+        Google.Protobuf.Collections.MapField<string, string> destination,
+        IReadOnlyDictionary<string, string>? source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
+            var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
+            destination[normalizedKey] = normalizedValue;
+        }
+    }
 }

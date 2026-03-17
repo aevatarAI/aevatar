@@ -1,0 +1,64 @@
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using FluentAssertions;
+
+namespace Aevatar.CQRS.Projection.Core.Tests;
+
+[Trait("Category", "ProviderIntegration")]
+[Trait("Feature", "ProjectionProviders")]
+public sealed class ProjectionProviderE2EIntegrationTests
+{
+    [ElasticsearchIntegrationFact]
+    public async Task ElasticsearchStore_ShouldRoundtripUpsertAndOverwrite()
+    {
+        var endpoint = GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            Endpoints = [endpoint],
+            IndexPrefix = "aevatar-e2e",
+            AutoCreateIndex = true,
+            RequestTimeoutMs = 10000,
+        };
+        var indexScope = "projection-provider-e2e-" + Guid.NewGuid().ToString("N");
+        using var store = new ElasticsearchProjectionDocumentStore<TestProviderStoreSmokeReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: indexScope,
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            model => model.Id);
+
+        var id = Guid.NewGuid().ToString("N");
+        var readModel = new TestProviderStoreSmokeReadModel
+        {
+            Id = id,
+            ActorId = id,
+            Value = "v1",
+            UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+
+        await store.UpsertAsync(readModel);
+        var fetched = await store.GetAsync(readModel.Id);
+        fetched.Should().NotBeNull();
+        fetched!.Value.Should().Be("v1");
+
+        readModel.Value = "v2";
+        readModel.UpdatedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await store.UpsertAsync(readModel);
+
+        var mutated = await store.GetAsync(readModel.Id);
+        mutated.Should().NotBeNull();
+        mutated!.Value.Should().Be("v2");
+    }
+
+    private static string GetRequiredEnvironmentVariable(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        if (!string.IsNullOrWhiteSpace(value))
+            return value.Trim();
+
+        throw new InvalidOperationException($"Environment variable '{name}' is required.");
+    }
+
+}

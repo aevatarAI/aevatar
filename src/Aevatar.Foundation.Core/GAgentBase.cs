@@ -2,8 +2,8 @@
 // GAgentBase - stateless base class for GAgent.
 //
 // Responsibilities:
-// 1. Unified event pipeline ([EventHandler] + IEventModule interleaved by priority)
-// 2. Module management APIs (RegisterModule / SetModules / manifest persistence)
+// 1. Unified event pipeline ([EventHandler] + IEventModule<IEventHandlerContext> interleaved by priority)
+// 2. Module management APIs (RegisterModule / SetModules)
 // 3. Dual hook channels (virtual methods + IGAgentExecutionHook pipeline)
 // 4. Publishing helpers (PublishAsync / SendToAsync)
 // ─────────────────────────────────────────────────────────────
@@ -12,7 +12,10 @@ using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Pipeline;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,18 +29,25 @@ namespace Aevatar.Foundation.Core;
 public abstract class GAgentBase : IAgent
 {
     private EventHandlerMetadata[]? _staticHandlers;
-    private volatile IEventModule[] _modules = [];
+    private volatile IEventModule<IEventHandlerContext>[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
+    private EventEnvelope? _activeInboundEnvelope;
 
     // Identity
 
     /// <summary>Unique agent identifier.</summary>
     public string Id { get; private set; } = string.Empty;
 
+    /// <summary>Current inbound envelope during handler execution, if any.</summary>
+    protected EventEnvelope? ActiveInboundEnvelope => _activeInboundEnvelope;
+
     // Framework-injected dependencies (set by Runtime)
 
-    /// <summary>Event publisher injected by actor/runtime.</summary>
+    /// <summary>Topology event publisher injected by actor/runtime.</summary>
     public IEventPublisher EventPublisher { get; set; } = NullEventPublisher.Instance;
+
+    /// <summary>Framework-internal committed state-event publisher injected by actor/runtime.</summary>
+    internal ICommittedStateEventPublisher CommittedStateEventPublisher { get; set; } = NullCommittedStateEventPublisher.Instance;
 
     /// <summary>Logger injected by runtime.</summary>
     public ILogger Logger { get; set; } = NullLogger.Instance;
@@ -60,12 +70,12 @@ public abstract class GAgentBase : IAgent
         return Task.FromResult<IReadOnlyList<Type>>(types);
     }
 
-    /// <summary>Activates agent: loads hooks from DI.</summary>
-    public virtual Task ActivateAsync(CancellationToken ct = default)
+    /// <summary>Activates agent and loads hooks.</summary>
+    public virtual async Task ActivateAsync(CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
+        ct.ThrowIfCancellationRequested();
         LoadHooksFromDI();
-        return Task.CompletedTask;
     }
 
     /// <summary>Deactivates agent.</summary>
@@ -81,53 +91,68 @@ public abstract class GAgentBase : IAgent
     /// 3. Executes handler
     /// 4. Calls IGAgentExecutionHook pipeline OnEventHandlerEndAsync
     /// 5. Calls virtual OnEventHandlerEndAsync
+    ///
+    /// Default behavior is fail-fast: handler exceptions are rethrown after hook callbacks.
+    /// Subclasses can override <see cref="ShouldSuppressHandlerException"/> to opt into best-effort continuation.
     /// </summary>
     public async Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
-        var ctx = CreateHandlerContext();
-        var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
-
-        foreach (var handler in pipeline)
+        var previousEnvelope = _activeInboundEnvelope;
+        _activeInboundEnvelope = envelope;
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (!handler.CanHandle(envelope)) continue;
+            var ctx = CreateHandlerContext(envelope);
+            var pipeline = EventPipelineBuilder.Build(GetStaticHandlers(), _modules, this);
 
-            var hookCtx = new GAgentExecutionHookContext
+            foreach (var handler in pipeline)
             {
-                AgentId = Id,
-                AgentType = GetType().Name,
-                EventId = envelope.Id,
-                EventType = envelope.Payload?.TypeUrl,
-                HandlerName = handler.Name,
-            };
+                ct.ThrowIfCancellationRequested();
+                if (!handler.CanHandle(envelope)) continue;
 
-            var sw = Stopwatch.StartNew();
-            Exception? error = null;
-            try
-            {
-                // Dual hook channels: Start
-                await OnEventHandlerStartAsync(envelope, handler.Name, null, ct);
-                await RunHooksAsync(h => h.OnEventHandlerStartAsync(hookCtx, ct), "OnEventHandlerStart");
+                var hookCtx = new GAgentExecutionHookContext
+                {
+                    AgentId = Id,
+                    AgentType = GetType().Name,
+                    EventId = envelope.Id,
+                    EventType = envelope.Payload?.TypeUrl,
+                    HandlerName = handler.Name,
+                };
 
-                await handler.HandleAsync(envelope, ctx, ct);
+                var sw = Stopwatch.StartNew();
+                Exception? error = null;
+                try
+                {
+                    // Dual hook channels: Start
+                    await OnEventHandlerStartAsync(envelope, handler.Name, null, ct);
+                    await RunHooksAsync(h => h.OnEventHandlerStartAsync(hookCtx, ct), "OnEventHandlerStart");
+
+                    await handler.HandleAsync(envelope, ctx, ct);
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                    hookCtx.Exception = ex;
+                    Logger.LogError(ex, "Handler {Name} failed", handler.Name);
+                    await RunHooksAsync(h => h.OnErrorAsync(hookCtx, ex, ct), "OnError");
+
+                    if (!ShouldSuppressHandlerException(envelope, handler.Name, ex))
+                        throw;
+                }
+                finally
+                {
+                    sw.Stop();
+                    hookCtx.Duration = sw.Elapsed;
+
+                    // Dual hook channels: End
+                    await RunHooksAsync(h => h.OnEventHandlerEndAsync(hookCtx, ct), "OnEventHandlerEnd");
+                    await OnEventHandlerEndAsync(envelope, handler.Name, null, sw.Elapsed, error, ct);
+                }
             }
-            catch (Exception ex)
-            {
-                error = ex;
-                hookCtx.Exception = ex;
-                Logger.LogError(ex, "Handler {Name} failed", handler.Name);
-                await RunHooksAsync(h => h.OnErrorAsync(hookCtx, ex, ct), "OnError");
-            }
-            finally
-            {
-                sw.Stop();
-                hookCtx.Duration = sw.Elapsed;
-
-                // Dual hook channels: End
-                await RunHooksAsync(h => h.OnEventHandlerEndAsync(hookCtx, ct), "OnEventHandlerEnd");
-                await OnEventHandlerEndAsync(envelope, handler.Name, null, sw.Elapsed, error, ct);
-            }
+        }
+        finally
+        {
+            _activeInboundEnvelope = previousEnvelope;
         }
     }
 
@@ -137,6 +162,21 @@ public abstract class GAgentBase : IAgent
     protected virtual Task OnEventHandlerStartAsync(
         EventEnvelope envelope, string handlerName, object? payload, CancellationToken ct)
         => Task.CompletedTask;
+
+    /// <summary>
+    /// Controls whether a handler exception should be suppressed.
+    /// Default is <c>false</c> (rethrow).
+    /// </summary>
+    protected virtual bool ShouldSuppressHandlerException(
+        EventEnvelope envelope,
+        string handlerName,
+        Exception exception)
+    {
+        _ = envelope;
+        _ = handlerName;
+        _ = exception;
+        return false;
+    }
 
     /// <summary>Virtual hook after handler execution. Subclasses may override.</summary>
     protected virtual Task OnEventHandlerEndAsync(
@@ -163,36 +203,96 @@ public abstract class GAgentBase : IAgent
     // Module management APIs
 
     /// <summary>Registers a dynamic event module.</summary>
-    public void RegisterModule(IEventModule module)
+    public void RegisterModule(IEventModule<IEventHandlerContext> module)
     {
         var current = _modules;
-        var next = new IEventModule[current.Length + 1];
+        var next = new IEventModule<IEventHandlerContext>[current.Length + 1];
         current.CopyTo(next, 0);
         next[current.Length] = module;
         _modules = next;
     }
 
     /// <summary>Replaces dynamic event modules in batch.</summary>
-    public void SetModules(IEnumerable<IEventModule> modules)
+    public void SetModules(IEnumerable<IEventModule<IEventHandlerContext>> modules)
     {
         _modules = modules.ToArray();
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>
-    public IReadOnlyList<IEventModule> GetModules() => _modules;
+    public IReadOnlyList<IEventModule<IEventHandlerContext>> GetModules() => _modules;
 
     // Publishing helper methods
 
-    /// <summary>Publishes an event with direction.</summary>
+    /// <summary>Publishes an event to a topology audience.</summary>
     protected Task PublishAsync<TEvent>(TEvent evt,
-        EventDirection direction = EventDirection.Down,
-        CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.PublishAsync(evt, direction, ct);
+        TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.PublishAsync(evt, audience, ct, _activeInboundEnvelope, options);
 
     /// <summary>Sends an event to a target actor.</summary>
     protected Task SendToAsync<TEvent>(string targetActorId, TEvent evt,
-        CancellationToken ct = default) where TEvent : Google.Protobuf.IMessage =>
-        EventPublisher.SendToAsync(targetActorId, evt, ct);
+        CancellationToken ct = default,
+        EventEnvelopePublishOptions? options = null) where TEvent : Google.Protobuf.IMessage =>
+        EventPublisher.SendToAsync(targetActorId, evt, ct, _activeInboundEnvelope, options);
+
+    protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .ScheduleTimeoutAsync(
+                new RuntimeCallbackTimeoutRequest
+                {
+                    ActorId = Id,
+                    CallbackId = callbackId,
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, options),
+                    DueTime = dueTime,
+                },
+                ct);
+    }
+
+    protected Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+        string callbackId,
+        TimeSpan dueTime,
+        TimeSpan period,
+        IMessage evt,
+        EventEnvelopePublishOptions? options = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(period, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(evt);
+
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .ScheduleTimerAsync(
+                new RuntimeCallbackTimerRequest
+                {
+                    ActorId = Id,
+                    CallbackId = callbackId,
+                    TriggerEnvelope = SelfEventEnvelopeFactory.Create(Id, evt, _activeInboundEnvelope, options),
+                    DueTime = dueTime,
+                    Period = period,
+                },
+                ct);
+    }
+
+    protected Task CancelDurableCallbackAsync(
+        RuntimeCallbackLease lease,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .CancelAsync(lease, ct);
+    }
 
     // Internal methods
 
@@ -229,16 +329,33 @@ public abstract class GAgentBase : IAgent
     private EventHandlerMetadata[] GetStaticHandlers() =>
         _staticHandlers ??= EventHandlerDiscoverer.Discover(GetType());
 
-    private EventHandlerContext CreateHandlerContext() =>
-        new(this, EventPublisher, Services, Logger);
+    private EventHandlerContext CreateHandlerContext(EventEnvelope envelope) =>
+        new(
+            this,
+            EventPublisher,
+            Services.GetRequiredService<IActorRuntimeCallbackScheduler>(),
+            Services,
+            Logger,
+            envelope);
 
     // Null implementations
 
     private sealed class NullEventPublisher : IEventPublisher
     {
         public static readonly NullEventPublisher Instance = new();
-        public Task PublishAsync<T>(T e, EventDirection d, CancellationToken c) where T : Google.Protobuf.IMessage => Task.CompletedTask;
-        public Task SendToAsync<T>(string t, T e, CancellationToken c) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task PublishAsync<T>(T e, TopologyAudience a, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+        public Task SendToAsync<T>(string t, T e, CancellationToken c, EventEnvelope? sourceEnvelope, EventEnvelopePublishOptions? options) where T : Google.Protobuf.IMessage => Task.CompletedTask;
+    }
+
+    private sealed class NullCommittedStateEventPublisher : ICommittedStateEventPublisher
+    {
+        public static readonly NullCommittedStateEventPublisher Instance = new();
+        public Task PublishAsync(
+            CommittedStateEventPublished e,
+            ObserverAudience a,
+            CancellationToken c,
+            EventEnvelope? sourceEnvelope,
+            EventEnvelopePublishOptions? options) => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

@@ -4,7 +4,7 @@
 
 using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using System.Linq;
 
 namespace Aevatar.AI.LLMProviders.Tornado;
 
@@ -24,9 +24,15 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<ITornadoLLMProviderRegistry> configure)
     {
+        if (services.Any(x => x.ServiceType == typeof(ILLMProviderFactory)))
+        {
+            throw new InvalidOperationException(
+                "ILLMProviderFactory is already registered. Multiple factory implementations are not supported in the same IServiceCollection.");
+        }
+
         var factory = new TornadoLLMProviderFactory();
         configure(factory);
-        services.TryAddSingleton<ILLMProviderFactory>(factory);
+        services.AddSingleton<ILLMProviderFactory>(factory);
         return services;
     }
 }

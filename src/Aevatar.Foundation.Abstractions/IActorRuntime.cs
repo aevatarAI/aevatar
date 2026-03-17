@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // IActorRuntime - actor runtime contract.
-// Manages actor lifecycle, topology, lookup, and restoration.
+// Manages actor lifecycle, topology, and lookup.
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar.Foundation.Abstractions;
@@ -25,9 +25,6 @@ public interface IActorRuntime
 
     /// <summary>Gets an actor by ID, or null if it does not exist.</summary>
     Task<IActor?> GetAsync(string id);
-
-    /// <summary>Gets all actors in the current runtime.</summary>
-    Task<IReadOnlyList<IActor>> GetAllAsync();
 
     /// <summary>Checks whether an actor with the specified ID exists.</summary>
     Task<bool> ExistsAsync(string id);

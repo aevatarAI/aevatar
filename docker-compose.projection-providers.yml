@@ -1,0 +1,23 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26
+    environment:
+      NEO4J_AUTH: "neo4j/password"
+      NEO4J_server_default__listen__address: "0.0.0.0"
+      NEO4J_server_memory_heap_initial__size: "256m"
+      NEO4J_server_memory_heap_max__size: "256m"
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    restart: unless-stopped

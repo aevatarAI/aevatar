@@ -1,9 +1,8 @@
 using System.Text;
 using System.Text.Json;
-using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Demos.Cli.Messages;
-using Aevatar.Foundation.Runtime.DependencyInjection;
-using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -308,38 +307,6 @@ internal sealed class DemoHook(DemoTraceStore traceStore) : IGAgentExecutionHook
     }
 }
 
-internal sealed class TracingPublisher(
-    string actorId,
-    IEventPublisher inner,
-    DemoTraceStore traceStore,
-    Func<EventDirection, Task<IReadOnlyList<string>>> resolveTargets) : IEventPublisher
-{
-    public async Task PublishAsync<TEvent>(TEvent evt, EventDirection direction, CancellationToken ct) where TEvent : IMessage
-    {
-        var targets = await resolveTargets(direction);
-        traceStore.Add(
-            "publish",
-            $"{evt.Descriptor.Name} published",
-            actorId,
-            evt.Descriptor.Name,
-            direction.ToString(),
-            targets);
-        await inner.PublishAsync(evt, direction, ct);
-    }
-
-    public Task SendToAsync<TEvent>(string targetActorId, TEvent evt, CancellationToken ct) where TEvent : IMessage
-    {
-        traceStore.Add(
-            "send",
-            $"{evt.Descriptor.Name} sent",
-            actorId,
-            evt.Descriptor.Name,
-            "Direct",
-            [targetActorId]);
-        return inner.SendToAsync(targetActorId, evt, ct);
-    }
-}
-
 internal static class DemoScenarioRunner
 {
     public static readonly IReadOnlyList<string> ScenarioNames =
@@ -365,7 +332,7 @@ internal static class DemoScenarioRunner
         services.AddTransient<DemoFaultyAgent>();
         services.AddTransient<DemoCounterAgent>();
         var sp = services.BuildServiceProvider();
-        var runtime = (LocalActorRuntime)sp.GetRequiredService<IActorRuntime>();
+        var runtime = sp.GetRequiredService<IActorRuntime>();
 
         try
         {
@@ -381,32 +348,34 @@ internal static class DemoScenarioRunner
         }
         finally
         {
-            var all = await runtime.GetAllAsync();
-            foreach (var actor in all)
-            {
-                await runtime.DestroyAsync(actor.Id);
-            }
+            foreach (var actorId in new[]
+                     {
+                         "parent", "child",
+                         "coord", "w1", "w2", "w3",
+                         "transformer", "sink",
+                         "faulty",
+                         "stateful",
+                     })
+                await runtime.DestroyAsync(actorId);
 
             sp.Dispose();
         }
     }
 
-    private static async Task<DemoRunResult> RunHierarchyAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunHierarchyAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var parent = await runtime.CreateAsync<DemoTransformerAgent>("parent");
         var child = await runtime.CreateAsync<DemoCollectorAgent>("child");
         await runtime.LinkAsync(parent.Id, child.Id);
-        await AttachTracingPublisherAsync(runtime, parent, traceStore);
-        await AttachTracingPublisherAsync(runtime, child, traceStore);
 
-        await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "hello-child" }, EventDirection.Down);
-        await WaitForAsync(() => ((DemoCollectorAgent)child.Agent).Received.Count > 0);
+        await DispatchAsync(parent, new PingEvent { Message = "hello-child" }, TopologyAudience.Children);
+        await WaitForAsync(() => GetCollectorValues(traceStore, child.Id).Count > 0);
 
-        traceStore.SetSummary("childReceived", string.Join(",", ((DemoCollectorAgent)child.Agent).Received));
-        return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore);
+        traceStore.SetSummary("childReceived", string.Join(",", GetCollectorValues(traceStore, child.Id)));
+        return await BuildResultAsync(runtime, "hierarchy", "Parent publishes Down event to child.", traceStore, parent.Id);
     }
 
-    private static async Task<DemoRunResult> RunFanoutAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunFanoutAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var coord = await runtime.CreateAsync<DemoTransformerAgent>("coord");
         var w1 = await runtime.CreateAsync<DemoCollectorAgent>("w1");
@@ -417,105 +386,92 @@ internal static class DemoScenarioRunner
         await runtime.LinkAsync(coord.Id, w2.Id);
         await runtime.LinkAsync(coord.Id, w3.Id);
 
-        await AttachTracingPublisherAsync(runtime, coord, traceStore);
-        await AttachTracingPublisherAsync(runtime, w1, traceStore);
-        await AttachTracingPublisherAsync(runtime, w2, traceStore);
-        await AttachTracingPublisherAsync(runtime, w3, traceStore);
-
-        await ((GAgentBase)coord.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "task" }, EventDirection.Down);
+        await DispatchAsync(coord, new PingEvent { Message = "task" }, TopologyAudience.Children);
         await WaitForAsync(() =>
-            ((DemoCollectorAgent)w1.Agent).Received.Count > 0 &&
-            ((DemoCollectorAgent)w2.Agent).Received.Count > 0 &&
-            ((DemoCollectorAgent)w3.Agent).Received.Count > 0);
+            GetCollectorValues(traceStore, w1.Id).Count > 0 &&
+            GetCollectorValues(traceStore, w2.Id).Count > 0 &&
+            GetCollectorValues(traceStore, w3.Id).Count > 0);
 
-        traceStore.SetSummary("w1", string.Join(",", ((DemoCollectorAgent)w1.Agent).Received));
-        traceStore.SetSummary("w2", string.Join(",", ((DemoCollectorAgent)w2.Agent).Received));
-        traceStore.SetSummary("w3", string.Join(",", ((DemoCollectorAgent)w3.Agent).Received));
-        return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore);
+        traceStore.SetSummary("w1", string.Join(",", GetCollectorValues(traceStore, w1.Id)));
+        traceStore.SetSummary("w2", string.Join(",", GetCollectorValues(traceStore, w2.Id)));
+        traceStore.SetSummary("w3", string.Join(",", GetCollectorValues(traceStore, w3.Id)));
+        return await BuildResultAsync(runtime, "fanout", "Coordinator broadcasts task to three workers.", traceStore, coord.Id);
     }
 
-    private static async Task<DemoRunResult> RunPipelineAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunPipelineAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var transformer = await runtime.CreateAsync<DemoTransformerAgent>("transformer");
         var collector = await runtime.CreateAsync<DemoCollectorAgent>("sink");
         await runtime.LinkAsync(transformer.Id, collector.Id);
-        await AttachTracingPublisherAsync(runtime, transformer, traceStore);
-        await AttachTracingPublisherAsync(runtime, collector, traceStore);
 
-        var moduleA = new ReplyModule("module_a", "A");
-        var moduleB = new ReplyModule("module_b", "B");
-        var agent = (DemoTransformerAgent)transformer.Agent;
-        agent.SetModules([moduleA]);
-        await ((GAgentBase)transformer.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
-        await WaitForAsync(() => ((DemoCollectorAgent)collector.Agent).Received.Count > 0);
+        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "A" }, TopologyAudience.Self);
+        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, TopologyAudience.Self);
+        await WaitForAsync(() => GetCollectorValues(traceStore, collector.Id).Count > 0);
 
-        agent.SetModules([moduleB]);
-        await ((GAgentBase)transformer.Agent).EventPublisher.PublishAsync(new PingEvent { Message = "pipeline" }, EventDirection.Self);
-        await WaitForAsync(() => ((DemoCollectorAgent)collector.Agent).Received.Count > 1);
+        await DispatchAsync(transformer, new SetTransformerReplyEvent { Reply = "B" }, TopologyAudience.Self);
+        await DispatchAsync(transformer, new PingEvent { Message = "pipeline" }, TopologyAudience.Self);
+        await WaitForAsync(() => GetCollectorValues(traceStore, collector.Id).Count > 1);
 
-        traceStore.SetSummary("pipelineReplies", string.Join(",", ((DemoCollectorAgent)collector.Agent).Received));
-        return await BuildResultAsync(runtime, "pipeline", "Swap module to change pipeline behavior.", traceStore);
+        traceStore.SetSummary("pipelineReplies", string.Join(",", GetCollectorValues(traceStore, collector.Id)));
+        return await BuildResultAsync(runtime, "pipeline", "Reconfigure transformer behavior via event.", traceStore, transformer.Id);
     }
 
-    private static async Task<DemoRunResult> RunHooksAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunHooksAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var faulty = await runtime.CreateAsync<DemoFaultyAgent>("faulty");
-        await AttachTracingPublisherAsync(runtime, faulty, traceStore);
+        try
+        {
+            await DispatchAsync(faulty, new PingEvent { Message = "boom" }, TopologyAudience.Self);
+        }
+        catch (InvalidOperationException)
+        {
+            // Expected: this scenario validates hook error capture.
+        }
 
-        await faulty.HandleEventAsync(CreateEnvelope(new PingEvent { Message = "boom" }));
-        await Task.Delay(80);
+        await WaitForAsync(() => traceStore
+            .SnapshotEvents()
+            .Any(x => x.Stage == "hook:error" && string.Equals(x.AgentId, faulty.Id, StringComparison.Ordinal)));
+
         traceStore.SetSummary("expected", "hook:start + hook:error + hook:end");
-        return await BuildResultAsync(runtime, "hooks", "Hook lifecycle around failing handler.", traceStore);
+        return await BuildResultAsync(runtime, "hooks", "Hook lifecycle around failing handler.", traceStore, faulty.Id);
     }
 
-    private static async Task<DemoRunResult> RunLifecycleAsync(LocalActorRuntime runtime, DemoTraceStore traceStore)
+    private static async Task<DemoRunResult> RunLifecycleAsync(IActorRuntime runtime, DemoTraceStore traceStore)
     {
         var actor = await runtime.CreateAsync<DemoCounterAgent>("stateful");
-        await AttachTracingPublisherAsync(runtime, actor, traceStore);
 
-        await actor.HandleEventAsync(CreateEnvelope(new IncrementEvent { Amount = 7 }));
-        await WaitForAsync(() => ((DemoCounterAgent)actor.Agent).State.Count == 7);
+        await DispatchAsync(actor, new IncrementEvent { Amount = 7 }, TopologyAudience.Self);
+        await WaitForAsync(() => TryGetLatestCounterAfter(traceStore, actor.Id, out var count) && count == 7);
 
         await runtime.DestroyAsync(actor.Id);
         var restored = await runtime.CreateAsync<DemoCounterAgent>("stateful");
-        var state = ((DemoCounterAgent)restored.Agent).State.Count;
+        var baselineEventCount = CountCounterStateEvents(traceStore, restored.Id);
+        await DispatchAsync(restored, new IncrementEvent { Amount = 0 }, TopologyAudience.Self);
+        await WaitForAsync(() => CountCounterStateEvents(traceStore, restored.Id) > baselineEventCount);
+        TryGetLatestCounterAfter(traceStore, restored.Id, out var state);
+
         traceStore.SetSummary("restoredCount", state);
-        return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore);
+        return await BuildResultAsync(runtime, "lifecycle", "Deactivate/save and reactivate/load state.", traceStore, restored.Id);
     }
 
-    private static async Task AttachTracingPublisherAsync(LocalActorRuntime runtime, IActor actor, DemoTraceStore traceStore)
+    private static async Task DispatchAsync<T>(
+        IActor actor,
+        T evt,
+        TopologyAudience direction,
+        string publisherId = "demo-user")
+        where T : IMessage
     {
-        if (actor.Agent is not GAgentBase gab) return;
-        var inner = gab.EventPublisher;
-        var wrapped = new TracingPublisher(
-            actor.Id,
-            inner,
-            traceStore,
-            async direction =>
-            {
-                var a = await runtime.GetAsync(actor.Id);
-                if (a == null) return Array.Empty<string>();
-                var children = await a.GetChildrenIdsAsync();
-                var parent = await a.GetParentIdAsync();
-                return direction switch
-                {
-                    EventDirection.Self => [actor.Id],
-                    EventDirection.Down => children.ToList(),
-                    EventDirection.Up => parent != null ? [parent] : [],
-                    EventDirection.Both => children.Concat(parent != null ? [parent] : []).ToList(),
-                    _ => [],
-                };
-            });
-        gab.EventPublisher = wrapped;
+        await actor.HandleEventAsync(CreateEnvelope(evt, publisherId, direction));
     }
 
     private static async Task<DemoRunResult> BuildResultAsync(
-        LocalActorRuntime runtime,
+        IActorRuntime runtime,
         string scenario,
         string description,
-        DemoTraceStore traceStore)
+        DemoTraceStore traceStore,
+        params string[] rootActorIds)
     {
-        var topology = await BuildTopologyAsync(runtime);
+        var topology = await BuildTopologyAsync(runtime, rootActorIds);
         return new DemoRunResult(
             scenario,
             description,
@@ -524,16 +480,27 @@ internal static class DemoScenarioRunner
             traceStore.SnapshotSummary());
     }
 
-    private static async Task<DemoTopology> BuildTopologyAsync(IActorRuntime runtime)
+    private static async Task<DemoTopology> BuildTopologyAsync(IActorRuntime runtime, params string[] rootActorIds)
     {
         var edges = new List<DemoTopologyEdge>();
-        var all = await runtime.GetAllAsync();
-        foreach (var actor in all)
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>(rootActorIds.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        while (queue.Count > 0)
         {
-            var parent = await actor.GetParentIdAsync();
-            if (!string.IsNullOrWhiteSpace(parent))
+            var parentId = queue.Dequeue();
+            if (!visited.Add(parentId))
+                continue;
+
+            var parent = await runtime.GetAsync(parentId);
+            if (parent == null)
+                continue;
+
+            var children = await parent.GetChildrenIdsAsync();
+            foreach (var childId in children)
             {
-                edges.Add(new DemoTopologyEdge(parent, actor.Id));
+                edges.Add(new DemoTopologyEdge(parentId, childId));
+                queue.Enqueue(childId);
             }
         }
 
@@ -551,15 +518,51 @@ internal static class DemoScenarioRunner
         if (!condition()) throw new TimeoutException("Condition not met.");
     }
 
-    private static EventEnvelope CreateEnvelope<T>(T evt, string publisherId = "demo-user")
+    private static List<string> GetCollectorValues(DemoTraceStore traceStore, string actorId) =>
+        traceStore
+            .SnapshotEvents()
+            .Where(x => x.Stage == "collector" && string.Equals(x.AgentId, actorId, StringComparison.Ordinal))
+            .Select(x => x.Data.TryGetValue("value", out var value) ? value : x.Message)
+            .ToList();
+
+    private static int CountCounterStateEvents(DemoTraceStore traceStore, string actorId) =>
+        traceStore
+            .SnapshotEvents()
+            .Count(x =>
+                x.Stage == "state" &&
+                string.Equals(x.AgentId, actorId, StringComparison.Ordinal) &&
+                x.Data.TryGetValue("field", out var field) &&
+                string.Equals(field, "count", StringComparison.Ordinal));
+
+    private static bool TryGetLatestCounterAfter(DemoTraceStore traceStore, string actorId, out int count)
+    {
+        var latest = traceStore
+            .SnapshotEvents()
+            .LastOrDefault(x =>
+                x.Stage == "state" &&
+                string.Equals(x.AgentId, actorId, StringComparison.Ordinal) &&
+                x.Data.TryGetValue("field", out var field) &&
+                string.Equals(field, "count", StringComparison.Ordinal));
+        if (latest == null || !latest.Data.TryGetValue("after", out var after) || !int.TryParse(after, out count))
+        {
+            count = 0;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static EventEnvelope CreateEnvelope<T>(
+        T evt,
+        string publisherId = "demo-user",
+        TopologyAudience direction = TopologyAudience.Children)
         where T : IMessage =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
-            PublisherId = publisherId,
-            Direction = EventDirection.Down,
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherId, direction),
         };
 }
 
@@ -580,20 +583,19 @@ internal static class DemoAgentBase
                 ["after"] = after,
             });
     }
-}
 
-internal sealed class ReplyModule(string name, string reply) : IEventModule
-{
-    public string Name { get; } = name;
-    public int Priority => 0;
-
-    public bool CanHandle(EventEnvelope envelope) =>
-        envelope.Payload?.Is(PingEvent.Descriptor) == true;
-
-    public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public static void RecordCollectorValue(string agentId, string eventType, string value)
     {
-        DemoAgentBase.TraceStore.Add("module", $"module={Name}");
-        return ctx.PublishAsync(new PongEvent { Reply = reply }, EventDirection.Down, ct);
+        TraceStore.Add(
+            "collector",
+            $"{eventType}:{value}",
+            agentId,
+            eventType,
+            data: new Dictionary<string, string>
+            {
+                ["event"] = eventType,
+                ["value"] = value,
+            });
     }
 }
 

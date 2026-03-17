@@ -62,9 +62,38 @@ public sealed class TornadoLLMProvider : ILLMProvider
         await foreach (var chunk in _api.Chat.StreamChatEnumerable(chatRequest).WithCancellation(ct))
         {
             var delta = chunk.Choices?.FirstOrDefault()?.Delta;
-            if (delta?.Content != null)
-                yield return new LLMStreamChunk { DeltaContent = delta.Content };
+            var usage = MapUsage(chunk.Usage);
+            var emitted = false;
+
+            if (!string.IsNullOrEmpty(delta?.Content))
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaContent = delta.Content,
+                    Usage = usage,
+                };
+                usage = null;
+                emitted = true;
+            }
+
+            if (delta?.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in delta.ToolCalls)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaToolCall = ConvertToolCallDelta(toolCall),
+                        Usage = usage,
+                    };
+                    usage = null;
+                    emitted = true;
+                }
+            }
+
+            if (!emitted && usage != null)
+                yield return new LLMStreamChunk { Usage = usage };
         }
+
         yield return new LLMStreamChunk { IsLast = true };
     }
 
@@ -89,6 +118,10 @@ public sealed class TornadoLLMProvider : ILLMProvider
             Messages = messages,
         };
 
+        var metadata = BuildMetadata(request);
+        if (metadata != null)
+            chatRequest.Metadata = metadata;
+
         if (request.Temperature.HasValue)
             chatRequest.Temperature = request.Temperature.Value;
 
@@ -99,6 +132,27 @@ public sealed class TornadoLLMProvider : ILLMProvider
         // LlmTornado Provider 主要用于纯 Chat 场景
 
         return chatRequest;
+    }
+
+    private static Dictionary<string, string>? BuildMetadata(LLMRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId) &&
+            (request.Metadata == null || request.Metadata.Count == 0))
+        {
+            return null;
+        }
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (request.Metadata != null)
+        {
+            foreach (var pair in request.Metadata)
+                metadata[pair.Key] = pair.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.RequestId))
+            metadata[LLMRequestMetadataKeys.RequestId] = request.RequestId.Trim();
+
+        return metadata;
     }
 
     // ─── 转换：LlmTornado → Aevatar ───
@@ -114,12 +168,9 @@ public sealed class TornadoLLMProvider : ILLMProvider
 
         if (choice?.Message?.ToolCalls is { Count: > 0 })
         {
-            toolCalls = choice.Message.ToolCalls.Select(tc => new AevatarToolCall
-            {
-                Id = tc.Id ?? Guid.NewGuid().ToString("N"),
-                Name = tc.FunctionCall?.Name ?? "",
-                ArgumentsJson = tc.FunctionCall?.Arguments ?? "{}",
-            }).ToList();
+            toolCalls = choice.Message.ToolCalls
+                .Select(ConvertToolCall)
+                .ToList();
         }
 
         TokenUsage? usage = null;
@@ -137,6 +188,38 @@ public sealed class TornadoLLMProvider : ILLMProvider
             ToolCalls = toolCalls,
             Usage = usage,
             FinishReason = choice?.FinishReason?.ToString(),
+        };
+    }
+
+    private static TokenUsage? MapUsage(ChatUsage? usage)
+    {
+        if (usage == null)
+            return null;
+
+        return new TokenUsage(
+            usage.PromptTokens,
+            usage.CompletionTokens,
+            usage.TotalTokens);
+    }
+
+    private static AevatarToolCall ConvertToolCall(LlmTornado.ChatFunctions.ToolCall toolCall)
+    {
+        return new AevatarToolCall
+        {
+            Id = toolCall.Id ?? Guid.NewGuid().ToString("N"),
+            Name = toolCall.FunctionCall?.Name ?? string.Empty,
+            ArgumentsJson = toolCall.FunctionCall?.Arguments ?? "{}",
+        };
+    }
+
+    // Keep delta semantics: missing stream IDs should remain empty for downstream merge.
+    private static AevatarToolCall ConvertToolCallDelta(LlmTornado.ChatFunctions.ToolCall toolCall)
+    {
+        return new AevatarToolCall
+        {
+            Id = toolCall.Id ?? string.Empty,
+            Name = toolCall.FunctionCall?.Name ?? string.Empty,
+            ArgumentsJson = toolCall.FunctionCall?.Arguments ?? string.Empty,
         };
     }
 }

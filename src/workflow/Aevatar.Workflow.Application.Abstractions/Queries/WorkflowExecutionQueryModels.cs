@@ -5,17 +5,95 @@ public sealed record WorkflowAgentSummary(
     string Type,
     string Description);
 
-public sealed record WorkflowRunSummary(
-    string RunId,
-    string WorkflowName,
-    string RootActorId,
-    DateTimeOffset StartedAt,
-    DateTimeOffset EndedAt,
-    double DurationMs,
-    bool? Success,
-    int TotalSteps,
-    WorkflowRunProjectionScope ProjectionScope,
-    WorkflowRunCompletionStatus CompletionStatus);
+public sealed class WorkflowCatalogItem
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string Group { get; set; } = string.Empty;
+    public string GroupLabel { get; set; } = string.Empty;
+    public int SortOrder { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string SourceLabel { get; set; } = string.Empty;
+    public bool ShowInLibrary { get; set; }
+    public bool IsPrimitiveExample { get; set; }
+    public bool RequiresLlmProvider { get; set; }
+    public List<string> Primitives { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogRole
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string SystemPrompt { get; set; } = string.Empty;
+    public string Provider { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public float? Temperature { get; set; }
+    public int? MaxTokens { get; set; }
+    public int? MaxToolRounds { get; set; }
+    public int? MaxHistoryMessages { get; set; }
+    public int? StreamBufferCapacity { get; set; }
+    public List<string> EventModules { get; set; } = [];
+    public string EventRoutes { get; set; } = string.Empty;
+    public List<string> Connectors { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogChildStep
+{
+    public string Id { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+}
+
+public sealed class WorkflowCatalogStep
+{
+    public string Id { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+    public Dictionary<string, string> Parameters { get; set; } = [];
+    public string Next { get; set; } = string.Empty;
+    public Dictionary<string, string> Branches { get; set; } = [];
+    public List<WorkflowCatalogChildStep> Children { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogEdge
+{
+    public string From { get; set; } = string.Empty;
+    public string To { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+}
+
+public sealed class WorkflowCatalogDefinition
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public bool ClosedWorldMode { get; set; }
+    public List<WorkflowCatalogRole> Roles { get; set; } = [];
+    public List<WorkflowCatalogStep> Steps { get; set; } = [];
+}
+
+public sealed class WorkflowCatalogItemDetail
+{
+    public WorkflowCatalogItem Catalog { get; set; } = new();
+    public string Yaml { get; set; } = string.Empty;
+    public WorkflowCatalogDefinition Definition { get; set; } = new();
+    public List<WorkflowCatalogEdge> Edges { get; set; } = [];
+}
+public enum WorkflowActorGraphDirection
+{
+    Outbound = 0,
+    Inbound = 1,
+    Both = 2,
+}
+
+public sealed class WorkflowActorGraphQueryOptions
+{
+    public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
+
+    public IReadOnlyList<string> EdgeTypes { get; set; } = [];
+}
+
+public sealed record WorkflowTopologyEdge(string Parent, string Child);
 
 public enum WorkflowRunProjectionScope
 {
@@ -50,7 +128,11 @@ public sealed class WorkflowRunReport
     public WorkflowRunCompletionStatus CompletionStatus { get; set; } = WorkflowRunCompletionStatus.Unknown;
     public string WorkflowName { get; set; } = string.Empty;
     public string RootActorId { get; set; } = string.Empty;
-    public string RunId { get; set; } = string.Empty;
+    public string CommandId { get; set; } = string.Empty;
+    public long StateVersion { get; set; }
+    public string LastEventId { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public double DurationMs { get; set; }
@@ -78,7 +160,6 @@ public sealed class WorkflowRunStepTrace
 {
     public string StepId { get; set; } = string.Empty;
     public string StepType { get; set; } = string.Empty;
-    public string RunId { get; set; } = string.Empty;
     public string TargetRole { get; set; } = string.Empty;
     public DateTimeOffset? RequestedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
@@ -87,7 +168,15 @@ public sealed class WorkflowRunStepTrace
     public string OutputPreview { get; set; } = string.Empty;
     public string Error { get; set; } = string.Empty;
     public Dictionary<string, string> RequestParameters { get; set; } = [];
-    public Dictionary<string, string> CompletionMetadata { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
+    public string NextStepId { get; set; } = string.Empty;
+    public string BranchKey { get; set; } = string.Empty;
+    public string AssignedVariable { get; set; } = string.Empty;
+    public string AssignedValue { get; set; } = string.Empty;
+    public string SuspensionType { get; set; } = string.Empty;
+    public string SuspensionPrompt { get; set; } = string.Empty;
+    public int? SuspensionTimeoutSeconds { get; set; }
+    public string RequestedVariableName { get; set; } = string.Empty;
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;

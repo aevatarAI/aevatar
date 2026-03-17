@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Collections.Concurrent;
-using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Abstractions.Persistence;
 
 namespace Aevatar.Foundation.Runtime.Persistence;
@@ -18,7 +17,6 @@ public sealed class InMemoryStateStore<TState> : IStateStore<TState> where TStat
     /// <summary>Loads state for the specified agent.</summary>
     public Task<TState?> LoadAsync(string agentId, CancellationToken ct = default)
     {
-        AgentMetrics.StateLoads.Add(1, [new("state.type", typeof(TState).Name)]);
         return Task.FromResult(_store.GetValueOrDefault(agentId));
     }
 
@@ -26,7 +24,6 @@ public sealed class InMemoryStateStore<TState> : IStateStore<TState> where TStat
     public Task SaveAsync(string agentId, TState state, CancellationToken ct = default)
     {
         _store[agentId] = state;
-        AgentMetrics.StateSaves.Add(1, [new("state.type", typeof(TState).Name)]);
         return Task.CompletedTask;
     }
 

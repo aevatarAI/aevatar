@@ -1,8 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// IAgentTool — Agent 工具接口
-// 定义工具契约：名称、描述、参数 Schema、执行方法
-// ─────────────────────────────────────────────────────────────
-
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
@@ -16,6 +11,9 @@ public interface IAgentTool
 
     /// <summary>工具参数 JSON Schema，描述输入格式。</summary>
     string ParametersSchema { get; }
+
+    /// <summary>工具审批模式。默认 NeverRequire（立即执行）。</summary>
+    ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     /// <summary>执行工具。参数为 JSON 字符串，返回结果为 JSON 字符串。</summary>
     /// <param name="argumentsJson">LLM 传入的参数 JSON。</param>

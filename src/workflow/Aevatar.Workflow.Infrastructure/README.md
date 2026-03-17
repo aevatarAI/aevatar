@@ -1,33 +1,62 @@
 # Aevatar.Workflow.Infrastructure
 
-`Aevatar.Workflow.Infrastructure` 提供 Workflow 应用层端口的基础设施实现（文件系统、工件落盘、启动装配）。
+工作流基础设施层。负责 IO、配置装配、Host 能力接线，以及 `IWorkflowRunActorPort` 的运行时适配。
 
-## 当前实现
+## 当前职责
 
-- `Reporting/FileSystemWorkflowExecutionReportArtifactSink`
-  - 实现 `IWorkflowExecutionReportArtifactSink`。
-  - 将 `WorkflowRunReport` 输出为 JSON/HTML 工件。
-- `Reporting/WorkflowExecutionReportWriter`
-  - 报告序列化与 HTML 渲染。
-- `Workflows/WorkflowDefinitionFileLoader`
-  - 从目录加载 `*.yaml/*.yml` 并注册到 `IWorkflowDefinitionRegistry`。
-- `Workflows/WorkflowDefinitionBootstrapHostedService`
-  - 宿主启动时自动加载 workflow 文件源。
+- workflow 文件系统加载
+- workflow capability endpoint 装配
+- run/report 工件落盘
+- `IWorkflowRunActorPort` 运行时实现
 
-## DI 扩展
+## WorkflowRunActorPort
 
-- `AddWorkflowInfrastructure(...)`
-  - 注册报告工件 sink。
-- `AddWorkflowDefinitionFileSource(...)`
-  - 注册 workflow 文件源与启动加载 HostedService。
+当前基础设施端口已经按 definition/run split 落地：
 
-## 配置
+- `CreateDefinitionAsync()` 创建 `WorkflowGAgent`
+- `CreateRunAsync(WorkflowDefinitionBinding)` 创建 `WorkflowRunGAgent`，并返回本次创建的 actor 集合用于失败回滚
+- `BindWorkflowDefinitionAsync()` 负责向 definition actor 发送权威绑定事件
+- `ParseWorkflowYamlAsync()` 负责入口 YAML 校验
 
-- `WorkflowExecutionReportArtifacts:OutputDirectory`
-  - 报告输出目录，默认 `artifacts/workflow-executions`。
-- `WorkflowDefinitionFileSource:WorkflowDirectories`
-  - workflow 定义扫描目录列表。
+`CreateRunAsync()` 会把 definition snapshot 绑定到新的 run actor，而不是复用 source actor 直接执行；若 definition actor 由这次调用新建，也会一并纳入 rollback 元数据。
 
-## 分层说明
+当前实现约束：
 
-本项目依赖 `Aevatar.Workflow.Application.Abstractions` 端口，不依赖 `Aevatar.Workflow.Application` 实现。
+- source actor binding 读取统一通过 `IWorkflowActorBindingReader`。当前默认实现是 projection 侧的 `ProjectionWorkflowActorBindingReader`：先判定 actor kind，再确保 binding projection，就地读取 read model；不再依赖 runtime query/reply 侧读 actor 状态。
+- 对显式传入的 `DefinitionActorId`，端口采用强约束复用策略：
+  - actor 不存在：按该 id 创建新的 `WorkflowGAgent`
+  - actor 已存在且是 `WorkflowGAgent`：若 definition 已一致则直接复用，不一致则原地重绑
+  - actor 已存在但不是 `WorkflowGAgent`：立即失败
+- 只有 `DefinitionActorId` 为空时，端口才允许创建无固定 id 的 definition actor；这一路径只用于 inline/ad-hoc workflow，不用于 registry-backed named workflow。
+
+## API 语义
+
+- `/api/chat`
+  - 创建并驱动新的 run actor
+- `/api/workflows/resume`
+  - 通过 `IWorkflowActorBindingReader` 校验目标必须是 run actor
+- `/api/workflows/signal`
+  - 通过 `IWorkflowActorBindingReader` 校验目标必须是 run actor
+
+## 目录
+
+```
+Aevatar.Workflow.Infrastructure/
+├── CapabilityApi/
+│   ├── ChatEndpoints.cs
+│   ├── ChatQueryEndpoints.cs
+│   └── ChatRunRequestNormalizer.cs
+├── Runs/
+│   └── WorkflowRunActorPort.cs
+├── Workflows/
+│   ├── WorkflowDefinitionFileLoader.cs
+│   └── WorkflowDefinitionBootstrapHostedService.cs
+└── Reporting/
+```
+
+## 分层边界
+
+- 依赖 Application abstractions
+- 可以依赖 Workflow.Core 作为 runtime adapter 的落地类型来源
+- 不在本层编排 run 业务逻辑
+- 不在本层维护 workflow 事实状态

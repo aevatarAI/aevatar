@@ -1,50 +1,64 @@
 # Aevatar.Workflow.Projection
 
-`Aevatar.Workflow.Projection` 是 Workflow 领域的 CQRS 读侧扩展层。
+workflow 领域的 projection/readmodel 实现。当前 durable materialization 已显式拆分为 authority current-state replica 和 derived artifacts：
 
-## 职责边界
+- authority：`WorkflowRunGAgent + WorkflowRunState + root committed events`
+- current-state replica：`WorkflowExecutionCurrentStateDocument`
+- durable artifacts：report / timeline / graph / actor binding
+- session observation：AGUI / live workflow run events
 
-- 应用层投影端口实现：`IWorkflowExecutionProjectionPort`（实现类 `WorkflowExecutionProjectionService`）
-- 领域上下文：`IWorkflowExecutionProjectionContextFactory`、`WorkflowExecutionProjectionContext`
-- run 输出契约：`WorkflowRunEvent`、`IWorkflowRunEventSink`、`WorkflowRunEventChannel`（定义于 `Aevatar.Workflow.Application.Abstractions`）
-- 领域投影实现：reducers、projectors、read model store
-- 领域 DI 组合：`AddWorkflowExecutionProjectionCQRS(...)`
+## 主链
 
-本项目依赖：
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+  RUN["WorkflowRunGAgent committed observation"]
+  CUR["WorkflowExecutionCurrentStateProjector"]
+  REP["WorkflowRunInsightReportArtifactProjector"]
+  TL["WorkflowRunTimelineArtifactProjector"]
+  GRA["WorkflowRunGraphArtifactProjector"]
+  AGUI["WorkflowExecutionRunEventProjector"]
+  CURDOC["Current-State Document"]
+  REPDOC["WorkflowRunInsightReportDocument"]
+  TLDOC["WorkflowRunTimelineDocument"]
+  GRAPH["Graph Store"]
+  HUB["ProjectionSessionEventHub&lt;WorkflowRunEventEnvelope&gt;"]
 
-- `Aevatar.CQRS.Projection.Abstractions`（通用抽象）
-- `Aevatar.CQRS.Projection.Core`（通用生命周期/订阅/协调实现）
+  RUN --> CUR --> CURDOC
+  RUN --> REP --> REPDOC
+  RUN --> TL --> TLDOC
+  RUN --> GRA --> GRAPH
+  RUN --> AGUI --> HUB
+```
 
-## 统一运行链路
+## 组成
 
-1. `StartAsync` 创建 projection run 上下文并注册 actor stream 订阅
-2. 每条 `EventEnvelope` 进入统一 coordinator，一对多调用已注册 projector
-3. `WorkflowExecutionReadModelProjector` 驱动 reducers 生成并更新 read model
-4. `WaitForRunProjectionCompletionStatusAsync` 返回 `Completed/TimedOut/Failed/...` 明确状态
-5. `CompleteAsync` 解除订阅并完成 run 生命周期
+### durable materialization
 
-AGUI 输出与 CQRS 读模型共享同一链路，只是在 projector 分支不同。
-应用层通过 `SetRunEventSink/GetRunEventSink` 挂载 run 级输出通道；
-AGUI 分支实现位于 `Aevatar.Workflow.Presentation.AGUIAdapter`，本项目保留领域中立 run 事件契约。
+- [WorkflowExecutionMaterializationPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionMaterializationPort.cs)
+- [WorkflowExecutionCurrentStateQueryPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionCurrentStateQueryPort.cs)
+- [WorkflowExecutionArtifactQueryPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionArtifactQueryPort.cs)
+- [WorkflowExecutionCurrentStateProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs)
+- [WorkflowRunInsightReportArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportArtifactProjector.cs)
+- [WorkflowRunTimelineArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineArtifactProjector.cs)
+- [WorkflowRunGraphArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphArtifactProjector.cs)
+- [WorkflowRunGraphArtifactMaterializer.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/ReadModels/WorkflowRunGraphArtifactMaterializer.cs)
 
-## 扩展方式
+### session observation
 
-- 新增 reducer：
-  - 实现 `IProjectionEventReducer<WorkflowExecutionReport, WorkflowExecutionProjectionContext>`
-  - 在 DI 中注册
-- 新增 projector：
-  - 实现 `IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>`
-  - 在 DI 中注册
-- 替换存储：
-  - 实现 `IProjectionReadModelStore<WorkflowExecutionReport, string>`
-  - 使用自定义实现替换默认内存存储
-- 可选 run 隔离：
-  - 配置 `WorkflowExecutionProjectionOptions.EnableRunEventIsolation = true`
-  - 默认为 `false`（`actor_shared` 语义）
-- 扩展 run 输出协议：
-  - 保持 `WorkflowRunEvent` 不变，新增 presentation adapter 进行协议映射
-  - 不改 Application 用例编排代码
+- [WorkflowExecutionProjectionPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionPort.cs)
+- [WorkflowExecutionRunEventProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs)
 
-## 与 API 的关系
+### shared artifact support
 
-`Aevatar.Host.Api` 通过 `Aevatar.Workflow.Application` 调用本项目，不直接编排投影内核细节。API 仅负责协议适配（SSE/WebSocket/HTTP Query）。
+- [WorkflowExecutionArtifactMaterializationSupport.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionArtifactMaterializationSupport.cs)
+
+## 关键约束
+
+- 不存在 `WorkflowRunInsightGAgent` secondary chain
+- current-state 只承认 actor-scoped current-state replica
+- report/timeline/graph 明确属于 derived durable artifacts
+- current-state/report/timeline/graph 都直接消费 root committed observation
+- session release 不会停止 durable materialization
+- session activation 只保留 `rootActorId + commandId`
+- graph 直接读取 graph store，不再从 report document 派生

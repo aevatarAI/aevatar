@@ -64,6 +64,8 @@ BenchmarkDotNet.Artifacts/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+!src/platform/Aevatar.GAgentService.Infrastructure/Artifacts/
+!src/platform/Aevatar.GAgentService.Infrastructure/Artifacts/**
 
 # Tye
 .tye/
@@ -487,3 +489,6 @@ scripts/.pids/
 .env.production
 .playwright-mcp
 *.db
+docs/agents-working-space/*
+.tools/*
+.plan/

@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>检查点模块。处理 type=checkpoint 的步骤。</summary>
-public sealed class CheckpointModule : IEventModule
+public sealed class CheckpointModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "checkpoint";
     public int Priority => 5;
@@ -21,7 +21,7 @@ public sealed class CheckpointModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var request = envelope.Payload!.Unpack<StepRequestEvent>();
         if (request.StepType != "checkpoint") return;
@@ -34,8 +34,9 @@ public sealed class CheckpointModule : IEventModule
         // 简化实现：将 input 透传为 output
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = request.StepId, RunId = request.RunId,
+            StepId = request.StepId,
+            RunId = request.RunId,
             Success = true, Output = request.Input,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

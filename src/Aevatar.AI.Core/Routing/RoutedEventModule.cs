@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // RoutedEventModule — 路由过滤包装器
 //
-// 包装一个 IEventModule，只有匹配路由规则的事件才传给内部模块。
+// 包装一个 IEventModule<IEventHandlerContext>，只有匹配路由规则的事件才传给内部模块。
 // 实现了 IRouteBypassModule 的模块不会被此包装器包装。
 // ─────────────────────────────────────────────────────────────
 
@@ -14,13 +14,13 @@ namespace Aevatar.AI.Core.Routing;
 /// <summary>
 /// 路由过滤包装器。只有匹配路由规则且目标模块名一致的事件才传给内部模块。
 /// </summary>
-public sealed class RoutedEventModule : IEventModule
+public sealed class RoutedEventModule : IEventModule<IEventHandlerContext>
 {
-    private readonly IEventModule _inner;
+    private readonly IEventModule<IEventHandlerContext> _inner;
     private readonly EventRoute[] _routes;
     private readonly IEventRouteEvaluator _evaluator;
 
-    public RoutedEventModule(IEventModule inner, EventRoute[] routes, IEventRouteEvaluator? evaluator = null)
+    public RoutedEventModule(IEventModule<IEventHandlerContext> inner, EventRoute[] routes, IEventRouteEvaluator? evaluator = null)
     {
         _inner = inner;
         _routes = routes;

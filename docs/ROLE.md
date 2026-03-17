@@ -260,7 +260,30 @@ Connector 是**按名称调用的外部能力**：在 `~/.aevatar/connectors.jso
 
 ---
 
-## 7. 小结
+## 7. Role 初始化参数与业务强类型扩展
+
+在重构后的口径中，`workflow.roles` 里的字段默认是**Role 初始化参数**，不是“通用 app 配置槽位”。
+
+1. **初始化参数与配置分离**
+   - `name/system_prompt/provider/model/temperature/max_*` 属于初始化输入。
+   - 初始化是否写入持久状态，由 RoleGAgent 内部 init 逻辑决定。
+2. **业务扩展走强类型**
+   - 业务侧如果需要自定义配置/状态，定义自己的 `GAgentBase<TState, TConfig>` 子类。
+   - 使用业务强类型事件与状态字段，不使用框架级 JSON 字符串扩展槽位。
+3. **不再推荐通用 app_config/app_state 补丁**
+   - 不再把 `app_config_*` 或等价通用字段作为扩展主路径。
+   - 需要重初始化时，使用显式 reinit 命令或销毁重建 role actor。
+
+这样可以保持：
+
+- 初始化语义清晰（一次性输入）；
+- 配置语义清晰（长期策略）；
+- 状态事实仍由 EventSourcing 回放恢复；
+- 业务模型保持强类型，可验证、可演进。
+
+---
+
+## 8. 小结
 
 | 要点 | 说明 |
 |------|------|

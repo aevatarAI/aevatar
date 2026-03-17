@@ -1,0 +1,32 @@
+groups:
+  - name: aevatar-observability
+    rules:
+      - alert: AevatarApiErrorRatioHigh
+        expr: sum(increase(aevatar_api_requests_total{result="error"}[5m])) / clamp_min(sum(increase(aevatar_api_requests_total[5m])), 1) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          service: aevatar-workflow-host
+        annotations:
+          summary: API error ratio is above 1%.
+          description: API requests have exceeded a 1% error ratio for 10 minutes.
+
+      - alert: AevatarRuntimeEventErrorRatioHigh
+        expr: sum(increase(aevatar_runtime_events_handled_total{result="error"}[5m])) / clamp_min(sum(increase(aevatar_runtime_events_handled_total[5m])), 1) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          service: aevatar-runtime
+        annotations:
+          summary: Runtime event error ratio is above 1%.
+          description: Runtime event handling has exceeded a 1% error ratio for 10 minutes.
+
+      - alert: AevatarApiFirstResponseP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(aevatar_api_first_response_duration_ms_bucket[5m]))) > 5000
+        for: 10m
+        labels:
+          severity: warning
+          service: aevatar-workflow-host
+        annotations:
+          summary: API first-response p95 is above 5000 ms.
+          description: User-perceived first response latency has remained above 5000 ms for 10 minutes.

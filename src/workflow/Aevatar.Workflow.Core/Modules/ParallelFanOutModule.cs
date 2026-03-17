@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -13,13 +14,9 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// 并行扇出模块。处理 parallel 类型步骤：拆分 N 个子步骤并行下发，收齐后合并结果并发布 StepCompletedEvent。
 /// </summary>
-public sealed class ParallelFanOutModule : IEventModule
+public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<string, int> _expected = [];
-    private readonly Dictionary<string, List<StepCompletedEvent>> _collected = [];
-    private readonly Dictionary<string, VoteConfig> _voteConfigs = [];
-    private readonly Dictionary<string, string> _voteStepToParent = [];
-    private readonly Dictionary<string, bool> _parentWorkerSuccess = [];
+    private const string ModuleStateKey = "parallel_fanout";
 
     /// <summary>
     /// 模块名称。
@@ -46,7 +43,7 @@ public sealed class ParallelFanOutModule : IEventModule
     /// <param name="envelope">事件信封。</param>
     /// <param name="ctx">事件处理上下文。</param>
     /// <param name="ct">取消令牌。</param>
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var payload = envelope.Payload;
         if (payload == null) return;
@@ -55,16 +52,33 @@ public sealed class ParallelFanOutModule : IEventModule
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "parallel") return;
+            var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var count = evt.Parameters.TryGetValue("parallel_count", out var cs) && int.TryParse(cs, out var n) ? n : 3;
-            _expected[evt.StepId] = count; _collected[evt.StepId] = [];
+            var state = WorkflowExecutionStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
             // Resolve which worker roles to fan out to
             // If step has workers param (comma-separated role IDs), use those; else generate generic sub-steps
             var workerRoles = new List<string>();
             if (evt.Parameters.TryGetValue("workers", out var workersParam) && !string.IsNullOrEmpty(workersParam))
             {
-                workerRoles.AddRange(workersParam.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                workerRoles.AddRange(WorkflowParameterValueParser.ParseStringList(workersParam));
                 count = workerRoles.Count;
-                _expected[evt.StepId] = count;
+            }
+
+            if (workerRoles.Count == 0 && string.IsNullOrWhiteSpace(evt.TargetRole))
+            {
+                ctx.Logger.LogWarning(
+                    "ParallelFanOut: step={StepId} missing workers and target_role; cannot fan-out.",
+                    evt.StepId);
+                state.Parents.Remove(evt.StepId);
+                await SaveStateAsync(state, ctx, ct);
+                await ctx.PublishAsync(new StepCompletedEvent
+                {
+                    StepId = evt.StepId,
+                    RunId = runId,
+                    Success = false,
+                    Error = "parallel requires parameters.workers (CSV/JSON list) or target_role",
+                }, TopologyAudience.Self, ct);
+                return;
             }
 
             var voteStepType = evt.Parameters.TryGetValue("vote_step_type", out var vst) ? vst : "";
@@ -74,7 +88,19 @@ public sealed class ParallelFanOutModule : IEventModule
                 if (key.StartsWith("vote_param_", StringComparison.OrdinalIgnoreCase))
                     voteParams[key["vote_param_".Length..]] = value;
             }
-            _voteConfigs[evt.StepId] = new VoteConfig(voteStepType, voteParams);
+            var parentState = new ParallelParentState
+            {
+                Expected = count,
+                VoteConfig = new VoteConfigState
+                {
+                    StepType = voteStepType,
+                },
+            };
+            foreach (var (key, value) in voteParams)
+                parentState.VoteConfig.Parameters[key] = value;
+
+            state.Parents[evt.StepId] = parentState;
+            await SaveStateAsync(state, ctx, ct);
 
             var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
             ctx.Logger.LogInformation("ParallelFanOut: step={StepId} fanout to {Count} workers, vote={VoteType}, input=({Len} chars) {Preview}",
@@ -87,101 +113,121 @@ public sealed class ParallelFanOutModule : IEventModule
                 {
                     StepId = $"{evt.StepId}_sub_{i}",
                     StepType = "llm_call",
-                    RunId = evt.RunId,
+                    RunId = runId,
                     Input = evt.Input,
                     TargetRole = role ?? "",
-                }, EventDirection.Self, ct);
+                }, TopologyAudience.Self, ct);
             }
         }
         else
         {
             var evt = payload.Unpack<StepCompletedEvent>();
+            var eventRunId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
+            var state = WorkflowExecutionStateAccess.Load<ParallelFanOutModuleState>(ctx, ModuleStateKey);
 
             // Vote result: map back to parent parallel step.
-            if (_voteStepToParent.TryGetValue(evt.StepId, out var voteParent))
+            if (state.VoteStepToParent.TryGetValue(evt.StepId, out var voteParentStepId))
             {
-                _voteStepToParent.Remove(evt.StepId);
-                _voteConfigs.Remove(voteParent);
-
-                var workersSuccess = _parentWorkerSuccess.TryGetValue(voteParent, out var successFromWorkers) &&
+                state.VoteStepToParent.Remove(evt.StepId);
+                var workersSuccess = state.ParentWorkerSuccess.TryGetValue(voteParentStepId, out var successFromWorkers) &&
                                      successFromWorkers;
-                _parentWorkerSuccess.Remove(voteParent);
+                state.ParentWorkerSuccess.Remove(voteParentStepId);
+                state.Parents.Remove(voteParentStepId);
+                await SaveStateAsync(state, ctx, ct);
 
                 var final = new StepCompletedEvent
                 {
-                    StepId = voteParent,
-                    RunId = evt.RunId,
+                    StepId = voteParentStepId,
+                    RunId = eventRunId,
                     Success = workersSuccess && evt.Success,
                     Output = evt.Output,
                     Error = evt.Error,
                     WorkerId = evt.WorkerId,
                 };
 
-                foreach (var (key, value) in evt.Metadata)
-                    final.Metadata[key] = value;
-                final.Metadata["parallel.used_vote"] = "true";
-                final.Metadata["parallel.vote_step_id"] = evt.StepId;
-                final.Metadata["parallel.workers_success"] = workersSuccess.ToString();
+                foreach (var (key, value) in evt.Annotations)
+                    final.Annotations[key] = value;
+                final.Annotations["parallel.used_vote"] = "true";
+                final.Annotations["parallel.vote_step_id"] = evt.StepId;
+                final.Annotations["parallel.workers_success"] = workersSuccess.ToString();
 
-                await ctx.PublishAsync(final, EventDirection.Self, ct);
+                await ctx.PublishAsync(final, TopologyAudience.Self, ct);
                 return;
             }
 
             var parent = evt.StepId.LastIndexOf("_sub_", StringComparison.Ordinal) is var idx and > 0 ? evt.StepId[..idx] : null;
-            if (parent == null || !_collected.ContainsKey(parent)) return;
-            _collected[parent].Add(evt);
+            if (parent == null) return;
+            if (!state.Parents.TryGetValue(parent, out var parentState)) return;
+            parentState.Collected.Add(evt.ToParallelItemResult());
+            state.Parents[parent] = parentState;
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
-                evt.StepId, _collected[parent].Count, _expected[parent]);
-            if (_collected[parent].Count >= _expected[parent])
+                evt.StepId, parentState.Collected.Count, parentState.Expected);
+            if (parentState.Collected.Count >= parentState.Expected)
             {
-                var results = _collected[parent];
+                var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
                 var merged = string.Join("\n---\n", results.Select(r => r.Output));
                 ctx.Logger.LogInformation("ParallelFanOut: step={StepId} all {Count} workers done, merged=({Len} chars)",
                     parent, results.Count, merged.Length);
 
-                if (_voteConfigs.TryGetValue(parent, out var voteConfig) &&
-                    !string.IsNullOrWhiteSpace(voteConfig.StepType))
+                if (!string.IsNullOrWhiteSpace(parentState.VoteConfig.StepType))
                 {
                     var voteStepId = $"{parent}_vote";
-                    _voteStepToParent[voteStepId] = parent;
-                    _parentWorkerSuccess[parent] = allSuccess;
+                    state.VoteStepToParent[voteStepId] = parent;
+                    state.ParentWorkerSuccess[parent] = allSuccess;
+                    await SaveStateAsync(state, ctx, ct);
 
                     var voteReq = new StepRequestEvent
                     {
                         StepId = voteStepId,
-                        StepType = voteConfig.StepType,
-                        RunId = evt.RunId,
+                        StepType = parentState.VoteConfig.StepType,
+                        RunId = eventRunId,
                         Input = merged,
                     };
-                    foreach (var (key, value) in voteConfig.Parameters)
+                    foreach (var (key, value) in parentState.VoteConfig.Parameters)
                         voteReq.Parameters[key] = value;
 
                     ctx.Logger.LogInformation(
                         "ParallelFanOut: step={StepId} dispatch vote step={VoteStepId} type={VoteType}",
-                        parent, voteStepId, voteConfig.StepType);
+                        parent, voteStepId, parentState.VoteConfig.StepType);
 
-                    await ctx.PublishAsync(voteReq, EventDirection.Self, ct);
+                    await ctx.PublishAsync(voteReq, TopologyAudience.Self, ct);
                 }
                 else
                 {
+                    state.Parents.Remove(parent);
+                    await SaveStateAsync(state, ctx, ct);
                     var completed = new StepCompletedEvent
                     {
                         StepId = parent,
-                        RunId = evt.RunId,
+                        RunId = eventRunId,
                         Success = allSuccess,
                         Output = merged,
                     };
-                    completed.Metadata["parallel.used_vote"] = "false";
-                    await ctx.PublishAsync(completed, EventDirection.Self, ct);
-                    _voteConfigs.Remove(parent);
+                    completed.Annotations["parallel.used_vote"] = "false";
+                    await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 }
-
-                _collected.Remove(parent);
-                _expected.Remove(parent);
+            }
+            else
+            {
+                await SaveStateAsync(state, ctx, ct);
             }
         }
     }
 
-    private sealed record VoteConfig(string StepType, Dictionary<string, string> Parameters);
+    private static Task SaveStateAsync(
+        ParallelFanOutModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Parents.Count == 0 &&
+            state.VoteStepToParent.Count == 0 &&
+            state.ParentWorkerSuccess.Count == 0)
+        {
+            return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+        }
+
+        return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
+    }
+
 }

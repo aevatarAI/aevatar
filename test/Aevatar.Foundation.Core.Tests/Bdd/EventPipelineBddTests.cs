@@ -43,7 +43,7 @@ public class EventPipelineBddTests
 }
 
 /// <summary>Test module.</summary>
-public class TestModule : IEventModule
+public class TestModule : IEventModule<IEventHandlerContext>
 {
     public string Name => "test_module";
     public int Priority { get; init; } = 5;

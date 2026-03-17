@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Abstractions";
+
+import "service_endpoint.proto";
+
+message ServicePolicySpec {
+  ServiceIdentity identity = 1;
+  string policy_id = 2;
+  string display_name = 3;
+  repeated string activation_required_binding_ids = 4;
+  repeated string invoke_allowed_caller_service_keys = 5;
+  bool invoke_requires_active_deployment = 6;
+}
+
+message ServicePolicyRecordState {
+  ServicePolicySpec spec = 1;
+  bool retired = 2;
+}
+
+message ServicePolicyCatalogState {
+  ServiceIdentity identity = 1;
+  map<string, ServicePolicyRecordState> policies = 2;
+  int64 last_applied_event_version = 3;
+  string last_event_id = 4;
+}
+
+message CreateServicePolicyCommand {
+  ServicePolicySpec spec = 1;
+}
+
+message UpdateServicePolicyCommand {
+  ServicePolicySpec spec = 1;
+}
+
+message RetireServicePolicyCommand {
+  ServiceIdentity identity = 1;
+  string policy_id = 2;
+}
+
+message ServicePolicyCreatedEvent {
+  ServicePolicySpec spec = 1;
+}
+
+message ServicePolicyUpdatedEvent {
+  ServicePolicySpec spec = 1;
+}
+
+message ServicePolicyRetiredEvent {
+  ServiceIdentity identity = 1;
+  string policy_id = 2;
+}

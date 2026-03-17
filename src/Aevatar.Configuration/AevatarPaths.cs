@@ -86,6 +86,21 @@ public static class AevatarPaths
     /// <summary>MCP 服务器配置目录。</summary>
     public static string MCP => Path.Combine(Root, "mcp");
 
+    /// <summary>App 运行态目录。</summary>
+    public static string Apps => Path.Combine(Root, "apps");
+
+    /// <summary>Playground 运行目录。</summary>
+    public static string Playground => Path.Combine(Apps, "playground");
+
+    /// <summary>Playground 会话目录。</summary>
+    public static string PlaygroundSessions => Path.Combine(Playground, "sessions");
+
+    /// <summary>Playground YAML 目录。</summary>
+    public static string PlaygroundYamls => Path.Combine(Playground, "yamls");
+
+    /// <summary>Playground 图缓存目录。</summary>
+    public static string PlaygroundGraphs => Path.Combine(Playground, "graphs");
+
     /// <summary>
     /// 仓库根目录下的 workflows 路径（用于从 repo 根加载 YAML，用户无需拷贝到 ~/.aevatar）。
     /// 解析方式：从当前目录或程序基目录向上查找含 aevatar.slnx、.git 或 Directory.Build.props 的目录，取其 workflows 子目录；未找到则用当前目录的 workflows。
@@ -138,6 +153,11 @@ public static class AevatarPaths
         Directory.CreateDirectory(Sessions);
         Directory.CreateDirectory(Logs);
         Directory.CreateDirectory(MCP);
+        Directory.CreateDirectory(Apps);
+        Directory.CreateDirectory(Playground);
+        Directory.CreateDirectory(PlaygroundSessions);
+        Directory.CreateDirectory(PlaygroundYamls);
+        Directory.CreateDirectory(PlaygroundGraphs);
     }
 
     /// <summary>获取指定 Agent 的 YAML 配置文件路径。</summary>

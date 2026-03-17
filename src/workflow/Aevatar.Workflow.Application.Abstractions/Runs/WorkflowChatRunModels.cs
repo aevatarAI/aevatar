@@ -1,11 +1,13 @@
-using Aevatar.Workflow.Application.Abstractions.Queries;
-
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowChatRunRequest(
     string Prompt,
     string? WorkflowName,
-    string? ActorId);
+    string? ActorId,
+    string? SessionId = null,
+    // Inline workflow YAML bundle; first item is the entry workflow.
+    IReadOnlyList<string>? WorkflowYamls = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -14,6 +16,10 @@ public enum WorkflowChatRunStartError
     WorkflowNotFound = 2,
     AgentTypeNotSupported = 3,
     ProjectionDisabled = 4,
+    WorkflowBindingMismatch = 5,
+    AgentWorkflowNotConfigured = 6,
+    InvalidWorkflowYaml = 7,
+    WorkflowNameMismatch = 8,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -27,40 +33,8 @@ public enum WorkflowProjectionCompletionStatus
     Unknown = 99,
 }
 
-public sealed record WorkflowChatRunStarted(
+public sealed record WorkflowChatRunAcceptedReceipt(
     string ActorId,
     string WorkflowName,
-    string RunId);
-
-public sealed record WorkflowChatRunFinalizeResult(
-    WorkflowProjectionCompletionStatus ProjectionCompletionStatus,
-    bool ProjectionCompleted,
-    WorkflowRunReport? Report);
-
-public sealed record WorkflowChatRunExecutionResult(
-    WorkflowChatRunStartError Error,
-    WorkflowChatRunStarted? Started,
-    WorkflowChatRunFinalizeResult? FinalizeResult)
-{
-    public bool Succeeded => Error == WorkflowChatRunStartError.None;
-}
-
-public sealed record WorkflowOutputFrame
-{
-    public required string Type { get; init; }
-    public long? Timestamp { get; init; }
-    public string? ThreadId { get; init; }
-    public string? RunId { get; init; }
-    public object? Result { get; init; }
-    public string? Message { get; init; }
-    public string? Code { get; init; }
-    public string? StepName { get; init; }
-    public string? MessageId { get; init; }
-    public string? Role { get; init; }
-    public string? Delta { get; init; }
-    public object? Snapshot { get; init; }
-    public string? ToolCallId { get; init; }
-    public string? ToolName { get; init; }
-    public string? Name { get; init; }
-    public object? Value { get; init; }
-}
+    string CommandId,
+    string CorrelationId);

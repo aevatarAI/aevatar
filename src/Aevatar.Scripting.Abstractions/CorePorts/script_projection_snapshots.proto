@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package aevatar.scripting.coreports;
+
+option csharp_namespace = "Aevatar.Scripting.Core.Ports";
+
+import "script_host_messages.proto";
+
+message ScriptDefinitionSnapshot {
+  string script_id = 1;
+  string revision = 2;
+  string source_text = 3;
+  string source_hash = 4;
+  aevatar.scripting.ScriptPackageSpec script_package = 5;
+  string state_type_url = 6;
+  string read_model_type_url = 7;
+  string read_model_schema_version = 8;
+  string read_model_schema_hash = 9;
+  bytes protocol_descriptor_set = 10;
+  string state_descriptor_full_name = 11;
+  string read_model_descriptor_full_name = 12;
+  aevatar.scripting.ScriptRuntimeSemanticsSpec runtime_semantics = 13;
+}
+
+message ScriptCatalogEntrySnapshot {
+  string script_id = 1;
+  string active_revision = 2;
+  string active_definition_actor_id = 3;
+  string active_source_hash = 4;
+  string previous_revision = 5;
+  repeated string revision_history = 6;
+  string last_proposal_id = 7;
+}

@@ -25,6 +25,6 @@ services.AddTornadoProviders(factory => factory
 
 ## 依赖
 
-- `Aevatar.AI.Core`
+- `Aevatar.AI.Abstractions`
 - `LlmTornado`
 - `Microsoft.Extensions.*.Abstractions`

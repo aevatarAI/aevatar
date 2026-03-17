@@ -8,11 +8,22 @@
     <RootNamespace>Aevatar.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Orleans\Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Application\Aevatar.Scripting.Application.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Maker\Aevatar.Workflow.Extensions.Maker.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
+    <ProjectReference Include="..\..\tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
@@ -20,6 +31,30 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Orleans.Serialization.Protobuf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos/claim_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/text_normalization_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/script_evolution_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/hybrid_service_upgrade_protocol.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Aevatar.Scripting.Abstractions" />
   </ItemGroup>
 </Project>

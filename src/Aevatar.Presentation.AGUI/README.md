@@ -20,7 +20,7 @@
 ## 使用场景
 
 - API 层收到 Agent 事件后，投影为 `AGUIEvent` 并通过 SSE 推送给前端
-- 作为协议层被 `Aevatar.Host.Api` 引用
+- 作为协议层被 `Aevatar.Workflow.Host.Api` 引用
 
 ## 依赖
 

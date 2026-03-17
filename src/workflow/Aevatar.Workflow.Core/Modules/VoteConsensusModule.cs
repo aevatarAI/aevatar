@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>投票共识模块。处理 type=vote 的步骤。</summary>
-public sealed class VoteConsensusModule : IEventModule
+public sealed class VoteConsensusModule : IEventModule<IWorkflowExecutionContext>
 {
     public string Name => "vote_consensus";
     public int Priority => 5;
@@ -21,7 +21,7 @@ public sealed class VoteConsensusModule : IEventModule
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true;
 
     /// <inheritdoc />
-    public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+    public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var evt = envelope.Payload!.Unpack<StepRequestEvent>();
         if (evt.StepType != "vote") return;
@@ -33,7 +33,7 @@ public sealed class VoteConsensusModule : IEventModule
             {
                 StepId = evt.StepId, RunId = evt.RunId, Success = false,
                 Error = "投票步骤没有候选结果",
-            }, EventDirection.Self, ct);
+            }, TopologyAudience.Self, ct);
             return;
         }
 
@@ -44,6 +44,6 @@ public sealed class VoteConsensusModule : IEventModule
         await ctx.PublishAsync(new StepCompletedEvent
         {
             StepId = evt.StepId, RunId = evt.RunId, Success = true, Output = winner,
-        }, EventDirection.Self, ct);
+        }, TopologyAudience.Self, ct);
     }
 }

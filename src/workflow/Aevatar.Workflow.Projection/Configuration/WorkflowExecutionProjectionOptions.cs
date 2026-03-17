@@ -1,3 +1,5 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+
 namespace Aevatar.Workflow.Projection.Configuration;
 
 /// <summary>
@@ -6,20 +8,27 @@ namespace Aevatar.Workflow.Projection.Configuration;
 public sealed class WorkflowExecutionProjectionOptions
     : IProjectionRuntimeOptions
 {
+
     /// <summary>
     /// Enables projection pipeline registration.
     /// </summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Exposes read-side run query endpoints.
+    /// Exposes read-side actor query endpoints.
     /// </summary>
-    public bool EnableRunQueryEndpoints { get; set; } = true;
+    public bool EnableActorQueryEndpoints { get; set; } = true;
+
+    public bool EnableRunQueryEndpoints
+    {
+        get => EnableActorQueryEndpoints;
+        set => EnableActorQueryEndpoints = value;
+    }
 
     /// <summary>
-    /// Writes run report artifacts (json/html).
+    /// Writes run report documents/export outputs (json/html).
     /// </summary>
-    public bool EnableRunReportArtifacts { get; set; } = true;
+    public bool EnableRunReportDocuments { get; set; } = true;
 
     /// <summary>
     /// Max wait time for one run projection completion signal.
@@ -32,8 +41,13 @@ public sealed class WorkflowExecutionProjectionOptions
     public int RunProjectionFinalizeGraceTimeoutMs { get; set; } = 1500;
 
     /// <summary>
-    /// When true, projectors should ignore envelopes whose run id doesn't match the current run.
-    /// Default false keeps actor-scoped shared stream semantics.
+    /// Whether to pre-validate read-model provider selection and capabilities during host startup.
     /// </summary>
-    public bool EnableRunEventIsolation { get; set; } = false;
+    public bool ValidateDocumentProviderOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// Whether to pre-validate graph provider selection and capabilities during host startup.
+    /// </summary>
+    public bool ValidateGraphProviderOnStartup { get; set; } = true;
+
 }

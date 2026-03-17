@@ -24,7 +24,7 @@ public sealed class BudgetMonitorHook : IAIGAgentExecutionHook
 
     public Task OnLLMRequestStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
     {
-        if (ctx.Metadata.TryGetValue("history_count", out var val) &&
+        if (ctx.Items.TryGetValue("history_count", out var val) &&
             val is int count && count > WarningThreshold)
             _logger.LogWarning("[Budget] 历史消息数 {Count} 超过阈值 {Threshold}", count, WarningThreshold);
         return Task.CompletedTask;
