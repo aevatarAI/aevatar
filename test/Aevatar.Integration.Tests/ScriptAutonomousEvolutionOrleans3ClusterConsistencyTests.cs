@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
@@ -9,6 +11,7 @@ using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Scripting.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +28,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     public async Task ComplexScriptFlow_ShouldRemainConsistentAcrossThreeOrleansSilos()
     {
         var garnetConnectionString = RequireGarnetConnectionString();
+        var sharedProjectionStores = new SharedScriptingProjectionStores();
         var clusterId = $"aevatar-script-cluster-{Guid.NewGuid():N}";
         var serviceId = $"aevatar-script-service-{Guid.NewGuid():N}";
         var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
@@ -46,7 +50,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node1SiloPort,
             node1GatewayPort,
             null,
-            garnetConnectionString);
+            garnetConnectionString,
+            sharedProjectionStores);
         var node2 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -55,7 +60,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node2SiloPort,
             node2GatewayPort,
             primaryEndpoint,
-            garnetConnectionString);
+            garnetConnectionString,
+            sharedProjectionStores);
         var node3 = await StartSiloHostAsync(
             clusterId,
             serviceId,
@@ -64,7 +70,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             node3SiloPort,
             node3GatewayPort,
             primaryEndpoint,
-            garnetConnectionString);
+            garnetConnectionString,
+            sharedProjectionStores);
 
         try
         {
@@ -309,7 +316,8 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         int siloPort,
         int gatewayPort,
         IPEndPoint? primarySiloEndpoint,
-        string garnetConnectionString)
+        string garnetConnectionString,
+        SharedScriptingProjectionStores sharedProjectionStores)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -333,6 +341,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             })
             .ConfigureServices(services =>
             {
+                sharedProjectionStores.Register(services);
                 services.AddScriptCapability();
             })
             .Build();
@@ -393,4 +402,49 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
     private static string RequireGarnetConnectionString() =>
         Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
+
+    private sealed class SharedScriptingProjectionStores
+    {
+        private readonly InMemoryProjectionDocumentStore<ScriptDefinitionSnapshotDocument, string> _definitionSnapshots =
+            new(
+                static readModel => readModel.Id,
+                static key => key,
+                static readModel => readModel.UpdatedAt);
+        private readonly InMemoryProjectionDocumentStore<ScriptCatalogEntryDocument, string> _catalogEntries =
+            new(
+                static readModel => readModel.Id,
+                static key => key,
+                static readModel => readModel.UpdatedAt);
+        private readonly InMemoryProjectionDocumentStore<ScriptReadModelDocument, string> _scriptReadModels =
+            new(
+                static readModel => readModel.Id,
+                static key => key,
+                static readModel => readModel.UpdatedAt);
+        private readonly InMemoryProjectionDocumentStore<ScriptEvolutionReadModel, string> _evolutionReadModels =
+            new(
+                static readModel => readModel.Id,
+                static key => key,
+                static readModel => readModel.UpdatedAt);
+        private readonly InMemoryProjectionDocumentStore<ScriptNativeDocumentReadModel, string> _nativeDocuments =
+            new(
+                static readModel => readModel.Id,
+                static key => key,
+                static readModel => readModel.UpdatedAt);
+        private readonly InMemoryProjectionGraphStore _graphStore = new();
+
+        public void Register(IServiceCollection services)
+        {
+            services.AddSingleton<IProjectionDocumentReader<ScriptDefinitionSnapshotDocument, string>>(_definitionSnapshots);
+            services.AddSingleton<IProjectionDocumentWriter<ScriptDefinitionSnapshotDocument>>(_definitionSnapshots);
+            services.AddSingleton<IProjectionDocumentReader<ScriptCatalogEntryDocument, string>>(_catalogEntries);
+            services.AddSingleton<IProjectionDocumentWriter<ScriptCatalogEntryDocument>>(_catalogEntries);
+            services.AddSingleton<IProjectionDocumentReader<ScriptReadModelDocument, string>>(_scriptReadModels);
+            services.AddSingleton<IProjectionDocumentWriter<ScriptReadModelDocument>>(_scriptReadModels);
+            services.AddSingleton<IProjectionDocumentReader<ScriptEvolutionReadModel, string>>(_evolutionReadModels);
+            services.AddSingleton<IProjectionDocumentWriter<ScriptEvolutionReadModel>>(_evolutionReadModels);
+            services.AddSingleton<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>(_nativeDocuments);
+            services.AddSingleton<IProjectionDocumentWriter<ScriptNativeDocumentReadModel>>(_nativeDocuments);
+            services.AddSingleton<IProjectionGraphStore>(_graphStore);
+        }
+    }
 }
