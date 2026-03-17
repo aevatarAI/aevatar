@@ -2,15 +2,15 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public sealed class ProjectionSessionScopeReleaseService<TLease, TScopeAgent>
-    : IProjectionSessionReleaseService<TLease>
+public sealed class ProjectionScopeReleaseService<TLease, TScopeAgent>
+    : IProjectionScopeReleaseService<TLease>
     where TLease : class, IProjectionRuntimeLease
     where TScopeAgent : IAgent
 {
     private readonly ProjectionScopeActorRuntime<TScopeAgent> _scopeRuntime;
     private readonly Func<TLease, ProjectionRuntimeScopeKey> _scopeKeyAccessor;
 
-    public ProjectionSessionScopeReleaseService(
+    public ProjectionScopeReleaseService(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         Func<TLease, ProjectionRuntimeScopeKey> scopeKeyAccessor,

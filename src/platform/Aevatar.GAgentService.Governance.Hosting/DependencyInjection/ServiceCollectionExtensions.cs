@@ -6,7 +6,6 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
-using Aevatar.GAgentService.Governance.Infrastructure.Migration;
 using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
@@ -27,7 +26,6 @@ public static class ServiceCollectionExtensions
 
         services.AddGAgentServiceGovernanceProjection();
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
-        services.TryAddSingleton<IServiceGovernanceLegacyImporter, DefaultServiceGovernanceLegacyImporter>();
         services.TryAddSingleton<IServiceGovernanceCommandTargetProvisioner, DefaultServiceGovernanceCommandTargetProvisioner>();
         services.TryAddSingleton<IActivationAdmissionEvaluator, DefaultActivationAdmissionEvaluator>();
         services.TryAddSingleton<IInvokeAdmissionEvaluator, DefaultInvokeAdmissionEvaluator>();

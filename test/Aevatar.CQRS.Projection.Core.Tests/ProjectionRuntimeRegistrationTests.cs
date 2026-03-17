@@ -29,21 +29,22 @@ public sealed class ProjectionRuntimeRegistrationTests
             context => new TestMaterializationLease(context));
 
         await using var provider = services.BuildServiceProvider();
-        var contextFactory = provider.GetRequiredService<IProjectionScopeContextFactory<TestMaterializationContext>>();
-        var activation = provider.GetRequiredService<IProjectionMaterializationActivationService<TestMaterializationLease>>();
-        var release = provider.GetRequiredService<IProjectionMaterializationReleaseService<TestMaterializationLease>>();
+        var contextFactory = provider.GetRequiredService<Func<ProjectionRuntimeScopeKey, TestMaterializationContext>>();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        var release = provider.GetRequiredService<IProjectionScopeReleaseService<TestMaterializationLease>>();
         provider.GetRequiredService<IProjectionFailureReplayService>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionFailureAlertSink>().Should().NotBeNull();
 
         var scopeKey = new ProjectionRuntimeScopeKey("actor-1", "projection-a", ProjectionRuntimeMode.DurableMaterialization);
-        var context = contextFactory.Create(scopeKey);
+        var context = contextFactory(scopeKey);
         context.RootActorId.Should().Be("actor-1");
         context.ProjectionKind.Should().Be("projection-a");
 
-        var lease = await activation.EnsureAsync(new ProjectionMaterializationStartRequest
+        var lease = await activation.EnsureAsync(new ProjectionScopeStartRequest
         {
             RootActorId = "actor-1",
             ProjectionKind = "projection-a",
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
         });
         await release.ReleaseIfIdleAsync(lease);
 
@@ -78,20 +79,21 @@ public sealed class ProjectionRuntimeRegistrationTests
             context => new TestSessionLease(context));
 
         await using var provider = services.BuildServiceProvider();
-        var contextFactory = provider.GetRequiredService<IProjectionScopeContextFactory<TestSessionContext>>();
-        var activation = provider.GetRequiredService<IProjectionSessionActivationService<TestSessionLease>>();
-        var release = provider.GetRequiredService<IProjectionSessionReleaseService<TestSessionLease>>();
+        var contextFactory = provider.GetRequiredService<Func<ProjectionRuntimeScopeKey, TestSessionContext>>();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestSessionLease>>();
+        var release = provider.GetRequiredService<IProjectionScopeReleaseService<TestSessionLease>>();
 
         var scopeKey = new ProjectionRuntimeScopeKey("actor-2", "projection-b", ProjectionRuntimeMode.SessionObservation, "session-9");
-        var context = contextFactory.Create(scopeKey);
+        var context = contextFactory(scopeKey);
         context.RootActorId.Should().Be("actor-2");
         context.ProjectionKind.Should().Be("projection-b");
         context.SessionId.Should().Be("session-9");
 
-        var lease = await activation.EnsureAsync(new ProjectionSessionStartRequest
+        var lease = await activation.EnsureAsync(new ProjectionScopeStartRequest
         {
             RootActorId = "actor-2",
             ProjectionKind = "projection-b",
+            Mode = ProjectionRuntimeMode.SessionObservation,
             SessionId = "session-9",
         });
         await release.ReleaseIfIdleAsync(lease);

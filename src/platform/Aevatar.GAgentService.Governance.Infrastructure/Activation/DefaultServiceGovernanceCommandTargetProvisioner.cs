@@ -10,20 +10,14 @@ namespace Aevatar.GAgentService.Governance.Infrastructure.Activation;
 public sealed class DefaultServiceGovernanceCommandTargetProvisioner
     : ActorTargetProvisionerBase, IServiceGovernanceCommandTargetProvisioner
 {
-    private readonly IServiceGovernanceLegacyImporter _legacyImporter;
-
-    public DefaultServiceGovernanceCommandTargetProvisioner(
-        IActorRuntime runtime,
-        IServiceGovernanceLegacyImporter legacyImporter)
+    public DefaultServiceGovernanceCommandTargetProvisioner(IActorRuntime runtime)
         : base(runtime)
     {
-        _legacyImporter = legacyImporter ?? throw new ArgumentNullException(nameof(legacyImporter));
     }
 
     public async Task<string> EnsureConfigurationTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(identity);
-        _ = await _legacyImporter.ImportIfNeededAsync(identity, ct);
         return await EnsureActorAsync<ServiceConfigurationGAgent>(ServiceActorIds.Configuration(identity), ct);
     }
 }

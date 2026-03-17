@@ -10,8 +10,8 @@ public sealed class ScriptEvolutionReadModelPort
 {
     public ScriptEvolutionReadModelPort(
         ScriptEvolutionProjectionOptions options,
-        IProjectionMaterializationActivationService<ScriptEvolutionMaterializationRuntimeLease> activationService,
-        IProjectionMaterializationReleaseService<ScriptEvolutionMaterializationRuntimeLease> releaseService)
+        IProjectionScopeActivationService<ScriptEvolutionMaterializationRuntimeLease> activationService,
+        IProjectionScopeReleaseService<ScriptEvolutionMaterializationRuntimeLease> releaseService)
         : base(
             () => options?.Enabled ?? false,
             activationService,
@@ -23,10 +23,11 @@ public sealed class ScriptEvolutionReadModelPort
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionMaterializationStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = ScriptProjectionKinds.EvolutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
 

@@ -9,8 +9,8 @@ public sealed class ServiceConfigurationProjectionPort
 {
     public ServiceConfigurationProjectionPort(
         ServiceGovernanceProjectionOptions options,
-        IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease> activationService,
-        IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease> releaseService)
+        IProjectionScopeActivationService<ServiceConfigurationRuntimeLease> activationService,
+        IProjectionScopeReleaseService<ServiceConfigurationRuntimeLease> releaseService)
         : base(
             () => options?.Enabled ?? false,
             activationService,
@@ -25,10 +25,11 @@ public sealed class ServiceConfigurationProjectionPort
             return;
 
         _ = await EnsureProjectionAsync(
-            new ProjectionMaterializationStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = ServiceGovernanceProjectionKinds.Configuration,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
     }

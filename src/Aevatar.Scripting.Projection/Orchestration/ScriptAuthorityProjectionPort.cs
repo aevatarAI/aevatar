@@ -8,8 +8,8 @@ public sealed class ScriptAuthorityProjectionPort
       IScriptAuthorityReadModelActivationPort
 {
     public ScriptAuthorityProjectionPort(
-        IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease> activationService,
-        IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease> releaseService)
+        IProjectionScopeActivationService<ScriptAuthorityRuntimeLease> activationService,
+        IProjectionScopeReleaseService<ScriptAuthorityRuntimeLease> releaseService)
         : base(
             static () => true,
             activationService,
@@ -21,10 +21,11 @@ public sealed class ScriptAuthorityProjectionPort
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionMaterializationStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = ScriptProjectionKinds.AuthorityMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
 

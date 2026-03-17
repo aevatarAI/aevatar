@@ -489,23 +489,24 @@ public sealed class ProjectionHotspotCoverageTests
     {
         public TestMaterializationPort(
             Func<bool> projectionEnabledAccessor,
-            IProjectionMaterializationActivationService<TestMaterializationLease> activationService,
-            IProjectionMaterializationReleaseService<TestMaterializationLease>? releaseService)
+            IProjectionScopeActivationService<TestMaterializationLease> activationService,
+            IProjectionScopeReleaseService<TestMaterializationLease>? releaseService)
             : base(projectionEnabledAccessor, activationService, releaseService)
         {
         }
 
         public Task<TestMaterializationLease?> EnsureProjectionPublicAsync(string rootActorId, CancellationToken ct) =>
             EnsureProjectionAsync(
-                new ProjectionMaterializationStartRequest
+                new ProjectionScopeStartRequest
                 {
                     RootActorId = rootActorId,
                     ProjectionKind = "kind-a",
+                    Mode = ProjectionRuntimeMode.DurableMaterialization,
                 },
                 ct);
 
         public Task<TestMaterializationLease?> EnsureProjectionFromRequestPublicAsync(
-            ProjectionMaterializationStartRequest? request,
+            ProjectionScopeStartRequest? request,
             CancellationToken ct) =>
             EnsureProjectionAsync(request!, ct);
 
@@ -513,12 +514,12 @@ public sealed class ProjectionHotspotCoverageTests
             ReleaseProjectionAsync(lease, ct);
     }
 
-    private sealed class TestMaterializationActivationService : IProjectionMaterializationActivationService<TestMaterializationLease>
+    private sealed class TestMaterializationActivationService : IProjectionScopeActivationService<TestMaterializationLease>
     {
-        public List<ProjectionMaterializationStartRequest> Requests { get; } = [];
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
 
         public Task<TestMaterializationLease> EnsureAsync(
-            ProjectionMaterializationStartRequest request,
+            ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
@@ -526,7 +527,7 @@ public sealed class ProjectionHotspotCoverageTests
         }
     }
 
-    private sealed class TestMaterializationReleaseService : IProjectionMaterializationReleaseService<TestMaterializationLease>
+    private sealed class TestMaterializationReleaseService : IProjectionScopeReleaseService<TestMaterializationLease>
     {
         public List<TestMaterializationLease> Released { get; } = [];
 
