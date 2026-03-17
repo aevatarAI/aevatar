@@ -104,6 +104,7 @@ public static class ServiceCollectionExtensions
                 ? new NoopAICapability()
                 : new RoleAgentDelegateAICapability(roleAgentPort);
         });
+        services.TryAddSingleton<ScriptCapabilityRegistrationsMarker>();
 
         return services;
     }
@@ -120,4 +121,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
     }
+
+    public sealed class ScriptCapabilityRegistrationsMarker;
 }

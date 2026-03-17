@@ -41,6 +41,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         });
         services.AddWorkflowInfrastructure(options =>
             configuration.GetSection("WorkflowRunReportExport").Bind(options));
+        services.TryAddSingleton<WorkflowCapabilityRegistrationsMarker>();
         return services;
     }
+
+    public sealed class WorkflowCapabilityRegistrationsMarker;
 }

@@ -33,10 +33,10 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (!services.Any(x => x.ServiceType == typeof(IScriptEvolutionProposalPort)))
+        if (!services.Any(x => x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker)))
             services.AddScriptCapability(configuration);
 
-        if (!services.Any(x => x.ServiceType == typeof(IWorkflowCatalogPort)))
+        if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
             services.AddWorkflowCapability(configuration);
 
         services.AddGAgentServiceProjection();
