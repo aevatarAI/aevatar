@@ -184,6 +184,61 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
     }
 
     [Fact]
+    public async Task MassTransitActorEventSubscriptionProvider_ShouldRemoveActorBucketAfterLastUnsubscribe()
+    {
+        var transport = new RecordingEnvelopeTransport();
+        var provider = new MassTransitActorEventSubscriptionProvider(
+            transport,
+            new MassTransitStreamOptions
+            {
+                StreamNamespace = "aevatar.events",
+            });
+
+        var subscription = await provider.SubscribeAsync<StringValue>(
+            "actor-1",
+            _ => Task.CompletedTask);
+
+        GetSubscriberBucketCount(provider).Should().Be(1);
+        HasSubscriberBucket(provider, "actor-1").Should().BeTrue();
+
+        await subscription.DisposeAsync();
+
+        transport.ActiveSubscriptionCount.Should().Be(0);
+        GetSubscriberBucketCount(provider).Should().Be(0);
+        HasSubscriberBucket(provider, "actor-1").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MassTransitActorEventSubscriptionProvider_ShouldRetryWhenExistingBucketWasRetired()
+    {
+        var transport = new RecordingEnvelopeTransport();
+        var provider = new MassTransitActorEventSubscriptionProvider(
+            transport,
+            new MassTransitStreamOptions
+            {
+                StreamNamespace = "aevatar.events",
+            });
+        var retiredBucket = CreateRetiredSubscriptionBucket();
+        AddSubscriberBucket(provider, "actor-1", retiredBucket);
+        var received = new List<string>();
+
+        await using var subscription = await provider.SubscribeAsync<StringValue>("actor-1", value =>
+        {
+            received.Add(value.Value);
+            return Task.CompletedTask;
+        });
+
+        transport.SubscribeCallCount.Should().Be(1);
+        transport.ActiveSubscriptionCount.Should().Be(1);
+        GetSubscriberBucketCount(provider).Should().Be(1);
+        ReferenceEquals(GetSubscriberBucket(provider, "actor-1"), retiredBucket).Should().BeFalse();
+
+        await transport.PushAsync(CreateRecord("actor-1", "recovered"));
+
+        received.Should().ContainSingle().Which.Should().Be("recovered");
+    }
+
+    [Fact]
     public async Task MassTransitKafkaEnvelopeTransport_ShouldValidateArgumentsAndWireDispatcher()
     {
         var producer = DispatchProxy.Create<ITopicProducer<KafkaStreamEnvelopeMessage>, TopicProducerProxy>();
@@ -287,6 +342,70 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
             StreamId = actorId,
             Payload = envelope.ToByteArray(),
         };
+    }
+
+    private static int GetSubscriberBucketCount(MassTransitActorEventSubscriptionProvider provider)
+    {
+        var buckets = GetSubscriberBuckets(provider);
+        return (int)(buckets.GetType().GetProperty("Count")!.GetValue(buckets) ?? 0);
+    }
+
+    private static bool HasSubscriberBucket(
+        MassTransitActorEventSubscriptionProvider provider,
+        string actorId)
+    {
+        var buckets = GetSubscriberBuckets(provider);
+        return (bool)(buckets.GetType().GetMethod("ContainsKey")!.Invoke(buckets, [actorId]) ?? false);
+    }
+
+    private static object? GetSubscriberBucket(
+        MassTransitActorEventSubscriptionProvider provider,
+        string actorId)
+    {
+        var buckets = GetSubscriberBuckets(provider);
+        var args = new object?[] { actorId, null };
+        var found = (bool)(buckets.GetType().GetMethod("TryGetValue")!.Invoke(buckets, args) ?? false);
+        return found ? args[1] : null;
+    }
+
+    private static void AddSubscriberBucket(
+        MassTransitActorEventSubscriptionProvider provider,
+        string actorId,
+        object bucket)
+    {
+        var buckets = GetSubscriberBuckets(provider);
+        var added = (bool)(buckets.GetType().GetMethod("TryAdd")!.Invoke(buckets, [actorId, bucket]) ?? false);
+        added.Should().BeTrue();
+    }
+
+    private static object CreateRetiredSubscriptionBucket()
+    {
+        var bucketType = typeof(MassTransitActorEventSubscriptionProvider).GetNestedType(
+            "SubscriptionBucket",
+            BindingFlags.NonPublic);
+        bucketType.Should().NotBeNull();
+
+        var bucket = Activator.CreateInstance(bucketType!, nonPublic: true);
+        bucket.Should().NotBeNull();
+
+        var retireMethod = bucketType!.GetMethod(
+            "TryRetireIfEmpty",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        retireMethod.Should().NotBeNull();
+
+        var retired = (bool)(retireMethod!.Invoke(bucket, []) ?? false);
+        retired.Should().BeTrue();
+        return bucket!;
+    }
+
+    private static object GetSubscriberBuckets(MassTransitActorEventSubscriptionProvider provider)
+    {
+        var field = typeof(MassTransitActorEventSubscriptionProvider).GetField(
+            "_subscribers",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        field.Should().NotBeNull();
+
+        return field!.GetValue(provider)!;
     }
 
     private sealed class RecordingEnvelopeTransport : IMassTransitEnvelopeTransport

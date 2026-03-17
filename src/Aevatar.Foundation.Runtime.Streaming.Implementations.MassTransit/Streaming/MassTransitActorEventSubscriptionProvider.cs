@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf;
@@ -8,9 +9,10 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
 {
     private readonly IMassTransitEnvelopeTransport _transport;
     private readonly MassTransitStreamOptions _options;
-    private readonly Lock _gate = new();
-    private readonly Dictionary<string, List<Subscriber>> _subscribers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SubscriptionBucket> _subscribers = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _transportSubscriptionGate = new(1, 1);
     private Task<IAsyncDisposable>? _transportSubscriptionTask;
+    private long _nextSubscriberId;
     private int _subscriberCount;
 
     public MassTransitActorEventSubscriptionProvider(
@@ -31,41 +33,39 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
         ArgumentNullException.ThrowIfNull(handler);
         ct.ThrowIfCancellationRequested();
 
-        var subscriber = Subscriber.Create(handler);
-        Task<IAsyncDisposable> transportSubscriptionTask;
-
-        lock (_gate)
+        var subscriber = Subscriber.Create(
+            Interlocked.Increment(ref _nextSubscriberId),
+            handler);
+        while (true)
         {
-            if (!_subscribers.TryGetValue(actorId, out var actorSubscribers))
-            {
-                actorSubscribers = [];
-                _subscribers[actorId] = actorSubscribers;
-            }
+            var actorSubscribers = _subscribers.GetOrAdd(actorId, static _ => new SubscriptionBucket());
+            if (actorSubscribers.TryAdd(subscriber))
+                break;
 
-            actorSubscribers.Add(subscriber);
-            _subscriberCount++;
-            transportSubscriptionTask = _transportSubscriptionTask ??= _transport.SubscribeAsync(DispatchRecordAsync, ct);
+            // A concurrent unsubscribe may have retired the previous empty bucket.
+            // Remove the stale entry if it is still current and retry with a fresh bucket.
+            _subscribers.TryRemove(new KeyValuePair<string, SubscriptionBucket>(actorId, actorSubscribers));
         }
+
+        Interlocked.Increment(ref _subscriberCount);
+
+        Task<IAsyncDisposable>? transportSubscriptionTask = null;
 
         try
         {
+            transportSubscriptionTask = await EnsureTransportSubscriptionAsync(ct);
             await transportSubscriptionTask;
         }
         catch
         {
-            lock (_gate)
-            {
-                RemoveSubscriberUnsafe(actorId, subscriber);
-
-                if (ReferenceEquals(_transportSubscriptionTask, transportSubscriptionTask))
-                    _transportSubscriptionTask = null;
-            }
+            RemoveSubscriber(actorId, subscriber.Id);
+            if (transportSubscriptionTask != null)
+                await ResetTransportSubscriptionIfCurrentAsync(transportSubscriptionTask);
 
             throw;
         }
 
-        await ReleaseTransportSubscriptionIfIdleAsync();
-        return new SubscriptionLease(this, actorId, subscriber);
+        return new SubscriptionLease(this, actorId, subscriber.Id);
     }
 
     private async Task DispatchRecordAsync(MassTransitEnvelopeRecord record)
@@ -76,17 +76,12 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
             return;
         }
 
-        Subscriber[] subscribers;
-        lock (_gate)
-        {
-            if (!_subscribers.TryGetValue(record.StreamId, out var actorSubscribers) ||
-                actorSubscribers.Count == 0)
-            {
-                return;
-            }
+        if (!_subscribers.TryGetValue(record.StreamId, out var actorSubscribers))
+            return;
 
-            subscribers = actorSubscribers.ToArray();
-        }
+        var subscribers = actorSubscribers.Snapshot();
+        if (subscribers.Length == 0)
+            return;
 
         EventEnvelope envelope;
         try
@@ -104,112 +99,117 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
         }
     }
 
-    private async ValueTask UnsubscribeAsync(string actorId, Subscriber subscriber)
+    private async ValueTask UnsubscribeAsync(string actorId, long subscriberId)
     {
-        Task<IAsyncDisposable>? transportSubscriptionTask = null;
+        if (!RemoveSubscriber(actorId, subscriberId))
+            return;
 
-        lock (_gate)
+        if (Volatile.Read(ref _subscriberCount) == 0)
+            await ReleaseTransportSubscriptionIfIdleAsync();
+    }
+
+    private async ValueTask<Task<IAsyncDisposable>> EnsureTransportSubscriptionAsync(CancellationToken ct)
+    {
+        var currentTask = Volatile.Read(ref _transportSubscriptionTask);
+        if (currentTask != null)
+            return currentTask;
+
+        await _transportSubscriptionGate.WaitAsync(ct);
+        try
         {
-            if (!RemoveSubscriberUnsafe(actorId, subscriber))
-                return;
+            currentTask = _transportSubscriptionTask;
+            if (currentTask != null)
+                return currentTask;
 
-            if (_subscriberCount == 0 && _transportSubscriptionTask != null)
-            {
-                if (_transportSubscriptionTask.IsCompletedSuccessfully)
-                {
-                    transportSubscriptionTask = _transportSubscriptionTask;
-                }
-
-                _transportSubscriptionTask = null;
-            }
+            currentTask = _transport.SubscribeAsync(DispatchRecordAsync, ct);
+            Volatile.Write(ref _transportSubscriptionTask, currentTask);
+            return currentTask;
         }
+        finally
+        {
+            _transportSubscriptionGate.Release();
+        }
+    }
 
-        if (transportSubscriptionTask != null)
-            await (await transportSubscriptionTask).DisposeAsync();
+    private async Task ResetTransportSubscriptionIfCurrentAsync(Task<IAsyncDisposable> transportSubscriptionTask)
+    {
+        await _transportSubscriptionGate.WaitAsync();
+        try
+        {
+            if (ReferenceEquals(_transportSubscriptionTask, transportSubscriptionTask))
+                _transportSubscriptionTask = null;
+        }
+        finally
+        {
+            _transportSubscriptionGate.Release();
+        }
     }
 
     private async Task ReleaseTransportSubscriptionIfIdleAsync()
     {
-        Task<IAsyncDisposable>? transportSubscriptionTask = null;
-
-        lock (_gate)
+        await _transportSubscriptionGate.WaitAsync();
+        try
         {
-            if (_subscriberCount != 0 ||
-                _transportSubscriptionTask is not { IsCompletedSuccessfully: true } currentTask)
-            {
+            if (Volatile.Read(ref _subscriberCount) != 0)
                 return;
-            }
 
+            var transportSubscriptionTask = _transportSubscriptionTask;
             _transportSubscriptionTask = null;
-            transportSubscriptionTask = currentTask;
-        }
+            if (transportSubscriptionTask is not { IsCompletedSuccessfully: true })
+                return;
 
-        if (transportSubscriptionTask != null)
             await (await transportSubscriptionTask).DisposeAsync();
+        }
+        finally
+        {
+            _transportSubscriptionGate.Release();
+        }
     }
 
-    private bool RemoveSubscriberUnsafe(string actorId, Subscriber subscriber)
+    private bool RemoveSubscriber(string actorId, long subscriberId)
     {
-        if (!_subscribers.TryGetValue(actorId, out var actorSubscribers) ||
-            !actorSubscribers.Remove(subscriber))
+        if (!_subscribers.TryGetValue(actorId, out var actorSubscribers))
         {
             return false;
         }
 
-        _subscriberCount--;
-        if (actorSubscribers.Count == 0)
-            _subscribers.Remove(actorId);
+        var removalResult = actorSubscribers.TryRemove(subscriberId);
+        if (removalResult == SubscriptionBucketRemovalResult.NotFound)
+            return false;
+
+        Interlocked.Decrement(ref _subscriberCount);
+        if (removalResult == SubscriptionBucketRemovalResult.RemovedLastSubscriber &&
+            actorSubscribers.TryRetireIfEmpty())
+        {
+            _subscribers.TryRemove(new KeyValuePair<string, SubscriptionBucket>(actorId, actorSubscribers));
+        }
 
         return true;
     }
 
-    private sealed class SubscriptionLease : IAsyncDisposable
-    {
-        private readonly MassTransitActorEventSubscriptionProvider _owner;
-        private readonly string _actorId;
-        private readonly Subscriber _subscriber;
-        private int _disposed;
-
-        public SubscriptionLease(
-            MassTransitActorEventSubscriptionProvider owner,
-            string actorId,
-            Subscriber subscriber)
-        {
-            _owner = owner;
-            _actorId = actorId;
-            _subscriber = subscriber;
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
-                return ValueTask.CompletedTask;
-
-            return new ValueTask(_owner.UnsubscribeAsync(_actorId, _subscriber).AsTask());
-        }
-    }
-
     private sealed class Subscriber
     {
+        public long Id { get; }
         private readonly Func<EventEnvelope, Task> _dispatchAsync;
 
-        private Subscriber(Func<EventEnvelope, Task> dispatchAsync)
+        private Subscriber(long id, Func<EventEnvelope, Task> dispatchAsync)
         {
+            Id = id;
             _dispatchAsync = dispatchAsync;
         }
 
         public Task DispatchAsync(EventEnvelope envelope) => _dispatchAsync(envelope);
 
-        public static Subscriber Create<TMessage>(Func<TMessage, Task> handler)
+        public static Subscriber Create<TMessage>(long id, Func<TMessage, Task> handler)
             where TMessage : class, IMessage, new()
         {
             if (typeof(TMessage) == typeof(EventEnvelope))
             {
-                return new Subscriber(envelope => ((Func<EventEnvelope, Task>)(object)handler)(envelope));
+                return new Subscriber(id, envelope => ((Func<EventEnvelope, Task>)(object)handler)(envelope));
             }
 
             var descriptor = new TMessage().Descriptor;
-            return new Subscriber(envelope =>
+            return new Subscriber(id, envelope =>
             {
                 if (envelope.Payload == null || !envelope.Payload.Is(descriptor))
                     return Task.CompletedTask;
@@ -218,4 +218,91 @@ public sealed class MassTransitActorEventSubscriptionProvider : IActorEventSubsc
             });
         }
     }
+
+    private sealed class SubscriptionBucket
+    {
+        private readonly Lock _gate = new();
+        private readonly Dictionary<long, Subscriber> _subscribers = [];
+        private bool _isRetired;
+
+        public bool TryAdd(Subscriber subscriber)
+        {
+            ArgumentNullException.ThrowIfNull(subscriber);
+
+            lock (_gate)
+            {
+                if (_isRetired)
+                    return false;
+
+                _subscribers[subscriber.Id] = subscriber;
+                return true;
+            }
+        }
+
+        public SubscriptionBucketRemovalResult TryRemove(long subscriberId)
+        {
+            lock (_gate)
+            {
+                if (!_subscribers.Remove(subscriberId))
+                    return SubscriptionBucketRemovalResult.NotFound;
+
+                return _subscribers.Count == 0
+                    ? SubscriptionBucketRemovalResult.RemovedLastSubscriber
+                    : SubscriptionBucketRemovalResult.Removed;
+            }
+        }
+
+        public bool TryRetireIfEmpty()
+        {
+            lock (_gate)
+            {
+                if (_isRetired || _subscribers.Count != 0)
+                    return false;
+
+                _isRetired = true;
+                return true;
+            }
+        }
+
+        public Subscriber[] Snapshot()
+        {
+            lock (_gate)
+            {
+                return _subscribers.Count == 0 ? [] : _subscribers.Values.ToArray();
+            }
+        }
+    }
+
+    private sealed class SubscriptionLease : IAsyncDisposable
+    {
+        private readonly MassTransitActorEventSubscriptionProvider _owner;
+        private readonly string _actorId;
+        private readonly long _subscriberId;
+        private int _disposed;
+
+        public SubscriptionLease(
+            MassTransitActorEventSubscriptionProvider owner,
+            string actorId,
+            long subscriberId)
+        {
+            _owner = owner;
+            _actorId = actorId;
+            _subscriberId = subscriberId;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                return ValueTask.CompletedTask;
+
+            return new ValueTask(_owner.UnsubscribeAsync(_actorId, _subscriberId).AsTask());
+        }
+    }
+}
+
+internal enum SubscriptionBucketRemovalResult
+{
+    NotFound = 0,
+    Removed = 1,
+    RemovedLastSubscriber = 2,
 }
