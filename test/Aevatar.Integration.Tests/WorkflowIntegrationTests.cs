@@ -27,6 +27,7 @@ using Aevatar.Workflow.Core.Validation;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Integration.Tests;
 
@@ -479,6 +480,7 @@ public class WorkflowIntegrationTests
     public void Scenario7_AllCoreModules()
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddAevatarWorkflow();
         using var provider = services.BuildServiceProvider();
         var factory = provider.GetRequiredService<IEventModuleFactory<IWorkflowExecutionContext>>();
