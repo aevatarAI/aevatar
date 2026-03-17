@@ -13,13 +13,16 @@ namespace Aevatar.Tools.Cli.Hosting;
 internal sealed class NyxIdAccessTokenHandler : DelegatingHandler
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly NyxIdInternalRequestCredentials _internalCredentials;
     private readonly NyxIdAppTokenService _tokenService;
 
     public NyxIdAccessTokenHandler(
         IHttpContextAccessor httpContextAccessor,
+        NyxIdInternalRequestCredentials internalCredentials,
         NyxIdAppTokenService tokenService)
     {
         _httpContextAccessor = httpContextAccessor ?? throw new ArgumentNullException(nameof(httpContextAccessor));
+        _internalCredentials = internalCredentials ?? throw new ArgumentNullException(nameof(internalCredentials));
         _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
     }
 
@@ -29,16 +32,35 @@ internal sealed class NyxIdAccessTokenHandler : DelegatingHandler
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var httpContext = _httpContextAccessor.HttpContext;
+        if (ShouldAttachInternalAuthHeader(request, httpContext) &&
+            !request.Headers.Contains(NyxIdInternalRequestCredentials.HeaderName))
+        {
+            request.Headers.TryAddWithoutValidation(
+                NyxIdInternalRequestCredentials.HeaderName,
+                _internalCredentials.Token);
+        }
+
         if (request.Headers.Authorization == null)
         {
             var accessToken = await _tokenService.GetAccessTokenAsync(
-                _httpContextAccessor.HttpContext,
+                httpContext,
                 cancellationToken);
             if (!string.IsNullOrWhiteSpace(accessToken))
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         }
 
         return await base.SendAsync(request, cancellationToken);
+    }
+
+    private static bool ShouldAttachInternalAuthHeader(HttpRequestMessage request, HttpContext? httpContext)
+    {
+        var requestUri = request.RequestUri;
+        if (requestUri == null || !requestUri.IsLoopback)
+            return false;
+
+        var currentPort = httpContext?.Request.Host.Port;
+        return currentPort.HasValue && currentPort.Value == requestUri.Port;
     }
 }
 

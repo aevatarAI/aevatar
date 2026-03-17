@@ -21,6 +21,8 @@ public sealed class AevatarDefaultHostOptions
     public bool EnableConnectorBootstrap { get; set; } = true;
 
     public bool AutoMapCapabilities { get; set; } = true;
+
+    public bool MapRootHealthEndpoint { get; set; } = true;
 }
 
 public static class WebApplicationBuilderExtensions
@@ -58,7 +60,8 @@ public static class WebApplicationBuilderExtensions
         if (options.EnableWebSockets)
             app.UseWebSockets();
 
-        app.MapGet("/", () => Results.Ok(new { name = options.ServiceName, status = "running" }));
+        if (options.MapRootHealthEndpoint)
+            app.MapGet("/", () => Results.Ok(new { name = options.ServiceName, status = "running" }));
 
         if (options.AutoMapCapabilities)
             app.MapAevatarCapabilities();

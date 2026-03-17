@@ -4,6 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -267,6 +268,40 @@ public sealed class ChatEndpointsInternalTests
         body.Should().Contain("aevatar.raw.observed");
         body.Should().Contain("WorkflowRunExecutionStartedEvent");
         body.Should().Contain("\"runId\": \"run-1\"");
+        body.Should().NotContain("EXECUTION_FAILED");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldSerializeRawObservedWorkflowExecutionStatePayloadWithNestedKernelState()
+    {
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(BuildRawObservedWorkflowExecutionStateUpsertedFrame(), ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext();
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("aevatar.raw.observed");
+        body.Should().Contain("WorkflowExecutionStateUpsertedEvent");
+        body.Should().Contain("WorkflowExecutionKernelState");
+        body.Should().Contain("\"scopeKey\": \"workflow_execution_kernel\"");
+        body.Should().Contain("\"runId\": \"run-1\"");
+        body.Should().Contain("\"currentStepId\": \"analyze\"");
         body.Should().NotContain("EXECUTION_FAILED");
     }
 
@@ -862,6 +897,42 @@ public sealed class ChatEndpointsInternalTests
                     PublisherActorId = "definition-actor-1",
                     CorrelationId = "corr-1",
                     StateVersion = 1,
+                    Payload = Any.Pack(payload),
+                }),
+            },
+        };
+    }
+
+    private static WorkflowRunEventEnvelope BuildRawObservedWorkflowExecutionStateUpsertedFrame()
+    {
+        var payload = new WorkflowExecutionStateUpsertedEvent
+        {
+            ScopeKey = "workflow_execution_kernel",
+            State = Any.Pack(new WorkflowExecutionKernelState
+            {
+                Active = true,
+                RunId = "run-1",
+                CurrentStepId = "analyze",
+                CurrentStepInput = "hello",
+                Variables =
+                {
+                    ["decision"] = "approved",
+                },
+            }),
+        };
+
+        return new WorkflowRunEventEnvelope
+        {
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = "evt-2",
+                    PayloadTypeUrl = Any.Pack(payload).TypeUrl,
+                    PublisherActorId = "workflow-run-actor-1",
+                    CorrelationId = "corr-1",
+                    StateVersion = 2,
                     Payload = Any.Pack(payload),
                 }),
             },

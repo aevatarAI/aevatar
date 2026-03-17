@@ -19,7 +19,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
-        services.AddSingleton<IWorkflowBundleRepository, FileWorkflowBundleRepository>();
         services.AddSingleton<IStudioWorkspaceStore, FileStudioWorkspaceStore>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;

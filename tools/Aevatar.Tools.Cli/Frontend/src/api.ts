@@ -1,6 +1,12 @@
 /* ─── Aevatar Workflow Studio – API client ─── */
 
 const BASE = '/api';
+const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
+
+type AuthRequiredDetail = {
+  loginUrl?: string | null;
+  message?: string | null;
+};
 
 function isJsonContentType(contentType: string | null) {
   const value = String(contentType || '').toLowerCase();
@@ -12,12 +18,28 @@ function isHtmlContentType(contentType: string | null) {
   return value.includes('text/html') || value.includes('application/xhtml+xml');
 }
 
-function redirectToLogin(loginUrl?: string | null) {
-  if (!loginUrl || typeof window === 'undefined') {
+function notifyAuthRequired(detail: AuthRequiredDetail) {
+  if (typeof window === 'undefined') {
     return;
   }
 
-  window.location.assign(loginUrl);
+  window.dispatchEvent(new CustomEvent<AuthRequiredDetail>(AUTH_REQUIRED_EVENT, {
+    detail,
+  }));
+}
+
+export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
+  if (typeof window === 'undefined') {
+    return () => undefined;
+  }
+
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<AuthRequiredDetail>).detail || {};
+    listener(detail);
+  };
+
+  window.addEventListener(AUTH_REQUIRED_EVENT, handler as EventListener);
+  return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handler as EventListener);
 }
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -32,8 +54,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
       ? await res.json().catch(() => ({}))
       : { message: await res.text().catch(() => '') };
 
-    if (body?.loginUrl) {
-      redirectToLogin(body.loginUrl);
+    if (res.status === 401 || body?.loginUrl) {
+      notifyAuthRequired({
+        loginUrl: body?.loginUrl,
+        message: body?.message || 'Sign in to continue.',
+      });
     }
 
     throw { status: res.status, ...body };
@@ -45,12 +70,22 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   }
 
   if (res.redirected) {
-    redirectToLogin(res.url);
+    notifyAuthRequired({
+      loginUrl: res.url,
+      message: 'Sign in to continue.',
+    });
   }
 
   const rawBody = await res.text().catch(() => '');
+  if (isHtmlContentType(contentType) || res.redirected) {
+    notifyAuthRequired({
+      loginUrl: res.redirected ? res.url : null,
+      message: 'API returned HTML instead of JSON. Sign-in may be required.',
+    });
+  }
+
   throw {
-    status: res.status,
+    status: res.redirected ? 401 : res.status,
     message: isHtmlContentType(contentType)
       ? 'API returned HTML instead of JSON. Sign-in may be required.'
       : 'API returned an unexpected response format.',
@@ -74,8 +109,22 @@ async function streamSse(
     signal,
   });
 
+  if (res.redirected) {
+    notifyAuthRequired({
+      loginUrl: res.url,
+      message: 'Sign in to continue.',
+    });
+  }
+
   if (!res.ok) {
     const payload = await res.json().catch(() => ({}));
+    if (res.status === 401 || payload?.loginUrl) {
+      notifyAuthRequired({
+        loginUrl: payload?.loginUrl || (res.redirected ? res.url : null),
+        message: payload?.message || 'Sign in to continue.',
+      });
+    }
+
     throw { status: res.status, ...payload };
   }
 
@@ -131,6 +180,13 @@ function normalizeAssistantFrame(frame: any) {
     };
   }
 
+  if (frame.textMessageReasoning) {
+    return {
+      type: 'TEXT_MESSAGE_REASONING',
+      delta: frame.textMessageReasoning.delta || '',
+    };
+  }
+
   if (frame.textMessageEnd) {
     return {
       type: 'TEXT_MESSAGE_END',
@@ -148,19 +204,6 @@ function normalizeAssistantFrame(frame: any) {
 
   return frame;
 }
-
-/* ─── Bundles ─── */
-export const bundles = {
-  list:     ()                           => request<any[]>('/bundles'),
-  get:      (id: string)                 => request<any>(`/bundles/${id}`),
-  create:   (data: any)                  => request<any>('/bundles', { method: 'POST', body: JSON.stringify(data) }),
-  update:   (id: string, data: any)      => request<any>(`/bundles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete:   (id: string)                 => request<void>(`/bundles/${id}`, { method: 'DELETE' }),
-  clone:    (id: string, data?: any)     => request<any>(`/bundles/${id}/clone`, { method: 'POST', body: JSON.stringify(data ?? {}) }),
-  versions: (id: string)                 => request<any[]>(`/bundles/${id}/versions`),
-  import_:  (data: any)                  => request<any>('/bundles/import', { method: 'POST', body: JSON.stringify(data) }),
-  export_:  (id: string)                 => request<any>(`/bundles/${id}/export`),
-};
 
 /* ─── Editor ─── */
 export const editor = {
@@ -180,12 +223,6 @@ export const workspace = {
   listWorkflows:  ()              => request<any[]>('/workspace/workflows'),
   getWorkflow:    (id: string)    => request<any>(`/workspace/workflows/${id}`),
   saveWorkflow:   (data: any)     => request<any>('/workspace/workflows', { method: 'POST', body: JSON.stringify(data) }),
-};
-
-/* ─── Layout ─── */
-export const layout = {
-  get:  (bundleId: string)              => request<any>(`/bundles/${bundleId}/layout`),
-  save: (bundleId: string, data: any)   => request<any>(`/bundles/${bundleId}/layout`, { method: 'PUT', body: JSON.stringify(data) }),
 };
 
 /* ─── Connectors ─── */
@@ -225,16 +262,19 @@ export const assistant = {
   authorWorkflow: async (
     data: {
       prompt: string;
+      currentYaml?: string;
+      availableWorkflowNames?: string[];
       metadata?: Record<string, string>;
-      workflowYamls?: string[];
     },
     options?: {
       signal?: AbortSignal;
       onText?: (text: string) => void;
+      onReasoning?: (text: string) => void;
     },
   ) => {
     let text = '';
-    await streamSse('/app/chat', data, frame => {
+    let reasoning = '';
+    await streamSse('/app/workflow-generator', data, frame => {
       const normalized = normalizeAssistantFrame(frame);
       if (!normalized) {
         return;
@@ -243,6 +283,12 @@ export const assistant = {
       if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
         text += normalized.delta || '';
         options?.onText?.(text);
+        return;
+      }
+
+      if (normalized.type === 'TEXT_MESSAGE_REASONING') {
+        reasoning += normalized.delta || '';
+        options?.onReasoning?.(reasoning);
         return;
       }
 

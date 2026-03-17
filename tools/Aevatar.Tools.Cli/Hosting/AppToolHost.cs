@@ -7,19 +7,16 @@ using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Tools.Cli.Bridge;
+using Aevatar.Tools.Cli.Studio.Application.Abstractions;
 using Aevatar.Tools.Cli.Studio.Application.DependencyInjection;
 using Aevatar.Tools.Cli.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Workflows;
-using Aevatar.Workflow.Sdk;
-using Aevatar.Workflow.Sdk.Options;
-using Aevatar.Workflow.Sdk.Streaming;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Options;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -83,27 +80,13 @@ internal static class AppToolHost
             });
 
         if (nyxIdAuthEnabled)
+        {
             builder.Services.AddNyxIdAppAuthentication(nyxIdAuthOptions);
+            builder.Services.AddSingleton<IStudioBackendRequestAuthSnapshotProvider, NyxIdStudioBackendRequestAuthSnapshotProvider>();
+        }
         else
             builder.Services.AddHttpContextAccessor();
 
-        builder.Services
-            .AddOptions<AevatarWorkflowClientOptions>()
-            .Configure(workflow => workflow.BaseUrl = sdkBaseUrl);
-        builder.Services.TryAddSingleton<IWorkflowChatTransport, SseChatTransport>();
-        var sdkClient = builder.Services.AddHttpClient<IAevatarWorkflowClient, AevatarWorkflowClient>((sp, httpClient) =>
-        {
-            var workflowOptions = sp.GetRequiredService<IOptions<AevatarWorkflowClientOptions>>().Value;
-            if (!Uri.TryCreate(workflowOptions.BaseUrl, UriKind.Absolute, out var baseUri))
-            {
-                throw new InvalidOperationException(
-                    $"Invalid Aevatar Workflow SDK base url: '{workflowOptions.BaseUrl}'.");
-            }
-
-            httpClient.BaseAddress = baseUri;
-            foreach (var (key, value) in workflowOptions.DefaultHeaders)
-                httpClient.DefaultRequestHeaders.TryAddWithoutValidation(key, value);
-        });
         var backendClient = builder.Services
             .AddHttpClient("AppBridgeBackend", client => client.BaseAddress = new Uri(sdkBaseUrl))
             .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
@@ -112,7 +95,6 @@ internal static class AppToolHost
             });
         if (nyxIdAuthEnabled)
         {
-            sdkClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
             backendClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
         }
 
@@ -133,11 +115,17 @@ internal static class AppToolHost
 
         if (embeddedWorkflowMode)
         {
+            builder.Services.AddSingleton<WorkflowGeneratePromptCatalog>();
+            builder.Services.AddSingleton<WorkflowGenerateOrchestrator>();
+            builder.Services.AddSingleton<WorkflowGenerateActorService>();
+            builder.Services.AddSingleton<Aevatar.Foundation.Core.Configurations.IAgentClassDefaultsProvider<Aevatar.AI.Core.AIAgentConfig>, WorkflowGenerateAgentDefaultsProvider>();
+            builder.Services.AddHostedService<WorkflowGenerateActorBootstrapHostedService>();
             builder.AddAevatarDefaultHost(options =>
             {
                 options.ServiceName = "aevatar.app";
                 options.EnableWebSockets = true;
                 options.EnableConnectorBootstrap = false;
+                options.MapRootHealthEndpoint = false;
             });
             builder.AddAevatarPlatform(options =>
             {
@@ -191,12 +179,9 @@ internal static class AppToolHost
                 sdkBaseUrl,
             }));
 
-        AppDemoPlaygroundEndpoints.Map(app, embeddedWorkflowMode);
-
         AppBridgeEndpoints.Map(app, new AppBridgeRouteOptions
         {
             MapCapabilityRoutes = !embeddedWorkflowMode,
-            MapAppAliases = true,
         });
         AppStudioEndpoints.Map(app, embeddedWorkflowMode);
 
@@ -235,7 +220,7 @@ internal static class AppToolHost
         Console.WriteLine("╔═══════════════════════════════════════════════════════════╗");
         Console.WriteLine("║                      aevatar app                          ║");
         Console.WriteLine("╠═══════════════════════════════════════════════════════════╣");
-        Console.WriteLine($"║  🌐 Playground: {localUrl,-41} ║");
+        Console.WriteLine($"║  🌐 Studio:     {localUrl,-41} ║");
         Console.WriteLine($"║  🔌 SDK base:   {sdkBaseUrl,-41} ║");
         Console.WriteLine($"║  🧠 Mode:       {(embeddedWorkflowMode ? "embedded" : "proxy"),-41} ║");
         Console.WriteLine($"║  🔗 Connectors: {connectorSummary,-41} ║");

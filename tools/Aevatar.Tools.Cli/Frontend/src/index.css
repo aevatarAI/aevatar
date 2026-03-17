@@ -1346,6 +1346,42 @@
   background: rgba(10, 17, 30, 0.96);
 }
 
+.execution-logs-popout-shell {
+  background: #f2f1ee;
+  width: 100vw;
+  min-width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+}
+
+.execution-logs.execution-logs-fullscreen {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  height: 100vh;
+  min-height: 100vh;
+  border-top: 0;
+  overflow: hidden;
+}
+
+.execution-logs.execution-logs-fullscreen .execution-logs-header {
+  height: 64px;
+  padding: 0 20px;
+}
+
+.execution-logs.execution-logs-fullscreen .execution-logs-header::before {
+  display: none;
+}
+
+.execution-logs.execution-logs-fullscreen .execution-logs-body {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: calc(100vh - 64px);
+}
+
 .execution-logs.collapsed {
   height: 56px;
 }
@@ -1435,7 +1471,18 @@
   color: var(--accent-text);
 }
 
+.execution-logs-window-action.active {
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: #fff4f1;
+  color: var(--accent-text);
+}
+
 .studio-shell[data-color-mode="dark"] .execution-logs-copy-action.active {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: #172235;
+}
+
+.studio-shell[data-color-mode="dark"] .execution-logs-window-action.active {
   border-color: rgba(var(--accent-rgb), 0.4);
   background: #172235;
 }
@@ -1444,11 +1491,14 @@
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 0;
+  width: 100%;
+  min-width: 0;
   height: calc(100% - 56px);
   min-height: 0;
 }
 
 .execution-runs-list {
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   border-right: 1px solid #f1ece5;
@@ -1465,6 +1515,9 @@
 }
 
 .execution-log-stream {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 0;
   padding: 14px;
   display: grid;
@@ -1479,8 +1532,11 @@
 }
 
 .execution-log-list {
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1489,6 +1545,7 @@
 .execution-run-card,
 .execution-log-card {
   width: 100%;
+  max-width: 100%;
   text-align: left;
   border: 1px solid #e8e4dd;
   border-radius: 14px;
@@ -1564,6 +1621,7 @@
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 

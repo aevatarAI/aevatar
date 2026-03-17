@@ -10,7 +10,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowGraphMapper>();
         services.AddSingleton<TextDiffService>();
         services.AddSingleton<WorkflowEditorService>();
-        services.AddSingleton<BundleService>();
         services.AddSingleton<WorkspaceService>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<ConnectorService>();

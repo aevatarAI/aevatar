@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
+using System.Text.Json;
 
 namespace Aevatar.Tools.Cli.Hosting;
 
@@ -12,6 +13,12 @@ internal static class AppStudioEndpoints
     {
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode));
+        app.MapPost("/api/app/workflow-generator", (
+            HttpContext http,
+            AppWorkflowGenerateRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct));
 
         app.MapPost("/api/app/scripts/draft-run", (
             AppScriptDraftRunRequest request,
@@ -198,10 +205,157 @@ internal static class AppStudioEndpoints
         }
     }
 
+    private static async Task HandleGenerateWorkflowAsync(
+        HttpContext http,
+        AppWorkflowGenerateRequest request,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        if (!embeddedWorkflowMode)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "WORKFLOW_GENERATOR_UNAVAILABLE",
+                message = "Ask AI workflow generation is only available in embedded mode.",
+            }, ct);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "WORKFLOW_GENERATOR_PROMPT_REQUIRED",
+                message = "Workflow authoring prompt is required.",
+            }, ct);
+            return;
+        }
+
+        var generator = services.GetService<WorkflowGenerateActorService>();
+        if (generator == null)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "WORKFLOW_GENERATOR_MISSING",
+                message = "Workflow generator services are not available in the current host.",
+            }, ct);
+            return;
+        }
+
+        try
+        {
+            await StartSseAsync(http.Response, ct);
+            var result = await generator.GenerateAsync(
+                new WorkflowGenerateRequest(
+                    request.Prompt.Trim(),
+                    request.CurrentYaml,
+                    request.AvailableWorkflowNames,
+                    request.Metadata),
+                (delta, token) => WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_REASONING",
+                    delta,
+                }, token),
+                ct);
+
+            foreach (var chunk in ChunkText(result.Yaml, 320))
+            {
+                await WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_CONTENT",
+                    delta = chunk,
+                }, ct);
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = result.Yaml,
+                delta = string.Empty,
+            }, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    code = "WORKFLOW_GENERATOR_FAILED",
+                    message = ex.Message,
+                }, ct);
+                return;
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "RUN_ERROR",
+                message = ex.Message,
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    code = "WORKFLOW_GENERATOR_UNEXPECTED",
+                    message = ex.Message,
+                }, ct);
+                return;
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "RUN_ERROR",
+                message = ex.Message,
+            }, ct);
+        }
+    }
+
     private static string ComputeSha256(string source)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(source ?? string.Empty));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static ValueTask StartSseAsync(HttpResponse response, CancellationToken ct)
+    {
+        response.StatusCode = StatusCodes.Status200OK;
+        response.Headers.ContentType = "text/event-stream; charset=utf-8";
+        response.Headers.CacheControl = "no-store";
+        response.Headers.Pragma = "no-cache";
+        response.Headers["X-Accel-Buffering"] = "no";
+        return new ValueTask(response.StartAsync(ct));
+    }
+
+    private static async Task WriteSseFrameAsync(HttpResponse response, object frame, CancellationToken ct)
+    {
+        var payload = JsonSerializer.Serialize(frame);
+        var bytes = Encoding.UTF8.GetBytes($"data: {payload}\n\n");
+        await response.Body.WriteAsync(bytes, ct);
+        await response.Body.FlushAsync(ct);
+    }
+
+    private static IEnumerable<string> ChunkText(string text, int chunkSize)
+    {
+        if (string.IsNullOrEmpty(text))
+            yield break;
+
+        var size = chunkSize > 0 ? chunkSize : 320;
+        for (var index = 0; index < text.Length; index += size)
+        {
+            var length = Math.Min(size, text.Length - index);
+            yield return text.Substring(index, length);
+        }
     }
 
     internal sealed record AppScriptDraftRunRequest(
@@ -211,4 +365,10 @@ internal static class AppStudioEndpoints
         string? Input,
         string? DefinitionActorId,
         string? RuntimeActorId);
+
+    internal sealed record AppWorkflowGenerateRequest(
+        string? Prompt,
+        string? CurrentYaml,
+        IReadOnlyCollection<string>? AvailableWorkflowNames,
+        IReadOnlyDictionary<string, string>? Metadata);
 }

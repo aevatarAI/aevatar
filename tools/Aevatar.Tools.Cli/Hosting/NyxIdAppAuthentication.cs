@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Net;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
@@ -34,6 +35,13 @@ internal sealed class NyxIdAppAuthOptions
     public string ProviderDisplayName { get; set; } = "Chrono workspace account";
 
     public bool RequireHttpsMetadata { get; set; } = true;
+}
+
+internal sealed class NyxIdInternalRequestCredentials
+{
+    public const string HeaderName = "X-Aevatar-Internal-Auth";
+
+    public string Token { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
 }
 
 internal static class NyxIdAppAuthentication
@@ -76,6 +84,7 @@ internal static class NyxIdAppAuthentication
 
         services.AddHttpContextAccessor();
         services.AddSingleton<IOptions<NyxIdAppAuthOptions>>(Options.Create(options));
+        services.AddSingleton<NyxIdInternalRequestCredentials>();
         services.AddSingleton<NyxIdAppTokenService>();
         services.AddTransient<NyxIdAccessTokenHandler>();
 
@@ -100,11 +109,16 @@ internal static class NyxIdAppAuthentication
 
                 oidc.CallbackPath = options.CallbackPath;
                 oidc.ResponseType = "code";
+                oidc.ResponseMode = "query";
                 oidc.UsePkce = true;
                 oidc.RequireHttpsMetadata = options.RequireHttpsMetadata;
                 oidc.SaveTokens = true;
                 oidc.GetClaimsFromUserInfoEndpoint = true;
                 oidc.MapInboundClaims = false;
+                oidc.NonceCookie.SameSite = SameSiteMode.Lax;
+                oidc.NonceCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+                oidc.CorrelationCookie.SameSite = SameSiteMode.Lax;
+                oidc.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
                 oidc.TokenValidationParameters = new TokenValidationParameters
                 {
                     NameClaimType = "name",
@@ -150,6 +164,8 @@ internal static class NyxIdAppAuthentication
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        var internalCredentials = app.Services.GetRequiredService<NyxIdInternalRequestCredentials>();
+
         app.UseAuthentication();
         app.UseAuthorization();
         app.Use(async (context, next) =>
@@ -161,6 +177,12 @@ internal static class NyxIdAppAuthentication
             }
 
             if (context.User.Identity?.IsAuthenticated == true)
+            {
+                await next();
+                return;
+            }
+
+            if (IsTrustedInternalRequest(context, internalCredentials))
             {
                 await next();
                 return;
@@ -183,6 +205,7 @@ internal static class NyxIdAppAuthentication
         app.MapGet("/api/auth/me", async (HttpContext context) =>
         {
             var authOptions = context.RequestServices.GetService<IOptions<NyxIdAppAuthOptions>>()?.Value;
+            var tokenService = context.RequestServices.GetService<NyxIdAppTokenService>();
             var scopeContext = context.RequestServices.GetService<IAppScopeResolver>()?.Resolve(context);
             if (!authEnabled)
             {
@@ -197,14 +220,23 @@ internal static class NyxIdAppAuthentication
             }
 
             var isAuthenticated = context.User.Identity?.IsAuthenticated == true;
-            if (!isAuthenticated)
+            var accessToken = isAuthenticated && tokenService != null
+                ? await tokenService.GetAccessTokenAsync(context, context.RequestAborted)
+                : null;
+            if (!isAuthenticated || string.IsNullOrWhiteSpace(accessToken))
             {
+                if (isAuthenticated)
+                    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
                 return Results.Json(new
                 {
                     enabled = true,
                     authenticated = false,
                     providerDisplayName = authOptions?.ProviderDisplayName,
                     loginUrl = BuildLoginUrl("/"),
+                    errorMessage = isAuthenticated
+                        ? "Authentication session is incomplete. Sign in again."
+                        : "Sign in to continue.",
                     scopeId = scopeContext?.ScopeId,
                     scopeSource = scopeContext?.Source,
                 });
@@ -271,6 +303,16 @@ internal static class NyxIdAppAuthentication
     private static bool IsAnonymousApiPath(PathString path) =>
         path.Equals("/api/app/health", StringComparison.OrdinalIgnoreCase) ||
         path.Equals("/api/auth/me", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTrustedInternalRequest(HttpContext context, NyxIdInternalRequestCredentials credentials)
+    {
+        if (!context.Request.Headers.TryGetValue(NyxIdInternalRequestCredentials.HeaderName, out var provided))
+            return false;
+
+        var token = provided.ToString().Trim();
+        return !string.IsNullOrWhiteSpace(token) &&
+               string.Equals(token, credentials.Token, StringComparison.Ordinal);
+    }
 
     private static IEnumerable<string> ParseScopes(string rawScope)
     {

@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using Aevatar.Tools.Cli.Studio.Application.Abstractions;
 using Aevatar.Tools.Cli.Studio.Application.Contracts;
@@ -11,11 +12,16 @@ public sealed class ExecutionService
 
     private readonly IStudioWorkspaceStore _store;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IStudioBackendRequestAuthSnapshotProvider? _authSnapshotProvider;
 
-    public ExecutionService(IStudioWorkspaceStore store, IHttpClientFactory httpClientFactory)
+    public ExecutionService(
+        IStudioWorkspaceStore store,
+        IHttpClientFactory httpClientFactory,
+        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;
+        _authSnapshotProvider = authSnapshotProvider;
     }
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -54,79 +60,11 @@ public sealed class ExecutionService
             Frames: []);
 
         await _store.SaveExecutionAsync(record, cancellationToken);
-
-        using var httpRequest = BuildStartExecutionRequest(runtimeBaseUrl, request, record);
-        var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
-
-        try
-        {
-            using var response = await runtimeClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                var error = await response.Content.ReadAsStringAsync(cancellationToken);
-                var failedRecord = record with
-                {
-                    Status = "failed",
-                    CompletedAtUtc = DateTimeOffset.UtcNow,
-                    Error = string.IsNullOrWhiteSpace(error) ? $"Runtime request failed: {(int)response.StatusCode}" : error,
-                };
-
-                await _store.SaveExecutionAsync(failedRecord, cancellationToken);
-                return ToDetail(failedRecord);
-            }
-
-            var frames = new List<StoredExecutionFrame>();
-            var pendingHumanSteps = new HashSet<string>(StringComparer.Ordinal);
-            string? actorId = null;
-            var runFinished = false;
-            var runFailed = false;
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var reader = new StreamReader(stream);
-
-            while (!reader.EndOfStream)
-            {
-                var line = await reader.ReadLineAsync(cancellationToken);
-                if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var payload = line["data:".Length..].Trim();
-                if (payload.Length == 0)
-                {
-                    continue;
-                }
-
-                frames.Add(new StoredExecutionFrame(DateTimeOffset.UtcNow, payload));
-                actorId ??= TryExtractActorId(payload);
-                TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed);
-            }
-
-            var status = ResolveExecutionStatus(runFinished, runFailed, pendingHumanSteps.Count > 0);
-
-            var completedRecord = record with
-            {
-                Status = status,
-                CompletedAtUtc = status is "completed" or "failed" ? DateTimeOffset.UtcNow : null,
-                ActorId = actorId,
-                Frames = frames,
-            };
-
-            await _store.SaveExecutionAsync(completedRecord, cancellationToken);
-            return ToDetail(completedRecord);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            var failedRecord = record with
-            {
-                Status = "failed",
-                CompletedAtUtc = DateTimeOffset.UtcNow,
-                Error = exception.Message,
-            };
-
-            await _store.SaveExecutionAsync(failedRecord, cancellationToken);
-            return ToDetail(failedRecord);
-        }
+        var authSnapshot = _authSnapshotProvider == null
+            ? null
+            : await _authSnapshotProvider.CaptureAsync(cancellationToken);
+        _ = Task.Run(() => RunStartExecutionAsync(record, request, authSnapshot));
+        return ToDetail(record);
     }
 
     public async Task<ExecutionDetail?> ResumeAsync(
@@ -241,6 +179,201 @@ public sealed class ExecutionService
         }
     }
 
+    private async Task RunStartExecutionAsync(
+        StoredExecutionRecord record,
+        StartExecutionRequest request,
+        StudioBackendRequestAuthSnapshot? authSnapshot)
+    {
+        using var httpRequest = BuildStartExecutionRequest(record.RuntimeBaseUrl, request, record);
+        ApplyAuthSnapshot(httpRequest, authSnapshot);
+        var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
+
+        try
+        {
+            using var response = await runtimeClient.SendAsync(
+                httpRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                CancellationToken.None);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync(CancellationToken.None);
+                var failure = ParseStartFailure(error, $"HTTP_{(int)response.StatusCode}");
+                await SaveExecutionFailureAsync(record, failure);
+                return;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(CancellationToken.None);
+            await ConsumeExecutionStreamAsync(record, stream, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            var failure = ParseStartFailure(exception.Message, "EXECUTION_START_FAILED");
+            await SaveExecutionFailureAsync(record, failure);
+        }
+    }
+
+    private async Task ConsumeExecutionStreamAsync(
+        StoredExecutionRecord seedRecord,
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        var frames = new List<StoredExecutionFrame>(seedRecord.Frames);
+        var pendingHumanSteps = new HashSet<string>(StringComparer.Ordinal);
+        var actorId = seedRecord.ActorId;
+        var runFinished = false;
+        var runFailed = false;
+        string? error = seedRecord.Error;
+
+        await foreach (var payload in ReadSsePayloadsAsync(stream, cancellationToken))
+        {
+            var receivedAtUtc = DateTimeOffset.UtcNow;
+            frames.Add(new StoredExecutionFrame(receivedAtUtc, payload));
+            actorId ??= TryExtractActorId(payload);
+            TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed);
+            error ??= TryExtractExecutionError(payload);
+
+            var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, pendingHumanSteps.Count > 0);
+            var liveRecord = seedRecord with
+            {
+                Status = liveStatus,
+                CompletedAtUtc = liveStatus is "completed" or "failed" ? receivedAtUtc : null,
+                ActorId = actorId,
+                Error = liveStatus == "failed" ? error : null,
+                Frames = frames.ToArray(),
+            };
+
+            await _store.SaveExecutionAsync(liveRecord, cancellationToken);
+        }
+
+        var finalStatus = ResolveCompletedExecutionStatus(runFinished, runFailed, pendingHumanSteps.Count > 0);
+        var finalRecord = seedRecord with
+        {
+            Status = finalStatus,
+            CompletedAtUtc = finalStatus is "completed" or "failed" ? DateTimeOffset.UtcNow : null,
+            ActorId = actorId,
+            Error = finalStatus == "failed" ? error : null,
+            Frames = frames.ToArray(),
+        };
+
+        await _store.SaveExecutionAsync(finalRecord, cancellationToken);
+    }
+
+    private async Task SaveExecutionFailureAsync(StoredExecutionRecord record, ExecutionStartFailure failure)
+    {
+        var failedRecord = record with
+        {
+            Status = "failed",
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            Error = failure.Message,
+            Frames =
+            [
+                new StoredExecutionFrame(
+                    DateTimeOffset.UtcNow,
+                    BuildRunErrorFrame(failure.Message, failure.Code))
+            ],
+        };
+
+        await _store.SaveExecutionAsync(failedRecord, CancellationToken.None);
+    }
+
+    private static void ApplyAuthSnapshot(
+        HttpRequestMessage request,
+        StudioBackendRequestAuthSnapshot? authSnapshot)
+    {
+        if (authSnapshot == null)
+        {
+            return;
+        }
+
+        if (request.Headers.Authorization == null &&
+            !string.IsNullOrWhiteSpace(authSnapshot.BearerToken))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authSnapshot.BearerToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(authSnapshot.InternalAuthHeaderName) ||
+            string.IsNullOrWhiteSpace(authSnapshot.InternalAuthToken) ||
+            !ShouldAttachInternalAuthHeader(request.RequestUri, authSnapshot.LocalOrigin) ||
+            request.Headers.Contains(authSnapshot.InternalAuthHeaderName))
+        {
+            return;
+        }
+
+        request.Headers.TryAddWithoutValidation(
+            authSnapshot.InternalAuthHeaderName,
+            authSnapshot.InternalAuthToken);
+    }
+
+    private static bool ShouldAttachInternalAuthHeader(Uri? requestUri, string? localOrigin)
+    {
+        if (requestUri == null || string.IsNullOrWhiteSpace(localOrigin))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(localOrigin, UriKind.Absolute, out var localUri))
+        {
+            return false;
+        }
+
+        return Uri.Compare(
+            requestUri,
+            localUri,
+            UriComponents.SchemeAndServer | UriComponents.Port,
+            UriFormat.SafeUnescaped,
+            StringComparison.OrdinalIgnoreCase) == 0;
+    }
+
+    private static async IAsyncEnumerable<string> ReadSsePayloadsAsync(
+        Stream stream,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(stream);
+        var dataLines = new List<string>();
+
+        while (!reader.EndOfStream)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                break;
+            }
+
+            if (line.Length == 0)
+            {
+                if (dataLines.Count == 0)
+                {
+                    continue;
+                }
+
+                var payload = string.Join("\n", dataLines).Trim();
+                dataLines.Clear();
+                if (payload.Length > 0 && !string.Equals(payload, "[DONE]", StringComparison.Ordinal))
+                {
+                    yield return payload;
+                }
+
+                continue;
+            }
+
+            if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                dataLines.Add(line["data:".Length..].Trim());
+            }
+        }
+
+        if (dataLines.Count > 0)
+        {
+            var payload = string.Join("\n", dataLines).Trim();
+            if (payload.Length > 0 && !string.Equals(payload, "[DONE]", StringComparison.Ordinal))
+            {
+                yield return payload;
+            }
+        }
+    }
+
     private static void TrackExecutionState(
         string payload,
         HashSet<string> pendingHumanSteps,
@@ -299,7 +432,37 @@ public sealed class ExecutionService
         }
     }
 
-    private static string ResolveExecutionStatus(bool runFinished, bool runFailed, bool waitingForHuman)
+    private static string? TryExtractExecutionError(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+            if (root.TryGetProperty("runError", out var runError) &&
+                runError.TryGetProperty("message", out var messageElement) &&
+                messageElement.ValueKind == JsonValueKind.String)
+            {
+                return messageElement.GetString();
+            }
+
+            if (root.TryGetProperty("custom", out var customElement) &&
+                customElement.TryGetProperty("name", out var customNameElement) &&
+                string.Equals(customNameElement.GetString(), "aevatar.step.completed", StringComparison.Ordinal) &&
+                customElement.TryGetProperty("payload", out var payloadElement) &&
+                payloadElement.TryGetProperty("error", out var errorElement) &&
+                errorElement.ValueKind == JsonValueKind.String)
+            {
+                return errorElement.GetString();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static string ResolveLiveExecutionStatus(bool runFinished, bool runFailed, bool waitingForHuman)
     {
         if (runFailed)
         {
@@ -311,7 +474,22 @@ public sealed class ExecutionService
             return "waiting";
         }
 
-        return "completed";
+        return runFinished ? "completed" : "running";
+    }
+
+    private static string ResolveCompletedExecutionStatus(bool runFinished, bool runFailed, bool waitingForHuman)
+    {
+        if (runFailed)
+        {
+            return "failed";
+        }
+
+        if (waitingForHuman)
+        {
+            return "waiting";
+        }
+
+        return runFinished ? "completed" : "completed";
     }
 
     private static HttpRequestMessage BuildStartExecutionRequest(
@@ -380,6 +558,54 @@ public sealed class ExecutionService
 
         return JsonSerializer.Serialize(payload);
     }
+
+    private static string BuildRunErrorFrame(string message, string? code)
+    {
+        var payload = new
+        {
+            runError = new
+            {
+                message,
+                code,
+            },
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static ExecutionStartFailure ParseStartFailure(string? rawError, string fallbackCode)
+    {
+        var fallbackMessage = string.IsNullOrWhiteSpace(rawError)
+            ? "Runtime request failed before any execution events were received."
+            : rawError.Trim();
+
+        if (string.IsNullOrWhiteSpace(rawError))
+            return new ExecutionStartFailure(fallbackMessage, fallbackCode);
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawError);
+            var root = document.RootElement;
+            var message = root.TryGetProperty("message", out var messageElement) &&
+                          messageElement.ValueKind == JsonValueKind.String
+                ? messageElement.GetString()
+                : null;
+            var code = root.TryGetProperty("code", out var codeElement) &&
+                       codeElement.ValueKind == JsonValueKind.String
+                ? codeElement.GetString()
+                : null;
+
+            return new ExecutionStartFailure(
+                string.IsNullOrWhiteSpace(message) ? fallbackMessage : message.Trim(),
+                string.IsNullOrWhiteSpace(code) ? fallbackCode : code.Trim());
+        }
+        catch
+        {
+            return new ExecutionStartFailure(fallbackMessage, fallbackCode);
+        }
+    }
+
+    private sealed record ExecutionStartFailure(string Message, string? Code);
 
     private static ExecutionSummary ToSummary(StoredExecutionRecord record) =>
         new(

@@ -38,6 +38,7 @@ import {
   LayoutGrid,
   LogOut,
   Moon,
+  Maximize2,
   Palette,
   Play,
   Plus,
@@ -237,6 +238,48 @@ function createEmptyAppContext(): AppContextState {
   };
 }
 
+type ExecutionLogsWindowState = {
+  isPopout: boolean;
+  executionId: string | null;
+};
+
+function readExecutionLogsWindowState(): ExecutionLogsWindowState {
+  if (typeof window === 'undefined') {
+    return {
+      isPopout: false,
+      executionId: null,
+    };
+  }
+
+  const url = new URL(window.location.href);
+  const executionId = url.searchParams.get('executionId');
+  return {
+    isPopout: url.searchParams.get('executionLogs') === 'popout',
+    executionId: executionId && executionId.trim() ? executionId.trim() : null,
+  };
+}
+
+function buildExecutionLogsWindowUrl(executionId: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('executionLogs', 'popout');
+  url.searchParams.set('executionId', executionId);
+  return url.toString();
+}
+
+function toExecutionSummary(detail: any) {
+  const prompt = String(detail?.prompt || '').trim();
+  return {
+    executionId: detail?.executionId || '',
+    workflowName: detail?.workflowName || '',
+    status: detail?.status || 'running',
+    promptPreview: prompt.length <= 120 ? prompt : `${prompt.slice(0, 117)}...`,
+    startedAtUtc: detail?.startedAtUtc || new Date().toISOString(),
+    completedAtUtc: detail?.completedAtUtc || null,
+    actorId: detail?.actorId || null,
+    error: detail?.error || null,
+  };
+}
+
 function createEmptyAuthSession(): AuthSessionState {
   return {
     loading: true,
@@ -258,39 +301,6 @@ function buildWorkflowAuthoringMetadata(scopeId: string | null) {
     'workflow.authoring.enabled': 'true',
     'workflow.intent': 'workflow_authoring',
   };
-}
-
-function buildWorkflowAuthoringPrompt(request: string, currentYaml: string) {
-  const normalizedRequest = String(request || '').trim();
-  const normalizedYaml = String(currentYaml || '').trim();
-
-  const parts = [
-    'Author an Aevatar workflow.',
-    'Return exactly one fenced ```yaml block and nothing else.',
-  ];
-
-  if (normalizedYaml) {
-    parts.push(
-      'Current workflow YAML:',
-      `\`\`\`yaml\n${normalizedYaml}\n\`\`\``,
-      'Apply the user request as a patch over the current workflow. Preserve any parts that do not need to change.',
-    );
-  } else {
-    parts.push('Create a new workflow from scratch.');
-  }
-
-  parts.push(`User request:\n${normalizedRequest}`);
-  return parts.join('\n\n');
-}
-
-function extractLastYamlBlock(markdown: string) {
-  const regex = /```(?:ya?ml)?\s*\n([\s\S]*?)```/gi;
-  let lastMatch = '';
-  for (const match of String(markdown || '').matchAll(regex)) {
-    lastMatch = String(match[1] || '').trim();
-  }
-
-  return lastMatch;
 }
 
 function WorkflowNodeCard({ data, selected }: any) {
@@ -636,15 +646,20 @@ function hasRoleDraftContent(role: RoleState | null | undefined) {
 }
 
 function App() {
+  const executionLogsWindowState = useMemo(() => readExecutionLogsWindowState(), []);
+  const isExecutionLogsPopout = executionLogsWindowState.isPopout;
+  const initialExecutionLogsPopoutExecutionId = executionLogsWindowState.executionId;
+
   const [appContext, setAppContext] = useState<AppContextState>(createEmptyAppContext());
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
-  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('workflows');
-  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>('workflows');
+  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('studio');
+  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>('studio');
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
+  const [logsDetached, setLogsDetached] = useState(false);
 
   const [workspaceSettings, setWorkspaceSettings] = useState<{
     runtimeBaseUrl: string;
@@ -733,6 +748,7 @@ function App() {
   const [askAiOpen, setAskAiOpen] = useState(false);
   const [askAiPrompt, setAskAiPrompt] = useState('');
   const [askAiAnswer, setAskAiAnswer] = useState('');
+  const [askAiReasoning, setAskAiReasoning] = useState('');
   const [askAiGeneratedYaml, setAskAiGeneratedYaml] = useState('');
   const [askAiPending, setAskAiPending] = useState(false);
   const [runtimeTestState, setRuntimeTestState] = useState<{
@@ -757,6 +773,8 @@ function App() {
   const toastTimerRef = useRef<number | null>(null);
   const executionLogCopyTimerRef = useRef<number | null>(null);
   const executionActionInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const executionLogsPopoutMonitorRef = useRef<number | null>(null);
+  const executionLogsPopoutWindowRef = useRef<Window | null>(null);
   const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
@@ -797,9 +815,27 @@ function App() {
     void bootstrap();
   }, []);
 
+  useEffect(() => api.onAuthRequired(detail => {
+    setRunModalOpen(false);
+    setAuthSession(prev => ({
+      ...prev,
+      loading: false,
+      enabled: true,
+      authenticated: false,
+      loginUrl: detail?.loginUrl || prev.loginUrl || '/auth/login',
+      errorMessage: detail?.message || 'Sign in to continue.',
+    }));
+  }), []);
+
   useEffect(() => () => {
     if (executionLogCopyTimerRef.current) {
       window.clearTimeout(executionLogCopyTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (executionLogsPopoutMonitorRef.current) {
+      window.clearInterval(executionLogsPopoutMonitorRef.current);
     }
   }, []);
 
@@ -850,10 +886,14 @@ function App() {
   }, [workspacePage]);
 
   useEffect(() => {
-    const toCompactControlHint = (raw: string) => {
+    const normalizeControlHint = (raw: string, detailed = false) => {
       const cleaned = raw.replace(/\s+/g, ' ').replace(/[.!?]+$/g, '').trim();
       if (!cleaned) {
         return '';
+      }
+
+      if (detailed) {
+        return cleaned;
       }
 
       const normalized = cleaned.toLowerCase();
@@ -891,7 +931,9 @@ function App() {
         const ariaLabel = control.getAttribute('aria-label')?.trim() || '';
         const existingTitle = control.getAttribute('title')?.trim() || '';
         const explicitHint = control.getAttribute('data-tooltip')?.trim() || '';
-        const nextTitle = toCompactControlHint(text || ariaLabel || existingTitle || explicitHint);
+        const nextTitle = normalizeControlHint(
+          explicitHint || ariaLabel || existingTitle || text,
+          Boolean(explicitHint || ariaLabel || existingTitle));
         if (!nextTitle || control.getAttribute('title') === nextTitle) {
           return;
         }
@@ -963,6 +1005,126 @@ function App() {
     setExecutionActionPendingKey('');
   }, [selectedExecutionId, activeExecutionLogIndex]);
 
+  useEffect(() => {
+    if (isExecutionLogsPopout) {
+      document.title = selectedExecutionId
+        ? `Execution Logs · ${executionDetail?.workflowName || 'Aevatar App'}`
+        : 'Execution Logs · Aevatar App';
+      return;
+    }
+
+    document.title = 'Aevatar App';
+  }, [executionDetail?.workflowName, isExecutionLogsPopout, selectedExecutionId]);
+
+  useEffect(() => {
+    if (!isExecutionLogsPopout || authSession.loading) {
+      return;
+    }
+
+    if (authSession.enabled && !authSession.authenticated) {
+      return;
+    }
+
+    if (!initialExecutionLogsPopoutExecutionId || selectedExecutionId === initialExecutionLogsPopoutExecutionId) {
+      return;
+    }
+
+    void openExecution(initialExecutionLogsPopoutExecutionId);
+  }, [
+    authSession.authenticated,
+    authSession.enabled,
+    authSession.loading,
+    initialExecutionLogsPopoutExecutionId,
+    isExecutionLogsPopout,
+    selectedExecutionId,
+  ]);
+
+  useEffect(() => {
+    if (isExecutionLogsPopout || !logsDetached) {
+      return undefined;
+    }
+
+    executionLogsPopoutMonitorRef.current = window.setInterval(() => {
+      const logsWindow = executionLogsPopoutWindowRef.current;
+      if (logsWindow && !logsWindow.closed) {
+        return;
+      }
+
+      executionLogsPopoutWindowRef.current = null;
+      setLogsDetached(false);
+      setLogsCollapsed(false);
+      if (executionLogsPopoutMonitorRef.current) {
+        window.clearInterval(executionLogsPopoutMonitorRef.current);
+        executionLogsPopoutMonitorRef.current = null;
+      }
+    }, 500);
+
+    return () => {
+      if (executionLogsPopoutMonitorRef.current) {
+        window.clearInterval(executionLogsPopoutMonitorRef.current);
+        executionLogsPopoutMonitorRef.current = null;
+      }
+    };
+  }, [isExecutionLogsPopout, logsDetached]);
+
+  useEffect(() => {
+    if (isExecutionLogsPopout || !selectedExecutionId) {
+      return;
+    }
+
+    const logsWindow = executionLogsPopoutWindowRef.current;
+    if (!logsWindow || logsWindow.closed) {
+      return;
+    }
+
+    try {
+      logsWindow.location.replace(buildExecutionLogsWindowUrl(selectedExecutionId));
+    } catch {
+    }
+  }, [isExecutionLogsPopout, selectedExecutionId]);
+
+  useEffect(() => {
+    if (!selectedExecutionId || executionDetail?.status !== 'running') {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timer = 0;
+
+    const refreshExecution = async () => {
+      try {
+        const detail = await api.executions.get(selectedExecutionId);
+        if (cancelled) {
+          return;
+        }
+
+        applyExecutionDetail(detail);
+        if (detail?.status === 'running') {
+          timer = window.setTimeout(() => {
+            void refreshExecution();
+          }, 700);
+        }
+      } catch {
+        if (cancelled) {
+          return;
+        }
+
+        timer = window.setTimeout(() => {
+          void refreshExecution();
+        }, 1200);
+      }
+    };
+
+    timer = window.setTimeout(() => {
+      void refreshExecution();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [executionDetail?.status, selectedExecutionId]);
+
   async function bootstrap() {
     try {
       const session = await api.auth.getSession();
@@ -976,7 +1138,7 @@ function App() {
         name: session?.name || '',
         email: session?.email || '',
         picture: session?.picture || '',
-        errorMessage: '',
+        errorMessage: session?.errorMessage || '',
       };
       setAuthSession(nextAuthSession);
 
@@ -1209,6 +1371,93 @@ function App() {
     }
   }
 
+  function focusExecutionLogsPopoutWindow() {
+    const logsWindow = executionLogsPopoutWindowRef.current;
+    if (!logsWindow || logsWindow.closed) {
+      executionLogsPopoutWindowRef.current = null;
+      setLogsDetached(false);
+      setLogsCollapsed(false);
+      return false;
+    }
+
+    logsWindow.focus();
+    return true;
+  }
+
+  function handlePopOutExecutionLogs() {
+    if (!selectedExecutionId) {
+      flash('Pick a run first', 'info');
+      return;
+    }
+
+    const nextUrl = buildExecutionLogsWindowUrl(selectedExecutionId);
+    const existingWindow = executionLogsPopoutWindowRef.current;
+    if (existingWindow && !existingWindow.closed) {
+      existingWindow.location.replace(nextUrl);
+      existingWindow.focus();
+      setLogsDetached(true);
+      setLogsCollapsed(true);
+      return;
+    }
+
+    const popupWidth = Math.max(window.screen?.availWidth || window.innerWidth || 1440, 1280);
+    const popupHeight = Math.max(window.screen?.availHeight || window.innerHeight || 960, 720);
+    const popupFeatures = [
+      'popup=yes',
+      `width=${popupWidth}`,
+      `height=${popupHeight}`,
+      'left=0',
+      'top=0',
+      'resizable=yes',
+      'scrollbars=yes',
+    ].join(',');
+    const logsWindow = window.open(
+      nextUrl,
+      'aevatar-execution-logs',
+      popupFeatures);
+
+    if (!logsWindow) {
+      flash('Allow pop-ups to open execution logs in a new window', 'error');
+      return;
+    }
+
+    executionLogsPopoutWindowRef.current = logsWindow;
+    try {
+      logsWindow.moveTo(0, 0);
+      logsWindow.resizeTo(popupWidth, popupHeight);
+    } catch {
+      // Browser window managers may block move/resize. The popup still renders fullscreen layout.
+    }
+    logsWindow.focus();
+    setLogsDetached(true);
+    setLogsCollapsed(true);
+  }
+
+  function handleToggleExecutionLogsPanel() {
+    if (logsDetached) {
+      focusExecutionLogsPopoutWindow();
+      return;
+    }
+
+    setLogsCollapsed(value => !value);
+  }
+
+  function upsertExecutionSummary(detail: any) {
+    if (!detail?.executionId) {
+      return;
+    }
+
+    const nextSummary = toExecutionSummary(detail);
+    setExecutions(prev => {
+      const existingIndex = prev.findIndex(item => item.executionId === nextSummary.executionId);
+      if (existingIndex < 0) {
+        return [nextSummary, ...prev];
+      }
+
+      return prev.map((item, index) => index === existingIndex ? { ...item, ...nextSummary } : item);
+    });
+  }
+
   function invalidateYamlSync() {
     yamlSyncRevisionRef.current += 1;
   }
@@ -1231,6 +1480,13 @@ function App() {
   function openWorkflowsPage() {
     setWorkspacePage('workflows');
     setRightPanelOpen(false);
+    setPaletteOpen(false);
+    setAskAiOpen(false);
+    setCanvasMenu({ open: false, x: 0, y: 0 });
+  }
+
+  function openStudioPage() {
+    setWorkspacePage('studio');
     setPaletteOpen(false);
     setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
@@ -1680,6 +1936,7 @@ function App() {
 
     setAskAiPending(true);
     setAskAiAnswer('');
+    setAskAiReasoning('');
     setAskAiGeneratedYaml('');
 
     try {
@@ -1689,39 +1946,28 @@ function App() {
         : null;
       const currentYaml = serialized?.yaml || workflowMeta.yaml || '';
       const answer = await api.assistant.authorWorkflow({
-        prompt: buildWorkflowAuthoringPrompt(askAiPrompt, currentYaml),
+        prompt: askAiPrompt.trim(),
+        currentYaml,
+        availableWorkflowNames: workflowList.map(item => item.name),
         metadata: workflowAuthoringMetadata,
       }, {
         onText: text => setAskAiAnswer(text),
+        onReasoning: text => setAskAiReasoning(text),
       });
 
-      const nextYaml = extractLastYamlBlock(answer);
+      const nextYaml = String(answer || '').trim();
       if (!nextYaml) {
-        throw new Error('AI did not return a YAML block.');
+        throw new Error('AI did not return workflow YAML.');
       }
 
-      setAskAiAnswer(answer);
+      setAskAiAnswer(nextYaml);
       setAskAiGeneratedYaml(nextYaml);
-      flash('AI workflow draft generated', 'success');
+      await applyAskAiYaml(nextYaml);
+      flash('AI workflow applied to canvas', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to generate workflow YAML', 'error');
     } finally {
       setAskAiPending(false);
-    }
-  }
-
-  async function handleAskAiApply() {
-    if (!askAiGeneratedYaml.trim()) {
-      flash('Generate YAML first', 'error');
-      return;
-    }
-
-    try {
-      await applyAskAiYaml(askAiGeneratedYaml);
-      setAskAiOpen(false);
-      flash('AI workflow applied to canvas', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to apply AI workflow', 'error');
     }
   }
 
@@ -1731,6 +1977,12 @@ function App() {
 
   async function handleConfirmRunWorkflow() {
     try {
+      if (authSession.enabled && !authSession.authenticated) {
+        setRunModalOpen(false);
+        flash('Sign in before running workflows', 'error');
+        return;
+      }
+
       const serialized = await serializeCurrentWorkflow();
       const errorCount = (serialized?.findings || []).filter((finding: ValidationFinding) => toFindingLevel(finding.level) === 'error').length;
       if (errorCount > 0) {
@@ -1759,7 +2011,9 @@ function App() {
       setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
-      await loadExecutions(detail?.executionId || null);
+      setLogsDetached(false);
+      applyExecutionDetail(detail);
+      void loadExecutions(detail?.executionId || null);
       flash(shouldRunPublishedWorkflow ? 'Published workflow run started' : 'Execution started', 'success');
     } catch (error: any) {
       flash(error?.message || 'Execution failed', 'error');
@@ -1772,15 +2026,7 @@ function App() {
     setExecutionDetail(detail);
     setExecutionTrace(trace);
     setActiveExecutionLogIndex(trace?.defaultLogIndex ?? null);
-    setExecutions(prev => prev.map(item => item.executionId === detail?.executionId
-      ? {
-          ...item,
-          status: detail?.status || item.status,
-          completedAtUtc: detail?.completedAtUtc ?? item.completedAtUtc,
-          actorId: detail?.actorId ?? item.actorId,
-          error: detail?.error ?? item.error,
-        }
-      : item));
+    upsertExecutionSummary(detail);
     scheduleCanvasOverview();
   }
 
@@ -1789,7 +2035,9 @@ function App() {
       const detail = await api.executions.get(executionId);
       applyExecutionDetail(detail);
       setStudioView('execution');
-      setLogsCollapsed(false);
+      if (!logsDetached) {
+        setLogsCollapsed(false);
+      }
     } catch (error: any) {
       flash(error?.message || 'Failed to load execution', 'error');
     }
@@ -2511,6 +2759,8 @@ function App() {
     : currentWorkflowExecutions.length > 0
       ? `${currentWorkflowExecutions.length} runs`
       : 'No runs yet';
+  const executionLogsCollapsed = !isExecutionLogsPopout && (logsCollapsed || logsDetached);
+  const executionLogsToggleLabel = logsDetached ? 'Viewing in new window' : executionSummaryLabel;
 
   const selectedSurfaceStyle = {
     borderColor: 'var(--accent-border)',
@@ -2578,6 +2828,250 @@ function App() {
       </a>
     </div>
   );
+
+  function renderExecutionLogsSection(fullscreen = false) {
+    const sectionCollapsed = !fullscreen && executionLogsCollapsed;
+    const sectionClassName = [
+      'execution-logs',
+      sectionCollapsed ? 'collapsed' : '',
+      fullscreen ? 'execution-logs-fullscreen' : '',
+    ].filter(Boolean).join(' ');
+    const popoutButtonVisible = !fullscreen && Boolean(selectedExecutionId);
+
+    return (
+      <section className={sectionClassName}>
+        <div className="execution-logs-header">
+          <div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-[0.16em]">Execution</div>
+            <div className="text-[14px] font-semibold text-gray-800">
+              {fullscreen ? 'Execution logs' : 'Logs'}
+            </div>
+          </div>
+          <div className="execution-logs-header-actions">
+            {executionTrace?.logs?.length ? (
+              <button
+                type="button"
+                className={`panel-icon-button execution-logs-copy-action ${copiedAllExecutionLogs ? 'active' : ''}`}
+                title="Copy all execution logs."
+                aria-label="Copy all execution logs."
+                data-tooltip="Copy logs"
+                onClick={() => void handleCopyAllExecutionLogs()}
+              >
+                {copiedAllExecutionLogs ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            ) : null}
+            {popoutButtonVisible ? (
+              <button
+                type="button"
+                className={`panel-icon-button execution-logs-window-action ${logsDetached ? 'active' : ''}`}
+                title="Pop out"
+                aria-label="Pop out execution logs."
+                data-tooltip="Pop out"
+                onClick={handlePopOutExecutionLogs}
+              >
+                <Maximize2 size={14} />
+              </button>
+            ) : null}
+            {fullscreen ? (
+              <button
+                type="button"
+                className="panel-icon-button execution-logs-window-action"
+                title="Close window."
+                aria-label="Close logs window."
+                data-tooltip="Close window"
+                onClick={() => window.close()}
+              >
+                <X size={14} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleToggleExecutionLogsPanel}
+                className="execution-logs-collapse-action"
+                aria-expanded={!sectionCollapsed}
+                data-tooltip={logsDetached ? 'Focus logs window.' : sectionCollapsed ? 'Expand logs.' : 'Collapse logs.'}
+              >
+                <span className="text-[12px] text-gray-500">{executionLogsToggleLabel}</span>
+                {logsDetached ? (
+                  <Maximize2 size={15} />
+                ) : (
+                  <ChevronDown size={16} className={`execution-logs-collapse-icon ${sectionCollapsed ? 'collapsed' : ''}`} />
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!sectionCollapsed ? (
+          <div className="execution-logs-body">
+            <div className="execution-runs-list">
+              {currentWorkflowExecutions.length === 0 ? (
+                <EmptyPanel
+                  icon={<Play size={18} className="text-gray-300" />}
+                  title="No runs"
+                  copy="Run the current workflow to inspect execution."
+                />
+              ) : currentWorkflowExecutions.map(execution => (
+                <button
+                  key={execution.executionId}
+                  onClick={() => void openExecution(execution.executionId)}
+                  className={`execution-run-card ${selectedExecutionId === execution.executionId ? 'active' : ''}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[13px] font-semibold text-gray-800">{formatDateTime(execution.startedAtUtc)}</div>
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400">{execution.status}</span>
+                  </div>
+                  <div className="text-[11px] text-gray-400 mt-1">{formatDurationBetween(execution.startedAtUtc, execution.completedAtUtc)}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="execution-log-stream">
+              <div className="execution-log-list">
+                {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
+                  <button
+                    key={`${log.timestamp}-${index}`}
+                    onClick={() => void handleExecutionLogClick(log, index)}
+                    className={`execution-log-card tone-${log.tone} ${activeExecutionLogIndex === index ? 'active' : ''}`}
+                    title="Click to copy this log."
+                  >
+                    <div className="execution-log-card-head">
+                      <div className="text-[12px] font-semibold text-gray-800">{log.title}</div>
+                      <div className="execution-log-card-meta">
+                        {copiedExecutionLogIndex === index ? (
+                          <span className="execution-log-card-copied">
+                            <Check size={12} /> Copied
+                          </span>
+                        ) : null}
+                        <div className="text-[11px] text-gray-400">{formatDateTime(log.timestamp)}</div>
+                      </div>
+                    </div>
+                    {log.meta ? <div className="text-[11px] text-gray-400 mt-1">{log.meta}</div> : null}
+                    {log.previewText ? <div className="execution-log-card-preview">{log.previewText}</div> : null}
+                  </button>
+                )) : (
+                  <EmptyPanel
+                    icon={<FileText size={18} className="text-gray-300" />}
+                    title="No logs yet"
+                    copy="Pick a run to inspect frames and step transitions."
+                  />
+                )}
+              </div>
+
+              {activeExecutionInteraction ? (
+                <div className="execution-action-panel">
+                  <div className="execution-action-intro">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] text-gray-400 uppercase tracking-[0.14em]">Action required</div>
+                        <div className="text-[15px] font-semibold text-gray-800 mt-1">
+                          {activeExecutionInteraction.kind === 'human_approval' ? 'Human approval' : 'Human input'}
+                        </div>
+                        <div className="execution-action-subtitle">
+                          {activeExecutionInteraction.kind === 'human_approval'
+                            ? 'Review the pending gate and approve or reject the run.'
+                            : 'Provide the missing value to resume this workflow step.'}
+                        </div>
+                      </div>
+                      <span className="execution-action-badge">
+                        {activeExecutionInteraction.stepId}
+                      </span>
+                    </div>
+
+                    <div className="execution-action-meta">
+                      <span className="execution-action-chip">
+                        <User size={12} /> Human required
+                      </span>
+                      {activeExecutionInteraction.variableName ? (
+                        <span className="execution-action-chip">
+                          stores as {activeExecutionInteraction.variableName}
+                        </span>
+                      ) : null}
+                      {activeExecutionInteraction.timeoutSeconds ? (
+                        <span className="execution-action-chip">
+                          timeout {activeExecutionInteraction.timeoutSeconds}s
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {activeExecutionInteraction.prompt ? (
+                    <div className="execution-action-block">
+                      <div className="execution-action-block-label">Prompt</div>
+                      <div className="execution-action-prompt">
+                        {activeExecutionInteraction.prompt}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="execution-action-block">
+                    <div className="execution-action-field-head">
+                      <label className="field-label">
+                        {activeExecutionInteraction.kind === 'human_approval'
+                          ? 'Feedback'
+                          : activeExecutionInteraction.variableName || 'Input'}
+                      </label>
+                      <span className={`execution-action-requirement ${activeExecutionInteraction.kind === 'human_approval' ? 'optional' : 'required'}`}>
+                        {activeExecutionInteraction.kind === 'human_approval' ? 'Optional note' : 'Required'}
+                      </span>
+                    </div>
+                    <div className="execution-action-helper">
+                      {activeExecutionInteraction.kind === 'human_approval'
+                        ? 'Add context for the operator if needed, then approve or reject this gate.'
+                        : activeExecutionInteraction.variableName
+                          ? `The submitted value will resume the run and be available as ${activeExecutionInteraction.variableName}.`
+                          : 'This response resumes the workflow immediately.'}
+                    </div>
+                    <textarea
+                      ref={executionActionInputRef}
+                      className="panel-textarea execution-action-textarea mt-1"
+                      value={executionActionInput}
+                      placeholder={activeExecutionInteraction.kind === 'human_approval'
+                        ? 'Optional feedback'
+                        : 'Enter the value to continue this step'}
+                      onChange={event => setExecutionActionInput(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="execution-action-footer">
+                    {activeExecutionInteraction.kind === 'human_approval' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost-action execution-danger-action"
+                          disabled={executionActionPendingKey === `${executionActionKeyBase}:reject`}
+                          onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'reject')}
+                        >
+                          <X size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:reject` ? 'Rejecting...' : 'Reject'}
+                        </button>
+                        <button
+                          type="button"
+                          className="solid-action"
+                          disabled={executionActionPendingKey === `${executionActionKeyBase}:approve`}
+                          onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'approve')}
+                        >
+                          <Check size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:approve` ? 'Approving...' : 'Approve'}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="solid-action"
+                        disabled={executionActionPendingKey === `${executionActionKeyBase}:submit`}
+                        onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'submit')}
+                      >
+                        <Play size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:submit` ? 'Submitting...' : 'Submit input'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
 
   function renderRolesPage() {
     return (
@@ -3010,6 +3504,28 @@ function App() {
     return <AppLoadingScreen />;
   }
 
+  if (authSession.enabled && !authSession.authenticated) {
+    return (
+      <AppAuthenticationGate
+        providerDisplayName={authSession.providerDisplayName}
+        loginUrl={authSession.loginUrl}
+        errorMessage={authSession.errorMessage}
+      />
+    );
+  }
+
+  if (isExecutionLogsPopout) {
+    return (
+      <div
+        className="studio-shell execution-logs-popout-shell relative flex min-h-screen w-full overflow-hidden bg-[#F2F1EE] text-gray-800"
+        data-appearance={settingsState.appearanceTheme || 'blue'}
+        data-color-mode={settingsState.colorMode || 'light'}
+      >
+        {renderExecutionLogsSection(true)}
+      </div>
+    );
+  }
+
   return (
     <div
       className="studio-shell relative flex h-screen w-full overflow-hidden bg-[#F2F1EE] text-gray-800"
@@ -3030,6 +3546,12 @@ function App() {
           <div className="studio-brand-mark w-11 h-11 rounded-[16px] flex items-center justify-center">
             <WorkflowIcon size={18} color="white" />
           </div>
+          <RailButton
+            active={workspacePage === 'studio'}
+            label="Studio"
+            icon={<WorkflowIcon size={18} />}
+            onClick={openStudioPage}
+          />
           <RailButton
             active={workspacePage === 'workflows'}
             label="Workflows"
@@ -3905,7 +4427,7 @@ function App() {
                   </div>
 
                   <p className="mt-3 text-[12px] leading-6 text-gray-500">
-                    Describe the workflow. When the canvas already has YAML, AI will patch the current draft.
+                    Describe the workflow. AI reasoning streams here, then valid YAML is applied to the canvas automatically.
                   </p>
 
                   <textarea
@@ -3916,46 +4438,57 @@ function App() {
                     onChange={event => setAskAiPrompt(event.target.value)}
                   />
 
-                  <div className="mt-3 flex items-center justify-between gap-2">
-                    <div className="text-[11px] text-gray-400">
-                      {askAiPending
-                        ? 'Streaming YAML draft...'
-                        : askAiGeneratedYaml
-                          ? 'YAML draft ready'
-                          : 'Return format: fenced yaml only'}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {askAiGeneratedYaml ? (
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <div className="text-[11px] text-gray-400">
+                        {askAiPending
+                          ? 'Generating and validating YAML...'
+                          : askAiGeneratedYaml
+                            ? 'Validated YAML applied to canvas. Click the YAML card to apply it again.'
+                            : 'Return format: workflow YAML only'}
+                      </div>
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() => navigator.clipboard?.writeText(askAiGeneratedYaml)}
+                          onClick={() => { void handleAskAiGenerate(); }}
                           className="ghost-action !px-3"
+                          disabled={askAiPending}
                         >
-                          <Copy size={14} /> Copy
+                          <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
                         </button>
-                      ) : null}
-                      <button
-                        onClick={() => { void handleAskAiGenerate(); }}
-                        className="ghost-action !px-3"
-                        disabled={askAiPending}
-                      >
-                        <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
-                      </button>
-                      <button
-                        onClick={() => { void handleAskAiApply(); }}
-                        className="solid-action !px-3"
-                        disabled={askAiPending || !askAiGeneratedYaml}
-                      >
-                        <Check size={14} /> Apply
-                      </button>
+                      </div>
                     </div>
-                  </div>
 
                   <div className="mt-4 rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Preview</div>
-                    <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                      {askAiAnswer || 'AI output will stream here.'}
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
+                    <pre className="mt-2 max-h-[140px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
+                      {askAiReasoning || 'LLM reasoning will stream here.'}
                     </pre>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!askAiGeneratedYaml.trim()) {
+                        return;
+                      }
+
+                      void applyAskAiYaml(askAiGeneratedYaml).then(
+                        () => flash('AI workflow applied to canvas', 'success'),
+                        (error: any) => flash(error?.message || 'Failed to apply workflow YAML', 'error'),
+                      );
+                    }}
+                    disabled={!askAiGeneratedYaml.trim()}
+                    className="mt-4 w-full rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3 text-left transition hover:border-[color:var(--accent-border)] disabled:cursor-default disabled:opacity-100"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">YAML</div>
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
+                        {askAiGeneratedYaml ? 'Click to apply' : 'Waiting for valid YAML'}
+                      </div>
+                    </div>
+                    <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                      {askAiAnswer || 'Validated workflow YAML will appear here.'}
+                    </pre>
+                  </button>
                 </div>
               ) : null}
 
@@ -4580,206 +5113,7 @@ function App() {
           ) : null}
         </section>
 
-        {studioView === 'execution' ? (
-          <section className={`execution-logs ${logsCollapsed ? 'collapsed' : ''}`}>
-            <div className="execution-logs-header">
-              <div>
-                <div className="text-[11px] text-gray-400 uppercase tracking-[0.16em]">Execution</div>
-                <div className="text-[14px] font-semibold text-gray-800">Logs</div>
-              </div>
-              <div className="execution-logs-header-actions">
-                {executionTrace?.logs?.length ? (
-                  <button
-                    type="button"
-                    className={`panel-icon-button execution-logs-copy-action ${copiedAllExecutionLogs ? 'active' : ''}`}
-                    title="Copy all execution logs."
-                    aria-label="Copy all execution logs."
-                    onClick={() => void handleCopyAllExecutionLogs()}
-                  >
-                    {copiedAllExecutionLogs ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setLogsCollapsed(value => !value)}
-                  className="execution-logs-collapse-action"
-                  aria-expanded={!logsCollapsed}
-                >
-                  <span className="text-[12px] text-gray-500">{executionSummaryLabel}</span>
-                  <ChevronDown size={16} className={`execution-logs-collapse-icon ${logsCollapsed ? 'collapsed' : ''}`} />
-                </button>
-              </div>
-            </div>
-
-            {!logsCollapsed ? (
-              <div className="execution-logs-body">
-                <div className="execution-runs-list">
-                  {currentWorkflowExecutions.length === 0 ? (
-                    <EmptyPanel
-                      icon={<Play size={18} className="text-gray-300" />}
-                      title="No runs"
-                      copy="Run the current workflow to inspect execution."
-                    />
-                  ) : currentWorkflowExecutions.map(execution => (
-                    <button
-                      key={execution.executionId}
-                      onClick={() => void openExecution(execution.executionId)}
-                      className={`execution-run-card ${selectedExecutionId === execution.executionId ? 'active' : ''}`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-[13px] font-semibold text-gray-800">{formatDateTime(execution.startedAtUtc)}</div>
-                        <span className="text-[10px] uppercase tracking-wide text-gray-400">{execution.status}</span>
-                      </div>
-                      <div className="text-[11px] text-gray-400 mt-1">{formatDurationBetween(execution.startedAtUtc, execution.completedAtUtc)}</div>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="execution-log-stream">
-                  <div className="execution-log-list">
-                    {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
-                      <button
-                        key={`${log.timestamp}-${index}`}
-                        onClick={() => void handleExecutionLogClick(log, index)}
-                        className={`execution-log-card tone-${log.tone} ${activeExecutionLogIndex === index ? 'active' : ''}`}
-                        title="Click to copy this log."
-                      >
-                        <div className="execution-log-card-head">
-                          <div className="text-[12px] font-semibold text-gray-800">{log.title}</div>
-                          <div className="execution-log-card-meta">
-                            {copiedExecutionLogIndex === index ? (
-                              <span className="execution-log-card-copied">
-                                <Check size={12} /> Copied
-                              </span>
-                            ) : null}
-                            <div className="text-[11px] text-gray-400">{formatDateTime(log.timestamp)}</div>
-                          </div>
-                        </div>
-                        {log.meta ? <div className="text-[11px] text-gray-400 mt-1">{log.meta}</div> : null}
-                        {log.previewText ? <div className="execution-log-card-preview">{log.previewText}</div> : null}
-                      </button>
-                    )) : (
-                      <EmptyPanel
-                        icon={<FileText size={18} className="text-gray-300" />}
-                        title="No logs yet"
-                        copy="Pick a run to inspect frames and step transitions."
-                      />
-                    )}
-                  </div>
-
-                  {activeExecutionInteraction ? (
-                    <div className="execution-action-panel">
-                      <div className="execution-action-intro">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] text-gray-400 uppercase tracking-[0.14em]">Action required</div>
-                            <div className="text-[15px] font-semibold text-gray-800 mt-1">
-                              {activeExecutionInteraction.kind === 'human_approval' ? 'Human approval' : 'Human input'}
-                            </div>
-                            <div className="execution-action-subtitle">
-                              {activeExecutionInteraction.kind === 'human_approval'
-                                ? 'Review the pending gate and approve or reject the run.'
-                                : 'Provide the missing value to resume this workflow step.'}
-                            </div>
-                          </div>
-                          <span className="execution-action-badge">
-                            {activeExecutionInteraction.stepId}
-                          </span>
-                        </div>
-
-                        <div className="execution-action-meta">
-                          <span className="execution-action-chip">
-                            <User size={12} /> Human required
-                          </span>
-                          {activeExecutionInteraction.variableName ? (
-                            <span className="execution-action-chip">
-                              stores as {activeExecutionInteraction.variableName}
-                            </span>
-                          ) : null}
-                          {activeExecutionInteraction.timeoutSeconds ? (
-                            <span className="execution-action-chip">
-                              timeout {activeExecutionInteraction.timeoutSeconds}s
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {activeExecutionInteraction.prompt ? (
-                        <div className="execution-action-block">
-                          <div className="execution-action-block-label">Prompt</div>
-                          <div className="execution-action-prompt">
-                            {activeExecutionInteraction.prompt}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="execution-action-block">
-                        <div className="execution-action-field-head">
-                          <label className="field-label">
-                            {activeExecutionInteraction.kind === 'human_approval'
-                              ? 'Feedback'
-                              : activeExecutionInteraction.variableName || 'Input'}
-                          </label>
-                          <span className={`execution-action-requirement ${activeExecutionInteraction.kind === 'human_approval' ? 'optional' : 'required'}`}>
-                            {activeExecutionInteraction.kind === 'human_approval' ? 'Optional note' : 'Required'}
-                          </span>
-                        </div>
-                        <div className="execution-action-helper">
-                          {activeExecutionInteraction.kind === 'human_approval'
-                            ? 'Add context for the operator if needed, then approve or reject this gate.'
-                            : activeExecutionInteraction.variableName
-                              ? `The submitted value will resume the run and be available as ${activeExecutionInteraction.variableName}.`
-                              : 'This response resumes the workflow immediately.'}
-                        </div>
-                        <textarea
-                          ref={executionActionInputRef}
-                          className="panel-textarea execution-action-textarea mt-1"
-                          value={executionActionInput}
-                          placeholder={activeExecutionInteraction.kind === 'human_approval'
-                            ? 'Optional feedback'
-                            : 'Enter the value to continue this step'}
-                          onChange={event => setExecutionActionInput(event.target.value)}
-                        />
-                      </div>
-
-                      <div className="execution-action-footer">
-                        {activeExecutionInteraction.kind === 'human_approval' ? (
-                          <>
-                            <button
-                              type="button"
-                              className="ghost-action execution-danger-action"
-                              disabled={executionActionPendingKey === `${executionActionKeyBase}:reject`}
-                              onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'reject')}
-                            >
-                              <X size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:reject` ? 'Rejecting...' : 'Reject'}
-                            </button>
-                            <button
-                              type="button"
-                              className="solid-action"
-                              disabled={executionActionPendingKey === `${executionActionKeyBase}:approve`}
-                              onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'approve')}
-                            >
-                              <Check size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:approve` ? 'Approving...' : 'Approve'}
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            type="button"
-                            className="solid-action"
-                            disabled={executionActionPendingKey === `${executionActionKeyBase}:submit`}
-                            onClick={() => void handleExecutionInteraction(activeExecutionInteraction, 'submit')}
-                          >
-                            <Play size={14} /> {executionActionPendingKey === `${executionActionKeyBase}:submit` ? 'Submitting...' : 'Submit input'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+        {studioView === 'execution' ? renderExecutionLogsSection() : null}
           </>
         )}
       </main>
@@ -5039,6 +5373,70 @@ function AppLoadingScreen() {
             <div>
               <div className="text-[24px] font-semibold text-gray-900">Preparing studio</div>
               <div className="text-[13px] text-gray-500">Loading workspace context, catalogs, and runtime settings.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppAuthenticationGate(props: {
+  providerDisplayName: string;
+  loginUrl: string;
+  errorMessage: string;
+}) {
+  return (
+    <div className="min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1040px] items-center justify-center">
+        <div className="grid w-full max-w-[920px] gap-6 rounded-[36px] border border-[#E6E3DE] bg-white/96 p-6 shadow-[0_30px_72px_rgba(15,23,42,0.08)] md:grid-cols-[minmax(0,1.1fr)_320px] md:p-8">
+          <div className="rounded-[28px] border border-[#ECE7DF] bg-[#FAF8F4] p-6 md:p-7">
+            <div className="panel-eyebrow">Aevatar App</div>
+            <div className="mt-3 flex items-start gap-4">
+              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-[20px] bg-white text-[var(--accent,#2563eb)] shadow-[0_12px_30px_rgba(37,99,235,0.08)]">
+                <Shield size={22} />
+              </div>
+              <div>
+                <div className="text-[28px] font-semibold leading-tight text-gray-900">Sign in to open Workflow Studio</div>
+                <div className="mt-3 max-w-[520px] text-[14px] leading-6 text-gray-500">
+                  Studio content, workflow execution, and scope-backed assets are only available after {props.providerDisplayName || 'NyxID'} authentication succeeds.
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-[22px] border border-[#E8E2D9] bg-white px-5 py-4">
+              <div className="text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">Access policy</div>
+              <div className="mt-2 text-[14px] leading-6 text-gray-600">
+                When the app is not authenticated, the workflow canvas, execution panel, and runtime actions stay locked. Sign in first, then Studio will load normally.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col justify-between rounded-[28px] border border-[#ECE7DF] bg-white p-6">
+            <div>
+              <div className="text-[13px] font-semibold uppercase tracking-[0.14em] text-gray-400">Authentication</div>
+              <div className="mt-3 text-[22px] font-semibold text-gray-900">{props.providerDisplayName || 'NyxID'}</div>
+              <div className="mt-2 text-[14px] leading-6 text-gray-500">
+                Use your existing identity session to continue into the app.
+              </div>
+              {props.errorMessage ? (
+                <div className="mt-4 rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-5 text-amber-800">
+                  {props.errorMessage}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-6 space-y-3">
+              <a
+                href={props.loginUrl || '/auth/login'}
+                className="solid-action w-full justify-center !no-underline"
+                title={`Sign in with ${props.providerDisplayName || 'NyxID'}.`}
+              >
+                <Shield size={14} /> Sign in
+              </a>
+              <div className="text-[12px] leading-5 text-gray-400">
+                After sign-in completes, the app will return to Studio automatically.
+              </div>
             </div>
           </div>
         </div>

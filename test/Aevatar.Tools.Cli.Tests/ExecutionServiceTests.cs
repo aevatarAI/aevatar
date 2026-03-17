@@ -22,7 +22,7 @@ public sealed class ExecutionServiceTests
                 data: [DONE]
 
                 """)));
-        var service = CreateService(handler);
+        var (service, store) = CreateService(handler);
 
         var detail = await service.StartAsync(new StartExecutionRequest(
             WorkflowName: "approval",
@@ -31,6 +31,7 @@ public sealed class ExecutionServiceTests
             RuntimeBaseUrl: "https://runtime.example",
             ScopeId: "scope-a",
             WorkflowId: "workflow-1"));
+        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
@@ -40,8 +41,10 @@ public sealed class ExecutionServiceTests
         body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
         body.RootElement.GetProperty("eventFormat").GetString().Should().Be("workflow");
         body.RootElement.TryGetProperty("workflowYamls", out _).Should().BeFalse();
-        detail.ActorId.Should().Be("run-actor-1");
-        detail.Status.Should().Be("completed");
+        detail.ActorId.Should().BeNull();
+        detail.Status.Should().Be("running");
+        completed.ActorId.Should().Be("run-actor-1");
+        completed.Status.Should().Be("completed");
     }
 
     [Fact]
@@ -56,13 +59,14 @@ public sealed class ExecutionServiceTests
                 data: [DONE]
 
                 """)));
-        var service = CreateService(handler);
+        var (service, store) = CreateService(handler);
 
         var detail = await service.StartAsync(new StartExecutionRequest(
             WorkflowName: "draft",
             Prompt: "hello",
             WorkflowYamls: ["name: draft"],
             RuntimeBaseUrl: "https://runtime.example"));
+        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
@@ -72,20 +76,90 @@ public sealed class ExecutionServiceTests
         body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
         body.RootElement.GetProperty("workflow").GetString().Should().Be("draft");
         body.RootElement.GetProperty("workflowYamls")[0].GetString().Should().Be("name: draft");
-        detail.ActorId.Should().Be("run-actor-2");
-        detail.Status.Should().Be("completed");
+        detail.ActorId.Should().BeNull();
+        detail.Status.Should().Be("running");
+        completed.ActorId.Should().Be("run-actor-2");
+        completed.Status.Should().Be("completed");
     }
 
-    private static ExecutionService CreateService(RecordingHttpMessageHandler handler)
+    [Fact]
+    public async Task StartAsync_WhenRuntimeReturnsStructuredError_ShouldPersistSyntheticRunErrorFrame()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent(
+                    """
+                    {"code":"AUTH_REQUIRED","message":"Sign in to use the app APIs.","loginUrl":"/auth/login?returnUrl=%2F"}
+                    """,
+                    Encoding.UTF8,
+                    "application/json"),
+            }));
+        var (service, store) = CreateService(handler);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "draft",
+            Prompt: "hello",
+            WorkflowYamls: ["name: draft"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
+
+        detail.Status.Should().Be("running");
+        failed.Error.Should().Be("Sign in to use the app APIs.");
+        failed.Frames.Should().HaveCount(1);
+
+        using var payload = JsonDocument.Parse(failed.Frames[0].Payload);
+        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("AUTH_REQUIRED");
+        payload.RootElement.GetProperty("runError").GetProperty("message").GetString().Should().Be("Sign in to use the app APIs.");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenAuthSnapshotCaptured_ShouldReplayHeadersInBackgroundRequest()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateSseResponse("""
+                data: {"runFinished":{"threadId":"run-3"}}
+
+                data: [DONE]
+
+                """)));
+        var snapshotProvider = new StubAuthSnapshotProvider(new StudioBackendRequestAuthSnapshot(
+            LocalOrigin: "https://runtime.example",
+            BearerToken: "token-123",
+            InternalAuthHeaderName: "X-Aevatar-Internal-Auth",
+            InternalAuthToken: "internal-456"));
+        var (service, store) = CreateService(handler, snapshotProvider);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "draft",
+            Prompt: "hello",
+            WorkflowYamls: ["name: draft"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().NotBeNull();
+        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("token-123");
+        handler.LastRequest.Headers.GetValues("X-Aevatar-Internal-Auth").Should().ContainSingle("internal-456");
+    }
+
+    private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
+        RecordingHttpMessageHandler handler,
+        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)
     {
         var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://backend.example"),
         };
+        var store = new InMemoryStudioWorkspaceStore();
 
-        return new ExecutionService(
-            new InMemoryStudioWorkspaceStore(),
-            new StubHttpClientFactory(httpClient));
+        return (
+            new ExecutionService(
+                store,
+                new StubHttpClientFactory(httpClient),
+                authSnapshotProvider),
+            store);
     }
 
     private static HttpResponseMessage CreateSseResponse(string payload) =>
@@ -104,6 +178,19 @@ public sealed class ExecutionServiceTests
         }
 
         public HttpClient CreateClient(string name) => _httpClient;
+    }
+
+    private sealed class StubAuthSnapshotProvider : IStudioBackendRequestAuthSnapshotProvider
+    {
+        private readonly StudioBackendRequestAuthSnapshot? _snapshot;
+
+        public StubAuthSnapshotProvider(StudioBackendRequestAuthSnapshot? snapshot)
+        {
+            _snapshot = snapshot;
+        }
+
+        public Task<StudioBackendRequestAuthSnapshot?> CaptureAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(_snapshot);
     }
 
     private sealed class RecordingHttpMessageHandler : HttpMessageHandler
@@ -137,6 +224,7 @@ public sealed class ExecutionServiceTests
 
     private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore
     {
+        private readonly object _sync = new();
         private StudioWorkspaceSettings _settings = new(
             RuntimeBaseUrl: "http://127.0.0.1:5100",
             Directories: [],
@@ -144,6 +232,7 @@ public sealed class ExecutionServiceTests
             ColorMode: "light");
 
         private readonly Dictionary<string, StoredExecutionRecord> _executions = new(StringComparer.Ordinal);
+        private readonly List<ExecutionWaiter> _waiters = [];
 
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
@@ -163,16 +252,68 @@ public sealed class ExecutionServiceTests
         public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredExecutionRecord>>(_executions.Values.ToList());
+        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return Task.FromResult<IReadOnlyList<StoredExecutionRecord>>(_executions.Values.ToList());
+            }
+        }
 
-        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(_executions.TryGetValue(executionId, out var record) ? record : null);
+        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return Task.FromResult(_executions.TryGetValue(executionId, out var record) ? record : null);
+            }
+        }
 
         public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord execution, CancellationToken cancellationToken = default)
         {
-            _executions[execution.ExecutionId] = execution;
+            List<ExecutionWaiter> completedWaiters = [];
+            lock (_sync)
+            {
+                _executions[execution.ExecutionId] = execution;
+                for (var index = _waiters.Count - 1; index >= 0; index -= 1)
+                {
+                    var waiter = _waiters[index];
+                    if (!string.Equals(waiter.ExecutionId, execution.ExecutionId, StringComparison.Ordinal) ||
+                        !waiter.Predicate(execution))
+                    {
+                        continue;
+                    }
+
+                    completedWaiters.Add(waiter);
+                    _waiters.RemoveAt(index);
+                }
+            }
+
+            foreach (var waiter in completedWaiters)
+            {
+                waiter.Source.TrySetResult(execution);
+            }
+
             return Task.FromResult(execution);
+        }
+
+        public Task<StoredExecutionRecord> WaitForExecutionAsync(
+            string executionId,
+            Func<StoredExecutionRecord, bool> predicate)
+        {
+            lock (_sync)
+            {
+                if (_executions.TryGetValue(executionId, out var execution) && predicate(execution))
+                {
+                    return Task.FromResult(execution);
+                }
+
+                var waiter = new ExecutionWaiter(
+                    executionId,
+                    predicate,
+                    new TaskCompletionSource<StoredExecutionRecord>(TaskCreationOptions.RunContinuationsAsynchronously));
+                _waiters.Add(waiter);
+                return waiter.Source.Task;
+            }
         }
 
         public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
@@ -204,5 +345,10 @@ public sealed class ExecutionServiceTests
 
         public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+
+        private sealed record ExecutionWaiter(
+            string ExecutionId,
+            Func<StoredExecutionRecord, bool> Predicate,
+            TaskCompletionSource<StoredExecutionRecord> Source);
     }
 }

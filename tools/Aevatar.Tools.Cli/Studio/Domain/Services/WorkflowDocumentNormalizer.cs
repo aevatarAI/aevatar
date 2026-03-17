@@ -25,26 +25,6 @@ public sealed class WorkflowDocumentNormalizer
             Configuration = document.Configuration with { },
         };
 
-    public WorkflowBundle NormalizeBundleForStorage(WorkflowBundle bundle) =>
-        bundle with
-        {
-            Name = bundle.Name.Trim(),
-            EntryWorkflowName = bundle.EntryWorkflowName.Trim(),
-            Tags = bundle.Tags
-                .Where(tag => !string.IsNullOrWhiteSpace(tag))
-                .Select(tag => tag.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase)
-                .ToList(),
-            Workflows = bundle.Workflows.Select(NormalizeForExport).ToList(),
-            Layout = bundle.Layout with
-            {
-                EntryWorkflow = string.IsNullOrWhiteSpace(bundle.Layout.EntryWorkflow)
-                    ? bundle.EntryWorkflowName.Trim()
-                    : bundle.Layout.EntryWorkflow.Trim(),
-            },
-        };
-
     private RoleModel NormalizeRole(RoleModel role)
     {
         var id = role.Id.Trim();

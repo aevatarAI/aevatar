@@ -1,6 +1,7 @@
 using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 
@@ -8,14 +9,7 @@ namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 internal static class ScopeWorkflowAguiEventMapper
 {
-    public static readonly TypeRegistry TypeRegistry = TypeRegistry.FromFiles(
-        AGUIEvent.Descriptor.File,
-        WorkflowRunEventEnvelope.Descriptor.File,
-        WorkflowRunExecutionStartedEvent.Descriptor.File,
-        AnyReflection.Descriptor,
-        StructReflection.Descriptor,
-        TimestampReflection.Descriptor,
-        WrappersReflection.Descriptor);
+    public static readonly TypeRegistry TypeRegistry = WorkflowJsonTypeRegistry.Create(AGUIEvent.Descriptor.File);
 
     public static AGUIEvent BuildRunContextEvent(WorkflowChatRunAcceptedReceipt receipt)
     {

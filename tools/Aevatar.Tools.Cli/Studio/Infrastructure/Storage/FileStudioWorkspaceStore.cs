@@ -29,7 +29,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
     public FileStudioWorkspaceStore(IOptions<StudioStorageOptions> options)
     {
         var storageOptions = options.Value.ResolveRootDirectory();
-        _appDataDirectory = Directory.GetParent(storageOptions.RootDirectory)?.FullName ?? storageOptions.RootDirectory;
+        _appDataDirectory = storageOptions.RootDirectory;
         _defaultRuntimeBaseUrl = string.IsNullOrWhiteSpace(storageOptions.DefaultRuntimeBaseUrl)
             ? "http://127.0.0.1:5100"
             : storageOptions.DefaultRuntimeBaseUrl.Trim().TrimEnd('/');
@@ -470,15 +470,62 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
             return default;
         }
 
-        await using var stream = File.OpenRead(filePath);
-        return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
+        try
+        {
+            await using var stream = new FileStream(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 4096,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return default;
+        }
     }
 
     private async Task WriteJsonAsync<T>(string filePath, T payload, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        await using var stream = File.Create(filePath);
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        var directoryPath = Path.GetDirectoryName(filePath)!;
+        Directory.CreateDirectory(directoryPath);
+
+        var tempFilePath = Path.Combine(
+            directoryPath,
+            $".{Path.GetFileName(filePath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await using (var stream = new FileStream(
+                             tempFilePath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 4096,
+                             options: FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+
+            if (File.Exists(filePath))
+            {
+                File.Move(tempFilePath, filePath, overwrite: true);
+            }
+            else
+            {
+                File.Move(tempFilePath, filePath);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempFilePath))
+            {
+                File.Delete(tempFilePath);
+            }
+        }
     }
 
     private static ConnectorJsonEntry ToConnectorJsonEntry(StoredConnectorDefinition connector) =>
