@@ -447,8 +447,7 @@ public sealed class WorkflowRunGAgent
             var roleId = role.Id;
             if (string.IsNullOrWhiteSpace(roleId))
             {
-                throw new InvalidOperationException(
-                    $"Workflow '{_compiledWorkflow.Name}' contains a role without a stable id.");
+                throw new InvalidOperationException("Role id is required to create child actor.");
             }
 
             var childActorId = BuildChildActorId(roleId);
