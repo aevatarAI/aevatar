@@ -116,6 +116,22 @@ Relevant config keys:
 - `Cli:App:NyxId:Scope`
 - `Cli:App:NyxId:CallbackPath`
 
+Optional remote connector catalog storage:
+
+```bash
+# store connector catalogs in chrono-storage instead of the local ~/.aevatar/connectors.json file
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:Enabled true --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:BaseUrl https://chrono-storage.example.com --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:Bucket studio-connectors --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:Prefix aevatar/connectors/v1 --json
+
+# keep the master key in secrets.json
+printf '%s' 'replace-with-a-long-random-secret' | \
+  aevatar config secrets set Cli:App:Connectors:ChronoStorage:MasterKey --stdin
+```
+
+When enabled, `aevatar app` resolves the current NyxID-backed `scope_id/sub`, derives a stable scoped object key, encrypts the catalog payload locally, and stores it in `chrono-storage`. Connector drafts stay local under the studio data directory and are separated per scope.
+
 `aevatar app` playground now includes a **Config** button:
 
 - it calls an internal workflow to run `aevatar config ui ensure --no-browser`

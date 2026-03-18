@@ -12,9 +12,9 @@ public sealed class ConnectorService
         "mcp",
     };
 
-    private readonly IStudioWorkspaceStore _store;
+    private readonly IConnectorCatalogStore _store;
 
-    public ConnectorService(IStudioWorkspaceStore store)
+    public ConnectorService(IConnectorCatalogStore store)
     {
         _store = store;
     }

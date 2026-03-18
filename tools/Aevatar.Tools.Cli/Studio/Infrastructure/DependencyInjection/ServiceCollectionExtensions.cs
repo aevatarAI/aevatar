@@ -15,11 +15,14 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.Configure<StudioStorageOptions>(configuration.GetSection("Studio:Storage"));
+        services.Configure<ConnectorCatalogStorageOptions>(configuration.GetSection(ConnectorCatalogStorageOptions.SectionName));
         services.AddSingleton(WorkflowCompatibilityProfile.AevatarV1);
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
-        services.AddSingleton<IStudioWorkspaceStore, FileStudioWorkspaceStore>();
+        services.AddSingleton<FileStudioWorkspaceStore>();
+        services.AddSingleton<IStudioWorkspaceStore>(sp => sp.GetRequiredService<FileStudioWorkspaceStore>());
+        services.AddSingleton<IConnectorCatalogStore, ChronoStorageConnectorCatalogStore>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }
