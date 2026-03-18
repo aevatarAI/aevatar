@@ -255,9 +255,12 @@ public sealed class StubConnector : IConnector
     public string Type => "stub";
     public string NextResponse { get; set; } = "";
     public bool ShouldFail { get; set; }
+    public string LastPayload { get; private set; } = "";
 
     public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
+        LastPayload = request.Payload;
+
         if (ShouldFail)
             return Task.FromResult(new ConnectorResponse { Success = false, Error = "Simulated connector failure" });
         return Task.FromResult(new ConnectorResponse { Success = true, Output = NextResponse });

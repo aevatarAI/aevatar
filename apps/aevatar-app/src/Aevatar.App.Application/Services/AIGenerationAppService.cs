@@ -71,16 +71,21 @@ public sealed class AIGenerationAppService : IAIGenerationAppService
     }
 
     public async Task<ImageResult> GenerateImageAsync(
-        string plantName, string plantDescription, string stage, CancellationToken ct = default)
+        string plantName,
+        string plantDescription,
+        string stage,
+        CancellationToken ct = default,
+        bool useInlineData = false)
     {
-        var prompt = Prompts.PlantImage(plantName, plantDescription, stage);
+        var prompt = Prompts.PlantImage(plantName, plantDescription, stage, useInlineData);
+        var inlineImageBase64 = useInlineData ? Prompts.GreenBgBase64 : null;
 
         try
         {
             var response = await ExecuteConnectorAsync(
                 "gemini_imagen",
                 "/v1beta/models/gemini-2.5-flash-image:generateContent",
-                Prompts.ToGeminiImagePayload(prompt),
+                Prompts.ToGeminiImagePayload(prompt, inlineImageBase64),
                 ct);
 
             var base64 = ExtractGeminiInlineData(response);

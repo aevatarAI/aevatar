@@ -75,7 +75,11 @@ public static class GenerateEndpoints
             return Results.BadRequest(new { error = "plantDescription must be <= 500 characters" });
 
         var result = await ai.GenerateImageAsync(
-            request.PlantName, request.PlantDescription ?? "", request.Stage, ctx.RequestAborted);
+            request.PlantName,
+            request.PlantDescription ?? "",
+            request.Stage,
+            ct: ctx.RequestAborted,
+            useInlineData: request.UseInlineData);
 
         if (!result.Succeeded)
         {
@@ -132,5 +136,9 @@ public sealed record AffirmationRequest(
     string UserGoal, string Mantra, string PlantName,
     string? ClientId = null, string? Stage = null, string? Trigger = null);
 public sealed record PlantImageRequest(
-    string ManifestationId, string PlantName, string Stage, string? PlantDescription = null);
+    string ManifestationId,
+    string PlantName,
+    string Stage,
+    string? PlantDescription = null,
+    bool UseInlineData = false);
 public sealed record SpeechRequest(string Text);

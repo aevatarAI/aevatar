@@ -24,27 +24,61 @@ public static class Prompts
         Respond with plain text only. Do not use any markdown syntax, formatting, or special characters like asterisks, hashes, or backticks.
         """;
 
+    public const string ImageWithBgStyle =
+        "SOLID MAGENTA #FF00FF BACKGROUND ONLY. Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. BACKGROUND MUST BE FLAT SOLID MAGENTA #FF00FF, NO GRADIENTS, NO VIGNETTE, NO SHADOWS ON BACKGROUND.";
+
     public const string ImageStyle =
-        "SOLID GREEN #00FF00 BACKGROUND ONLY. Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated, NO SHADOW, NO DROP SHADOW, NO VIGNETTE, bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. BACKGROUND MUST BE FLAT SOLID GREEN #00FF00, NO GRADIENTS, NO VIGNETTE, NO SHADOWS ON BACKGROUND. The plant/subject itself must NOT contain any pure or near-pure green (#00FF00). Use desaturated, muted, yellow-green, teal, or olive tones for any foliage — never vivid chroma-key green.";
-        
-    public static string PlantImage(string plantName, string plantDescription, string stage) => stage switch
+        "Cute 3D render, soft smooth clay texture, floating in mid-air, completely isolated on the provided green background. ABSOLUTELY NO SHADOW, NO DROP SHADOW, NO CAST SHADOW, NO AMBIENT OCCLUSION SHADOW, NO VIGNETTE, NO GRADIENT, NO DARKENING AT EDGES OR CORNERS. The green background must remain perfectly uniform and unaltered. CRITICAL COLOR RULE: The subject must NEVER use bright green, lime green, neon green, or any vivid saturated green similar to the background (#33CC33). Allowed greens for the subject: only dark forest green, olive green, sage green, muted dusty green, or desaturated yellow-green. Prefer using pinks, purples, blues, corals, lavenders, golds, and warm pastels for most of the subject. Bright evenly lit, soft studio lighting, pastel colors, whimsical, clean distinct edges, 3D icon aesthetic, c4d render, hyper-realistic lighting, subtle matte and shiny texture mix on surfaces, highly detailed clean cutout. Place the subject centered and floating in front of the provided background. Do not alter the background in any way.";
+
+    public const string GreenBgBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAHH0lEQVR4nO3VMQ0AMAzAsHIqfwYDNRg9YskA8mX2LQBBc14AwAkDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgCgDAIgyAIAoAwCIMgCAKAMAiDIAgKgP9wRHueGh42UAAAAASUVORK5CYII=";
+
+    public static string PlantImage(string plantName, string plantDescription, string stage, bool useInlineData = false)
     {
-        "seed" => $"A cute, single magical seed of a {plantName} floating. 3D clay render, minimalist, adorable, glowing details, no shadow. {ImageStyle}",
-        "sprout" => $"A tiny, adorable sprout of a {plantName} floating. 3D clay render, soft, friendly, new life, magical energy, no shadow. {ImageStyle}",
-        "growing" => $"A happy, growing magical plant ({plantName}) floating in mid-air. 3D clay render, vibrant, healthy, cute, magical leaves, no shadow. {plantDescription}. {ImageStyle}",
-        "blooming" => $"A magnificent, fully bloomed {plantName} flower floating in the air, magical aura, bioluminescence. 3D clay render, breathtaking, centerpiece, no shadow. {plantDescription}. {ImageStyle}",
-        _ => $"A magical {plantName} plant. {ImageStyle}",
-    };
+        var style = useInlineData ? ImageStyle : ImageWithBgStyle;
+
+        return stage switch
+        {
+            "seed" => $"A cute, single magical seed of a {plantName} floating. 3D clay render, minimalist, adorable, glowing details, no shadow. {style}",
+            "sprout" => $"A tiny, adorable sprout of a {plantName} floating. 3D clay render, soft, friendly, new life, magical energy, no shadow. {style}",
+            "growing" => $"A happy, growing magical plant ({plantName}) floating in mid-air. 3D clay render, vibrant, healthy, cute, magical leaves, no shadow. {plantDescription}. {style}",
+            "blooming" => $"A magnificent, fully bloomed {plantName} flower floating in the air, magical aura, bioluminescence. 3D clay render, breathtaking, centerpiece, no shadow. {plantDescription}. {style}",
+            _ => $"A magical {plantName} plant. {style}",
+        };
+    }
 
     public static string Speech(string text) =>
         $"""Speak this affirmation in a soothing, calm, and warm way: "{text}" """;
 
-    public static string ToGeminiImagePayload(string prompt) =>
-        System.Text.Json.JsonSerializer.Serialize(new
-        {
-            contents = new[] { new { parts = new[] { new { text = prompt } } } },
-            generationConfig = new { responseModalities = new[] { "TEXT", "IMAGE" } },
-        });
+    public static string ToGeminiImagePayload(string prompt, string? inlineImageBase64 = null)
+        => string.IsNullOrWhiteSpace(inlineImageBase64)
+            ? System.Text.Json.JsonSerializer.Serialize(new
+            {
+                contents = new[] { new { parts = new[] { new { text = prompt } } } },
+                generationConfig = new { responseModalities = new[] { "TEXT", "IMAGE" } },
+            })
+            : System.Text.Json.JsonSerializer.Serialize(new
+            {
+                contents = new[]
+                {
+                    new
+                    {
+                        parts = new object[]
+                        {
+                            new { text = prompt },
+                            new
+                            {
+                                inline_data = new
+                                {
+                                    mime_type = "image/png",
+                                    data = inlineImageBase64,
+                                },
+                            },
+                        },
+                    },
+                },
+                generationConfig = new { responseModalities = new[] { "TEXT", "IMAGE" } },
+            });
 
     public static string ToGeminiSpeechPayload(string prompt) =>
         System.Text.Json.JsonSerializer.Serialize(new

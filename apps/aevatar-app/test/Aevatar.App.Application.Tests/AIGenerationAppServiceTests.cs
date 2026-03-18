@@ -114,6 +114,37 @@ public sealed class AIGenerationAppServiceTests
     }
 
     [Fact]
+    public async Task GenerateImage_UseInlineData_IncludesConfiguredBase64Image()
+    {
+        var geminiResponse = GeminiResponseJson("base64imagedata");
+        var connectors = new StubConnectorRegistry(geminiResponse);
+        var svc = CreateService(new StubWorkflowService(), connectors);
+
+        await svc.GenerateImageAsync("Rose", "a rose", "seed", useInlineData: true);
+
+        connectors.Connector.Should().NotBeNull();
+        connectors.Connector!.LastPayload.Should().Contain("\"inline_data\"");
+        connectors.Connector.LastPayload.Should().Contain("\"mime_type\":\"image/png\"");
+        connectors.Connector.LastPayload.Should().Contain(Prompts.GreenBgBase64[..32]);
+        connectors.Connector.LastPayload.Should().Contain(Prompts.ImageStyle);
+    }
+
+    [Fact]
+    public async Task GenerateImage_DefaultPayload_DoesNotIncludeInlineData()
+    {
+        var geminiResponse = GeminiResponseJson("base64imagedata");
+        var connectors = new StubConnectorRegistry(geminiResponse);
+        var svc = CreateService(new StubWorkflowService(), connectors);
+
+        await svc.GenerateImageAsync("Rose", "a rose", "seed");
+
+        connectors.Connector.Should().NotBeNull();
+        connectors.Connector!.LastPayload.Should().NotContain("\"inline_data\"");
+        connectors.Connector.LastPayload.Should().NotContain(Prompts.GreenBgBase64[..32]);
+        connectors.Connector.LastPayload.Should().Contain(Prompts.ImageWithBgStyle);
+    }
+
+    [Fact]
     public async Task GenerateImage_NoInlineData_ReturnsPlaceholder()
     {
         var connectors = new StubConnectorRegistry("""{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}""");
@@ -180,12 +211,14 @@ public sealed class AIGenerationAppServiceTests
 internal sealed class StubConnectorRegistry : IConnectorRegistry
 {
     private readonly Dictionary<string, IConnector> _connectors = new(StringComparer.OrdinalIgnoreCase);
+    public StubConnector? Connector { get; }
 
     public StubConnectorRegistry(string? successOutput = null, string? error = null)
     {
         if (successOutput != null || error != null)
         {
             var connector = new StubConnector(successOutput, error);
+            Connector = connector;
             _connectors["gemini_imagen"] = connector;
             _connectors["gemini_tts"] = connector;
         }
@@ -202,6 +235,7 @@ internal sealed class StubConnector : IConnector
 {
     private readonly string? _output;
     private readonly string? _error;
+    public string LastPayload { get; private set; } = "";
 
     public StubConnector(string? output = null, string? error = null)
     {
@@ -214,6 +248,8 @@ internal sealed class StubConnector : IConnector
 
     public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
     {
+        LastPayload = request.Payload;
+
         if (_error != null)
             return Task.FromResult(new ConnectorResponse { Success = false, Error = _error });
 

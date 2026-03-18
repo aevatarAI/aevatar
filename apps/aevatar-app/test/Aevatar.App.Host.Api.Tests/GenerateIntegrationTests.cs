@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Aevatar.App.Application.Services;
 using FluentAssertions;
 
 namespace Aevatar.App.Host.Api.Tests;
@@ -137,6 +138,29 @@ public sealed class GenerateIntegrationTests : IClassFixture<AppTestFixture>
         var json = await res.Content.ReadFromJsonAsync<JsonElement>();
         json.GetProperty("success").GetBoolean().Should().BeTrue();
         json.GetProperty("imageData").GetString().Should().NotBeNullOrEmpty();
+        _fx.ConnectorStub.LastPayload.Should().NotContain("\"inline_data\"");
+        _fx.ConnectorStub.LastPayload.Should().Contain(Prompts.ImageWithBgStyle);
+    }
+
+    [Fact]
+    public async Task GeneratePlantImage_UseInlineData_True_IncludesInlineDataPayload()
+    {
+        _fx.ConnectorStub.NextResponse = """{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUg=="}}]}}]}""";
+
+        using var client = _fx.CreateAuthenticatedClient("gen-img-inline", "img-inline@test.com");
+        var res = await client.PostAsJsonAsync("/api/generate/plant-image", new
+        {
+            manifestationId = "m1",
+            plantName = "Rose",
+            stage = "seed",
+            useInlineData = true
+        });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        _fx.ConnectorStub.LastPayload.Should().Contain("\"inline_data\"");
+        _fx.ConnectorStub.LastPayload.Should().Contain("\"mime_type\":\"image/png\"");
+        _fx.ConnectorStub.LastPayload.Should().Contain(Prompts.GreenBgBase64[..32]);
+        _fx.ConnectorStub.LastPayload.Should().Contain(Prompts.ImageStyle);
     }
 
     [Fact]

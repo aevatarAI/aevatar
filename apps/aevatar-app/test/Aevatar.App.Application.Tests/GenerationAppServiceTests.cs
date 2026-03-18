@@ -90,7 +90,11 @@ file sealed class StubAIGeneration : IAIGenerationAppService
     }
 
     public Task<ImageResult> GenerateImageAsync(
-        string plantName, string plantDescription, string stage, CancellationToken ct)
+        string plantName,
+        string plantDescription,
+        string stage,
+        CancellationToken ct,
+        bool useInlineData)
         => Task.FromResult(ImageResult.Placeholder("placeholder"));
 
     public Task<SpeechResult> GenerateSpeechAsync(string text, CancellationToken ct)

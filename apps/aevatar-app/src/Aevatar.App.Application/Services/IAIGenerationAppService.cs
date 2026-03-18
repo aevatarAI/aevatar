@@ -8,7 +8,11 @@ public interface IAIGenerationAppService
         string userGoal, string mantra, string plantName, CancellationToken ct = default);
 
     Task<ImageResult> GenerateImageAsync(
-        string plantName, string plantDescription, string stage, CancellationToken ct = default);
+        string plantName,
+        string plantDescription,
+        string stage,
+        CancellationToken ct = default,
+        bool useInlineData = false);
 
     Task<SpeechResult> GenerateSpeechAsync(string text, CancellationToken ct = default);
 }

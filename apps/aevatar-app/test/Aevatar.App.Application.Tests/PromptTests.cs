@@ -33,7 +33,16 @@ public sealed class PromptTests
 
         prompt.Should().Contain(expected);
         prompt.Should().Contain("Fern");
+        prompt.Should().Contain(Prompts.ImageWithBgStyle);
+    }
+
+    [Fact]
+    public void PlantImage_UseInlineData_UsesImageStyle()
+    {
+        var prompt = Prompts.PlantImage("Fern", "a green fern", "seed", useInlineData: true);
+
         prompt.Should().Contain(Prompts.ImageStyle);
+        prompt.Should().NotContain(Prompts.ImageWithBgStyle);
     }
 
     [Fact]
