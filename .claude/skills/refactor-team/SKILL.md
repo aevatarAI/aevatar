@@ -1,14 +1,16 @@
 ---
 name: refactor-team
 description: Orchestrate a fully automated multi-agent refactoring workflow to audit, fix, review, and PR architectural issues against CLAUDE.md rules. Use when user wants to run automated code audit, refactoring, or architecture compliance checks.
-argument-hint: [max-issues]
+argument-hint: [max-issues-per-cycle]
 ---
 
-# Automated Refactoring Team — Agent Subprocess Mode
+# Automated Refactoring Team — Continuous Agent Subprocess Mode
 
-You are the **Team Lead** orchestrating a multi-agent refactoring workflow using Agent subprocesses. Each agent is spawned, completes its task, and is destroyed. You directly control every step.
+You are the **Team Lead** orchestrating a continuous multi-agent refactoring workflow. Each agent is spawned, completes its task, and is destroyed. You directly control every step.
 
-**Max issues this run:** $ARGUMENTS (default: 5 if not specified)
+The workflow runs in a **continuous loop**: audit → fix → review → PR → sync → re-audit, until no more issues are found.
+
+**Max issues per cycle:** $ARGUMENTS (default: 5 if not specified)
 
 ---
 
@@ -29,13 +31,47 @@ git checkout "$INTEGRATION_BRANCH" 2>/dev/null || git checkout -b "$INTEGRATION_
 
 ### 0.2 Initialize Tracking
 
-- `issues_processed = 0`, `issues_succeeded = 0`, `issues_skipped = 0`
+- `cycle = 1`
+- `total_succeeded = 0`, `total_skipped = 0`
 - `max_issues` = first argument or 5
-- `round = 0` (per issue, reset each issue)
 
 ---
 
-## Phase 1: Audit
+## Phase 1: Sync & PR Status Check
+
+**Run this at the start of each cycle (including the first).**
+
+### 1.1 Fetch Latest
+
+```bash
+git fetch origin
+git pull --ff-only origin "$INTEGRATION_BRANCH" 2>/dev/null || true
+```
+
+### 1.2 Check Previous PR Merge Status
+
+If there are PRs from previous cycles, check their merge status:
+
+```bash
+gh pr list --base "$INTEGRATION_BRANCH" --state merged --json number,title,mergedAt --limit 50
+gh pr list --base "$INTEGRATION_BRANCH" --state open --json number,title
+```
+
+Report:
+- **Merged PRs:** list with PR number and title
+- **Open PRs:** list with PR number and title (still awaiting review)
+
+If any PRs were merged since last check, pull the updated integration branch:
+
+```bash
+git pull --ff-only origin "$INTEGRATION_BRANCH"
+```
+
+This ensures the next audit runs against the latest codebase including already-merged fixes.
+
+---
+
+## Phase 2: Audit
 
 Read `.claude/skills/refactor-team/auditor-prompt.md`, then spawn auditor:
 
@@ -47,17 +83,17 @@ Agent(
 )
 ```
 
-If zero issues → "No issues found.", END.
+If zero issues → output final summary and **END**.
 
 Sort by severity: CRITICAL > HIGH > MEDIUM > LOW. Take top `max_issues`.
 
 ---
 
-## Phase 2: Issue Processing Loop
+## Phase 3: Issue Processing Loop
 
 For each issue (serial):
 
-### Step 2.1: Spawn Implementer
+### Step 3.1: Spawn Implementer
 
 Read `.claude/skills/refactor-team/implementer-prompt.md`. Determine branch type:
 - Architecture → `refactor/`
@@ -81,7 +117,7 @@ If FAILED and round < 3 → re-spawn with failure context. Round 3 → skip.
 
 Record branch name and changed files.
 
-### Step 2.2: Get Diff
+### Step 3.2: Get Diff
 
 ```bash
 git fetch origin
@@ -89,7 +125,7 @@ DIFF_OUTPUT=$(git diff $INTEGRATION_BRANCH...origin/<impl-branch>)
 CHANGED_FILES=$(git diff --name-only $INTEGRATION_BRANCH...origin/<impl-branch>)
 ```
 
-### Step 2.3: Spawn 5 Reviewers in Parallel
+### Step 3.3: Spawn 5 Reviewers in Parallel
 
 Read prompt files:
 - `.claude/skills/refactor-team/arch-reviewer-prompt.md`
@@ -115,7 +151,7 @@ Agent(subagent_type: "general-purpose", model: "sonnet",
   prompt: <ci-guard-runner-prompt.md> + "git fetch origin && git checkout origin/<impl-branch>" + changed files)
 ```
 
-### Step 2.4: Convergence
+### Step 3.4: Convergence
 
 Collect all 5 outputs.
 
@@ -131,7 +167,7 @@ Collect all 5 outputs.
 - Must-fix AND round >= 3 → skip issue
 - No must-fix → APPROVED → submit PR
 
-### Step 2.5: Submit PR
+### Step 3.5: Submit PR
 
 ```bash
 gh pr create \
@@ -169,28 +205,57 @@ PREOF
 )"
 ```
 
-### Step 2.6: Next Issue
+### Step 3.6: Next Issue
 
 Ensure on `$INTEGRATION_BRANCH`. Increment `issues_processed`. Reset `round = 0`. Continue if issues remain.
 
 ---
 
-## Phase 3: Summary
+## Phase 4: Cycle Summary & Continue
+
+### 4.1 Output Cycle Summary
 
 ```markdown
-## Refactoring Team Run Summary
+## Cycle N Summary
+
+**Issues processed:** X
+**Succeeded:** Y PRs
+**Skipped:** Z
+```
+
+### 4.2 Next Cycle
+
+Increment `cycle`. Go back to **Phase 1** (Sync & PR Status Check → Audit → Process).
+
+The loop ends when the auditor finds **zero new issues**.
+
+---
+
+## Phase 5: Final Summary (on loop end)
+
+```markdown
+## Refactoring Team Final Summary
 
 **Date:** YYYY-MM-DD
 **Integration branch:** $INTEGRATION_BRANCH
+**Total cycles:** N
 
-### Results
+### All PRs
 
-| # | Issue | Severity | Status | PR |
-|---|-------|----------|--------|-----|
-| 1 | <title> | CRITICAL | ✅ PR #XX | <url> |
-| 2 | <title> | HIGH | ❌ Skipped (reason) | — |
+| # | Cycle | Issue | Severity | Status | PR |
+|---|-------|-------|----------|--------|-----|
+| 1 | 1 | <title> | HIGH | ✅ PR #XX | <url> |
+| 2 | 1 | <title> | HIGH | ❌ Skipped | — |
+| 3 | 2 | <title> | MEDIUM | ✅ PR #XX | <url> |
 
-**Processed:** X / max_issues
-**Succeeded:** Y PRs
-**Skipped:** Z
+### PR Merge Status
+
+| PR | Status |
+|----|--------|
+| #XX | ✅ Merged |
+| #XX | ⏳ Open |
+
+**Total succeeded:** X PRs
+**Total skipped:** Y
+**Audit clean:** Yes (no more issues found)
 ```
