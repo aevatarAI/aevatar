@@ -17,7 +17,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldResolveAuthorizeAndDispatch()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             identity,
             "r1",
@@ -91,7 +91,7 @@ public sealed class ServiceInvocationApplicationServiceTests
     public async Task InvokeAsync_ShouldGenerateIds_WhenBothCommandAndCorrelationAreMissing()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             identity,
             "r1",
