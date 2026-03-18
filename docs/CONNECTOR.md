@@ -89,7 +89,7 @@
 2. 调用 `ConnectorRegistration.RegisterConnectors(...)`；
 3. 从 `AevatarConnectorConfig.LoadConnectors()` 读取配置；
 4. 根据 `type` 找到 `IConnectorBuilder`；
-5. 成功构建后注册到 `IConnectorRegistry`（默认实现 `InMemoryConnectorRegistry`）。
+5. 成功构建后注册到 `IConnectorRegistry`（默认实现 `ConfiguredConnectorRegistry`）。
 
 Builder 当前行为：
 

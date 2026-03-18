@@ -19,7 +19,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenNonConnectorStep_ShouldNoop()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -36,7 +36,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenMissingConnectorParameter_ShouldFail()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -55,7 +55,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenConnectorMissingAndOptionalYes_ShouldSkip()
     {
-        var module = new ConnectorCallModule(new InMemoryConnectorRegistry());
+        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -81,7 +81,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenFirstAttemptThrowsAndRetrySucceeds_ShouldPublishSuccess()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         var connector = new ThrowThenSuccessConnector("retryable");
         registry.Register(connector);
 
@@ -117,7 +117,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenTimeoutAndContinue_ShouldKeepInput()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         registry.Register(new DelayConnector("slow"));
         var module = new ConnectorCallModule(registry);
         var ctx = CreateContext();
@@ -147,7 +147,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenSecureConnectorCallUsesTemplateDefault_ShouldResolveCapturedSecret()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure");
         registry.Register(connector);
         var module = new ConnectorCallModule(registry);
@@ -196,7 +196,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenSecureJsonPlaceholderUsed_ShouldEscapeSecretForJsonString()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure-json");
         registry.Register(connector);
         var module = new ConnectorCallModule(registry);
