@@ -5,9 +5,9 @@ namespace Aevatar.Tools.Cli.Studio.Application.Services;
 
 public sealed class RoleCatalogService
 {
-    private readonly IStudioWorkspaceStore _store;
+    private readonly IRoleCatalogStore _store;
 
-    public RoleCatalogService(IStudioWorkspaceStore store)
+    public RoleCatalogService(IRoleCatalogStore store)
     {
         _store = store;
     }
@@ -43,6 +43,12 @@ public sealed class RoleCatalogService
             cancellationToken);
 
         return ToResponse(saved);
+    }
+
+    public async Task<ImportRoleCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
+        return ToImportResponse(imported);
     }
 
     public async Task<RoleDraftResponse> SaveDraftAsync(
@@ -145,4 +151,22 @@ public sealed class RoleCatalogService
             role.Provider,
             role.Model,
             role.Connectors.ToList());
+
+    private static ImportRoleCatalogResponse ToImportResponse(ImportedRoleCatalog imported) =>
+        new(
+            imported.SourceFilePath,
+            imported.SourceFileExists,
+            imported.Catalog.Roles.Count,
+            imported.Catalog.HomeDirectory,
+            imported.Catalog.FilePath,
+            imported.Catalog.FileExists,
+            imported.Catalog.Roles
+                .Select(role => new RoleDefinitionDto(
+                    role.Id,
+                    role.Name,
+                    role.SystemPrompt,
+                    role.Provider,
+                    role.Model,
+                    role.Connectors.ToList()))
+                .ToList());
 }

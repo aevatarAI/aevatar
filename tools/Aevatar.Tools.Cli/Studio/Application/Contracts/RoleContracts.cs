@@ -19,6 +19,15 @@ public sealed record SaveRoleCatalogRequest(
 public sealed record SaveRoleDraftRequest(
     RoleDefinitionDto? Draft);
 
+public sealed record ImportRoleCatalogResponse(
+    string SourceFilePath,
+    bool SourceFileExists,
+    int ImportedCount,
+    string HomeDirectory,
+    string FilePath,
+    bool FileExists,
+    IReadOnlyList<RoleDefinitionDto> Roles);
+
 public sealed record RoleDefinitionDto(
     string Id,
     string Name,

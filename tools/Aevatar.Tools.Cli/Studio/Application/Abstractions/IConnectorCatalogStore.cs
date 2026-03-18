@@ -8,6 +8,8 @@ public interface IConnectorCatalogStore
         StoredConnectorCatalog catalog,
         CancellationToken cancellationToken = default);
 
+    Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default);
+
     Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default);
 
     Task<StoredConnectorDraft> SaveConnectorDraftAsync(
@@ -16,3 +18,8 @@ public interface IConnectorCatalogStore
 
     Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default);
 }
+
+public sealed record ImportedConnectorCatalog(
+    string SourceFilePath,
+    bool SourceFileExists,
+    StoredConnectorCatalog Catalog);

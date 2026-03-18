@@ -22,7 +22,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
         services.AddSingleton<FileStudioWorkspaceStore>();
         services.AddSingleton<IStudioWorkspaceStore>(sp => sp.GetRequiredService<FileStudioWorkspaceStore>());
+        services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
+        services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
+        services.AddSingleton<ChronoStorageMasterKeyResolver>();
+        services.AddSingleton<ChronoStorageCatalogBlobClient>();
         services.AddSingleton<IConnectorCatalogStore, ChronoStorageConnectorCatalogStore>();
+        services.AddSingleton<IRoleCatalogStore, ChronoStorageRoleCatalogStore>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

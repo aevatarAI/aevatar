@@ -116,21 +116,37 @@ Relevant config keys:
 - `Cli:App:NyxId:Scope`
 - `Cli:App:NyxId:CallbackPath`
 
-Optional remote connector catalog storage:
+Optional remote connector and role catalog storage:
 
 ```bash
-# store connector catalogs in chrono-storage instead of the local ~/.aevatar/connectors.json file
-aevatar config config-json set Cli:App:Connectors:ChronoStorage:Enabled true --json
+# optional overrides when you do not want the built-in Nyx proxy defaults
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:UseNyxProxy false --json
 aevatar config config-json set Cli:App:Connectors:ChronoStorage:BaseUrl https://chrono-storage.example.com --json
-aevatar config config-json set Cli:App:Connectors:ChronoStorage:Bucket studio-connectors --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl https://nyx-api.chrono-ai.fun --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug chrono-storage-service --json
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:Bucket studio-catalogs --json
 aevatar config config-json set Cli:App:Connectors:ChronoStorage:Prefix aevatar/connectors/v1 --json
-
-# keep the master key in secrets.json
-printf '%s' 'replace-with-a-long-random-secret' | \
-  aevatar config secrets set Cli:App:Connectors:ChronoStorage:MasterKey --stdin
+aevatar config config-json set Cli:App:Connectors:ChronoStorage:RolesPrefix aevatar/roles/v1 --json
+aevatar config secrets set Cli:App:Connectors:ChronoStorage:StaticBearerToken <token>
 ```
 
-When enabled, `aevatar app` resolves the current NyxID-backed `scope_id/sub`, derives a stable scoped object key, encrypts the catalog payload locally, and stores it in `chrono-storage`. Connector drafts stay local under the studio data directory and are separated per scope.
+By default, `aevatar app` now enables chrono-storage catalog backing with:
+
+- `Cli:App:Connectors:ChronoStorage:UseNyxProxy = true`
+- `Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug = chrono-storage-service`
+- `Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl = <empty>` and falls back to `Cli:App:NyxId:Authority`
+- `Cli:App:Connectors:ChronoStorage:Bucket = studio-catalogs`
+- `Cli:App:Connectors:ChronoStorage:CreateBucketIfMissing = false`
+- no required extra storage API key; the app reuses the current NyxID login access token when calling the Nyx proxy
+
+`aevatar app` resolves the current NyxID-backed `scope_id/sub`, derives a stable scoped object key, encrypts the catalog payload locally, and stores it in `chrono-storage` through NyxID's authenticated proxy route (`/api/v1/proxy/s/chrono-storage-service/...`).
+
+- Connector catalogs use `Cli:App:Connectors:ChronoStorage:Prefix`.
+- Role catalogs use `Cli:App:Connectors:ChronoStorage:RolesPrefix`.
+- Set `UseNyxProxy = false` only when you intentionally want to call a chrono-storage base URL directly.
+- If `Cli:App:Connectors:ChronoStorage:MasterKey` is not configured, the app reuses `~/.aevatar/masterkey.bin`; if that file does not exist yet, it is created automatically on first chrono-storage write.
+- Connector and role drafts stay local under the studio data directory and are separated per scope.
+- Existing local `~/.aevatar/connectors.json` and `~/.aevatar/roles.json` files are not auto-migrated. Use the **Import local** button in the app when you want to copy the local file into `chrono-storage`.
 
 `aevatar app` playground now includes a **Config** button:
 

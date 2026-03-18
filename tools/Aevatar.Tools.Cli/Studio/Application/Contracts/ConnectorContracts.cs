@@ -19,6 +19,15 @@ public sealed record SaveConnectorCatalogRequest(
 public sealed record SaveConnectorDraftRequest(
     ConnectorDefinitionDto? Draft);
 
+public sealed record ImportConnectorCatalogResponse(
+    string SourceFilePath,
+    bool SourceFileExists,
+    int ImportedCount,
+    string HomeDirectory,
+    string FilePath,
+    bool FileExists,
+    IReadOnlyList<ConnectorDefinitionDto> Connectors);
+
 public sealed record ConnectorDefinitionDto(
     string Name,
     string Type,

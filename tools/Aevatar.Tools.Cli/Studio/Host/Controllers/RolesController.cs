@@ -38,6 +38,19 @@ public sealed class RolesController : ControllerBase
         }
     }
 
+    [HttpPost("import-local")]
+    public async Task<ActionResult<ImportRoleCatalogResponse>> ImportLocal(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _roleCatalogService.ImportLocalCatalogAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
+
     [HttpPut("draft")]
     public async Task<ActionResult<RoleDraftResponse>> SaveDraft(
         [FromBody] SaveRoleDraftRequest request,

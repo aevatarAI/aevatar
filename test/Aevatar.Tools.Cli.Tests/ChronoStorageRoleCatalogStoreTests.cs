@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Tools.Cli.Tests;
 
-public sealed class ChronoStorageConnectorCatalogStoreTests
+public sealed class ChronoStorageRoleCatalogStoreTests
 {
     [Fact]
     public async Task SaveAndGetCatalogAsync_WhenRemoteEnabled_ShouldRoundTripEncryptedCatalog()
@@ -18,60 +18,52 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         using var workspaceRoot = new TemporaryDirectory();
         var localStore = new InMemoryStudioWorkspaceStore();
         var storageServer = new InMemoryChronoStorageServer();
-        var store = CreateStore(
-            localStore,
-            new StubAppScopeResolver("scope-alpha"),
-            storageServer.CreateHttpClientFactory(),
-            workspaceRoot.Path);
-        var catalog = new StoredConnectorCatalog(
+        var store = CreateStore(localStore, new StubAppScopeResolver("role-scope"), storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
+        var catalog = new StoredRoleCatalog(
             HomeDirectory: string.Empty,
             FilePath: string.Empty,
             FileExists: false,
-            Connectors:
+            Roles:
             [
-                CreateConnector("scope_web", "https://example.com/api"),
+                CreateRole("assistant", "Main Assistant"),
             ]);
 
-        var saved = await store.SaveConnectorCatalogAsync(catalog);
-        var loaded = await store.GetConnectorCatalogAsync();
+        var saved = await store.SaveRoleCatalogAsync(catalog);
+        var loaded = await store.GetRoleCatalogAsync();
 
         saved.FileExists.Should().BeTrue();
-        saved.FilePath.Should().StartWith("chrono-storage://studio-connectors/");
-        loaded.Connectors.Should().BeEquivalentTo(catalog.Connectors);
+        saved.FilePath.Should().StartWith("chrono-storage://studio-catalogs/");
+        loaded.Roles.Should().BeEquivalentTo(catalog.Roles);
 
         storageServer.Objects.Should().ContainSingle();
         var persistedPayload = storageServer.Objects.Values.Single();
-        Encoding.UTF8.GetString(persistedPayload).Should().NotContain("scope_web");
-        Encoding.UTF8.GetString(persistedPayload).Should().NotContain("https://example.com/api");
+        Encoding.UTF8.GetString(persistedPayload).Should().NotContain("Main Assistant");
+        Encoding.UTF8.GetString(persistedPayload).Should().NotContain("assistant");
     }
 
     [Fact]
-    public async Task ImportLocalCatalogAsync_WhenRemoteCatalogMissing_ShouldUploadLocalCatalog()
+    public async Task ImportLocalCatalogAsync_WhenRemoteEnabled_ShouldUploadLocalRoles()
     {
         using var workspaceRoot = new TemporaryDirectory();
         var localStore = new InMemoryStudioWorkspaceStore
         {
-            ConnectorCatalog = new StoredConnectorCatalog(
+            RoleCatalog = new StoredRoleCatalog(
                 HomeDirectory: "/tmp/.aevatar",
-                FilePath: "/tmp/.aevatar/connectors.json",
+                FilePath: "/tmp/.aevatar/roles.json",
                 FileExists: true,
-                Connectors:
+                Roles:
                 [
-                    CreateConnector("imported_http", "https://import.example.com"),
+                    CreateRole("reviewer", "Reviewer"),
                 ]),
         };
         var storageServer = new InMemoryChronoStorageServer();
-        var store = CreateStore(
-            localStore,
-            new StubAppScopeResolver("scope-import"),
-            storageServer.CreateHttpClientFactory(),
-            workspaceRoot.Path);
+        var store = CreateStore(localStore, new StubAppScopeResolver("role-import"), storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
 
         var imported = await store.ImportLocalCatalogAsync();
 
-        imported.SourceFilePath.Should().Be("/tmp/.aevatar/connectors.json");
+        imported.SourceFilePath.Should().Be("/tmp/.aevatar/roles.json");
         imported.Catalog.FileExists.Should().BeTrue();
-        imported.Catalog.Connectors.Should().BeEquivalentTo(localStore.ConnectorCatalog.Connectors);
+        imported.Catalog.Roles.Should().BeEquivalentTo(localStore.RoleCatalog.Roles);
         storageServer.Objects.Should().ContainSingle();
     }
 
@@ -80,26 +72,18 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     {
         using var workspaceRoot = new TemporaryDirectory();
         var storageServer = new InMemoryChronoStorageServer();
-        var draft = new StoredConnectorDraft(
+        var draft = new StoredRoleDraft(
             HomeDirectory: string.Empty,
             FilePath: string.Empty,
             FileExists: false,
             UpdatedAtUtc: DateTimeOffset.Parse("2026-03-18T09:30:00Z"),
-            Draft: CreateConnector("draft_connector", "https://draft.example.com"));
-        var scopeAStore = CreateStore(
-            new InMemoryStudioWorkspaceStore(),
-            new StubAppScopeResolver("scope-a"),
-            storageServer.CreateHttpClientFactory(),
-            workspaceRoot.Path);
-        var scopeBStore = CreateStore(
-            new InMemoryStudioWorkspaceStore(),
-            new StubAppScopeResolver("scope-b"),
-            storageServer.CreateHttpClientFactory(),
-            workspaceRoot.Path);
+            Draft: CreateRole("catalog_admin", "Catalog Admin"));
+        var scopeAStore = CreateStore(new InMemoryStudioWorkspaceStore(), new StubAppScopeResolver("scope-a"), storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
+        var scopeBStore = CreateStore(new InMemoryStudioWorkspaceStore(), new StubAppScopeResolver("scope-b"), storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
 
-        var savedDraft = await scopeAStore.SaveConnectorDraftAsync(draft);
-        var loadedDraft = await scopeAStore.GetConnectorDraftAsync();
-        var otherScopeDraft = await scopeBStore.GetConnectorDraftAsync();
+        var savedDraft = await scopeAStore.SaveRoleDraftAsync(draft);
+        var loadedDraft = await scopeAStore.GetRoleDraftAsync();
+        var otherScopeDraft = await scopeBStore.GetRoleDraftAsync();
 
         savedDraft.FileExists.Should().BeTrue();
         File.Exists(savedDraft.FilePath).Should().BeTrue();
@@ -108,7 +92,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         otherScopeDraft.Draft.Should().BeNull();
     }
 
-    private static ChronoStorageConnectorCatalogStore CreateStore(
+    private static ChronoStorageRoleCatalogStore CreateStore(
         IStudioWorkspaceStore localStore,
         IAppScopeResolver scopeResolver,
         IHttpClientFactory httpClientFactory,
@@ -120,7 +104,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             UseNyxProxy = true,
             NyxProxyBaseUrl = "https://nyx.test",
             NyxProxyServiceSlug = "chrono-storage-service",
-            Bucket = "studio-connectors",
+            Bucket = "studio-catalogs",
             Prefix = "aevatar/connectors/v1",
             RolesPrefix = "aevatar/roles/v1",
             MasterKey = "unit-test-master-key",
@@ -128,7 +112,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         });
         var masterKeyResolver = new ChronoStorageMasterKeyResolver(workspaceRoot, allowKeychain: false);
         var blobClient = new ChronoStorageCatalogBlobClient(scopeResolver, httpClientFactory, options, masterKeyResolver);
-        return new ChronoStorageConnectorCatalogStore(
+        return new ChronoStorageRoleCatalogStore(
             localStore,
             blobClient,
             options,
@@ -138,37 +122,14 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             }));
     }
 
-    private static StoredConnectorDefinition CreateConnector(string name, string baseUrl) =>
+    private static StoredRoleDefinition CreateRole(string id, string name) =>
         new(
+            Id: id,
             Name: name,
-            Type: "http",
-            Enabled: true,
-            TimeoutMs: 30_000,
-            Retry: 1,
-            Http: new StoredHttpConnectorConfig(
-                BaseUrl: baseUrl,
-                AllowedMethods: ["POST"],
-                AllowedPaths: ["/"],
-                AllowedInputKeys: ["input"],
-                DefaultHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Authorization"] = "Bearer demo",
-                }),
-            Cli: new StoredCliConnectorConfig(
-                Command: string.Empty,
-                FixedArguments: [],
-                AllowedOperations: [],
-                AllowedInputKeys: [],
-                WorkingDirectory: string.Empty,
-                Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
-            Mcp: new StoredMcpConnectorConfig(
-                ServerName: string.Empty,
-                Command: string.Empty,
-                Arguments: [],
-                Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                DefaultTool: string.Empty,
-                AllowedTools: [],
-                AllowedInputKeys: []));
+            SystemPrompt: "You are helpful.",
+            Provider: "openai-main",
+            Model: "gpt-test",
+            Connectors: ["scope_web"]);
 
     private sealed class StubAppScopeResolver : IAppScopeResolver
     {
@@ -184,11 +145,11 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
 
     private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore
     {
-        public StoredConnectorCatalog ConnectorCatalog { get; set; } = new(
+        public StoredRoleCatalog RoleCatalog { get; set; } = new(
             HomeDirectory: string.Empty,
             FilePath: string.Empty,
             FileExists: false,
-            Connectors: []);
+            Roles: []);
 
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new StudioWorkspaceSettings("http://127.0.0.1:5100", [], "blue", "light"));
@@ -214,13 +175,10 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             throw new NotSupportedException();
 
         public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(ConnectorCatalog);
+            throw new NotSupportedException();
 
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default)
-        {
-            ConnectorCatalog = catalog with { FileExists = true };
-            return Task.FromResult(ConnectorCatalog);
-        }
+        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
@@ -232,10 +190,13 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             throw new NotSupportedException();
 
         public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(RoleCatalog);
 
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default)
+        {
+            RoleCatalog = catalog with { FileExists = true };
+            return Task.FromResult(RoleCatalog);
+        }
 
         public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
@@ -269,9 +230,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
                 _server = server;
             }
 
-            protected override async Task<HttpResponseMessage> SendAsync(
-                HttpRequestMessage request,
-                CancellationToken cancellationToken)
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
                 if (string.Equals(uri.Host, "download.local", StringComparison.OrdinalIgnoreCase))
@@ -394,7 +353,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         {
             Path = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(),
-                "aevatar-connector-store-tests",
+                "aevatar-role-store-tests",
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
         }

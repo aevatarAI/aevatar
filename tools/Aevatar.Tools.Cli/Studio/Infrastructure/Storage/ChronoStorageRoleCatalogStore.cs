@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 
-internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStore
+internal sealed class ChronoStorageRoleCatalogStore : IRoleCatalogStore
 {
     private const string EncryptedCatalogFileName = "catalog.json.enc";
 
@@ -12,7 +12,7 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
     private readonly ConnectorCatalogStorageOptions _options;
     private readonly string _draftsDirectory;
 
-    public ChronoStorageConnectorCatalogStore(
+    public ChronoStorageRoleCatalogStore(
         IStudioWorkspaceStore localWorkspaceStore,
         ChronoStorageCatalogBlobClient blobClient,
         IOptions<ConnectorCatalogStorageOptions> options,
@@ -24,16 +24,16 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
 
         var resolvedStudioOptions = studioStorageOptions?.Value.ResolveRootDirectory()
                                    ?? throw new ArgumentNullException(nameof(studioStorageOptions));
-        _draftsDirectory = Path.Combine(resolvedStudioOptions.RootDirectory, "connectors-drafts");
+        _draftsDirectory = Path.Combine(resolvedStudioOptions.RootDirectory, "roles-drafts");
         Directory.CreateDirectory(_draftsDirectory);
     }
 
-    public async Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default)
+    public async Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName);
         if (remoteContext is null)
         {
-            return await _localWorkspaceStore.GetConnectorCatalogAsync(cancellationToken);
+            return await _localWorkspaceStore.GetRoleCatalogAsync(cancellationToken);
         }
 
         var encryptedPayload = await _blobClient.TryDownloadEncryptedAsync(remoteContext, cancellationToken);
@@ -44,51 +44,51 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
 
         var plaintext = _blobClient.DecryptPayload(remoteContext, encryptedPayload);
         await using var stream = new MemoryStream(plaintext, writable: false);
-        var connectors = await ConnectorCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
-        return CreateRemoteCatalog(remoteContext, fileExists: true, connectors);
+        var roles = await RoleCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
+        return CreateRemoteCatalog(remoteContext, fileExists: true, roles);
     }
 
-    public async Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
-        StoredConnectorCatalog catalog,
+    public async Task<StoredRoleCatalog> SaveRoleCatalogAsync(
+        StoredRoleCatalog catalog,
         CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName);
         if (remoteContext is null)
         {
-            return await _localWorkspaceStore.SaveConnectorCatalogAsync(catalog, cancellationToken);
+            return await _localWorkspaceStore.SaveRoleCatalogAsync(catalog, cancellationToken);
         }
 
-        await UploadCatalogAsync(remoteContext, catalog.Connectors, cancellationToken);
-        return CreateRemoteCatalog(remoteContext, fileExists: true, catalog.Connectors);
+        await UploadCatalogAsync(remoteContext, catalog.Roles, cancellationToken);
+        return CreateRemoteCatalog(remoteContext, fileExists: true, catalog.Roles);
     }
 
-    public async Task<ImportedConnectorCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
+    public async Task<ImportedRoleCatalog> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName)
-                           ?? throw new InvalidOperationException("Chrono-storage connector catalog import requires remote storage to be enabled.");
-        var localCatalog = await _localWorkspaceStore.GetConnectorCatalogAsync(cancellationToken);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName)
+                           ?? throw new InvalidOperationException("Chrono-storage role catalog import requires remote storage to be enabled.");
+        var localCatalog = await _localWorkspaceStore.GetRoleCatalogAsync(cancellationToken);
         if (!localCatalog.FileExists)
         {
-            throw new InvalidOperationException($"Local connector catalog not found at '{localCatalog.FilePath}'.");
+            throw new InvalidOperationException($"Local role catalog not found at '{localCatalog.FilePath}'.");
         }
 
-        await UploadCatalogAsync(remoteContext, localCatalog.Connectors, cancellationToken);
-        var importedCatalog = CreateRemoteCatalog(remoteContext, fileExists: true, localCatalog.Connectors);
-        return new ImportedConnectorCatalog(localCatalog.FilePath, true, importedCatalog);
+        await UploadCatalogAsync(remoteContext, localCatalog.Roles, cancellationToken);
+        var importedCatalog = CreateRemoteCatalog(remoteContext, fileExists: true, localCatalog.Roles);
+        return new ImportedRoleCatalog(localCatalog.FilePath, true, importedCatalog);
     }
 
-    public async Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default)
+    public async Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName);
         if (remoteContext is null)
         {
-            return await _localWorkspaceStore.GetConnectorDraftAsync(cancellationToken);
+            return await _localWorkspaceStore.GetRoleDraftAsync(cancellationToken);
         }
 
         var draftFilePath = GetDraftFilePath(remoteContext.OwnerKey);
         if (!File.Exists(draftFilePath))
         {
-            return new StoredConnectorDraft(
+            return new StoredRoleDraft(
                 HomeDirectory: _draftsDirectory,
                 FilePath: draftFilePath,
                 FileExists: false,
@@ -97,12 +97,12 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
         }
 
         await using var stream = File.OpenRead(draftFilePath);
-        var parsed = await ConnectorCatalogJsonSerializer.ReadDraftAsync(
+        var parsed = await RoleCatalogJsonSerializer.ReadDraftAsync(
             stream,
             fallbackUpdatedAtUtc: new DateTimeOffset(File.GetLastWriteTimeUtc(draftFilePath), TimeSpan.Zero),
             cancellationToken);
 
-        return new StoredConnectorDraft(
+        return new StoredRoleDraft(
             HomeDirectory: _draftsDirectory,
             FilePath: draftFilePath,
             FileExists: true,
@@ -110,21 +110,21 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
             Draft: parsed.Draft);
     }
 
-    public async Task<StoredConnectorDraft> SaveConnectorDraftAsync(
-        StoredConnectorDraft draft,
+    public async Task<StoredRoleDraft> SaveRoleDraftAsync(
+        StoredRoleDraft draft,
         CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName);
         if (remoteContext is null)
         {
-            return await _localWorkspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
+            return await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
         }
 
         var draftFilePath = GetDraftFilePath(remoteContext.OwnerKey);
         var updatedAtUtc = draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow;
         await WriteDraftFileAsync(draftFilePath, draft.Draft, updatedAtUtc, cancellationToken);
 
-        return new StoredConnectorDraft(
+        return new StoredRoleDraft(
             HomeDirectory: _draftsDirectory,
             FilePath: draftFilePath,
             FileExists: true,
@@ -132,12 +132,12 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
             Draft: draft.Draft);
     }
 
-    public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default)
+    public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
     {
-        var remoteContext = _blobClient.TryResolveContext(_options.Prefix, EncryptedCatalogFileName);
+        var remoteContext = _blobClient.TryResolveContext(_options.RolesPrefix, EncryptedCatalogFileName);
         if (remoteContext is null)
         {
-            return _localWorkspaceStore.DeleteConnectorDraftAsync(cancellationToken);
+            return _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
         }
 
         var draftFilePath = GetDraftFilePath(remoteContext.OwnerKey);
@@ -151,18 +151,18 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
 
     private async Task UploadCatalogAsync(
         ChronoStorageCatalogBlobClient.RemoteScopeContext remoteContext,
-        IReadOnlyList<StoredConnectorDefinition> connectors,
+        IReadOnlyList<StoredRoleDefinition> roles,
         CancellationToken cancellationToken)
     {
         await using var stream = new MemoryStream();
-        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(stream, connectors, cancellationToken);
+        await RoleCatalogJsonSerializer.WriteCatalogAsync(stream, roles, cancellationToken);
         var encryptedPayload = _blobClient.EncryptPayload(remoteContext, stream.ToArray());
         await _blobClient.UploadEncryptedAsync(remoteContext, encryptedPayload, cancellationToken);
     }
 
     private async Task WriteDraftFileAsync(
         string filePath,
-        StoredConnectorDefinition? draft,
+        StoredRoleDefinition? draft,
         DateTimeOffset updatedAtUtc,
         CancellationToken cancellationToken)
     {
@@ -181,7 +181,7 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
                              bufferSize: 4096,
                              options: FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                await ConnectorCatalogJsonSerializer.WriteDraftAsync(stream, draft, updatedAtUtc, cancellationToken);
+                await RoleCatalogJsonSerializer.WriteDraftAsync(stream, draft, updatedAtUtc, cancellationToken);
                 await stream.FlushAsync(cancellationToken);
             }
 
@@ -205,13 +205,13 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
 
     private string GetDraftFilePath(string ownerKey) => Path.Combine(_draftsDirectory, $"{ownerKey}.json");
 
-    private StoredConnectorCatalog CreateRemoteCatalog(
+    private StoredRoleCatalog CreateRemoteCatalog(
         ChronoStorageCatalogBlobClient.RemoteScopeContext remoteContext,
         bool fileExists,
-        IReadOnlyList<StoredConnectorDefinition> connectors) =>
+        IReadOnlyList<StoredRoleDefinition> roles) =>
         new(
             HomeDirectory: _blobClient.CreateRemoteHomeDirectory(remoteContext),
             FilePath: _blobClient.CreateRemoteFilePath(remoteContext),
             FileExists: fileExists,
-            Connectors: connectors);
+            Roles: roles);
 }

@@ -715,6 +715,7 @@ function App() {
   const [selectedConnectorKey, setSelectedConnectorKey] = useState<string | null>(null);
   const [connectorDraft, setConnectorDraft] = useState<ConnectorState | null>(null);
   const [connectorModalOpen, setConnectorModalOpen] = useState(false);
+  const [connectorImportPending, setConnectorImportPending] = useState(false);
 
   const [roleCatalog, setRoleCatalog] = useState<RoleState[]>([]);
   const [rolesMeta, setRolesMeta] = useState({
@@ -734,6 +735,7 @@ function App() {
   const [roleDraft, setRoleDraft] = useState<RoleState | null>(null);
   const [roleModalTarget, setRoleModalTarget] = useState<RoleModalTarget>('catalog');
   const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [roleImportPending, setRoleImportPending] = useState(false);
 
   const [executions, setExecutions] = useState<any[]>([]);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -786,6 +788,8 @@ function App() {
   );
   const selectedConnector = connectors.find(connector => connector.key === selectedConnectorKey) || null;
   const selectedCatalogRole = roleCatalog.find(role => role.key === selectedCatalogRoleKey) || null;
+  const connectorCatalogIsRemote = connectorsMeta.filePath.startsWith('chrono-storage://');
+  const roleCatalogIsRemote = rolesMeta.filePath.startsWith('chrono-storage://');
   const selectedProvider = settingsState.providers.find(provider => provider.key === selectedProviderKey) || null;
   const providerTypeMap = useMemo(
     () => new Map(settingsState.providerTypes.map(item => [item.id, item])),
@@ -1202,16 +1206,7 @@ function App() {
 
       hydrateSettings(settings);
 
-      setConnectorsMeta({
-        homeDirectory: connectorCatalog?.homeDirectory || '',
-        filePath: connectorCatalog?.filePath || '',
-        fileExists: Boolean(connectorCatalog?.fileExists),
-      });
-      const connectorItems = Array.isArray(connectorCatalog?.connectors)
-        ? connectorCatalog.connectors.map(toConnectorState)
-        : [];
-      setConnectors(connectorItems);
-      setSelectedConnectorKey(connectorItems[0]?.key || null);
+      hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
 
       hydrateRoleCatalog(roleCatalogResponse);
@@ -1283,6 +1278,20 @@ function App() {
       status: 'idle',
       message: '',
     });
+  }
+
+  function hydrateConnectorCatalog(payload: any) {
+    const connectorItems = Array.isArray(payload?.connectors)
+      ? payload.connectors.map((item: any) => toConnectorState(item))
+      : [];
+
+    setConnectorsMeta({
+      homeDirectory: payload?.homeDirectory || '',
+      filePath: payload?.filePath || '',
+      fileExists: Boolean(payload?.fileExists),
+    });
+    setConnectors(connectorItems);
+    setSelectedConnectorKey(connectorItems[0]?.key || null);
   }
 
   function hydrateRoleCatalog(payload: any) {
@@ -2161,19 +2170,23 @@ function App() {
       const response = await api.connectors.saveCatalog({
         connectors: connectors.map(toConnectorPayload),
       });
-      const nextConnectors = Array.isArray(response?.connectors)
-        ? response.connectors.map(toConnectorState)
-        : [];
-      setConnectors(nextConnectors);
-      setSelectedConnectorKey(nextConnectors[0]?.key || null);
-      setConnectorsMeta({
-        homeDirectory: response?.homeDirectory || '',
-        filePath: response?.filePath || '',
-        fileExists: Boolean(response?.fileExists),
-      });
+      hydrateConnectorCatalog(response);
       flash('Connectors saved', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to save connectors', 'error');
+    }
+  }
+
+  async function handleImportLocalConnectors() {
+    try {
+      setConnectorImportPending(true);
+      const response = await api.connectors.importLocal();
+      hydrateConnectorCatalog(response);
+      flash(`Imported ${response?.importedCount ?? 0} connectors from ${response?.sourceFilePath || 'local file'}`, 'success');
+    } catch (error: any) {
+      flash(error?.message || 'Failed to import local connectors', 'error');
+    } finally {
+      setConnectorImportPending(false);
     }
   }
 
@@ -2263,6 +2276,19 @@ function App() {
       flash('Roles saved', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to save roles', 'error');
+    }
+  }
+
+  async function handleImportLocalRoles() {
+    try {
+      setRoleImportPending(true);
+      const response = await api.roles.importLocal();
+      hydrateRoleCatalog(response);
+      flash(`Imported ${response?.importedCount ?? 0} roles from ${response?.sourceFilePath || 'local file'}`, 'success');
+    } catch (error: any) {
+      flash(error?.message || 'Failed to import local roles', 'error');
+    } finally {
+      setRoleImportPending(false);
     }
   }
 
@@ -3125,6 +3151,15 @@ function App() {
                 >
                   Save
                 </button>
+                {roleCatalogIsRemote ? (
+                  <button
+                    onClick={() => void handleImportLocalRoles()}
+                    className="ghost-action catalog-save-action"
+                    disabled={roleImportPending}
+                  >
+                    <Upload size={14} /> {roleImportPending ? 'Importing...' : 'Import local'}
+                  </button>
+                ) : null}
               </div>
 
               <div className="search-field">
@@ -3138,7 +3173,9 @@ function App() {
               </div>
 
               <div className="text-[11px] text-gray-400 break-all">
-                {rolesMeta.fileExists ? 'File' : 'Will create'} · {rolesMeta.filePath}
+                {roleCatalogIsRemote
+                  ? `${rolesMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${rolesMeta.filePath}`
+                  : `${rolesMeta.fileExists ? 'File' : 'Will create'} · ${rolesMeta.filePath}`}
               </div>
               {roleDraftMeta.filePath ? (
                 <div className="text-[11px] text-gray-400 break-all">
@@ -3331,6 +3368,15 @@ function App() {
                 >
                   Save
                 </button>
+                {connectorCatalogIsRemote ? (
+                  <button
+                    onClick={() => void handleImportLocalConnectors()}
+                    className="ghost-action catalog-save-action"
+                    disabled={connectorImportPending}
+                  >
+                    <Upload size={14} /> {connectorImportPending ? 'Importing...' : 'Import local'}
+                  </button>
+                ) : null}
               </div>
 
               <div className="search-field">
@@ -3344,7 +3390,9 @@ function App() {
               </div>
 
               <div className="text-[11px] text-gray-400 break-all">
-                {connectorsMeta.fileExists ? 'File' : 'Will create'} · {connectorsMeta.filePath}
+                {connectorCatalogIsRemote
+                  ? `${connectorsMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${connectorsMeta.filePath}`
+                  : `${connectorsMeta.fileExists ? 'File' : 'Will create'} · ${connectorsMeta.filePath}`}
               </div>
               {connectorDraftMeta.filePath ? (
                 <div className="text-[11px] text-gray-400 break-all">

@@ -38,6 +38,19 @@ public sealed class ConnectorsController : ControllerBase
         }
     }
 
+    [HttpPost("import-local")]
+    public async Task<ActionResult<ImportConnectorCatalogResponse>> ImportLocal(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _connectorService.ImportLocalCatalogAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+    }
+
     [HttpPut("draft")]
     public async Task<ActionResult<ConnectorDraftResponse>> SaveDraft(
         [FromBody] SaveConnectorDraftRequest request,

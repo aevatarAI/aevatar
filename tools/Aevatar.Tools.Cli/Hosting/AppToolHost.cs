@@ -98,6 +98,12 @@ internal static class AppToolHost
             backendClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
         }
 
+        var nyxProxyClient = builder.Services.AddHttpClient(ChronoStorageCatalogBlobClient.NyxProxyHttpClientName);
+        if (nyxIdAuthEnabled)
+        {
+            nyxProxyClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
+        }
+
         builder.Services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         builder.Services.AddStudioInfrastructure(builder.Configuration);
         builder.Services.AddStudioApplication();

@@ -52,6 +52,12 @@ public sealed class ConnectorService
         return ToResponse(saved);
     }
 
+    public async Task<ImportConnectorCatalogResponse> ImportLocalCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
+        return ToImportResponse(imported);
+    }
+
     public async Task<ConnectorDraftResponse> SaveDraftAsync(
         SaveConnectorDraftRequest request,
         CancellationToken cancellationToken = default)
@@ -212,6 +218,44 @@ public sealed class ConnectorService
             catalog.FilePath,
             catalog.FileExists,
             catalog.Connectors.Select(connector =>
+                new ConnectorDefinitionDto(
+                    connector.Name,
+                    connector.Type,
+                    connector.Enabled,
+                    connector.TimeoutMs,
+                    connector.Retry,
+                    new HttpConnectorDefinitionDto(
+                        connector.Http.BaseUrl,
+                        connector.Http.AllowedMethods.ToList(),
+                        connector.Http.AllowedPaths.ToList(),
+                        connector.Http.AllowedInputKeys.ToList(),
+                        connector.Http.DefaultHeaders.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase)),
+                    new CliConnectorDefinitionDto(
+                        connector.Cli.Command,
+                        connector.Cli.FixedArguments.ToList(),
+                        connector.Cli.AllowedOperations.ToList(),
+                        connector.Cli.AllowedInputKeys.ToList(),
+                        connector.Cli.WorkingDirectory,
+                        connector.Cli.Environment.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase)),
+                    new McpConnectorDefinitionDto(
+                        connector.Mcp.ServerName,
+                        connector.Mcp.Command,
+                        connector.Mcp.Arguments.ToList(),
+                        connector.Mcp.Environment.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase),
+                        connector.Mcp.DefaultTool,
+                        connector.Mcp.AllowedTools.ToList(),
+                        connector.Mcp.AllowedInputKeys.ToList())))
+                .ToList());
+
+    private static ImportConnectorCatalogResponse ToImportResponse(ImportedConnectorCatalog imported) =>
+        new(
+            imported.SourceFilePath,
+            imported.SourceFileExists,
+            imported.Catalog.Connectors.Count,
+            imported.Catalog.HomeDirectory,
+            imported.Catalog.FilePath,
+            imported.Catalog.FileExists,
+            imported.Catalog.Connectors.Select(connector =>
                 new ConnectorDefinitionDto(
                     connector.Name,
                     connector.Type,
