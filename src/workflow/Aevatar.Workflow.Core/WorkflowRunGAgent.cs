@@ -9,7 +9,6 @@ using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -430,7 +429,7 @@ public sealed class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (TryBuildWorkflowArtifactFact(envelope, out var artifactFact))
+        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
             await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
@@ -502,7 +501,7 @@ public sealed class WorkflowRunGAgent
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await _dispatchPort.DispatchAsync(actor.Id, CreateRoleAgentInitializeEnvelope(role));
+            await _dispatchPort.DispatchAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
             _childAgentIds.Add(actor.Id);
             await PersistDomainEventAsync(new WorkflowRoleActorLinkedEvent
             {
@@ -726,113 +725,6 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
-    private bool TryBuildWorkflowArtifactFact(EventEnvelope envelope, out IMessage artifactFact)
-    {
-        artifactFact = null!;
-        if (envelope.Payload == null)
-            return false;
-
-        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, out var roleReplyFact))
-        {
-            artifactFact = roleReplyFact;
-            return true;
-        }
-
-        if (envelope.Payload.Is(WorkflowCompletedEvent.Descriptor))
-            return false;
-
-        if (envelope.Payload.Is(StepRequestEvent.Descriptor))
-        {
-            artifactFact = envelope.Payload.Unpack<StepRequestEvent>();
-            return true;
-        }
-
-        if (envelope.Payload.Is(StepCompletedEvent.Descriptor))
-        {
-            artifactFact = envelope.Payload.Unpack<StepCompletedEvent>();
-            return true;
-        }
-
-        if (envelope.Payload.Is(WorkflowSuspendedEvent.Descriptor))
-        {
-            artifactFact = envelope.Payload.Unpack<WorkflowSuspendedEvent>();
-            return true;
-        }
-
-        if (envelope.Payload.Is(WaitingForSignalEvent.Descriptor))
-        {
-            artifactFact = envelope.Payload.Unpack<WaitingForSignalEvent>();
-            return true;
-        }
-
-        if (envelope.Payload.Is(WorkflowSignalBufferedEvent.Descriptor))
-        {
-            artifactFact = envelope.Payload.Unpack<WorkflowSignalBufferedEvent>();
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool TryBuildWorkflowRoleReplyRecordedEvent(
-        EventEnvelope envelope,
-        out WorkflowRoleReplyRecordedEvent evt)
-    {
-        evt = null!;
-
-        if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) != true)
-            return false;
-
-        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
-        if (published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
-        {
-            return false;
-        }
-
-        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
-        if (!IsRoleChildActor(publisherActorId))
-            return false;
-
-        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
-        evt = new WorkflowRoleReplyRecordedEvent
-        {
-            RunId = string.IsNullOrWhiteSpace(State.RunId)
-                ? WorkflowRunIdNormalizer.Normalize(Id)
-                : WorkflowRunIdNormalizer.Normalize(State.RunId),
-            RoleActorId = publisherActorId,
-            RoleId = ResolveRoleId(publisherActorId),
-            SessionId = completed.SessionId ?? string.Empty,
-            Content = completed.Content ?? string.Empty,
-            ReasoningContent = completed.ReasoningContent ?? string.Empty,
-            Prompt = completed.Prompt ?? string.Empty,
-            ContentEmitted = completed.ContentEmitted,
-        };
-
-        foreach (var toolCall in completed.ToolCalls)
-        {
-            evt.ToolCalls.Add(new WorkflowRoleReplyToolCall
-            {
-                ToolName = toolCall.ToolName ?? string.Empty,
-                CallId = toolCall.CallId ?? string.Empty,
-            });
-        }
-
-        return true;
-    }
-
-    private bool IsRoleChildActor(string actorId) =>
-        !string.IsNullOrWhiteSpace(actorId) &&
-        actorId.StartsWith(Id + ":", StringComparison.Ordinal);
-
-    private string ResolveRoleId(string actorId)
-    {
-        if (!IsRoleChildActor(actorId))
-            return actorId ?? string.Empty;
-
-        return actorId[(Id.Length + 1)..];
-    }
-
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
@@ -1019,87 +911,6 @@ public sealed class WorkflowRunGAgent
             new(false, error ?? string.Empty, null);
     }
 
-    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
-    {
-        var knownStepTypes = new HashSet<string>(_knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
-        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
-        ExpandKnownStepTypesFromFactory(workflow, knownStepTypes);
-
-        return WorkflowValidator.Validate(
-            workflow,
-            new WorkflowValidator.WorkflowValidationOptions
-            {
-                RequireKnownStepTypes = true,
-                KnownStepTypes = knownStepTypes,
-            },
-            availableWorkflowNames: null);
-    }
-
-    private void ExpandKnownStepTypesFromFactory(WorkflowDefinition workflow, ISet<string> knownStepTypes)
-    {
-        foreach (var stepType in EnumerateReferencedStepTypes(workflow.Steps))
-        {
-            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
-            if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
-                continue;
-
-            if (_stepExecutorFactory.TryCreate(canonical, out _))
-                knownStepTypes.Add(canonical);
-        }
-    }
-
-    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
-    {
-        foreach (var step in steps)
-        {
-            yield return step.Type;
-
-            foreach (var (key, value) in step.Parameters)
-            {
-                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
-                    !string.IsNullOrWhiteSpace(value))
-                {
-                    yield return value;
-                }
-            }
-
-            if (step.Children is { Count: > 0 })
-            {
-                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
-                    yield return childType;
-            }
-        }
-    }
-
-    private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role)
-    {
-        var initialize = new InitializeRoleAgentEvent
-        {
-            RoleName = role.Name ?? string.Empty,
-            ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
-            Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
-            SystemPrompt = role.SystemPrompt ?? string.Empty,
-            MaxTokens = role.MaxTokens ?? 0,
-            MaxToolRounds = role.MaxToolRounds ?? 0,
-            MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
-            EventModules = role.EventModules ?? string.Empty,
-            EventRoutes = role.EventRoutes ?? string.Empty,
-        };
-
-        if (role.Temperature.HasValue)
-            initialize.Temperature = role.Temperature.Value;
-
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(initialize),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = Guid.NewGuid().ToString("N"),
-            },
-        };
-    }
+    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow) =>
+        WorkflowRunDefinitionValidationSupport.Validate(workflow, _knownModuleStepTypes, _stepExecutorFactory);
 }
