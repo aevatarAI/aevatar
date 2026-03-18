@@ -256,6 +256,7 @@ export const executions = {
   get:   (id: string)    => request<any>(`/executions/${id}`),
   start: (data: any)     => request<any>('/executions', { method: 'POST', body: JSON.stringify(data) }),
   resume:(id: string, data: any) => request<any>(`/executions/${id}/resume`, { method: 'POST', body: JSON.stringify(data) }),
+  stop:  (id: string, data: any) => request<any>(`/executions/${id}/stop`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const assistant = {

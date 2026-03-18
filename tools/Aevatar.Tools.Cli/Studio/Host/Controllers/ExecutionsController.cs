@@ -41,4 +41,14 @@ public sealed class ExecutionsController : ControllerBase
         var execution = await _executionService.ResumeAsync(executionId, request, cancellationToken);
         return execution is null ? NotFound() : Ok(execution);
     }
+
+    [HttpPost("{executionId}/stop")]
+    public async Task<ActionResult<ExecutionDetail>> Stop(
+        string executionId,
+        [FromBody] StopExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var execution = await _executionService.StopAsync(executionId, request, cancellationToken);
+        return execution is null ? NotFound() : Ok(execution);
+    }
 }

@@ -948,6 +948,34 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
       continue;
     }
 
+    if (customName === 'studio.run.stop.requested') {
+      logs.push({
+        tone: 'pending',
+        title: 'Stop requested',
+        meta: '',
+        previewText: buildExecutionLogPreview(customPayload?.reason),
+        clipboardText: buildExecutionLogText(customPayload?.reason),
+        timestamp,
+        stepId: latestStepId,
+        interaction: null,
+      });
+      continue;
+    }
+
+    if (customName === 'aevatar.run.stopped') {
+      logs.push({
+        tone: 'run',
+        title: 'Run stopped',
+        meta: '',
+        previewText: buildExecutionLogPreview(customPayload?.reason),
+        clipboardText: buildExecutionLogText(customPayload?.reason),
+        timestamp,
+        stepId: latestStepId,
+        interaction: null,
+      });
+      continue;
+    }
+
     if (parsed.runError?.message) {
       logs.push({
         tone: 'failed',
@@ -955,6 +983,20 @@ export function buildExecutionTrace(detail: any): ExecutionTrace | null {
         meta: parsed.runError.code || '',
         previewText: buildExecutionLogPreview(parsed.runError.message),
         clipboardText: buildExecutionLogText(parsed.runError.message),
+        timestamp,
+        stepId: latestStepId,
+        interaction: null,
+      });
+      continue;
+    }
+
+    if (parsed.runStopped) {
+      logs.push({
+        tone: 'run',
+        title: 'Run stopped',
+        meta: '',
+        previewText: buildExecutionLogPreview(parsed.runStopped.reason),
+        clipboardText: buildExecutionLogText(parsed.runStopped.reason),
         timestamp,
         stepId: latestStepId,
         interaction: null,

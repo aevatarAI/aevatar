@@ -141,6 +141,7 @@ public sealed class StartWorkflowRunEventEnvelopeMappingHandler : IWorkflowRunEv
                 RunStarted = new WorkflowRunStartedEventPayload
                 {
                     ThreadId = threadId,
+                    RunId = evt.RunId,
                 },
             },
         ];
@@ -471,6 +472,56 @@ public sealed class WorkflowCompletedRunEventEnvelopeMappingHandler : IWorkflowR
             },
         ];
         return true;
+    }
+}
+
+public sealed class WorkflowStoppedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => 45;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        events = [];
+        if (envelope.Payload == null)
+            return false;
+
+        if (envelope.Payload.Is(WorkflowStoppedEvent.Descriptor))
+        {
+            var evt = envelope.Payload.Unpack<WorkflowStoppedEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    RunStopped = new WorkflowRunStoppedEventPayload
+                    {
+                        RunId = evt.RunId,
+                        Reason = evt.Reason,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowRunStoppedEvent.Descriptor))
+        {
+            var evt = envelope.Payload.Unpack<WorkflowRunStoppedEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    RunStopped = new WorkflowRunStoppedEventPayload
+                    {
+                        RunId = evt.RunId,
+                        Reason = evt.Reason,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        return false;
     }
 }
 

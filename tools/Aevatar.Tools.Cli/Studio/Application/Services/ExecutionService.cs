@@ -101,6 +101,10 @@ public sealed class ExecutionService
             userInput = string.IsNullOrWhiteSpace(request.UserInput) ? null : request.UserInput.Trim(),
             metadata = request.Metadata,
         });
+        var authSnapshot = _authSnapshotProvider == null
+            ? null
+            : await _authSnapshotProvider.CaptureAsync(cancellationToken);
+        ApplyAuthSnapshot(httpRequest, authSnapshot);
 
         var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
         using var response = await runtimeClient.SendAsync(httpRequest, cancellationToken);
@@ -132,6 +136,72 @@ public sealed class ExecutionService
             CompletedAtUtc = null,
             ActorId = nextActorId,
             Error = null,
+            Frames = frames,
+        };
+
+        await _store.SaveExecutionAsync(updatedRecord, cancellationToken);
+        return ToDetail(updatedRecord);
+    }
+
+    public async Task<ExecutionDetail?> StopAsync(
+        string executionId,
+        StopExecutionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await _store.GetExecutionAsync(executionId, cancellationToken);
+        if (record is null)
+        {
+            return null;
+        }
+
+        if (IsTerminalExecutionStatus(record.Status))
+            return ToDetail(record);
+
+        var actorId = record.ActorId?.Trim();
+        if (string.IsNullOrWhiteSpace(actorId))
+        {
+            throw new InvalidOperationException("Execution is missing actorId and cannot be stopped.");
+        }
+
+        var runId = TryExtractRunIdFromRecord(record);
+        if (string.IsNullOrWhiteSpace(runId))
+        {
+            throw new InvalidOperationException("Execution is missing runId and cannot be stopped.");
+        }
+
+        var reason = string.IsNullOrWhiteSpace(request.Reason)
+            ? "user requested stop"
+            : request.Reason.Trim();
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{record.RuntimeBaseUrl.TrimEnd('/')}/api/workflows/stop");
+        httpRequest.Content = JsonContent.Create(new
+        {
+            actorId,
+            runId,
+            reason,
+        });
+        var authSnapshot = _authSnapshotProvider == null
+            ? null
+            : await _authSnapshotProvider.CaptureAsync(cancellationToken);
+        ApplyAuthSnapshot(httpRequest, authSnapshot);
+
+        var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
+        using var response = await runtimeClient.SendAsync(httpRequest, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                ? $"Runtime stop request failed: {(int)response.StatusCode}"
+                : error);
+        }
+
+        var frames = record.Frames.ToList();
+        frames.Add(new StoredExecutionFrame(
+            DateTimeOffset.UtcNow,
+            BuildStudioStopRequestedFrame(actorId, runId, reason)));
+
+        var updatedRecord = record with
+        {
             Frames = frames,
         };
 
@@ -179,6 +249,54 @@ public sealed class ExecutionService
         }
     }
 
+    private static string? TryExtractRunId(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("runStarted", out var runStarted) &&
+                runStarted.TryGetProperty("runId", out var runIdElement) &&
+                runIdElement.ValueKind == JsonValueKind.String)
+            {
+                return runIdElement.GetString();
+            }
+
+            if (root.TryGetProperty("runStopped", out var runStopped) &&
+                runStopped.TryGetProperty("runId", out var stoppedRunIdElement) &&
+                stoppedRunIdElement.ValueKind == JsonValueKind.String)
+            {
+                return stoppedRunIdElement.GetString();
+            }
+
+            if (root.TryGetProperty("custom", out var customElement) &&
+                customElement.TryGetProperty("payload", out var payloadElement) &&
+                payloadElement.TryGetProperty("runId", out var customRunIdElement) &&
+                customRunIdElement.ValueKind == JsonValueKind.String)
+            {
+                return customRunIdElement.GetString();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static string? TryExtractRunIdFromRecord(StoredExecutionRecord record)
+    {
+        foreach (var frame in record.Frames)
+        {
+            var runId = TryExtractRunId(frame.Payload);
+            if (!string.IsNullOrWhiteSpace(runId))
+                return runId.Trim();
+        }
+
+        return null;
+    }
+
     private async Task RunStartExecutionAsync(
         StoredExecutionRecord record,
         StartExecutionRequest request,
@@ -223,6 +341,7 @@ public sealed class ExecutionService
         var actorId = seedRecord.ActorId;
         var runFinished = false;
         var runFailed = false;
+        var runStopped = false;
         string? error = seedRecord.Error;
 
         await foreach (var payload in ReadSsePayloadsAsync(stream, cancellationToken))
@@ -230,29 +349,29 @@ public sealed class ExecutionService
             var receivedAtUtc = DateTimeOffset.UtcNow;
             frames.Add(new StoredExecutionFrame(receivedAtUtc, payload));
             actorId ??= TryExtractActorId(payload);
-            TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed);
+            TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed, ref runStopped);
             error ??= TryExtractExecutionError(payload);
 
-            var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, pendingHumanSteps.Count > 0);
+            var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
             var liveRecord = seedRecord with
             {
                 Status = liveStatus,
-                CompletedAtUtc = liveStatus is "completed" or "failed" ? receivedAtUtc : null,
+                CompletedAtUtc = liveStatus is "completed" or "failed" or "stopped" ? receivedAtUtc : null,
                 ActorId = actorId,
-                Error = liveStatus == "failed" ? error : null,
+                Error = liveStatus is "failed" or "stopped" ? error : null,
                 Frames = frames.ToArray(),
             };
 
             await _store.SaveExecutionAsync(liveRecord, cancellationToken);
         }
 
-        var finalStatus = ResolveCompletedExecutionStatus(runFinished, runFailed, pendingHumanSteps.Count > 0);
+        var finalStatus = ResolveCompletedExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
         var finalRecord = seedRecord with
         {
             Status = finalStatus,
-            CompletedAtUtc = finalStatus is "completed" or "failed" ? DateTimeOffset.UtcNow : null,
+            CompletedAtUtc = finalStatus is "completed" or "failed" or "stopped" ? DateTimeOffset.UtcNow : null,
             ActorId = actorId,
-            Error = finalStatus == "failed" ? error : null,
+            Error = finalStatus is "failed" or "stopped" ? error : null,
             Frames = frames.ToArray(),
         };
 
@@ -378,7 +497,8 @@ public sealed class ExecutionService
         string payload,
         HashSet<string> pendingHumanSteps,
         ref bool runFinished,
-        ref bool runFailed)
+        ref bool runFailed,
+        ref bool runStopped)
     {
         try
         {
@@ -417,6 +537,11 @@ public sealed class ExecutionService
                 }
             }
 
+            if (string.Equals(customName, "aevatar.run.stopped", StringComparison.Ordinal))
+            {
+                runStopped = true;
+            }
+
             if (root.TryGetProperty("runFinished", out _))
             {
                 runFinished = true;
@@ -425,6 +550,11 @@ public sealed class ExecutionService
             if (root.TryGetProperty("runError", out _))
             {
                 runFailed = true;
+            }
+
+            if (root.TryGetProperty("runStopped", out _))
+            {
+                runStopped = true;
             }
         }
         catch
@@ -445,14 +575,30 @@ public sealed class ExecutionService
                 return messageElement.GetString();
             }
 
+            if (root.TryGetProperty("runStopped", out var runStopped) &&
+                runStopped.TryGetProperty("reason", out var reasonElement) &&
+                reasonElement.ValueKind == JsonValueKind.String)
+            {
+                return reasonElement.GetString();
+            }
+
             if (root.TryGetProperty("custom", out var customElement) &&
                 customElement.TryGetProperty("name", out var customNameElement) &&
-                string.Equals(customNameElement.GetString(), "aevatar.step.completed", StringComparison.Ordinal) &&
-                customElement.TryGetProperty("payload", out var payloadElement) &&
-                payloadElement.TryGetProperty("error", out var errorElement) &&
-                errorElement.ValueKind == JsonValueKind.String)
+                customElement.TryGetProperty("payload", out var payloadElement))
             {
-                return errorElement.GetString();
+                if (string.Equals(customNameElement.GetString(), "aevatar.step.completed", StringComparison.Ordinal) &&
+                    payloadElement.TryGetProperty("error", out var errorElement) &&
+                    errorElement.ValueKind == JsonValueKind.String)
+                {
+                    return errorElement.GetString();
+                }
+
+                if (string.Equals(customNameElement.GetString(), "aevatar.run.stopped", StringComparison.Ordinal) &&
+                    payloadElement.TryGetProperty("reason", out var stoppedReasonElement) &&
+                    stoppedReasonElement.ValueKind == JsonValueKind.String)
+                {
+                    return stoppedReasonElement.GetString();
+                }
             }
         }
         catch
@@ -462,11 +608,20 @@ public sealed class ExecutionService
         return null;
     }
 
-    private static string ResolveLiveExecutionStatus(bool runFinished, bool runFailed, bool waitingForHuman)
+    private static string ResolveLiveExecutionStatus(
+        bool runFinished,
+        bool runFailed,
+        bool runStopped,
+        bool waitingForHuman)
     {
         if (runFailed)
         {
             return "failed";
+        }
+
+        if (runStopped)
+        {
+            return "stopped";
         }
 
         if (waitingForHuman)
@@ -477,11 +632,20 @@ public sealed class ExecutionService
         return runFinished ? "completed" : "running";
     }
 
-    private static string ResolveCompletedExecutionStatus(bool runFinished, bool runFailed, bool waitingForHuman)
+    private static string ResolveCompletedExecutionStatus(
+        bool runFinished,
+        bool runFailed,
+        bool runStopped,
+        bool waitingForHuman)
     {
         if (runFailed)
         {
             return "failed";
+        }
+
+        if (runStopped)
+        {
+            return "stopped";
         }
 
         if (waitingForHuman)
@@ -559,6 +723,28 @@ public sealed class ExecutionService
         return JsonSerializer.Serialize(payload);
     }
 
+    private static string BuildStudioStopRequestedFrame(
+        string actorId,
+        string runId,
+        string reason)
+    {
+        var payload = new
+        {
+            custom = new
+            {
+                name = "studio.run.stop.requested",
+                payload = new
+                {
+                    actorId,
+                    runId,
+                    reason,
+                },
+            },
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
     private static string BuildRunErrorFrame(string message, string? code)
     {
         var payload = new
@@ -606,6 +792,11 @@ public sealed class ExecutionService
     }
 
     private sealed record ExecutionStartFailure(string Message, string? Code);
+
+    private static bool IsTerminalExecutionStatus(string? status) =>
+        string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase);
 
     private static ExecutionSummary ToSummary(StoredExecutionRecord record) =>
         new(

@@ -22,6 +22,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             { new WorkflowRunEventEnvelope { RunStarted = new WorkflowRunStartedEventPayload() }, WorkflowRunEventTypes.RunStarted },
             { new WorkflowRunEventEnvelope { RunFinished = new WorkflowRunFinishedEventPayload() }, WorkflowRunEventTypes.RunFinished },
             { new WorkflowRunEventEnvelope { RunError = new WorkflowRunErrorEventPayload() }, WorkflowRunEventTypes.RunError },
+            { new WorkflowRunEventEnvelope { RunStopped = new WorkflowRunStoppedEventPayload() }, WorkflowRunEventTypes.RunStopped },
             { new WorkflowRunEventEnvelope { StepStarted = new WorkflowStepStartedEventPayload() }, WorkflowRunEventTypes.StepStarted },
             { new WorkflowRunEventEnvelope { StepFinished = new WorkflowStepFinishedEventPayload() }, WorkflowRunEventTypes.StepFinished },
             { new WorkflowRunEventEnvelope { TextMessageStart = new WorkflowTextMessageStartEventPayload() }, WorkflowRunEventTypes.TextMessageStart },

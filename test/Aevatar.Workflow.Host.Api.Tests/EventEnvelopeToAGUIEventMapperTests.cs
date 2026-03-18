@@ -69,11 +69,13 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             WorkflowName = "review",
             Input = "hello",
+            RunId = "run-1",
         }));
 
         events.Should().ContainSingle();
         events[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStarted);
         events[0].RunStarted.ThreadId.Should().Be("test");
+        events[0].RunStarted.RunId.Should().Be("run-1");
     }
 
     [Fact]
@@ -280,6 +282,32 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowStoppedEvents_ShouldMapToRunStoppedEnvelope()
+    {
+        var stopped = CreateMapper().Map(WrapCommitted(new WorkflowStoppedEvent
+        {
+            WorkflowName = "review",
+            RunId = "run-stop-1",
+            Reason = "manual",
+        }));
+        var runStopped = CreateMapper().Map(WrapCommitted(new WorkflowRunStoppedEvent
+        {
+            RunId = "run-stop-2",
+            Reason = "forced",
+        }));
+
+        stopped.Should().ContainSingle();
+        stopped[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStopped);
+        stopped[0].RunStopped.RunId.Should().Be("run-stop-1");
+        stopped[0].RunStopped.Reason.Should().Be("manual");
+
+        runStopped.Should().ContainSingle();
+        runStopped[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStopped);
+        runStopped[0].RunStopped.RunId.Should().Be("run-stop-2");
+        runStopped[0].RunStopped.Reason.Should().Be("forced");
+    }
+
+    [Fact]
     public void WorkflowSuspendedAndWaitingSignal_ShouldMapToCustomPayloads()
     {
         var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
@@ -413,6 +441,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         new WorkflowCompletedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var workflowCompletedEvents).Should().BeFalse();
         workflowCompletedEvents.Should().BeEmpty();
 
+        new WorkflowStoppedRunEventEnvelopeMappingHandler().TryMap(noPayload, out var workflowStoppedEvents).Should().BeFalse();
+        workflowStoppedEvents.Should().BeEmpty();
+
         new ToolCallRunEventEnvelopeMappingHandler().TryMap(noPayload, out var toolEvents).Should().BeFalse();
         toolEvents.Should().BeEmpty();
 
@@ -513,6 +544,7 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new AITextStreamRunEventEnvelopeMappingHandler(),
             new AIReasoningRunEventEnvelopeMappingHandler(),
             new WorkflowCompletedRunEventEnvelopeMappingHandler(),
+            new WorkflowStoppedRunEventEnvelopeMappingHandler(),
             new ToolCallRunEventEnvelopeMappingHandler(),
             new WorkflowSuspendedRunEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalRunEventEnvelopeMappingHandler(),

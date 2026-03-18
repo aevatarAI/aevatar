@@ -25,6 +25,12 @@ public sealed class WorkflowRunCompletionPolicy
             return true;
         }
 
+        if (evt.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunStopped)
+        {
+            completion = WorkflowProjectionCompletionStatus.Stopped;
+            return true;
+        }
+
         return false;
     }
 }

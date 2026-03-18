@@ -17,6 +17,9 @@ public sealed record ResumeExecutionRequest(
     string? SuspensionType = null,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
+public sealed record StopExecutionRequest(
+    string? Reason = null);
+
 public sealed record ExecutionSummary(
     string ExecutionId,
     string WorkflowName,

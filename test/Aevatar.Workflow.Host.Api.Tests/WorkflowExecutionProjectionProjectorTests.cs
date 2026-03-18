@@ -551,6 +551,41 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldHandleWorkflowStoppedEvent()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-stop",
+            FinalOutput = "previous",
+            FinalError = string.Empty,
+            Success = null,
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 6, 0, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WorkflowStoppedEvent
+                {
+                    WorkflowName = "review",
+                    RunId = "run-stop",
+                    Reason = "manual",
+                },
+                21,
+                "evt-workflow-stopped-domain"),
+            timestamp);
+
+        report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
+        report.Success.Should().BeFalse();
+        report.FinalOutput.Should().BeEmpty();
+        report.FinalError.Should().Be("manual");
+        report.EndedAt.Should().Be(timestamp);
+        report.Timeline.Should().Contain(x => x.Stage == "workflow.stopped" && x.Message == "manual");
+    }
+
+    [Fact]
     public void ApplyObservedPayloadToReport_ShouldRespectExplicitRoleIds_AndPreserveStartedAt()
     {
         var startedAt = new DateTimeOffset(2026, 3, 18, 5, 30, 0, TimeSpan.Zero);

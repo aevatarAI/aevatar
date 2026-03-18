@@ -46,6 +46,7 @@ import {
   Search,
   Settings,
   Shield,
+  Square,
   Sun,
   Terminal,
   Trash2,
@@ -745,6 +746,7 @@ function App() {
   const [runModalOpen, setRunModalOpen] = useState(false);
   const [executionActionInput, setExecutionActionInput] = useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] = useState('');
+  const [executionStopPending, setExecutionStopPending] = useState(false);
   const [askAiOpen, setAskAiOpen] = useState(false);
   const [askAiPrompt, setAskAiPrompt] = useState('');
   const [askAiAnswer, setAskAiAnswer] = useState('');
@@ -803,6 +805,7 @@ function App() {
     ? executionTrace.logs[activeExecutionLogIndex as number] || null
     : null;
   const activeExecutionInteraction = activeExecutionLog?.interaction &&
+    executionDetail?.status === 'waiting' &&
     activeExecutionLog.stepId &&
     executionTrace?.stepStates.get(activeExecutionLog.stepId)?.status === 'waiting'
     ? activeExecutionLog.interaction
@@ -810,6 +813,9 @@ function App() {
   const executionActionKeyBase = selectedExecutionId && activeExecutionInteraction
     ? `${selectedExecutionId}:${activeExecutionInteraction.stepId}`
     : '';
+  const executionCanStop =
+    Boolean(selectedExecutionId) &&
+    (executionDetail?.status === 'running' || executionDetail?.status === 'waiting');
 
   useEffect(() => {
     void bootstrap();
@@ -1084,7 +1090,8 @@ function App() {
   }, [isExecutionLogsPopout, selectedExecutionId]);
 
   useEffect(() => {
-    if (!selectedExecutionId || executionDetail?.status !== 'running') {
+    const shouldRefresh = executionDetail?.status === 'running' || executionDetail?.status === 'waiting';
+    if (!selectedExecutionId || !shouldRefresh) {
       return undefined;
     }
 
@@ -1099,7 +1106,7 @@ function App() {
         }
 
         applyExecutionDetail(detail);
-        if (detail?.status === 'running') {
+        if (detail?.status === 'running' || detail?.status === 'waiting') {
           timer = window.setTimeout(() => {
             void refreshExecution();
           }, 700);
@@ -2084,6 +2091,25 @@ function App() {
       flash(error?.message || 'Failed to resume execution', 'error');
     } finally {
       setExecutionActionPendingKey('');
+    }
+  }
+
+  async function handleStopExecution() {
+    if (!selectedExecutionId || !executionCanStop) {
+      return;
+    }
+
+    setExecutionStopPending(true);
+    try {
+      const detail = await api.executions.stop(selectedExecutionId, {
+        reason: 'user requested stop',
+      });
+      applyExecutionDetail(detail);
+      flash('Stop requested', 'info');
+    } catch (error: any) {
+      flash(error?.message || 'Failed to stop execution', 'error');
+    } finally {
+      setExecutionStopPending(false);
     }
   }
 
@@ -4239,6 +4265,17 @@ function App() {
                 >
                   <Play size={15} />
                 </button>
+                {studioView === 'execution' && executionCanStop ? (
+                  <button
+                    onClick={() => void handleStopExecution()}
+                    data-tooltip="Stop"
+                    aria-label="Stop"
+                    disabled={executionStopPending}
+                    className="panel-icon-button header-toolbar-action"
+                  >
+                    <Square size={15} />
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>

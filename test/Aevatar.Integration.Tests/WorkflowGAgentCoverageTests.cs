@@ -833,16 +833,22 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_HandleWorkflowRunStoppedAsync_ShouldPersistOnlyWhenActive()
+    public async Task WorkflowRunGAgent_HandleWorkflowRunStoppedAsync_ShouldPersistStopAndCleanupOnlyOnce()
     {
         var eventStore = new InMemoryEventStore();
-        var agent = CreateRunAgent(eventStore: eventStore);
+        var publisher = new RecordingEventPublisher();
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+        agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_valid",
             runId: "run-stop-async");
         await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+        await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
+
+        var roleActorId = runtime.CreatedActors.Single().Id;
 
         await agent.HandleWorkflowRunStoppedAsync(new WorkflowRunStoppedEvent
         {
@@ -857,6 +863,12 @@ public class WorkflowGAgentCoverageTests
 
         agent.State.Status.Should().Be("stopped");
         agent.State.FinalError.Should().Be("requested");
+        agent.State.ExecutionStates.Should().BeEmpty();
+        runtime.Unlinked.Should().Contain(roleActorId);
+        runtime.Destroyed.Should().Contain(roleActorId);
+        publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x => x.Content == "Workflow execution stopped: requested");
 
         var persisted = await eventStore.GetEventsAsync(agent.Id);
         persisted.Count(x => x.EventData.Is(WorkflowRunStoppedEvent.Descriptor)).Should().Be(1);

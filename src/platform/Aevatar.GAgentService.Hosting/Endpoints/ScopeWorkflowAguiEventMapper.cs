@@ -60,14 +60,14 @@ internal static class ScopeWorkflowAguiEventMapper
                 aguiEvent.RunStarted = new RunStartedEvent
                 {
                     ThreadId = frame.RunStarted.ThreadId,
-                    RunId = ResolveRunId(frame.RunStarted.ThreadId),
+                    RunId = ResolveRunId(frame.RunStarted.RunId, frame.RunStarted.ThreadId),
                 };
                 return true;
             case WorkflowRunEventEnvelope.EventOneofCase.RunFinished:
                 aguiEvent.RunFinished = new RunFinishedEvent
                 {
                     ThreadId = frame.RunFinished.ThreadId,
-                    RunId = ResolveRunId(frame.RunFinished.ThreadId),
+                    RunId = ResolveRunId(null, frame.RunFinished.ThreadId),
                     Result = frame.RunFinished.Result,
                 };
                 return true;
@@ -76,6 +76,13 @@ internal static class ScopeWorkflowAguiEventMapper
                 {
                     Message = frame.RunError.Message,
                     Code = frame.RunError.Code,
+                };
+                return true;
+            case WorkflowRunEventEnvelope.EventOneofCase.RunStopped:
+                aguiEvent.Custom = new CustomEvent
+                {
+                    Name = "aevatar.run.stopped",
+                    Payload = Any.Pack(frame.RunStopped),
                 };
                 return true;
             case WorkflowRunEventEnvelope.EventOneofCase.StepStarted:
@@ -179,8 +186,10 @@ internal static class ScopeWorkflowAguiEventMapper
         return true;
     }
 
-    private static string ResolveRunId(string threadId) =>
-        string.IsNullOrWhiteSpace(threadId)
-            ? string.Empty
-            : threadId;
+    private static string ResolveRunId(string? runId, string threadId) =>
+        !string.IsNullOrWhiteSpace(runId)
+            ? runId
+            : string.IsNullOrWhiteSpace(threadId)
+                ? string.Empty
+                : threadId;
 }

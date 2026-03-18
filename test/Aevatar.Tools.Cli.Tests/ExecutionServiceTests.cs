@@ -144,6 +144,108 @@ public sealed class ExecutionServiceTests
         handler.LastRequest.Headers.GetValues("X-Aevatar-Internal-Auth").Should().ContainSingle("internal-456");
     }
 
+    [Fact]
+    public async Task StartAsync_WhenRunStoppedFrameObserved_ShouldPersistStoppedStatus()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateSseResponse("""
+                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-stop","workflowName":"approval"}}}
+
+                data: {"runStarted":{"threadId":"run-actor-stop","runId":"run-stop-1"}}
+
+                data: {"runStopped":{"runId":"run-stop-1","reason":"manual"}}
+
+                data: [DONE]
+
+                """)));
+        var (service, store) = CreateService(handler);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            WorkflowYamls: ["name: approval"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        var stopped = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "stopped");
+
+        stopped.ActorId.Should().Be("run-actor-stop");
+        stopped.Status.Should().Be("stopped");
+        stopped.Error.Should().Be("manual");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenAguiStoppedCustomEventObserved_ShouldPersistStoppedStatus()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateSseResponse("""
+                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-stop-2","workflowName":"approval"}}}
+
+                data: {"runStarted":{"threadId":"run-actor-stop-2","runId":"run-stop-2"}}
+
+                data: {"custom":{"name":"aevatar.run.stopped","payload":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowRunStoppedEventPayload","runId":"run-stop-2","reason":"manual"}}}
+
+                data: [DONE]
+
+                """)));
+        var (service, store) = CreateService(handler);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            WorkflowYamls: ["name: approval"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        var stopped = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "stopped");
+
+        stopped.ActorId.Should().Be("run-actor-stop-2");
+        stopped.Status.Should().Be("stopped");
+        stopped.Error.Should().Be("manual");
+    }
+
+    [Fact]
+    public async Task StopAsync_ShouldCallWorkflowStopEndpoint_AndAppendLocalStopFrame()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            }));
+        var (service, store) = CreateService(handler);
+        var seed = new StoredExecutionRecord(
+            ExecutionId: "exec-stop-1",
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            Status: "waiting",
+            StartedAtUtc: DateTimeOffset.UtcNow,
+            CompletedAtUtc: null,
+            ActorId: "run-actor-stop-1",
+            Error: null,
+            Frames:
+            [
+                new StoredExecutionFrame(
+                    DateTimeOffset.UtcNow,
+                    """{"runStarted":{"threadId":"run-actor-stop-1","runId":"run-stop-1"}}""")
+            ]);
+        await store.SaveExecutionAsync(seed);
+
+        var detail = await service.StopAsync("exec-stop-1", new StopExecutionRequest("manual"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/workflows/stop");
+        handler.LastBody.Should().NotBeNull();
+        using (var body = JsonDocument.Parse(handler.LastBody!))
+        {
+            body.RootElement.GetProperty("actorId").GetString().Should().Be("run-actor-stop-1");
+            body.RootElement.GetProperty("runId").GetString().Should().Be("run-stop-1");
+            body.RootElement.GetProperty("reason").GetString().Should().Be("manual");
+        }
+
+        detail.Should().NotBeNull();
+        detail!.Status.Should().Be("waiting");
+        using var payload = JsonDocument.Parse(detail.Frames.Last().Payload);
+        payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.run.stop.requested");
+    }
+
     private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
         RecordingHttpMessageHandler handler,
         IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)

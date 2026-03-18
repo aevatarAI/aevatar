@@ -120,6 +120,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             ApplyWorkflowRoleReplyRecorded(readModel, payload.Unpack<WorkflowRoleReplyRecordedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WorkflowCompletedEvent.Descriptor))
             ApplyWorkflowCompleted(readModel, payload.Unpack<WorkflowCompletedEvent>(), payload.TypeUrl, observedAt);
+        else if (payload.Is(WorkflowStoppedEvent.Descriptor))
+            ApplyWorkflowStopped(readModel, payload.Unpack<WorkflowStoppedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WorkflowRunStoppedEvent.Descriptor))
             ApplyWorkflowRunStopped(readModel, payload.Unpack<WorkflowRunStoppedEvent>(), payload.TypeUrl, observedAt);
 
@@ -356,6 +358,30 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             null);
     }
 
+    private static void ApplyWorkflowStopped(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowStoppedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+        readModel.Success = false;
+        readModel.FinalOutput = string.Empty;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            readModel.FinalError = evt.Reason;
+        readModel.EndedAt = observedAt;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "workflow.stopped",
+            evt.Reason ?? "stopped",
+            readModel.RootActorId,
+            null,
+            null,
+            eventType,
+            null);
+    }
+
     private static void ApplyWorkflowRunStopped(
         WorkflowRunInsightReportDocument readModel,
         WorkflowRunStoppedEvent evt,
@@ -363,6 +389,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+        readModel.Success = false;
+        readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             readModel.FinalError = evt.Reason;
         readModel.EndedAt = observedAt;
