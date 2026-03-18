@@ -29,10 +29,10 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         var current = _cachedTools;
-        if (current is { IsFaulted: false }) return current;
+        if (current is { IsCompletedSuccessfully: true }) return current;
         var task = DiscoverAllAsync(_options, _clientManager, _logger, ct);
         var winner = Interlocked.CompareExchange(ref _cachedTools, task, current);
-        return winner ?? task;
+        return ReferenceEquals(winner, current) ? task : winner!;
     }
 
     private static async Task<IReadOnlyList<IAgentTool>> DiscoverAllAsync(

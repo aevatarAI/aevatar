@@ -135,10 +135,10 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {
         var current = _tools;
-        if (current is { IsFaulted: false }) return current;
+        if (current is { IsCompletedSuccessfully: true }) return current;
         var task = ConnectAndIndexToolsAsync(ct);
         var winner = Interlocked.CompareExchange(ref _tools, task, current);
-        return winner ?? task;
+        return ReferenceEquals(winner, current) ? task : winner!;
     }
 
     private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(CancellationToken ct)
