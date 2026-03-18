@@ -3,6 +3,7 @@
 // 自动连接、发现工具、适配为 IAgentTool
 // ─────────────────────────────────────────────────────────────
 
+using System.Collections.Immutable;
 using Aevatar.AI.Abstractions.ToolProviders;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -13,10 +14,12 @@ namespace Aevatar.AI.ToolProviders.MCP;
 
 /// <summary>
 /// 管理 MCP Server 连接。连接后自动发现工具并适配为 IAgentTool。
+/// Clients are tracked via an immutable list for thread-safe append;
+/// disposal iterates a snapshot and is intended to be called once at shutdown.
 /// </summary>
 public sealed class MCPClientManager : IAsyncDisposable
 {
-    private readonly List<McpClient> _clients = [];
+    private ImmutableList<McpClient> _clients = ImmutableList<McpClient>.Empty;
     private readonly ILogger _logger;
 
     public MCPClientManager(ILogger? logger = null) =>
@@ -47,7 +50,7 @@ public sealed class MCPClientManager : IAsyncDisposable
         };
 
         var client = await McpClient.CreateAsync(transport, options, cancellationToken: ct);
-        _clients.Add(client);
+        ImmutableInterlocked.Update(ref _clients, list => list.Add(client));
 
         // 发现工具
         var tools = await client.ListToolsAsync(cancellationToken: ct);
@@ -72,8 +75,8 @@ public sealed class MCPClientManager : IAsyncDisposable
     /// <summary>释放所有 MCP 连接。</summary>
     public async ValueTask DisposeAsync()
     {
-        foreach (var client in _clients)
+        var snapshot = Interlocked.Exchange(ref _clients, ImmutableList<McpClient>.Empty);
+        foreach (var client in snapshot)
             await client.DisposeAsync();
-        _clients.Clear();
     }
 }
