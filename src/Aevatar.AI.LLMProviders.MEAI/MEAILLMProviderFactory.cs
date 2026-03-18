@@ -5,7 +5,7 @@
 // 按名字选择。每个 provider 由一个 IChatClient 支撑。
 // ─────────────────────────────────────────────────────────────
 
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -16,10 +16,13 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// <summary>
 /// 基于 MEAI 的 LLM Provider 工厂。
 /// 支持注册多个命名 provider，按名字获取。
+/// Startup-initialized, read-heavy: uses ImmutableDictionary for lock-free reads.
 /// </summary>
 public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProviderRegistry
 {
-    private readonly ConcurrentDictionary<string, MEAILLMProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
+    private ImmutableDictionary<string, MEAILLMProvider> _providers =
+        ImmutableDictionary<string, MEAILLMProvider>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
     private string _defaultName = "openai";
 
     /// <summary>
@@ -30,24 +33,26 @@ public sealed class MEAILLMProviderFactory : ILLMProviderFactory, IMEAILLMProvid
     /// <param name="logger">日志记录器。</param>
     public IMEAILLMProviderRegistry Register(string name, IChatClient client, ILogger? logger = null)
     {
-        _providers[name] = new MEAILLMProvider(name, client, logger);
+        var provider = new MEAILLMProvider(name, client, logger);
+        ImmutableInterlocked.AddOrUpdate(ref _providers, name, provider, (_, _) => provider);
         return this;
     }
 
     /// <summary>设置默认 provider 名称。</summary>
     public IMEAILLMProviderRegistry SetDefault(string name)
     {
-        _defaultName = name;
+        Volatile.Write(ref _defaultName, name);
         return this;
     }
 
     /// <inheritdoc />
     public ILLMProvider GetProvider(string name) =>
-        _providers.GetValueOrDefault(name)
-        ?? throw new InvalidOperationException($"LLM Provider '{name}' 未注册。可用: {string.Join(", ", _providers.Keys)}");
+        _providers.TryGetValue(name, out var provider)
+        ? provider
+        : throw new InvalidOperationException($"LLM Provider '{name}' 未注册。可用: {string.Join(", ", _providers.Keys)}");
 
     /// <inheritdoc />
-    public ILLMProvider GetDefault() => GetProvider(_defaultName);
+    public ILLMProvider GetDefault() => GetProvider(Volatile.Read(ref _defaultName));
 
     /// <inheritdoc />
     public IReadOnlyList<string> GetAvailableProviders() => _providers.Keys.ToList();
