@@ -102,10 +102,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
         var current = _toolIndex;
-        if (current is { IsFaulted: false }) return current;
+        if (current is { IsCompletedSuccessfully: true }) return current;
         var task = DiscoverAllToolsAsync(_toolSources, _logger, ct);
         var winner = Interlocked.CompareExchange(ref _toolIndex, task, current);
-        return winner ?? task;
+        return ReferenceEquals(winner, current) ? task : winner!;
     }
 
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
