@@ -51,7 +51,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         await module.HandleAsync(Envelope(new StartWorkflowEvent { Input = "x" }), ctx, CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("无步骤");
     }
@@ -96,7 +96,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             Envelope(new StepCompletedEvent { StepId = "s2", RunId = runId, Success = true, Output = "done" }),
             ctx,
             CancellationToken.None);
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("done");
     }
@@ -219,7 +219,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Select(x => x.evt).OfType<WorkflowCompletedEvent>().Single();
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.RunId.Should().Be(runId);
         completed.Error.Should().Contain("already active");
@@ -252,7 +252,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.RunId.Should().Be("run-trim");
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("done");
@@ -274,7 +274,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Be("boom");
     }
@@ -411,7 +411,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Be("boom-3");
     }
@@ -444,7 +444,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("default-skip-output");
     }
@@ -555,7 +555,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Be("boom");
     }
@@ -716,7 +716,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Be("boom");
     }
@@ -745,7 +745,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeFalse();
         completed.Error.Should().Be("boom");
     }
@@ -869,7 +869,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             }),
             ctx,
             CancellationToken.None);
-        ctx.Published.Should().ContainSingle().Which.evt.Should().BeOfType<WorkflowCompletedEvent>().Which.Success.Should().BeFalse();
+        SingleWorkflowCompletion(ctx).Success.Should().BeFalse();
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -912,7 +912,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
 
-        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<WorkflowCompletedEvent>().Subject;
+        var completed = SingleWorkflowCompletion(ctx);
         completed.Success.Should().BeTrue();
         completed.Output.Should().BeEmpty();
     }
@@ -1026,6 +1026,15 @@ public sealed class WorkflowLoopModuleCoverageTests
             new TestAgent("workflow-loop-test-agent"),
             NullLogger.Instance);
     }
+
+    private static WorkflowCompletedEvent SingleWorkflowCompletion(
+        TestEventHandlerContext ctx,
+        TopologyAudience direction = TopologyAudience.Parent) =>
+        ctx.Published
+            .Where(x => x.direction == direction)
+            .Select(x => x.evt)
+            .OfType<WorkflowCompletedEvent>()
+            .Single();
 
     private static EventEnvelope Envelope(IMessage evt)
     {

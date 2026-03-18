@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Metadata;
@@ -45,11 +46,24 @@ public sealed class ServiceServingProjectionInfrastructureTests
                 RootActorId = root,
                 ProjectionKind = projectionName,
             });
+        var options = new ServiceProjectionOptions();
 
-        IServiceDeploymentCatalogProjectionPort deploymentPort = new ServiceDeploymentCatalogProjectionPort(deploymentActivation);
-        IServiceServingSetProjectionPort servingPort = new ServiceServingSetProjectionPort(servingActivation);
-        IServiceRolloutProjectionPort rolloutPort = new ServiceRolloutProjectionPort(rolloutActivation);
-        IServiceTrafficViewProjectionPort trafficPort = new ServiceTrafficViewProjectionPort(trafficActivation);
+        IServiceDeploymentCatalogProjectionPort deploymentPort = new ServiceDeploymentCatalogProjectionPort(
+            options,
+            deploymentActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>>());
+        IServiceServingSetProjectionPort servingPort = new ServiceServingSetProjectionPort(
+            options,
+            servingActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>>());
+        IServiceRolloutProjectionPort rolloutPort = new ServiceRolloutProjectionPort(
+            options,
+            rolloutActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>>());
+        IServiceTrafficViewProjectionPort trafficPort = new ServiceTrafficViewProjectionPort(
+            options,
+            trafficActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>>());
 
         await deploymentPort.EnsureProjectionAsync("");
         await deploymentPort.EnsureProjectionAsync("actor-deploy");
@@ -133,12 +147,55 @@ public sealed class ServiceServingProjectionInfrastructureTests
     [Fact]
     public void DedicatedServiceProjectionEndpoints_ShouldValidateConstructorArguments()
     {
-        Action nullCatalog = () => new ServiceCatalogProjectionPort(null!);
-        Action nullDeployment = () => new ServiceDeploymentCatalogProjectionPort(null!);
-        Action nullRevision = () => new ServiceRevisionCatalogProjectionPort(null!);
-        Action nullServing = () => new ServiceServingSetProjectionPort(null!);
-        Action nullRollout = () => new ServiceRolloutProjectionPort(null!);
-        Action nullTraffic = () => new ServiceTrafficViewProjectionPort(null!);
+        var catalogActivation = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
+            static (root, projectionName) => new ServiceCatalogProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var deploymentActivation = new RecordingProjectionActivationService<ServiceDeploymentCatalogProjectionContext>(
+            static (root, projectionName) => new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var revisionActivation = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
+            static (root, projectionName) => new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var servingActivation = new RecordingProjectionActivationService<ServiceServingSetProjectionContext>(
+            static (root, projectionName) => new ServiceServingSetProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var rolloutActivation = new RecordingProjectionActivationService<ServiceRolloutProjectionContext>(
+            static (root, projectionName) => new ServiceRolloutProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var trafficActivation = new RecordingProjectionActivationService<ServiceTrafficViewProjectionContext>(
+            static (root, projectionName) => new ServiceTrafficViewProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var catalogRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>();
+        var deploymentRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>>();
+        var revisionRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>();
+        var servingRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>>();
+        var rolloutRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRolloutProjectionContext>>();
+        var trafficRelease = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>>();
+
+        Action nullCatalog = () => new ServiceCatalogProjectionPort(null!, catalogActivation, catalogRelease);
+        Action nullDeployment = () => new ServiceDeploymentCatalogProjectionPort(null!, deploymentActivation, deploymentRelease);
+        Action nullRevision = () => new ServiceRevisionCatalogProjectionPort(null!, revisionActivation, revisionRelease);
+        Action nullServing = () => new ServiceServingSetProjectionPort(null!, servingActivation, servingRelease);
+        Action nullRollout = () => new ServiceRolloutProjectionPort(null!, rolloutActivation, rolloutRelease);
+        Action nullTraffic = () => new ServiceTrafficViewProjectionPort(null!, trafficActivation, trafficRelease);
 
         nullCatalog.Should().Throw<ArgumentNullException>();
         nullDeployment.Should().Throw<ArgumentNullException>();
@@ -146,6 +203,25 @@ public sealed class ServiceServingProjectionInfrastructureTests
         nullServing.Should().Throw<ArgumentNullException>();
         nullRollout.Should().Throw<ArgumentNullException>();
         nullTraffic.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void DedicatedServiceProjectionEndpoints_ShouldValidateActivationService_AndAllowOptionalReleaseService()
+    {
+        var options = new ServiceProjectionOptions();
+        var activation = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
+            static (root, projectionName) => new ServiceCatalogProjectionContext
+            {
+                RootActorId = root,
+                ProjectionKind = projectionName,
+            });
+        var release = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>();
+
+        Action nullActivation = () => new ServiceCatalogProjectionPort(options, null!, release);
+        Action nullRelease = () => new ServiceCatalogProjectionPort(options, activation, null!);
+
+        nullActivation.Should().Throw<ArgumentNullException>();
+        nullRelease.Should().NotThrow();
     }
 
 }

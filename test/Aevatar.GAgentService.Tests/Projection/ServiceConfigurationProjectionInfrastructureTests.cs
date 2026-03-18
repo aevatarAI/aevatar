@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.Contexts;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.Metadata;
@@ -23,13 +24,30 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
     public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
         var activationService = new RecordingConfigurationActivationService();
-        var service = new ServiceConfigurationProjectionPort(activationService);
+        var service = new ServiceConfigurationProjectionPort(
+            new ServiceGovernanceProjectionOptions(),
+            activationService,
+            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("config-actor");
 
         activationService.Calls.Should().ContainSingle();
         activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
+    }
+
+    [Fact]
+    public async Task ConfigurationProjectionPort_ShouldSkipActivation_WhenDisabled()
+    {
+        var activationService = new RecordingConfigurationActivationService();
+        var service = new ServiceConfigurationProjectionPort(
+            new ServiceGovernanceProjectionOptions { Enabled = false },
+            activationService,
+            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
+
+        await service.EnsureProjectionAsync("config-actor");
+
+        activationService.Calls.Should().BeEmpty();
     }
 
     [Fact]

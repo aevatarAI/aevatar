@@ -114,3 +114,16 @@ internal sealed class RecordingProjectionActivationService<TContext>
             _contextFactory(request.RootActorId, request.ProjectionKind)));
     }
 }
+
+internal sealed class RecordingProjectionReleaseService<TLease>
+    : IProjectionMaterializationReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
+{
+    public List<TLease> Released { get; } = [];
+
+    public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
+    {
+        Released.Add(lease);
+        return Task.CompletedTask;
+    }
+}

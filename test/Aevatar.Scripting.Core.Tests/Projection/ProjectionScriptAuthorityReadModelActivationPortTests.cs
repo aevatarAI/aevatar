@@ -1,7 +1,4 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Projection.Orchestration;
 using FluentAssertions;
 
@@ -14,90 +11,66 @@ public sealed class ProjectionScriptAuthorityReadModelActivationPortTests
     {
         var activationService = new StubActivationService(new object());
         var projectionPort = CreateProjectionPort(activationService);
-        var port = new ProjectionScriptAuthorityReadModelActivationPort(projectionPort);
 
-        await port.ActivateAsync("script-definition:script-1", CancellationToken.None);
+        await projectionPort.ActivateAsync("script-definition:script-1", CancellationToken.None);
 
         activationService.ActorIds.Should().Equal("script-definition:script-1");
     }
 
     [Fact]
-    public async Task ActivateAsync_ShouldThrow_WhenProjectionDisabled()
+    public async Task ActivateAsync_ShouldThrow_WhenActivationDoesNotReturnLease()
     {
         var projectionPort = CreateProjectionPort(new StubActivationService(null));
-        var port = new ProjectionScriptAuthorityReadModelActivationPort(projectionPort);
-
-        var action = () => port.ActivateAsync("script-definition:script-2", CancellationToken.None);
+        var action = () => projectionPort.ActivateAsync("script-definition:script-2", CancellationToken.None);
 
         await action.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*script-definition:script-2*");
     }
 
-    private static ScriptAuthorityProjectionPortService CreateProjectionPort(
+    [Fact]
+    public async Task EnsureActorProjectionAsync_ShouldReturnNull_WhenActorIdIsBlank()
+    {
+        var activationService = new StubActivationService(new object());
+        var projectionPort = CreateProjectionPort(activationService);
+
+        var lease = await projectionPort.EnsureActorProjectionAsync(" ", CancellationToken.None);
+
+        lease.Should().BeNull();
+        activationService.ActorIds.Should().BeEmpty();
+    }
+
+    private static ScriptAuthorityProjectionPort CreateProjectionPort(
         StubActivationService activationService) =>
         new(
             activationService,
-            new StubReleaseService(),
-            new StubSinkSubscriptionManager(),
-            new StubLiveForwarder());
+            new StubReleaseService());
 
     private sealed class StubActivationService(object? leaseMarker)
-        : IProjectionPortActivationService<ScriptAuthorityRuntimeLease>
+        : IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease>
     {
         public List<string> ActorIds { get; } = [];
 
         public Task<ScriptAuthorityRuntimeLease> EnsureAsync(
-            string rootEntityId,
-            string projectionName,
-            string input,
-            string commandId,
+            ProjectionMaterializationStartRequest request,
             CancellationToken ct = default)
         {
-            ActorIds.Add(rootEntityId);
+            ActorIds.Add(request.RootActorId);
             if (leaseMarker is null)
                 return Task.FromResult<ScriptAuthorityRuntimeLease>(null!);
 
             var context = new ScriptAuthorityProjectionContext
             {
-                ProjectionId = $"{rootEntityId}:authority",
-                RootActorId = rootEntityId,
+                RootActorId = request.RootActorId,
+                ProjectionKind = request.ProjectionKind,
             };
 
             return Task.FromResult(new ScriptAuthorityRuntimeLease(context));
         }
     }
 
-    private sealed class StubReleaseService : IProjectionPortReleaseService<ScriptAuthorityRuntimeLease>
+    private sealed class StubReleaseService : IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease>
     {
         public Task ReleaseIfIdleAsync(ScriptAuthorityRuntimeLease runtimeLease, CancellationToken ct = default) =>
             Task.CompletedTask;
-    }
-
-    private sealed class StubSinkSubscriptionManager
-        : IEventSinkProjectionSubscriptionManager<ScriptAuthorityRuntimeLease, EventEnvelope>
-    {
-        public Task AttachOrReplaceAsync(
-            ScriptAuthorityRuntimeLease lease,
-            IEventSink<EventEnvelope> sink,
-            Func<EventEnvelope, ValueTask> handler,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task DetachAsync(
-            ScriptAuthorityRuntimeLease lease,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class StubLiveForwarder
-        : IEventSinkProjectionLiveForwarder<ScriptAuthorityRuntimeLease, EventEnvelope>
-    {
-        public ValueTask ForwardAsync(
-            ScriptAuthorityRuntimeLease lease,
-            IEventSink<EventEnvelope> sink,
-            EventEnvelope evt,
-            CancellationToken ct = default) =>
-            ValueTask.CompletedTask;
     }
 }

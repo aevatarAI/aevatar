@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Metadata;
@@ -32,7 +33,10 @@ public sealed class ServiceProjectionInfrastructureTests
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             });
-        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(activationService);
+        IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(
+            new ServiceProjectionOptions(),
+            activationService,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("actor-1");
@@ -50,13 +54,48 @@ public sealed class ServiceProjectionInfrastructureTests
                 RootActorId = rootActorId,
                 ProjectionKind = projectionName,
             });
-        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(activationService);
+        IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(
+            new ServiceProjectionOptions(),
+            activationService,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(" ");
         await service.EnsureProjectionAsync("actor-2");
 
         activationService.Calls.Should().ContainSingle();
         activationService.Calls[0].Should().Be(("actor-2", "service-revisions"));
+    }
+
+    [Fact]
+    public async Task ProjectionPorts_ShouldSkipActivation_WhenDisabled()
+    {
+        var catalogActivation = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
+            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+            });
+        var revisionActivation = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
+            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+            });
+        var disabledOptions = new ServiceProjectionOptions { Enabled = false };
+        IServiceCatalogProjectionPort catalogPort = new ServiceCatalogProjectionPort(
+            disabledOptions,
+            catalogActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
+        IServiceRevisionCatalogProjectionPort revisionPort = new ServiceRevisionCatalogProjectionPort(
+            disabledOptions,
+            revisionActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
+
+        await catalogPort.EnsureProjectionAsync("actor-1");
+        await revisionPort.EnsureProjectionAsync("actor-2");
+
+        catalogActivation.Calls.Should().BeEmpty();
+        revisionActivation.Calls.Should().BeEmpty();
     }
 
     [Fact]
