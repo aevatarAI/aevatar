@@ -18,6 +18,7 @@ public class WorkflowGenerateOrchestratorTests
             "name: repaired\nsteps:\n  - id: only_step\n    type: llm_call"
         ]);
         var prompts = new List<string>();
+        var progress = new List<WorkflowGenerateProgress>();
 
         var result = await orchestrator.GenerateAsync(
             new WorkflowGenerateRequest(
@@ -32,6 +33,12 @@ public class WorkflowGenerateOrchestratorTests
                 prompts.Add(prompt);
                 return Task.FromResult<string?>(responses.Dequeue());
             },
+            (update, ct) =>
+            {
+                _ = ct;
+                progress.Add(update);
+                return Task.CompletedTask;
+            },
             CancellationToken.None);
 
         result.Attempts.Should().Be(2);
@@ -40,6 +47,13 @@ public class WorkflowGenerateOrchestratorTests
         prompts.Should().HaveCount(2);
         prompts[1].Should().Contain("Validation findings:");
         prompts[1].Should().Contain("missing_step");
+        progress.Select(item => item.Stage).Should().ContainInOrder(
+            WorkflowGenerateProgressStage.GeneratingDraft,
+            WorkflowGenerateProgressStage.ValidatingDraft,
+            WorkflowGenerateProgressStage.RepairingDraft,
+            WorkflowGenerateProgressStage.GeneratingDraft,
+            WorkflowGenerateProgressStage.ValidatingDraft,
+            WorkflowGenerateProgressStage.Completed);
     }
 
     [Fact]
@@ -60,6 +74,7 @@ public class WorkflowGenerateOrchestratorTests
                 _ = ct;
                 return Task.FromResult<string?>("not yaml at all");
             },
+            null,
             CancellationToken.None);
 
         await act.Should()

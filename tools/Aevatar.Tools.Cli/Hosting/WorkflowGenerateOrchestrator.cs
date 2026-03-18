@@ -17,6 +17,21 @@ internal sealed record WorkflowGenerateResult(
     int Attempts,
     IReadOnlyList<ValidationFinding> Findings);
 
+internal enum WorkflowGenerateProgressStage
+{
+    Starting,
+    Queued,
+    GeneratingDraft,
+    ValidatingDraft,
+    RepairingDraft,
+    Completed,
+}
+
+internal sealed record WorkflowGenerateProgress(
+    WorkflowGenerateProgressStage Stage,
+    int Attempt,
+    string Message);
+
 internal sealed class WorkflowGenerateOrchestrator
 {
     private const int MaxAttempts = 3;
@@ -34,6 +49,7 @@ internal sealed class WorkflowGenerateOrchestrator
     public async Task<WorkflowGenerateResult> GenerateAsync(
         WorkflowGenerateRequest request,
         Func<string, IReadOnlyDictionary<string, string>?, CancellationToken, Task<string?>> generateTurnAsync,
+        Func<WorkflowGenerateProgress, CancellationToken, Task>? onProgress,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -50,6 +66,15 @@ internal sealed class WorkflowGenerateOrchestrator
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
+            if (onProgress != null)
+            {
+                await onProgress(
+                    new WorkflowGenerateProgress(
+                        WorkflowGenerateProgressStage.GeneratingDraft,
+                        attempt,
+                        $"Generating workflow draft (attempt {attempt}/{MaxAttempts})..."),
+                    ct);
+            }
 
             var prompt = attempt == 1
                 ? BuildInitialPrompt(normalizedPrompt, currentYaml)
@@ -70,6 +95,15 @@ internal sealed class WorkflowGenerateOrchestrator
             }
 
             lastCandidate = candidateYaml;
+            if (onProgress != null)
+            {
+                await onProgress(
+                    new WorkflowGenerateProgress(
+                        WorkflowGenerateProgressStage.ValidatingDraft,
+                        attempt,
+                        $"Validating generated YAML (attempt {attempt}/{MaxAttempts})..."),
+                    ct);
+            }
             var parse = _editorService.ParseYaml(new ParseYamlRequest(candidateYaml, request.AvailableWorkflowNames));
             if (parse.Document == null || HasErrors(parse.Findings))
             {
@@ -83,6 +117,15 @@ internal sealed class WorkflowGenerateOrchestrator
                             "Return a complete workflow YAML document.",
                             "parse_failed")
                     ];
+                if (onProgress != null && attempt < MaxAttempts)
+                {
+                    await onProgress(
+                        new WorkflowGenerateProgress(
+                            WorkflowGenerateProgressStage.RepairingDraft,
+                            attempt,
+                            BuildRepairStatusMessage(lastFindings, attempt)),
+                        ct);
+                }
                 continue;
             }
 
@@ -93,7 +136,26 @@ internal sealed class WorkflowGenerateOrchestrator
             {
                 lastCandidate = normalized.Yaml;
                 lastFindings = normalized.Findings;
+                if (onProgress != null && attempt < MaxAttempts)
+                {
+                    await onProgress(
+                        new WorkflowGenerateProgress(
+                            WorkflowGenerateProgressStage.RepairingDraft,
+                            attempt,
+                            BuildRepairStatusMessage(lastFindings, attempt)),
+                        ct);
+                }
                 continue;
+            }
+
+            if (onProgress != null)
+            {
+                await onProgress(
+                    new WorkflowGenerateProgress(
+                        WorkflowGenerateProgressStage.Completed,
+                        attempt,
+                        "Workflow YAML validated and ready."),
+                    ct);
             }
 
             return new WorkflowGenerateResult(normalized.Yaml, attempt, normalized.Findings);
@@ -206,5 +268,15 @@ internal sealed class WorkflowGenerateOrchestrator
 
         var details = string.Join("; ", findings.Select(static finding => $"{finding.Path}: {finding.Message}"));
         return $"AI could not produce a valid workflow YAML draft. {details}";
+    }
+
+    private static string BuildRepairStatusMessage(IReadOnlyList<ValidationFinding> findings, int attempt)
+    {
+        var headline = $"Draft {attempt} was invalid. Repairing and retrying...";
+        if (findings.Count == 0)
+            return headline;
+
+        var firstFinding = findings[0];
+        return $"{headline} {firstFinding.Path}: {firstFinding.Message}";
     }
 }

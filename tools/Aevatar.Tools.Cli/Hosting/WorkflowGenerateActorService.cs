@@ -49,9 +49,30 @@ internal sealed class WorkflowGenerateActorService
     public async Task<WorkflowGenerateResult> GenerateAsync(
         WorkflowGenerateRequest request,
         Func<string, CancellationToken, Task>? onReasoning,
+        Func<WorkflowGenerateProgress, CancellationToken, Task>? onProgress,
         CancellationToken ct)
     {
+        if (onProgress != null)
+        {
+            await onProgress(
+                new WorkflowGenerateProgress(
+                    WorkflowGenerateProgressStage.Starting,
+                    0,
+                    "Starting Ask AI workflow generation..."),
+                ct);
+        }
+
         await EnsureInitializedAsync(ct);
+        if (onProgress != null && _gate.CurrentCount == 0)
+        {
+            await onProgress(
+                new WorkflowGenerateProgress(
+                    WorkflowGenerateProgressStage.Queued,
+                    0,
+                    "Another Ask AI request is running. Waiting for the generator..."),
+                ct);
+        }
+
         await _gate.WaitAsync(ct);
         try
         {
@@ -72,6 +93,7 @@ internal sealed class WorkflowGenerateActorService
                     metadata,
                     onReasoning,
                     token),
+                onProgress,
                 ct);
         }
         finally
