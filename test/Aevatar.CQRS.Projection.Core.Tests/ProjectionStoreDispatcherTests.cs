@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -90,6 +91,28 @@ public class ProjectionStoreDispatcherTests
 
         binding.IsEnabled.Should().BeFalse();
         binding.DisabledReason.Should().Contain("not registered");
+    }
+
+    [Fact]
+    public async Task ProjectionDocumentBinding_WhenStoreRegistered_ShouldExposeActiveState_AndForwardWrites()
+    {
+        var writer = new RecordingDocumentWriter();
+        var binding = new ProjectionDocumentStoreBinding<TestReadModel>(writer);
+        var readModel = new TestReadModel
+        {
+            Id = "id-1",
+            Value = "v1",
+        };
+
+        binding.IsEnabled.Should().BeTrue();
+        binding.DisabledReason.Should().Be("Document binding is active.");
+        binding.SinkName.Should().Be("Document");
+
+        var result = await binding.UpsertAsync(readModel);
+
+        result.IsApplied.Should().BeTrue();
+        writer.Upserts.Should().ContainSingle();
+        writer.Upserts[0].Should().BeSameAs(readModel);
     }
 
     [Fact]
@@ -236,6 +259,18 @@ public class ProjectionStoreDispatcherTests
             ct.ThrowIfCancellationRequested();
             LastContext = context;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingDocumentWriter : IProjectionDocumentWriter<TestReadModel>
+    {
+        public List<TestReadModel> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
 

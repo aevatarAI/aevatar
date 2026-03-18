@@ -237,6 +237,36 @@ internal static class ScriptEvolutionIntegrationTestKit
         }
     }
 
+    public static async Task<T> WaitForAsync<T>(
+        Func<CancellationToken, Task<T>> probeAsync,
+        Func<T, bool> isReady,
+        string timeoutMessage,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(probeAsync);
+        ArgumentNullException.ThrowIfNull(isReady);
+        ArgumentException.ThrowIfNullOrWhiteSpace(timeoutMessage);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        try
+        {
+            while (true)
+            {
+                var current = await probeAsync(timeoutCts.Token);
+                if (isReady(current))
+                    return current;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(timeoutMessage);
+        }
+    }
+
     public static async Task<ProjectionGraphSubgraph> WaitForGraphSubgraphAsync(
         IServiceProvider provider,
         string scope,

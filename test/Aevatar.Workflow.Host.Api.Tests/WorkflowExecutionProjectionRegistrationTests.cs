@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -48,30 +49,25 @@ public class WorkflowExecutionProjectionRegistrationTests
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
-        var graphArtifactStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunGraphArtifactDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
-        var graphArtifactDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument>>();
+        var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
-        var graphMaterializer = provider.GetRequiredService<IProjectionGraphMaterializer<WorkflowRunGraphArtifactDocument>>();
-
         currentStateStore.Should().NotBeNull();
         timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
-        graphArtifactStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
         timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
-        graphArtifactDispatcher.Should().NotBeNull();
+        graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle()
             .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
         artifactMaterializers.Should().ContainSingle()
             .Which.Should().BeOfType<WorkflowRunInsightReportArtifactProjector>();
-        graphMaterializer.Should().BeOfType<WorkflowRunGraphArtifactMaterializer>();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -126,17 +122,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowRunGraphArtifactDocumentMetadataProvider_ShouldExposeExpectedDefaults()
-    {
-        var provider = new WorkflowRunGraphArtifactDocumentMetadataProvider();
-
-        provider.Metadata.IndexName.Should().Be("workflow-run-graph-artifacts");
-        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
-        provider.Metadata.Settings.Should().BeEmpty();
-        provider.Metadata.Aliases.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
     {
         var services = new ServiceCollection();
@@ -164,11 +149,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
-            keySelector: document => document.RootActorId,
-            keyFormatter: key => key,
-            defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
@@ -198,14 +178,6 @@ public class WorkflowExecutionProjectionRegistrationTests
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
-            keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunGraphArtifactDocument, string>(
-            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-            },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>>().Metadata,
-            keySelector: document => document.RootActorId,
             keyFormatter: key => key);
     }
 

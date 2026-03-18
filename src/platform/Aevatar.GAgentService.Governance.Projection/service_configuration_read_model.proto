@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.governance.projection.readmodels;
+
+option csharp_namespace = "Aevatar.GAgentService.Governance.Projection.ReadModels";
+
+import "google/protobuf/timestamp.proto";
+
+message ServiceConfigurationReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  ServiceIdentityReadModel identity_value = 5;
+  google.protobuf.Timestamp updated_at_utc_value = 6;
+  repeated ServiceBindingReadModel binding_entries = 7;
+  repeated ServiceEndpointExposureReadModel endpoint_entries = 8;
+  repeated ServicePolicyReadModel policy_entries = 9;
+}
+
+message ServiceIdentityReadModel {
+  string tenant_id = 1;
+  string app_id = 2;
+  string namespace = 3;
+  string service_id = 4;
+}
+
+message ServiceBindingReadModel {
+  string binding_id = 1;
+  string display_name = 2;
+  int32 binding_kind_value = 3;
+  repeated string policy_id_entries = 4;
+  bool retired = 5;
+  BoundServiceReferenceReadModel service_ref = 6;
+  BoundConnectorReferenceReadModel connector_ref = 7;
+  BoundSecretReferenceReadModel secret_ref = 8;
+}
+
+message BoundServiceReferenceReadModel {
+  ServiceIdentityReadModel identity = 1;
+  string endpoint_id = 2;
+}
+
+message BoundConnectorReferenceReadModel {
+  string connector_type = 1;
+  string connector_id = 2;
+}
+
+message BoundSecretReferenceReadModel {
+  string secret_name = 1;
+}
+
+message ServiceEndpointExposureReadModel {
+  string endpoint_id = 1;
+  string display_name = 2;
+  int32 kind_value = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+  int32 exposure_kind_value = 7;
+  repeated string policy_id_entries = 8;
+}
+
+message ServicePolicyReadModel {
+  string policy_id = 1;
+  string display_name = 2;
+  repeated string activation_required_binding_id_entries = 3;
+  repeated string invoke_allowed_caller_service_key_entries = 4;
+  bool invoke_requires_active_deployment = 5;
+  bool retired = 6;
+}

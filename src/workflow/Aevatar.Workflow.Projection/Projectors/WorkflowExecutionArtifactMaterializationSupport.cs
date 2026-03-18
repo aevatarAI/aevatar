@@ -5,11 +5,91 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection.ReadModels;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
 internal static class WorkflowExecutionArtifactMaterializationSupport
 {
+    private delegate void ObservedPayloadHandler(
+        WorkflowRunInsightReportDocument readModel,
+        Google.Protobuf.WellKnownTypes.Any payload,
+        DateTimeOffset observedAt);
+
+    private static readonly IReadOnlyDictionary<string, ObservedPayloadHandler> ObservedPayloadHandlers =
+        new Dictionary<string, ObservedPayloadHandler>(StringComparer.Ordinal)
+        {
+            [BuildTypeUrl(WorkflowRunExecutionStartedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowRunExecutionStarted(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowRunExecutionStartedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(StepRequestEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyStepRequest(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<StepRequestEvent>(),
+                    observedAt),
+            [BuildTypeUrl(StepCompletedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyStepCompleted(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<StepCompletedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowSuspendedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowSuspended(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowSuspendedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WaitingForSignalEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWaitingForSignal(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WaitingForSignalEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowSignalBufferedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowSignalBuffered(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowSignalBufferedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowRoleActorLinkedEvent.Descriptor)] = static (readModel, payload, _) =>
+                ApplyWorkflowRoleActorLinked(
+                    readModel,
+                    payload.Unpack<WorkflowRoleActorLinkedEvent>()),
+            [BuildTypeUrl(SubWorkflowBindingUpsertedEvent.Descriptor)] = static (readModel, payload, _) =>
+                ApplySubWorkflowBindingUpserted(
+                    readModel,
+                    payload.Unpack<SubWorkflowBindingUpsertedEvent>()),
+            [BuildTypeUrl(WorkflowRoleReplyRecordedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowRoleReplyRecorded(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowRoleReplyRecordedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowCompletedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowCompleted(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowCompletedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowStopped(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowStoppedEvent>(),
+                    observedAt),
+            [BuildTypeUrl(WorkflowRunStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowRunStopped(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowRunStoppedEvent>(),
+                    observedAt),
+        };
+
     public static bool TryUnpackRootStateEnvelope(
         EventEnvelope envelope,
         out StateEvent? stateEvent,
@@ -100,38 +180,16 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             return;
         }
 
-        if (payload.Is(WorkflowRunExecutionStartedEvent.Descriptor))
-            ApplyWorkflowRunExecutionStarted(readModel, payload.Unpack<WorkflowRunExecutionStartedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(StepRequestEvent.Descriptor))
-            ApplyStepRequest(readModel, payload.Unpack<StepRequestEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(StepCompletedEvent.Descriptor))
-            ApplyStepCompleted(readModel, payload.Unpack<StepCompletedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowSuspendedEvent.Descriptor))
-            ApplyWorkflowSuspended(readModel, payload.Unpack<WorkflowSuspendedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WaitingForSignalEvent.Descriptor))
-            ApplyWaitingForSignal(readModel, payload.Unpack<WaitingForSignalEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowSignalBufferedEvent.Descriptor))
-            ApplyWorkflowSignalBuffered(readModel, payload.Unpack<WorkflowSignalBufferedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowRoleActorLinkedEvent.Descriptor))
-            ApplyRoleActorLinked(readModel, payload.Unpack<WorkflowRoleActorLinkedEvent>());
-        else if (payload.Is(SubWorkflowBindingUpsertedEvent.Descriptor))
-            ApplySubWorkflowBinding(readModel, payload.Unpack<SubWorkflowBindingUpsertedEvent>());
-        else if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
-            ApplyWorkflowRoleReplyRecorded(readModel, payload.Unpack<WorkflowRoleReplyRecordedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowCompletedEvent.Descriptor))
-            ApplyWorkflowCompleted(readModel, payload.Unpack<WorkflowCompletedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowStoppedEvent.Descriptor))
-            ApplyWorkflowStopped(readModel, payload.Unpack<WorkflowStoppedEvent>(), payload.TypeUrl, observedAt);
-        else if (payload.Is(WorkflowRunStoppedEvent.Descriptor))
-            ApplyWorkflowRunStopped(readModel, payload.Unpack<WorkflowRunStoppedEvent>(), payload.TypeUrl, observedAt);
+        if (ObservedPayloadHandlers.TryGetValue(payload.TypeUrl ?? string.Empty, out var handler))
+            handler(readModel, payload, observedAt);
 
         RefreshSummary(readModel);
     }
 
     private static void ApplyWorkflowRunExecutionStarted(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowRunExecutionStartedEvent evt,
         string eventType,
+        WorkflowRunExecutionStartedEvent evt,
         DateTimeOffset observedAt)
     {
         readModel.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? readModel.WorkflowName : evt.WorkflowName;
@@ -152,8 +210,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyStepRequest(
         WorkflowRunInsightReportDocument readModel,
-        StepRequestEvent evt,
         string eventType,
+        StepRequestEvent evt,
         DateTimeOffset observedAt)
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
@@ -176,8 +234,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyStepCompleted(
         WorkflowRunInsightReportDocument readModel,
-        StepCompletedEvent evt,
         string eventType,
+        StepCompletedEvent evt,
         DateTimeOffset observedAt)
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
@@ -206,8 +264,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowSuspended(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowSuspendedEvent evt,
         string eventType,
+        WorkflowSuspendedEvent evt,
         DateTimeOffset observedAt)
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
@@ -230,8 +288,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWaitingForSignal(
         WorkflowRunInsightReportDocument readModel,
-        WaitingForSignalEvent evt,
         string eventType,
+        WaitingForSignalEvent evt,
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
@@ -253,8 +311,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowSignalBuffered(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowSignalBufferedEvent evt,
         string eventType,
+        WorkflowSignalBufferedEvent evt,
         DateTimeOffset observedAt)
     {
         AddTimeline(
@@ -272,14 +330,14 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             });
     }
 
-    private static void ApplyRoleActorLinked(
+    private static void ApplyWorkflowRoleActorLinked(
         WorkflowRunInsightReportDocument readModel,
         WorkflowRoleActorLinkedEvent evt)
     {
         UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
     }
 
-    private static void ApplySubWorkflowBinding(
+    private static void ApplySubWorkflowBindingUpserted(
         WorkflowRunInsightReportDocument readModel,
         SubWorkflowBindingUpsertedEvent evt)
     {
@@ -288,8 +346,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowRoleReplyRecorded(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowRoleReplyRecordedEvent evt,
         string eventType,
+        WorkflowRoleReplyRecordedEvent evt,
         DateTimeOffset observedAt)
     {
         var roleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId;
@@ -335,8 +393,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowCompleted(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowCompletedEvent evt,
         string eventType,
+        WorkflowCompletedEvent evt,
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = evt.Success
@@ -360,8 +418,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowStopped(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowStoppedEvent evt,
         string eventType,
+        WorkflowStoppedEvent evt,
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
@@ -384,8 +442,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static void ApplyWorkflowRunStopped(
         WorkflowRunInsightReportDocument readModel,
-        WorkflowRunStoppedEvent evt,
         string eventType,
+        WorkflowRunStoppedEvent evt,
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
@@ -456,6 +514,12 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         };
         steps.Add(existing);
         return existing;
+    }
+
+    private static string BuildTypeUrl(MessageDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return "type.googleapis.com/" + descriptor.FullName;
     }
 
     private static void UpsertTopology(

@@ -48,6 +48,62 @@ public sealed partial class Neo4jProjectionGraphStore
             config.WithConnectionTimeout(TimeSpan.FromMilliseconds(Math.Max(1000, options.RequestTimeoutMs))));
     }
 
+    public async Task ReplaceOwnerGraphAsync(
+        ProjectionOwnedGraph graph,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ct.ThrowIfCancellationRequested();
+
+        var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(graph.Scope);
+        var ownerId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(graph.OwnerId);
+        if (scope.Length == 0 || ownerId.Length == 0)
+            throw new InvalidOperationException("Owned graph requires non-empty scope and ownerId.");
+
+        var nodes = graph.Nodes
+            .Select(node => new Dictionary<string, object?>
+            {
+                ["nodeId"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(node.NodeId),
+                ["nodeType"] = NormalizeNodeType(node.NodeType),
+                ["propertiesJson"] = SerializeProperties(node.Properties),
+                ["updatedAtEpochMs"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeTimestamp(node.UpdatedAt),
+                ["projectionManaged"] = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionManaged(node.Properties),
+                ["projectionOwnerId"] = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionOwnerId(node.Properties),
+            })
+            .Where(node => ((string?)node["nodeId"])?.Length > 0)
+            .ToArray();
+        var edges = graph.Edges
+            .Select(edge => new Dictionary<string, object?>
+            {
+                ["edgeId"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.EdgeId),
+                ["fromNodeId"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.FromNodeId),
+                ["toNodeId"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.ToNodeId),
+                ["relationType"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(edge.EdgeType),
+                ["propertiesJson"] = SerializeProperties(edge.Properties),
+                ["updatedAtEpochMs"] = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeTimestamp(edge.UpdatedAt),
+                ["projectionManaged"] = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionManaged(edge.Properties),
+                ["projectionOwnerId"] = Neo4jProjectionGraphStoreNormalizationSupport.ResolveProjectionOwnerId(edge.Properties),
+            })
+            .Where(edge =>
+                ((string?)edge["edgeId"])?.Length > 0 &&
+                ((string?)edge["fromNodeId"])?.Length > 0 &&
+                ((string?)edge["toNodeId"])?.Length > 0 &&
+                ((string?)edge["relationType"])?.Length > 0)
+            .ToArray();
+
+        await EnsureSchemaAsync(ct);
+        var cypher = Neo4jProjectionGraphStoreCypherSupport.BuildReplaceOwnerGraphCypher(_nodeLabel, _edgeType);
+        var parameters = new Dictionary<string, object?>
+        {
+            ["scope"] = scope,
+            ["ownerId"] = ownerId,
+            ["nodes"] = nodes,
+            ["edges"] = edges,
+            ["targetNodeIds"] = nodes.Select(x => x["nodeId"]).OfType<string>().ToArray(),
+        };
+        await ExecuteWriteTransactionAsync(cypher, parameters, ct);
+    }
+
     public async Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(node);
@@ -332,6 +388,12 @@ public sealed partial class Neo4jProjectionGraphStore
     {
         _schemaLock.Dispose();
         await _driver.DisposeAsync();
+    }
+
+    private static string NormalizeNodeType(string? value)
+    {
+        var normalized = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(value ?? string.Empty);
+        return normalized.Length == 0 ? "Unknown" : normalized;
     }
 
 }

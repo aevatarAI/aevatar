@@ -3,28 +3,44 @@ using System.Text;
 
 namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
-public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
+internal sealed class ElasticsearchIndexLifecycleManager : IDisposable
 {
-    private async Task EnsureIndexAsync(
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly Lock _stateGate = new();
+    private readonly HashSet<string> _initializedIndices = new(StringComparer.Ordinal);
+    private readonly HttpClient _httpClient;
+    private readonly bool _autoCreate;
+
+    public ElasticsearchIndexLifecycleManager(HttpClient httpClient, bool autoCreate)
+    {
+        _httpClient = httpClient;
+        _autoCreate = autoCreate;
+    }
+
+    public async Task EnsureIndexAsync(
         string indexName,
         DocumentIndexMetadata metadata,
         CancellationToken ct)
     {
-        if (!_autoCreateIndex)
+        if (!_autoCreate)
             return;
 
-        await _indexInitializationLock.WaitAsync(ct);
+        lock (_stateGate)
+        {
+            if (_initializedIndices.Contains(indexName))
+                return;
+        }
+
+        await _initLock.WaitAsync(ct);
         try
         {
-            lock (_dynamicIndexStateGate)
+            lock (_stateGate)
             {
                 if (_initializedIndices.Contains(indexName))
                     return;
             }
 
-            var payload = ElasticsearchProjectionDocumentStorePayloadSupport.BuildIndexInitializationPayload(
-                metadata,
-                _jsonOptions);
+            var payload = ElasticsearchProjectionDocumentStorePayloadSupport.BuildIndexInitializationPayload(metadata);
             using var request = new HttpRequestMessage(HttpMethod.Put, indexName)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
@@ -32,7 +48,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             using var response = await _httpClient.SendAsync(request, ct);
             if (response.IsSuccessStatusCode)
             {
-                MarkIndexInitialized(indexName);
+                MarkInitialized(indexName);
                 return;
             }
 
@@ -40,7 +56,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             if (response.StatusCode == HttpStatusCode.BadRequest &&
                 responsePayload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
             {
-                MarkIndexInitialized(indexName);
+                MarkInitialized(indexName);
                 return;
             }
 
@@ -49,13 +65,15 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
         }
         finally
         {
-            _indexInitializationLock.Release();
+            _initLock.Release();
         }
     }
 
-    private void MarkIndexInitialized(string indexName)
+    private void MarkInitialized(string indexName)
     {
-        lock (_dynamicIndexStateGate)
+        lock (_stateGate)
             _initializedIndices.Add(indexName);
     }
+
+    public void Dispose() => _initLock.Dispose();
 }

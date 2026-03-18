@@ -301,7 +301,7 @@ public class ClaimReplayTests
         public Task<ProjectionWriteResult> UpsertAsync(ScriptReadModelDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            _store[readModel.Id] = readModel.DeepClone();
+            _store[readModel.Id] = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
@@ -309,7 +309,7 @@ public class ClaimReplayTests
         {
             ct.ThrowIfCancellationRequested();
             _store.TryGetValue(key, out var readModel);
-            return Task.FromResult(readModel?.DeepClone());
+            return Task.FromResult(readModel?.Clone());
         }
 
         public Task<ProjectionDocumentQueryResult<ScriptReadModelDocument>> QueryAsync(
@@ -321,7 +321,7 @@ public class ClaimReplayTests
             {
                 Items = _store.Values
                     .Take(query.Take <= 0 ? 50 : query.Take)
-                    .Select(static x => x.DeepClone())
+                    .Select(static x => x.Clone())
                     .ToArray(),
             });
         }

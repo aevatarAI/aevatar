@@ -7,7 +7,7 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceReadModelCloneTests
 {
     [Fact]
-    public void ServiceCatalogReadModel_DeepClone_ShouldCopyNestedEndpoints()
+    public void ServiceCatalogReadModel_Clone_ShouldCopyNestedEndpoints()
     {
         var source = new ServiceCatalogReadModel
         {
@@ -22,14 +22,14 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Endpoints[0].DisplayName = "changed";
 
         source.Endpoints[0].DisplayName.Should().Be("run");
     }
 
     [Fact]
-    public void ServiceRevisionCatalogReadModel_DeepClone_ShouldCopyNestedRevisionEntries()
+    public void ServiceRevisionCatalogReadModel_Clone_ShouldCopyNestedRevisionEntries()
     {
         var source = new ServiceRevisionCatalogReadModel
         {
@@ -51,14 +51,14 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Revisions[0].Endpoints[0].DisplayName = "changed";
 
         source.Revisions[0].Endpoints[0].DisplayName.Should().Be("run");
     }
 
     [Fact]
-    public void ServiceDeploymentCatalogReadModel_DeepClone_ShouldCopyNestedDeployments()
+    public void ServiceDeploymentCatalogReadModel_Clone_ShouldCopyNestedDeployments()
     {
         var source = new ServiceDeploymentCatalogReadModel
         {
@@ -74,14 +74,14 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Deployments[0].RevisionId = "changed";
 
         source.Deployments[0].RevisionId.Should().Be("r1");
     }
 
     [Fact]
-    public void ServiceServingSetReadModel_DeepClone_ShouldCopyNestedTargets()
+    public void ServiceServingSetReadModel_Clone_ShouldCopyNestedTargets()
     {
         var source = new ServiceServingSetReadModel
         {
@@ -96,14 +96,14 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Targets[0].EnabledEndpointIds[0] = "changed";
 
         source.Targets[0].EnabledEndpointIds.Should().Equal("run");
     }
 
     [Fact]
-    public void ServiceRolloutReadModel_DeepClone_ShouldCopyStagesAndBaselineTargets()
+    public void ServiceRolloutReadModel_Clone_ShouldCopyStagesAndBaselineTargets()
     {
         var source = new ServiceRolloutReadModel
         {
@@ -131,7 +131,7 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Stages[0].Targets[0].DeploymentId = "changed-stage";
         clone.BaselineTargets[0].DeploymentId = "changed-baseline";
 
@@ -140,7 +140,7 @@ public sealed class ServiceReadModelCloneTests
     }
 
     [Fact]
-    public void ServiceTrafficViewReadModel_DeepClone_ShouldCopyEndpointsAndTargets()
+    public void ServiceTrafficViewReadModel_Clone_ShouldCopyEndpointsAndTargets()
     {
         var source = new ServiceTrafficViewReadModel
         {
@@ -161,14 +161,14 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Endpoints[0].Targets[0].DeploymentId = "changed";
 
         source.Endpoints[0].Targets[0].DeploymentId.Should().Be("dep-1");
     }
 
     [Fact]
-    public void ServiceConfigurationReadModel_DeepClone_ShouldCopyBindingsPoliciesAndEndpoints()
+    public void ServiceConfigurationReadModel_Clone_ShouldCopyBindingsPoliciesAndEndpoints()
     {
         var source = new ServiceConfigurationReadModel
         {
@@ -204,7 +204,7 @@ public sealed class ServiceReadModelCloneTests
             },
         };
 
-        var clone = source.DeepClone();
+        var clone = source.Clone();
         clone.Bindings[0].PolicyIds[0] = "changed-binding-policy";
         clone.Bindings[0].ConnectorRef!.ConnectorId = "changed-connector";
         clone.Endpoints[0].PolicyIds[0] = "changed-endpoint-policy";

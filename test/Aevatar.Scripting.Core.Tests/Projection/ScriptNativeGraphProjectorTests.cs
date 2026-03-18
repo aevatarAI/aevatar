@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -21,10 +22,10 @@ public sealed class ScriptNativeGraphProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldMaterializeRelationsIntoNativeGraphReadModel()
     {
-        var dispatcher = new RecordingNativeGraphDispatcher();
+        var graphWriter = new RecordingNativeGraphWriter();
         IProjectionGraphMaterializer<ScriptNativeGraphReadModel> graphMaterializer = new ScriptNativeGraphMaterializer();
         var projector = new ScriptNativeGraphProjector(
-            dispatcher,
+            graphWriter,
             new ScriptNativeGraphMaterializer());
         var context = new ScriptExecutionMaterializationContext
         {
@@ -77,8 +78,8 @@ public sealed class ScriptNativeGraphProjectorTests
                     "claim-schema")),
             CancellationToken.None);
 
-        dispatcher.LastUpsert.Should().NotBeNull();
-        var graphReadModel = dispatcher.LastUpsert!;
+        graphWriter.LastUpsert.Should().NotBeNull();
+        var graphReadModel = graphWriter.LastUpsert!;
         var graph = graphMaterializer.Materialize(graphReadModel);
         graphReadModel.SchemaId.Should().Be("claim_case");
         graphReadModel.GraphScope.Should().Be("script-native-claim_case");
@@ -90,6 +91,149 @@ public sealed class ScriptNativeGraphProjectorTests
             x.FromNodeId == "script:claim_case:claim-runtime" &&
             x.ToNodeId == "ref:policy:POLICY-B" &&
             x.EdgeType == "rel_policy");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreInvalidEnvelope_AndCommittedEnvelopeWithUnexpectedPayload()
+    {
+        var graphWriter = new RecordingNativeGraphWriter();
+        var projector = new ScriptNativeGraphProjector(
+            graphWriter,
+            new ScriptNativeGraphMaterializer());
+        var context = new ScriptExecutionMaterializationContext
+        {
+            RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
+        };
+
+        await projector.ProjectAsync(context, new EventEnvelope());
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "outer-unexpected",
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-unexpected",
+                        EventData = Any.Pack(new StringValue { Value = "unexpected" }),
+                    },
+                    StateRoot = Any.Pack(new ScriptBehaviorState()),
+                }),
+            });
+
+        graphWriter.LastUpsert.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCommittedFactsWithoutNativeGraph()
+    {
+        var graphWriter = new RecordingNativeGraphWriter();
+        var projector = new ScriptNativeGraphProjector(
+            graphWriter,
+            new ScriptNativeGraphMaterializer());
+        var context = new ScriptExecutionMaterializationContext
+        {
+            RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "claim-runtime",
+                    EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
+                    DomainEventPayload = Any.Pack(new ClaimDecisionRecorded()),
+                    ReadModelTypeUrl = Any.Pack(new ClaimReadModel()).TypeUrl,
+                    ReadModelPayload = Any.Pack(new ClaimReadModel()),
+                    StateVersion = 4,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T01:00:00Z").ToUnixTimeMilliseconds(),
+                },
+                ScriptCommittedEnvelopeFactory.CreateState(
+                    "definition-1",
+                    "claim_orchestrator",
+                    "rev-claim-1",
+                    new ClaimState(),
+                    4,
+                    Any.Pack(new ClaimReadModel()).TypeUrl,
+                    ClaimScriptSources.DecisionBehavior,
+                    ClaimScriptSources.DecisionBehaviorHash,
+                    ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+                    "3",
+                    "claim-schema")));
+
+        graphWriter.LastUpsert.Should().BeNull();
+    }
+
+    [Fact]
+    public void Ctor_ShouldThrow_WhenDependenciesMissing()
+    {
+        Action noWriter = () => new ScriptNativeGraphProjector(null!, new ScriptNativeGraphMaterializer());
+        Action noMaterializer = () => new ScriptNativeGraphProjector(new RecordingNativeGraphWriter(), null!);
+
+        noWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
+        noMaterializer.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("materializer");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldFallbackToFactTimestamp_WhenEnvelopeTimestampIsMissing()
+    {
+        var graphWriter = new RecordingNativeGraphWriter();
+        var projector = new ScriptNativeGraphProjector(
+            graphWriter,
+            new ScriptNativeGraphMaterializer());
+        var context = new ScriptExecutionMaterializationContext
+        {
+            RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
+        };
+        var readModel = BuildClaimReadModel();
+        var occurredAt = DateTimeOffset.Parse("2026-03-14T02:00:00Z");
+
+        var fact = new ScriptDomainFactCommitted
+        {
+            ActorId = "claim-runtime",
+            DefinitionActorId = "definition-1",
+            ScriptId = "claim_orchestrator",
+            Revision = "rev-claim-1",
+            RunId = "run-claim-1",
+            EventType = Any.Pack(new ClaimDecisionRecorded()).TypeUrl,
+            DomainEventPayload = Any.Pack(new ClaimDecisionRecorded { Current = readModel.Clone() }),
+            ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+            ReadModelPayload = Any.Pack(readModel),
+            StateVersion = 5,
+            OccurredAtUnixTimeMs = occurredAt.ToUnixTimeMilliseconds(),
+            NativeGraph = BuildNativeGraphProjection(readModel),
+        };
+
+        var envelope = ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
+            fact,
+            ScriptCommittedEnvelopeFactory.CreateState(
+                "definition-1",
+                "claim_orchestrator",
+                "rev-claim-1",
+                new ClaimState
+                {
+                    CaseId = readModel.CaseId,
+                },
+                5,
+                Any.Pack(readModel).TypeUrl,
+                ClaimScriptSources.DecisionBehavior,
+                ClaimScriptSources.DecisionBehaviorHash,
+                ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
+                "3",
+                "claim-schema"),
+            "evt-graph-1",
+            occurredAt);
+        envelope.Timestamp = null;
+
+        await projector.ProjectAsync(context, envelope);
+
+        graphWriter.LastUpsert.Should().NotBeNull();
+        graphWriter.LastUpsert!.UpdatedAt.Should().Be(occurredAt);
     }
 
     private static ClaimReadModel BuildClaimReadModel()
@@ -144,15 +288,15 @@ public sealed class ScriptNativeGraphProjectorTests
             "evt-graph-1",
             DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
 
-    private sealed class RecordingNativeGraphDispatcher : IProjectionWriteDispatcher<ScriptNativeGraphReadModel>
+    private sealed class RecordingNativeGraphWriter : IProjectionGraphWriter<ScriptNativeGraphReadModel>
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
-        public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
+        public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.DeepClone();
-            return Task.FromResult(ProjectionWriteResult.Applied());
+            LastUpsert = readModel.Clone();
+            return Task.CompletedTask;
         }
     }
 }

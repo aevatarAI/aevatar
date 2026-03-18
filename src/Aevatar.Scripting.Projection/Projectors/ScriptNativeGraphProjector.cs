@@ -10,14 +10,14 @@ namespace Aevatar.Scripting.Projection.Projectors;
 public sealed class ScriptNativeGraphProjector
     : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
-    private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel> _graphWriteDispatcher;
+    private readonly IProjectionGraphWriter<ScriptNativeGraphReadModel> _graphWriter;
     private readonly IScriptNativeGraphMaterializer _materializer;
 
     public ScriptNativeGraphProjector(
-        IProjectionWriteDispatcher<ScriptNativeGraphReadModel> graphWriteDispatcher,
+        IProjectionGraphWriter<ScriptNativeGraphReadModel> graphWriter,
         IScriptNativeGraphMaterializer materializer)
     {
-        _graphWriteDispatcher = graphWriteDispatcher ?? throw new ArgumentNullException(nameof(graphWriteDispatcher));
+        _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
     }
 
@@ -52,7 +52,7 @@ public sealed class ScriptNativeGraphProjector
             sourceEventId,
             updatedAt,
             fact.NativeGraph);
-        await _graphWriteDispatcher.UpsertAsync(graphReadModel, ct);
+        await _graphWriter.UpsertAsync(graphReadModel, ct);
     }
 
 }

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package aevatar.cqrs.projection.core.tests;
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Core.Tests";
+
+import "google/protobuf/timestamp.proto";
+
+message TestStoreReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string value = 6;
+}
+
+message TestDynamicStoreReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string document_index_scope = 6;
+}
+
+message TestProviderStoreSmokeReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string value = 6;
+  int64 updated_at_epoch_ms = 7;
+}
