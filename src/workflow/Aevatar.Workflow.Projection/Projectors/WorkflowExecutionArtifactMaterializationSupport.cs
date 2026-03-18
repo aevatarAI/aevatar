@@ -101,218 +101,281 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         }
 
         if (payload.Is(WorkflowRunExecutionStartedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowRunExecutionStartedEvent>();
-            readModel.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? readModel.WorkflowName : evt.WorkflowName;
-            readModel.Input = evt.Input ?? string.Empty;
-            if (readModel.StartedAt == default)
-                readModel.StartedAt = observedAt;
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "workflow.start",
-                $"command={readModel.CommandId}",
-                readModel.RootActorId,
-                null,
-                null,
-                payload.TypeUrl,
-                null);
-        }
+            ApplyWorkflowRunExecutionStarted(readModel, payload.Unpack<WorkflowRunExecutionStartedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(StepRequestEvent.Descriptor))
-        {
-            var evt = payload.Unpack<StepRequestEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.StepId = evt.StepId ?? string.Empty;
-            step.StepType = evt.StepType ?? string.Empty;
-            step.TargetRole = evt.TargetRole ?? string.Empty;
-            step.RequestedAt = observedAt;
-            ReplaceMap(step.RequestParameters, evt.Parameters);
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "step.request",
-                $"{evt.StepId} ({evt.StepType})",
-                readModel.RootActorId,
-                evt.StepId,
-                evt.StepType,
-                payload.TypeUrl,
-                evt.Parameters);
-        }
+            ApplyStepRequest(readModel, payload.Unpack<StepRequestEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(StepCompletedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<StepCompletedEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.StepId = evt.StepId ?? string.Empty;
-            step.CompletedAt = observedAt;
-            step.Success = evt.Success;
-            step.OutputPreview = Truncate(evt.Output ?? string.Empty, 240);
-            step.Error = evt.Error ?? string.Empty;
-            step.WorkerId = evt.WorkerId ?? string.Empty;
-            step.NextStepId = evt.NextStepId ?? string.Empty;
-            step.BranchKey = evt.BranchKey ?? string.Empty;
-            step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
-            step.AssignedValue = evt.AssignedValue ?? string.Empty;
-            ReplaceMap(step.CompletionAnnotations, evt.Annotations);
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                evt.Success ? "step.completed" : "step.failed",
-                $"{evt.StepId} ({(evt.Success ? "success" : "failed")})",
-                evt.WorkerId,
-                evt.StepId,
-                step.StepType,
-                payload.TypeUrl,
-                evt.Annotations);
-        }
+            ApplyStepCompleted(readModel, payload.Unpack<StepCompletedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WorkflowSuspendedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowSuspendedEvent>();
-            var step = GetOrCreateStep(readModel.Steps, evt.StepId);
-            step.SuspensionType = evt.SuspensionType ?? string.Empty;
-            step.SuspensionPrompt = evt.Prompt ?? string.Empty;
-            step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
-            step.RequestedVariableName = evt.VariableName ?? string.Empty;
-            readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "workflow.suspended",
-                $"{evt.StepId} ({evt.SuspensionType})",
-                readModel.RootActorId,
-                evt.StepId,
-                step.StepType,
-                payload.TypeUrl,
-                evt.Metadata);
-        }
+            ApplyWorkflowSuspended(readModel, payload.Unpack<WorkflowSuspendedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WaitingForSignalEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WaitingForSignalEvent>();
-            readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "signal.waiting",
-                evt.SignalName ?? string.Empty,
-                readModel.RootActorId,
-                evt.StepId,
-                null,
-                payload.TypeUrl,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["signal_name"] = evt.SignalName ?? string.Empty,
-                    ["timeout_ms"] = evt.TimeoutMs.ToString(),
-                });
-        }
+            ApplyWaitingForSignal(readModel, payload.Unpack<WaitingForSignalEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WorkflowSignalBufferedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowSignalBufferedEvent>();
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "signal.buffered",
-                evt.SignalName ?? string.Empty,
-                readModel.RootActorId,
-                evt.StepId,
-                null,
-                payload.TypeUrl,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["signal_name"] = evt.SignalName ?? string.Empty,
-                });
-        }
+            ApplyWorkflowSignalBuffered(readModel, payload.Unpack<WorkflowSignalBufferedEvent>(), payload.TypeUrl, observedAt);
         else if (payload.Is(WorkflowRoleActorLinkedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowRoleActorLinkedEvent>();
-            UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
-        }
+            ApplyRoleActorLinked(readModel, payload.Unpack<WorkflowRoleActorLinkedEvent>());
         else if (payload.Is(SubWorkflowBindingUpsertedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<SubWorkflowBindingUpsertedEvent>();
-            UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
-        }
+            ApplySubWorkflowBinding(readModel, payload.Unpack<SubWorkflowBindingUpsertedEvent>());
         else if (payload.Is(WorkflowRoleReplyRecordedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowRoleReplyRecordedEvent>();
-            readModel.RoleReplies.Add(new WorkflowExecutionRoleReply
+            ApplyWorkflowRoleReplyRecorded(readModel, payload.Unpack<WorkflowRoleReplyRecordedEvent>(), payload.TypeUrl, observedAt);
+        else if (payload.Is(WorkflowCompletedEvent.Descriptor))
+            ApplyWorkflowCompleted(readModel, payload.Unpack<WorkflowCompletedEvent>(), payload.TypeUrl, observedAt);
+        else if (payload.Is(WorkflowRunStoppedEvent.Descriptor))
+            ApplyWorkflowRunStopped(readModel, payload.Unpack<WorkflowRunStoppedEvent>(), payload.TypeUrl, observedAt);
+
+        RefreshSummary(readModel);
+    }
+
+    private static void ApplyWorkflowRunExecutionStarted(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowRunExecutionStartedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        readModel.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? readModel.WorkflowName : evt.WorkflowName;
+        readModel.Input = evt.Input ?? string.Empty;
+        if (readModel.StartedAt == default)
+            readModel.StartedAt = observedAt;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "workflow.start",
+            $"command={readModel.CommandId}",
+            readModel.RootActorId,
+            null,
+            null,
+            eventType,
+            null);
+    }
+
+    private static void ApplyStepRequest(
+        WorkflowRunInsightReportDocument readModel,
+        StepRequestEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        step.StepId = evt.StepId ?? string.Empty;
+        step.StepType = evt.StepType ?? string.Empty;
+        step.TargetRole = evt.TargetRole ?? string.Empty;
+        step.RequestedAt = observedAt;
+        ReplaceMap(step.RequestParameters, evt.Parameters);
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "step.request",
+            $"{evt.StepId} ({evt.StepType})",
+            readModel.RootActorId,
+            evt.StepId,
+            evt.StepType,
+            eventType,
+            evt.Parameters);
+    }
+
+    private static void ApplyStepCompleted(
+        WorkflowRunInsightReportDocument readModel,
+        StepCompletedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        step.StepId = evt.StepId ?? string.Empty;
+        step.CompletedAt = observedAt;
+        step.Success = evt.Success;
+        step.OutputPreview = Truncate(evt.Output ?? string.Empty, 240);
+        step.Error = evt.Error ?? string.Empty;
+        step.WorkerId = evt.WorkerId ?? string.Empty;
+        step.NextStepId = evt.NextStepId ?? string.Empty;
+        step.BranchKey = evt.BranchKey ?? string.Empty;
+        step.AssignedVariable = evt.AssignedVariable ?? string.Empty;
+        step.AssignedValue = evt.AssignedValue ?? string.Empty;
+        ReplaceMap(step.CompletionAnnotations, evt.Annotations);
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            evt.Success ? "step.completed" : "step.failed",
+            $"{evt.StepId} ({(evt.Success ? "success" : "failed")})",
+            evt.WorkerId,
+            evt.StepId,
+            step.StepType,
+            eventType,
+            evt.Annotations);
+    }
+
+    private static void ApplyWorkflowSuspended(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowSuspendedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        step.SuspensionType = evt.SuspensionType ?? string.Empty;
+        step.SuspensionPrompt = evt.Prompt ?? string.Empty;
+        step.SuspensionTimeoutSeconds = evt.TimeoutSeconds == 0 ? null : evt.TimeoutSeconds;
+        step.RequestedVariableName = evt.VariableName ?? string.Empty;
+        readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "workflow.suspended",
+            $"{evt.StepId} ({evt.SuspensionType})",
+            readModel.RootActorId,
+            evt.StepId,
+            step.StepType,
+            eventType,
+            evt.Metadata);
+    }
+
+    private static void ApplyWaitingForSignal(
+        WorkflowRunInsightReportDocument readModel,
+        WaitingForSignalEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        readModel.CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "signal.waiting",
+            evt.SignalName ?? string.Empty,
+            readModel.RootActorId,
+            evt.StepId,
+            null,
+            eventType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                Timestamp = observedAt,
-                RoleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId,
-                SessionId = evt.SessionId ?? string.Empty,
-                Content = evt.Content ?? string.Empty,
-                ContentLength = (evt.Content ?? string.Empty).Length,
+                ["signal_name"] = evt.SignalName ?? string.Empty,
+                ["timeout_ms"] = evt.TimeoutMs.ToString(),
             });
+    }
+
+    private static void ApplyWorkflowSignalBuffered(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowSignalBufferedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "signal.buffered",
+            evt.SignalName ?? string.Empty,
+            readModel.RootActorId,
+            evt.StepId,
+            null,
+            eventType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["signal_name"] = evt.SignalName ?? string.Empty,
+            });
+    }
+
+    private static void ApplyRoleActorLinked(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowRoleActorLinkedEvent evt)
+    {
+        UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
+    }
+
+    private static void ApplySubWorkflowBinding(
+        WorkflowRunInsightReportDocument readModel,
+        SubWorkflowBindingUpsertedEvent evt)
+    {
+        UpsertTopology(readModel.Topology, readModel.RootActorId, evt.ChildActorId);
+    }
+
+    private static void ApplyWorkflowRoleReplyRecorded(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowRoleReplyRecordedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        var roleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId;
+        readModel.RoleReplies.Add(new WorkflowExecutionRoleReply
+        {
+            Timestamp = observedAt,
+            RoleId = roleId,
+            SessionId = evt.SessionId ?? string.Empty,
+            Content = evt.Content ?? string.Empty,
+            ContentLength = (evt.Content ?? string.Empty).Length,
+        });
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "role.reply",
+            roleId,
+            evt.RoleActorId,
+            null,
+            null,
+            eventType,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["session_id"] = evt.SessionId ?? string.Empty,
+            });
+
+        foreach (var toolCall in evt.ToolCalls)
+        {
             AddTimeline(
                 readModel.Timeline,
                 observedAt,
-                "role.reply",
-                string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId,
+                "tool.call",
+                toolCall.ToolName ?? string.Empty,
                 evt.RoleActorId,
                 null,
                 null,
-                payload.TypeUrl,
+                eventType,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["session_id"] = evt.SessionId ?? string.Empty,
+                    ["call_id"] = toolCall.CallId ?? string.Empty,
                 });
+        }
+    }
 
-            foreach (var toolCall in evt.ToolCalls)
-            {
-                AddTimeline(
-                    readModel.Timeline,
-                    observedAt,
-                    "tool.call",
-                    toolCall.ToolName ?? string.Empty,
-                    evt.RoleActorId,
-                    null,
-                    null,
-                    payload.TypeUrl,
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["call_id"] = toolCall.CallId ?? string.Empty,
-                    });
-            }
-        }
-        else if (payload.Is(WorkflowCompletedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowCompletedEvent>();
-            readModel.CompletionStatus = evt.Success
-                ? WorkflowExecutionCompletionStatus.Completed
-                : WorkflowExecutionCompletionStatus.Failed;
-            readModel.Success = evt.Success;
-            readModel.FinalOutput = evt.Output ?? string.Empty;
-            readModel.FinalError = evt.Error ?? string.Empty;
-            readModel.EndedAt = observedAt;
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                evt.Success ? "workflow.completed" : "workflow.failed",
-                evt.Success ? "completed" : "failed",
-                readModel.RootActorId,
-                null,
-                null,
-                payload.TypeUrl,
-                null);
-        }
-        else if (payload.Is(WorkflowRunStoppedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<WorkflowRunStoppedEvent>();
-            readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
-            if (!string.IsNullOrWhiteSpace(evt.Reason))
-                readModel.FinalError = evt.Reason;
-            readModel.EndedAt = observedAt;
-            AddTimeline(
-                readModel.Timeline,
-                observedAt,
-                "workflow.stopped",
-                evt.Reason ?? "stopped",
-                readModel.RootActorId,
-                null,
-                null,
-                payload.TypeUrl,
-                null);
-        }
+    private static void ApplyWorkflowCompleted(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowCompletedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        readModel.CompletionStatus = evt.Success
+            ? WorkflowExecutionCompletionStatus.Completed
+            : WorkflowExecutionCompletionStatus.Failed;
+        readModel.Success = evt.Success;
+        readModel.FinalOutput = evt.Output ?? string.Empty;
+        readModel.FinalError = evt.Error ?? string.Empty;
+        readModel.EndedAt = observedAt;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            evt.Success ? "workflow.completed" : "workflow.failed",
+            evt.Success ? "completed" : "failed",
+            readModel.RootActorId,
+            null,
+            null,
+            eventType,
+            null);
+    }
 
-        RefreshSummary(readModel);
+    private static void ApplyWorkflowRunStopped(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowRunStoppedEvent evt,
+        string eventType,
+        DateTimeOffset observedAt)
+    {
+        readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            readModel.FinalError = evt.Reason;
+        readModel.EndedAt = observedAt;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "workflow.stopped",
+            evt.Reason ?? "stopped",
+            readModel.RootActorId,
+            null,
+            null,
+            eventType,
+            null);
     }
 
     public static WorkflowRunTimelineDocument BuildTimelineDocument(WorkflowRunInsightReportDocument report)
