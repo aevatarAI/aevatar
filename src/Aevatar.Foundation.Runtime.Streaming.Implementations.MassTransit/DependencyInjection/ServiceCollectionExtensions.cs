@@ -1,4 +1,4 @@
-using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -19,6 +19,9 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton(options));
         services.Replace(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.IStreamProvider, MassTransitStreamProvider>());
+        services.Replace(ServiceDescriptor.Singleton<MassTransitStreamProvider>(sp =>
+            (MassTransitStreamProvider)sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));
+        services.Replace(ServiceDescriptor.Singleton<IActorEventSubscriptionProvider, MassTransitActorEventSubscriptionProvider>());
         services.Replace(ServiceDescriptor.Singleton<IStreamLifecycleManager, MassTransitStreamLifecycleManager>());
         return services;
     }

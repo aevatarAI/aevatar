@@ -232,7 +232,7 @@ internal static class ChatCommandHandler
             }
 
             Directory.CreateDirectory(AevatarPaths.Workflows);
-            var normalizedContent = AppDemoPlaygroundEndpoints.NormalizeWorkflowContentForSave(generatedYaml);
+            var normalizedContent = AppWorkflowYamlFiles.NormalizeContentForSave(generatedYaml);
             await File.WriteAllTextAsync(targetPath, normalizedContent, cancellationToken);
             Console.WriteLine($"Saved workflow YAML: {targetPath}");
             return 0;
@@ -358,7 +358,7 @@ internal static class ChatCommandHandler
     {
         try
         {
-            return AppDemoPlaygroundEndpoints.NormalizeWorkflowSaveFilename(filenameOverride, workflowName);
+            return AppWorkflowYamlFiles.NormalizeSaveFilename(filenameOverride, workflowName);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {

@@ -147,6 +147,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Theory]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunFinished, true, WorkflowProjectionCompletionStatus.Completed)]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunError, true, WorkflowProjectionCompletionStatus.Failed)]
+    [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunStopped, true, WorkflowProjectionCompletionStatus.Stopped)]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.None, false, WorkflowProjectionCompletionStatus.Unknown)]
     public void WorkflowRunCompletionPolicy_ShouldResolveTerminalStatus(
         WorkflowRunEventEnvelope.EventOneofCase eventCase,
@@ -163,6 +164,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             WorkflowRunEventEnvelope.EventOneofCase.RunError => new WorkflowRunEventEnvelope
             {
                 RunError = new WorkflowRunErrorEventPayload(),
+            },
+            WorkflowRunEventEnvelope.EventOneofCase.RunStopped => new WorkflowRunEventEnvelope
+            {
+                RunStopped = new WorkflowRunStoppedEventPayload(),
             },
             _ => new WorkflowRunEventEnvelope(),
         };

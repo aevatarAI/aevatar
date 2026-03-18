@@ -95,16 +95,6 @@ internal static class ChatWebSocketCommandParser
             ? Guid.NewGuid().ToString("N")
             : command.RequestId;
 
-        if (string.IsNullOrWhiteSpace(command.Payload.Prompt))
-        {
-            parseError = new ChatWebSocketCommandParseError(
-                "INVALID_PROMPT",
-                "Prompt is required.",
-                requestId,
-                responseMessageType);
-            return false;
-        }
-
         commandEnvelope = new ChatWebSocketCommandEnvelope(requestId, command.Payload, responseMessageType);
         return true;
     }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Google.Protobuf;
@@ -43,7 +44,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         TReadModel readModel,
         CancellationToken ct)
     {
-        var payload = _formatter.Format(readModel);
+        var payload = SerializePayload(readModel, keyValue);
         var startedAt = DateTimeOffset.UtcNow;
 
         try
@@ -166,6 +167,19 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         {
             return null;
         }
+    }
+
+    private string SerializePayload(TReadModel readModel, string keyValue)
+    {
+        var payload = JsonNode.Parse(_formatter.Format(readModel)) as JsonObject;
+        if (payload == null)
+        {
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' could not be serialized into a JSON object for Elasticsearch persistence.");
+        }
+
+        payload[ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField] = keyValue;
+        return payload.ToJsonString();
     }
 
     private void LogWriteCompleted(string keyValue, DateTimeOffset startedAt)

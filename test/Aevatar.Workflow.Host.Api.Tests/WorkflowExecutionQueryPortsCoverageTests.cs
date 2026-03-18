@@ -348,15 +348,18 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     private static QueryPortHarness CreateHarness(
         WorkflowExecutionProjectionOptions options,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
+        RecordingDocumentReader<WorkflowRunInsightReportDocument>? reportReader = null,
         RecordingDocumentReader<WorkflowRunTimelineDocument>? timelineReader = null,
         RecordingProjectionGraphStore? graphStore = null)
     {
         currentStateReader ??= new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
+        reportReader ??= new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
         timelineReader ??= new RecordingDocumentReader<WorkflowRunTimelineDocument>();
         graphStore ??= new RecordingProjectionGraphStore();
         return new QueryPortHarness(
             new WorkflowExecutionCurrentStateQueryPort(
                 currentStateReader,
+                reportReader,
                 new WorkflowExecutionReadModelMapper(),
                 options),
             new WorkflowExecutionArtifactQueryPort(
@@ -365,6 +368,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 graphStore,
                 options),
             currentStateReader,
+            reportReader,
             timelineReader,
             graphStore);
     }
@@ -373,6 +377,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         IWorkflowExecutionCurrentStateQueryPort CurrentStatePort,
         IWorkflowExecutionArtifactQueryPort ArtifactPort,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
+        RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
         RecordingDocumentReader<WorkflowRunTimelineDocument> TimelineReader,
         RecordingProjectionGraphStore GraphStore);
 

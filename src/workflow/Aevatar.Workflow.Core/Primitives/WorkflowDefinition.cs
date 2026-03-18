@@ -85,7 +85,7 @@ public sealed class WorkflowDefinition
 public sealed class WorkflowRuntimeConfiguration
 {
     /// <summary>
-    /// When true, only the closed-world primitive subset is allowed.
+    /// Compatibility flag preserved in workflow YAML.
     /// </summary>
     public bool ClosedWorldMode { get; init; }
 }

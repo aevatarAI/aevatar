@@ -116,23 +116,15 @@ internal sealed class RecordingProjectionActivationService<TContext>
     }
 }
 
-internal sealed class NoOpProjectionReleaseService<TLease>
+internal sealed class RecordingProjectionReleaseService<TLease>
     : IProjectionMaterializationReleaseService<TLease>
     where TLease : class, IProjectionRuntimeLease
 {
+    public List<TLease> Released { get; } = [];
+
     public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(lease);
-        return Task.CompletedTask;
-    }
-}
-
-internal sealed class NoOpServiceConfigurationReleaseService
-    : IProjectionMaterializationReleaseService<ServiceConfigurationRuntimeLease>
-{
-    public Task ReleaseIfIdleAsync(ServiceConfigurationRuntimeLease lease, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
+        Released.Add(lease);
         return Task.CompletedTask;
     }
 }

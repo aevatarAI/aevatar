@@ -1,4 +1,5 @@
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 
@@ -15,6 +16,7 @@ builder.AddAevatarPlatform(options =>
 {
     options.EnableMakerExtensions = true;
 });
+builder.AddGAgentServiceCapabilityBundle();
 
 var app = builder.Build();
 

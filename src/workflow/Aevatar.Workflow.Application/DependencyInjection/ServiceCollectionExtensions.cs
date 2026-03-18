@@ -90,6 +90,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowSignalCommand>, WorkflowSignalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandTargetResolver<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowStopCommandTargetResolver>();
+        services.TryAddSingleton<ICommandTargetBinder<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, NoOpCommandTargetBinder<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowStopCommand>, WorkflowStopCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<RegistryBackedWorkflowCatalogPort>();
         services.TryAddSingleton<IWorkflowCatalogPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());

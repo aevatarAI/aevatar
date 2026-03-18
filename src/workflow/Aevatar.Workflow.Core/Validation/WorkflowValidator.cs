@@ -37,7 +37,6 @@ public static class WorkflowValidator
         var knownCanonicalStepTypes = options.RequireKnownStepTypes
             ? WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(options.KnownStepTypes)
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var closedWorldMode = options.ForceClosedWorldMode ?? wf.Configuration.ClosedWorldMode;
         var allSteps = EnumerateSteps(wf.Steps).ToList();
         var stepIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var step in allSteps)
@@ -69,8 +68,6 @@ public static class WorkflowValidator
             ValidateBranchTargets(step, stepIds, errors);
             ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
 
-            if (closedWorldMode)
-                ValidateClosedWorldRules(step, errors);
         }
 
         return errors;
@@ -214,21 +211,6 @@ public static class WorkflowValidator
         }
     }
 
-    private static void ValidateClosedWorldRules(StepDefinition step, List<string> errors)
-    {
-        if (WorkflowPrimitiveCatalog.IsClosedWorldBlocked(step.Type))
-            errors.Add($"步骤 '{step.Id}' 使用非闭包原语 '{step.Type}'（closed_world_mode=true）");
-
-        foreach (var (key, value) in step.Parameters)
-        {
-            if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
-                WorkflowPrimitiveCatalog.IsClosedWorldBlocked(value))
-            {
-                errors.Add($"步骤 '{step.Id}' 的参数 '{key}' 引用了非闭包原语 '{value}'");
-            }
-        }
-    }
-
     private static bool HasAgentTypeOverride(StepDefinition step) =>
         TryGetParameter(step.Parameters, "agent_type", out var agentType) &&
         !string.IsNullOrWhiteSpace(agentType);
@@ -305,7 +287,7 @@ public static class WorkflowValidator
         public static WorkflowValidationOptions Default { get; } = new();
 
         /// <summary>
-        /// 强制覆盖 workflow 自身的 closed world 配置。null 表示使用 workflow 配置值。
+        /// 兼容保留字段；validator 不再基于 closed world 配置阻止 step type。
         /// </summary>
         public bool? ForceClosedWorldMode { get; init; }
 

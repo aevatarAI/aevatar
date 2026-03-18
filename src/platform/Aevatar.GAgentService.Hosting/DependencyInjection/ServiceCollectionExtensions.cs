@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
@@ -11,14 +12,18 @@ using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Hosting.DependencyInjection;
 
@@ -31,8 +36,14 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddScriptCapability(configuration);
-        services.AddWorkflowCapability(configuration);
+        if (!services.Any(x => x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker)))
+            services.AddScriptCapability(configuration);
+
+        if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
+            services.AddWorkflowCapability(configuration);
+
+        services.AddOptions<GAgentServiceDemoOptions>()
+            .Bind(configuration.GetSection("GAgentService:Demo"));
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
@@ -50,6 +61,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.AddOptions<ScopeWorkflowCapabilityOptions>()
+            .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
+        services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
+        services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
+        services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
     }
 

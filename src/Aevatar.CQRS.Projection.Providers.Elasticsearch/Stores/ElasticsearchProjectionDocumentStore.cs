@@ -148,13 +148,13 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
         {
-                Content = new StringContent(
-                    ElasticsearchProjectionDocumentStorePayloadSupport.BuildQueryPayloadJson(
-                        query,
-                        _defaultSortField,
-                        boundedTake),
-                    Encoding.UTF8,
-                    "application/json"),
+            Content = new StringContent(
+                ElasticsearchProjectionDocumentStorePayloadSupport.BuildQueryPayloadJson(
+                    query,
+                    _defaultSortField,
+                    boundedTake),
+                Encoding.UTF8,
+                "application/json"),
         };
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)

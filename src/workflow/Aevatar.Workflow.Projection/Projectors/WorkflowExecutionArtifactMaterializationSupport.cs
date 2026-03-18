@@ -76,6 +76,12 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowCompletedEvent>(),
                     observedAt),
+            [BuildTypeUrl(WorkflowStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
+                ApplyWorkflowStopped(
+                    readModel,
+                    payload.TypeUrl ?? string.Empty,
+                    payload.Unpack<WorkflowStoppedEvent>(),
+                    observedAt),
             [BuildTypeUrl(WorkflowRunStoppedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
                 ApplyWorkflowRunStopped(
                     readModel,
@@ -344,10 +350,11 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowRoleReplyRecordedEvent evt,
         DateTimeOffset observedAt)
     {
+        var roleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId;
         readModel.RoleReplies.Add(new WorkflowExecutionRoleReply
         {
             Timestamp = observedAt,
-            RoleId = string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId,
+            RoleId = roleId,
             SessionId = evt.SessionId ?? string.Empty,
             Content = evt.Content ?? string.Empty,
             ContentLength = (evt.Content ?? string.Empty).Length,
@@ -356,7 +363,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             readModel.Timeline,
             observedAt,
             "role.reply",
-            string.IsNullOrWhiteSpace(evt.RoleId) ? evt.RoleActorId : evt.RoleId,
+            roleId,
             evt.RoleActorId,
             null,
             null,
@@ -409,6 +416,30 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             null);
     }
 
+    private static void ApplyWorkflowStopped(
+        WorkflowRunInsightReportDocument readModel,
+        string eventType,
+        WorkflowStoppedEvent evt,
+        DateTimeOffset observedAt)
+    {
+        readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+        readModel.Success = false;
+        readModel.FinalOutput = string.Empty;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            readModel.FinalError = evt.Reason;
+        readModel.EndedAt = observedAt;
+        AddTimeline(
+            readModel.Timeline,
+            observedAt,
+            "workflow.stopped",
+            evt.Reason ?? "stopped",
+            readModel.RootActorId,
+            null,
+            null,
+            eventType,
+            null);
+    }
+
     private static void ApplyWorkflowRunStopped(
         WorkflowRunInsightReportDocument readModel,
         string eventType,
@@ -416,6 +447,8 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         readModel.CompletionStatus = WorkflowExecutionCompletionStatus.Stopped;
+        readModel.Success = false;
+        readModel.FinalOutput = string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             readModel.FinalError = evt.Reason;
         readModel.EndedAt = observedAt;

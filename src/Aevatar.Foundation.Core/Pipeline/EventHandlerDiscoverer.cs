@@ -34,7 +34,12 @@ internal static class EventHandlerDiscoverer
 
             foreach (var method in methods)
             {
-                var sig = $"{method.GetBaseDefinition().DeclaringType?.FullName}.{method.GetBaseDefinition().Name}";
+                var baseDefinition = method.GetBaseDefinition();
+                var parameterSignature = string.Join(
+                    ",",
+                    baseDefinition.GetParameters()
+                        .Select(x => x.ParameterType.FullName ?? x.ParameterType.Name));
+                var sig = $"{baseDefinition.DeclaringType?.FullName}.{baseDefinition.Name}({parameterSignature})";
                 if (!seen.Add(sig)) continue;
                 var metadata = TryBuild(method);
                 if (metadata != null) handlers.Add(metadata);

@@ -1,102 +1,41 @@
-using System.Reflection;
 using System.Text.Json;
 using Aevatar.Tools.Cli.Bridge;
-using Aevatar.Workflow.Sdk;
-using Aevatar.Workflow.Sdk.Contracts;
+using Aevatar.Tools.Cli.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Tools.Cli.Tests;
 
 public sealed class AppBridgeEndpointsTests
 {
     [Fact]
-    public async Task HandleSignalAsync_WhenStepIdIsProvided_ShouldForwardPreciseCorrelationToClient()
+    public async Task TryCreateProxyErrorResult_WhenBackendRedirects_ShouldReturnUnauthorizedJson()
     {
-        var method = typeof(AppBridgeEndpoints).GetMethod(
-            "HandleSignalAsync",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        method.Should().NotBeNull();
-
-        var client = new CapturingWorkflowClient();
-        var request = new WorkflowSignalRequest
+        using var response = new HttpResponseMessage(System.Net.HttpStatusCode.Found)
         {
-            ActorId = "actor-1",
-            RunId = "run-1",
-            SignalName = "channel_binding_ready",
-            StepId = "wait-channel-ready",
-            CommandId = "cmd-1",
-            Payload = """{"status":"ok"}""",
+            RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://backend.example/api/scopes/scope-1/workflows"),
         };
+        response.Headers.Location = new Uri("https://login.example/sign-in", UriKind.Absolute);
 
-        var task = method!
-            .Invoke(null, new object?[] { request, client, CancellationToken.None })
-            .Should()
-            .BeAssignableTo<Task<IResult>>()
-            .Subject;
+        var created = AppBridgeEndpoints.TryCreateProxyErrorResult(response, out var result);
 
-        var result = await task;
-        client.LastSignalRequest.Should().NotBeNull();
-        client.LastSignalRequest!.ActorId.Should().Be("actor-1");
-        client.LastSignalRequest.RunId.Should().Be("run-1");
-        client.LastSignalRequest.SignalName.Should().Be("channel_binding_ready");
-        client.LastSignalRequest.StepId.Should().Be("wait-channel-ready");
-        client.LastSignalRequest.CommandId.Should().Be("cmd-1");
+        created.Should().BeTrue();
 
-        result.Should().NotBeNull();
-    }
+        var context = new DefaultHttpContext();
+        context.RequestServices = new ServiceCollection()
+            .AddLogging()
+            .BuildServiceProvider();
+        context.Response.Body = new MemoryStream();
+        await result.ExecuteAsync(context);
 
-    private sealed class CapturingWorkflowClient : IAevatarWorkflowClient
-    {
-        public WorkflowSignalRequest? LastSignalRequest { get; private set; }
-
-        public IAsyncEnumerable<WorkflowEvent> StartRunStreamAsync(
-            ChatRunRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowRunResult> RunToCompletionAsync(
-            ChatRunRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowResumeResponse> ResumeAsync(
-            WorkflowResumeRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowSignalResponse> SignalAsync(
-            WorkflowSignalRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            LastSignalRequest = request;
-            return Task.FromResult(new WorkflowSignalResponse
-            {
-                Accepted = true,
-                ActorId = request.ActorId,
-                RunId = request.RunId,
-                SignalName = request.SignalName,
-                StepId = request.StepId,
-                CommandId = request.CommandId,
-            });
-        }
-
-        public Task<IReadOnlyList<JsonElement>> GetWorkflowCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetCapabilitiesAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetWorkflowDetailAsync(string workflowName, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<JsonElement?> GetActorSnapshotAsync(string actorId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<JsonElement>> GetActorTimelineAsync(
-            string actorId,
-            int take = 200,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        context.Response.Body.Position = 0;
+        var payload = await JsonSerializer.DeserializeAsync<AppApiErrorResponse>(
+            context.Response.Body,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        payload.Should().NotBeNull();
+        payload!.Code.Should().Be(AppApiErrors.BackendAuthRequiredCode);
+        payload.LoginUrl.Should().Be("https://login.example/sign-in");
     }
 }

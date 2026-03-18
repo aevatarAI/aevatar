@@ -162,7 +162,7 @@ public sealed class TelegramUserConnector : IConnector
                 _client = newClient;
                 _manager = manager;
                 _logger.LogInformation(
-                    "telegram_user connector '{Connector}' initialized with account id={UserId}",
+                    "telegram_user connector '{Connector}' initialized with account id={ScopeId}",
                     Name,
                     me.id);
                 newClient = null;

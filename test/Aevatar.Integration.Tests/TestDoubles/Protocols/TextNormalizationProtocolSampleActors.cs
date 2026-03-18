@@ -238,17 +238,14 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
     private const string ScriptRevision = "rev-1";
 
     private readonly IScriptRuntimeCommandPort _commandPort;
-    private readonly IServiceProvider _serviceProvider;
     private readonly IScriptReadModelQueryApplicationService _queryService;
     private readonly IScriptExecutionProjectionPort _projectionPort;
 
     public TextNormalizationScriptingProtocolGAgent(
-        IServiceProvider serviceProvider,
         IScriptRuntimeCommandPort commandPort,
         IScriptReadModelQueryApplicationService queryService,
         IScriptExecutionProjectionPort projectionPort)
     {
-        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
@@ -276,14 +273,14 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
                 definitionActorId,
                 TextNormalizationRequested.Descriptor.FullName,
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
                 sink,
                 runId,
                 CancellationToken.None);
 
-            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
-                _serviceProvider,
-                runtimeActorId,
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => _queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
                 CancellationToken.None);
 
             await PersistDomainEventAsync(new TextNormalizationCompleted

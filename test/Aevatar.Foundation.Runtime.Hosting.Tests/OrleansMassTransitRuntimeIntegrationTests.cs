@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
@@ -421,6 +423,142 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
         {
             await host.StopAsync();
             host.Dispose();
+        }
+    }
+
+    [KafkaIntegrationFact]
+    public async Task KafkaTransport_ShouldDeliverSelfPublishedEnvelopeBackToSameActor()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        SelfPublishingKafkaIntegrationAgent.Reset();
+
+        var host = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            siloPort,
+            gatewayPort);
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var initialized = await grain.InitializeAgentAsync(typeof(SelfPublishingKafkaIntegrationAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            var transport = host.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "trigger-self" }),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+            };
+
+            await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
+
+            var receivedEnvelope = await SelfPublishingKafkaIntegrationAgent.WaitForSelfEnvelopeAsync(TimeSpan.FromSeconds(30));
+            receivedEnvelope.Payload!.Is(Int32Value.Descriptor).Should().BeTrue();
+            receivedEnvelope.Payload.Unpack<Int32Value>().Value.Should().Be(42);
+            receivedEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+            receivedEnvelope.Route.PublisherActorId.Should().Be(actorId);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [KafkaIntegrationFact]
+    public async Task KafkaTransport_ShouldDeliverSelfPublishedEnvelopeBackToSameActor_InMultiSiloCluster()
+    {
+        var bootstrapServers = RequireKafkaBootstrapServers();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
+        var clusterId = $"aevatar-orleans-it-cluster-{Guid.NewGuid():N}";
+        var serviceId = $"aevatar-orleans-it-service-{Guid.NewGuid():N}";
+        var node1SiloPort = ReserveTcpPort();
+        var node1GatewayPort = ReserveTcpPort();
+        var node2SiloPort = ReserveTcpPort();
+        var node2GatewayPort = ReserveTcpPort();
+        var node3SiloPort = ReserveTcpPort();
+        var node3GatewayPort = ReserveTcpPort();
+        SelfPublishingKafkaIntegrationAgent.Reset();
+
+        var node1 = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            node1SiloPort,
+            node1GatewayPort,
+            clusterId,
+            serviceId);
+        var node2 = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            node2SiloPort,
+            node2GatewayPort,
+            clusterId,
+            serviceId);
+        var node3 = await StartSiloHostAsync(
+            bootstrapServers,
+            topicName,
+            consumerGroup,
+            streamProviderName,
+            actorEventNamespace,
+            node3SiloPort,
+            node3GatewayPort,
+            clusterId,
+            serviceId);
+
+        try
+        {
+            var grainFactory = node1.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var initialized = await grain.InitializeAgentAsync(typeof(SelfPublishingKafkaIntegrationAgent).AssemblyQualifiedName!);
+            initialized.Should().BeTrue();
+
+            var transport = node1.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Payload = Any.Pack(new StringValue { Value = "trigger-self" }),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
+            };
+
+            await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
+
+            var receivedEnvelope = await SelfPublishingKafkaIntegrationAgent.WaitForSelfEnvelopeAsync(TimeSpan.FromSeconds(30));
+            receivedEnvelope.Payload!.Is(Int32Value.Descriptor).Should().BeTrue();
+            receivedEnvelope.Payload.Unpack<Int32Value>().Value.Should().Be(42);
+            receivedEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+            receivedEnvelope.Route.PublisherActorId.Should().Be(actorId);
+        }
+        finally
+        {
+            await node3.StopAsync();
+            node3.Dispose();
+            await node2.StopAsync();
+            node2.Dispose();
+            await node1.StopAsync();
+            node1.Dispose();
         }
     }
 
@@ -1029,5 +1167,71 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                 return originId;
             return string.IsNullOrWhiteSpace(envelope.Id) ? Guid.NewGuid().ToString("N") : envelope.Id;
         }
+    }
+
+    public sealed class SelfPublishingKafkaIntegrationAgent : GAgentBase
+    {
+        private static readonly Lock SyncLock = new();
+        private static Channel<EventEnvelope> _selfEnvelopes = CreateChannel();
+
+        [EventHandler]
+        public async Task HandleStringValue(StringValue value)
+        {
+            if (!string.Equals(value.Value, "trigger-self", StringComparison.Ordinal))
+                return;
+
+            await PublishAsync(new Int32Value { Value = 42 }, TopologyAudience.Self);
+        }
+
+        [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+        public Task HandleSelfInt32Value(Int32Value value)
+        {
+            if (value.Value != 42 || ActiveInboundEnvelope == null)
+                return Task.CompletedTask;
+
+            lock (SyncLock)
+            {
+                _selfEnvelopes.Writer.TryWrite(ActiveInboundEnvelope.Clone());
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public override Task<string> GetDescriptionAsync() =>
+            Task.FromResult("self-publishing-kafka-integration-agent");
+
+        public static void Reset()
+        {
+            lock (SyncLock)
+            {
+                _selfEnvelopes = CreateChannel();
+            }
+        }
+
+        public static async Task<EventEnvelope> WaitForSelfEnvelopeAsync(TimeSpan timeout)
+        {
+            Channel<EventEnvelope> channel;
+            lock (SyncLock)
+            {
+                channel = _selfEnvelopes;
+            }
+
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                return await channel.Reader.ReadAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"Timed out after {timeout} waiting for self-published envelope.");
+            }
+        }
+
+        private static Channel<EventEnvelope> CreateChannel() =>
+            Channel.CreateUnbounded<EventEnvelope>(new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = false,
+            });
     }
 }

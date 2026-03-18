@@ -125,6 +125,7 @@
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
+- 端口约束：所有 Web API 服务禁止使用 `5000` 与 `5050` 端口；新增或修改 Host、启动脚本、`launchSettings`、README、CLI 示例时，默认端口必须避开 `5000/5050`，并保持代码、脚本与文档一致。若需要提供默认示例，统一使用其他端口（当前文档默认使用 `5100`）。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
 - `bash tools/ci/query_projection_priming_guard.sh`：校验 query/read 路径不触发 projection priming 或生命周期操作。

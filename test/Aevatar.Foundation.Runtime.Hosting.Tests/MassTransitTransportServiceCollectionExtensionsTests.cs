@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
+using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -95,6 +96,7 @@ public class MassTransitTransportServiceCollectionExtensionsTests
     public void AddMassTransitStreamProvider_ShouldRegisterStreamProvider_AndLifecycleManager()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IMassTransitEnvelopeTransport, StubMassTransitEnvelopeTransport>();
 
         services.AddAevatarMassTransitStreamProvider(options =>
         {
@@ -103,9 +105,41 @@ public class MassTransitTransportServiceCollectionExtensionsTests
 
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider));
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamLifecycleManager));
+        services.Should().Contain(x => x.ServiceType == typeof(MassTransitStreamProvider));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorEventSubscriptionProvider) &&
+                                       x.ImplementationType == typeof(MassTransitActorEventSubscriptionProvider));
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<MassTransitStreamOptions>();
         options.StreamNamespace.Should().Be("aevatar.test.events");
+        provider.GetRequiredService<MassTransitStreamProvider>().Should().NotBeNull();
+        provider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamLifecycleManager>().Should().NotBeNull();
+    }
+
+    private sealed class StubMassTransitEnvelopeTransport : IMassTransitEnvelopeTransport
+    {
+        public Task PublishAsync(
+            string streamNamespace,
+            string streamId,
+            byte[] payload,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            Func<MassTransitEnvelopeRecord, Task> handler,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(handler);
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable>(new NoOpAsyncDisposable());
+        }
+    }
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

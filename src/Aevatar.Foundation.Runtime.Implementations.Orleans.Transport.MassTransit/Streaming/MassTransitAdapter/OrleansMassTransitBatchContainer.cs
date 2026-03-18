@@ -8,15 +8,15 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTrans
 internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
 {
     [Id(0)]
-    public StreamId StreamId { get; set; }
+    public StreamId StreamId { get; private set; } = default!;
 
     [Id(1)]
-    public EventEnvelope Envelope { get; set; } = new();
+    public EventEnvelope Envelope { get; private set; } = default!;
 
     [Id(2)]
-    public EventSequenceTokenV2 DeliverySequenceToken { get; set; } = new(0);
+    public EventSequenceTokenV2 BatchSequenceToken { get; private set; } = default!;
 
-    public OrleansMassTransitBatchContainer()
+    private OrleansMassTransitBatchContainer()
     {
     }
 
@@ -27,10 +27,10 @@ internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
     {
         StreamId = streamId;
         Envelope = envelope;
-        DeliverySequenceToken = sequenceToken;
+        BatchSequenceToken = sequenceToken;
     }
 
-    public StreamSequenceToken SequenceToken => DeliverySequenceToken;
+    public StreamSequenceToken SequenceToken => BatchSequenceToken;
 
     public IEnumerable<Tuple<T, StreamSequenceToken>> GetEvents<T>()
     {

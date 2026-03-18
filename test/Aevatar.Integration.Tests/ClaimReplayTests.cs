@@ -188,7 +188,7 @@ public class ClaimReplayTests
         var context = new ScriptExecutionMaterializationContext
         {
             RootActorId = runtimeActorId,
-            ProjectionKind = "script-execution-read-model",
+            ProjectionKind = "script-execution-materialization",
         };
 
         var projectionNow = DateTimeOffset.UtcNow;
@@ -230,34 +230,27 @@ public class ClaimReplayTests
                             CaseId = evt.Current.CaseId,
                             PolicyId = evt.Current.PolicyId,
                             DecisionStatus = evt.Current.DecisionStatus,
-                            ManualReviewRequired = evt.Current.ManualReviewRequired,
                             AiSummary = evt.Current.AiSummary,
-                            RiskScore = evt.Current.RiskScore,
-                            CompliancePassed = evt.Current.CompliancePassed,
                             LastCommandId = evt.CommandId ?? string.Empty,
                         })
-                    .ProjectState(static (state, fact) => state == null
+                    .ProjectState(static (state, _) => state == null
                         ? new ClaimCaseReadModel()
                         : new ClaimCaseReadModel
                         {
-                            HasValue = true,
+                            HasValue = !string.IsNullOrWhiteSpace(state.CaseId),
                             CaseId = state.CaseId,
                             PolicyId = state.PolicyId,
                             DecisionStatus = state.DecisionStatus,
-                            ManualReviewRequired = state.ManualReviewRequired,
                             AiSummary = state.AiSummary,
-                            RiskScore = state.RiskScore,
-                            CompliancePassed = state.CompliancePassed,
                             LastCommandId = state.LastCommandId,
                             Search = new ClaimSearchIndex
                             {
-                                LookupKey = string.Concat(state.CaseId ?? string.Empty, ":", state.PolicyId ?? string.Empty).ToLowerInvariant(),
-                                DecisionKey = (state.DecisionStatus ?? string.Empty).ToLowerInvariant(),
+                                LookupKey = string.Concat(state.CaseId, ":", state.PolicyId).ToLowerInvariant(),
+                                DecisionKey = state.DecisionStatus.ToLowerInvariant(),
                             },
                             Refs = new ClaimRefs
                             {
-                                PolicyId = state.PolicyId ?? string.Empty,
-                                OwnerActorId = fact.ActorId,
+                                PolicyId = state.PolicyId,
                             },
                         });
             }

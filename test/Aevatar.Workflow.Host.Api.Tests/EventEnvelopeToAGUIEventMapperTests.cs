@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
@@ -68,11 +69,13 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             WorkflowName = "review",
             Input = "hello",
+            RunId = "run-1",
         }));
 
         events.Should().ContainSingle();
         events[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStarted);
         events[0].RunStarted.ThreadId.Should().Be("test");
+        events[0].RunStarted.RunId.Should().Be("run-1");
     }
 
     [Fact]
@@ -89,6 +92,20 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         events.Should().ContainSingle();
         events[0].RunStarted.ThreadId.Should().Be("fallback-workflow");
+    }
+
+    [Fact]
+    public void WorkflowRunExecutionStartedEvent_ShouldBeIgnored()
+    {
+        var events = CreateMapper().Map(WrapCommitted(new WorkflowRunExecutionStartedEvent
+        {
+            RunId = "run-1",
+            WorkflowName = "review",
+            Input = "hello",
+            DefinitionActorId = "definition-actor-1",
+        }));
+
+        events.Should().BeEmpty();
     }
 
     [Fact]
@@ -265,6 +282,32 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowStoppedEvents_ShouldMapToRunStoppedEnvelope()
+    {
+        var stopped = CreateMapper().Map(WrapCommitted(new WorkflowStoppedEvent
+        {
+            WorkflowName = "review",
+            RunId = "run-stop-1",
+            Reason = "manual",
+        }));
+        var runStopped = CreateMapper().Map(WrapCommitted(new WorkflowRunStoppedEvent
+        {
+            RunId = "run-stop-2",
+            Reason = "forced",
+        }));
+
+        stopped.Should().ContainSingle();
+        stopped[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStopped);
+        stopped[0].RunStopped.RunId.Should().Be("run-stop-1");
+        stopped[0].RunStopped.Reason.Should().Be("manual");
+
+        runStopped.Should().ContainSingle();
+        runStopped[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunStopped);
+        runStopped[0].RunStopped.RunId.Should().Be("run-stop-2");
+        runStopped[0].RunStopped.Reason.Should().Be("forced");
+    }
+
+    [Fact]
     public void WorkflowSuspendedAndWaitingSignal_ShouldMapToCustomPayloads()
     {
         var suspended = CreateMapper().Map(WrapCommitted(new WorkflowSuspendedEvent
@@ -398,6 +441,9 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         new WorkflowCompletedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var workflowCompletedEvents).Should().BeFalse();
         workflowCompletedEvents.Should().BeEmpty();
 
+        new WorkflowStoppedRunEventEnvelopeMappingHandler().TryMap(noPayload, out var workflowStoppedEvents).Should().BeFalse();
+        workflowStoppedEvents.Should().BeEmpty();
+
         new ToolCallRunEventEnvelopeMappingHandler().TryMap(noPayload, out var toolEvents).Should().BeFalse();
         toolEvents.Should().BeEmpty();
 
@@ -458,16 +504,32 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
-    public void UnknownOrNullPayload_ShouldReturnEmpty()
+    public void UnknownPayload_ShouldFallbackToRawObservedCustomEvent()
     {
-        var unknown = CreateMapper().Map(WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }));
+        var unknownEnvelope = WrapCommitted(new ParentChangedEvent { OldParent = "a", NewParent = "b" }, version: 7);
+
+        var unknown = CreateMapper().Map(unknownEnvelope);
+
+        unknown.Should().ContainSingle();
+        unknown[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        unknown[0].Custom.Name.Should().Be("aevatar.raw.observed");
+        var payload = unknown[0].Custom.Payload.Unpack<WorkflowObservedEnvelopeCustomPayload>();
+        payload.EventId.Should().Be(unknownEnvelope.Id);
+        payload.CorrelationId.Should().Be("cmd-1");
+        payload.StateVersion.Should().Be(7);
+        payload.PayloadTypeUrl.Should().Contain(nameof(ParentChangedEvent));
+        payload.Payload.Unpack<ParentChangedEvent>().OldParent.Should().Be("a");
+    }
+
+    [Fact]
+    public void NullPayload_ShouldReturnEmpty()
+    {
         var nullPayload = CreateMapper().Map(new EventEnvelope
         {
             Id = "test",
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("x", TopologyAudience.Children),
         });
 
-        unknown.Should().BeEmpty();
         nullPayload.Should().BeEmpty();
     }
 
@@ -475,12 +537,14 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     {
         return new EventEnvelopeToWorkflowRunEventMapper(
         [
+            new WorkflowRunExecutionStartedEnvelopeMappingHandler(),
             new StartWorkflowRunEventEnvelopeMappingHandler(),
             new StepRequestRunEventEnvelopeMappingHandler(),
             new StepCompletedRunEventEnvelopeMappingHandler(),
             new AITextStreamRunEventEnvelopeMappingHandler(),
             new AIReasoningRunEventEnvelopeMappingHandler(),
             new WorkflowCompletedRunEventEnvelopeMappingHandler(),
+            new WorkflowStoppedRunEventEnvelopeMappingHandler(),
             new ToolCallRunEventEnvelopeMappingHandler(),
             new WorkflowSuspendedRunEventEnvelopeMappingHandler(),
             new WorkflowWaitingSignalRunEventEnvelopeMappingHandler(),

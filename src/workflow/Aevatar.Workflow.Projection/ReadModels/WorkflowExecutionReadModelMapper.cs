@@ -25,6 +25,32 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
+    public WorkflowActorSnapshot ToActorSnapshot(
+        WorkflowExecutionCurrentStateDocument source,
+        WorkflowRunInsightReportDocument? report)
+    {
+        var snapshot = ToActorSnapshot(source);
+        if (report == null)
+            return snapshot;
+
+        snapshot.WorkflowName = string.IsNullOrWhiteSpace(snapshot.WorkflowName)
+            ? report.WorkflowName
+            : snapshot.WorkflowName;
+        snapshot.CompletionStatus = MapCompletionStatus(report.CompletionStatus);
+        snapshot.LastSuccess = report.Success;
+        snapshot.LastOutput = string.IsNullOrWhiteSpace(snapshot.LastOutput)
+            ? report.FinalOutput
+            : snapshot.LastOutput;
+        snapshot.LastError = string.IsNullOrWhiteSpace(snapshot.LastError)
+            ? report.FinalError
+            : snapshot.LastError;
+        snapshot.TotalSteps = report.Summary.TotalSteps;
+        snapshot.RequestedSteps = report.Summary.RequestedSteps;
+        snapshot.CompletedSteps = report.Summary.CompletedSteps;
+        snapshot.RoleReplyCount = report.Summary.RoleReplyCount;
+        return snapshot;
+    }
+
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
@@ -102,6 +128,21 @@ public sealed class WorkflowExecutionReadModelMapper
             "stopped" => WorkflowRunCompletionStatus.Stopped,
             "not_found" => WorkflowRunCompletionStatus.NotFound,
             "disabled" => WorkflowRunCompletionStatus.Disabled,
+            _ => WorkflowRunCompletionStatus.Unknown,
+        };
+    }
+    private static WorkflowRunCompletionStatus MapCompletionStatus(
+        WorkflowExecutionCompletionStatus status)
+    {
+        return status switch
+        {
+            WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
+            WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
+            WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
+            WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
+            WorkflowExecutionCompletionStatus.Disabled => WorkflowRunCompletionStatus.Disabled,
+            WorkflowExecutionCompletionStatus.WaitingForSignal => WorkflowRunCompletionStatus.Running,
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }

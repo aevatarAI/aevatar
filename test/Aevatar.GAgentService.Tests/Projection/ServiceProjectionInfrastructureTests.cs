@@ -27,7 +27,6 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public async Task CatalogProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
-        var options = new ServiceProjectionOptions();
         var activationService = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
             {
@@ -35,9 +34,9 @@ public sealed class ServiceProjectionInfrastructureTests
                 ProjectionKind = projectionName,
             });
         IServiceCatalogProjectionPort service = new ServiceCatalogProjectionPort(
-            options,
+            new ServiceProjectionOptions(),
             activationService,
-            new NoOpProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("actor-1");
@@ -49,7 +48,6 @@ public sealed class ServiceProjectionInfrastructureTests
     [Fact]
     public async Task RevisionProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
-        var options = new ServiceProjectionOptions();
         var activationService = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
             static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
             {
@@ -57,15 +55,47 @@ public sealed class ServiceProjectionInfrastructureTests
                 ProjectionKind = projectionName,
             });
         IServiceRevisionCatalogProjectionPort service = new ServiceRevisionCatalogProjectionPort(
-            options,
+            new ServiceProjectionOptions(),
             activationService,
-            new NoOpProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
 
         await service.EnsureProjectionAsync(" ");
         await service.EnsureProjectionAsync("actor-2");
 
         activationService.Calls.Should().ContainSingle();
         activationService.Calls[0].Should().Be(("actor-2", "service-revisions"));
+    }
+
+    [Fact]
+    public async Task ProjectionPorts_ShouldSkipActivation_WhenDisabled()
+    {
+        var catalogActivation = new RecordingProjectionActivationService<ServiceCatalogProjectionContext>(
+            static (rootActorId, projectionName) => new ServiceCatalogProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+            });
+        var revisionActivation = new RecordingProjectionActivationService<ServiceRevisionCatalogProjectionContext>(
+            static (rootActorId, projectionName) => new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+            });
+        var disabledOptions = new ServiceProjectionOptions { Enabled = false };
+        IServiceCatalogProjectionPort catalogPort = new ServiceCatalogProjectionPort(
+            disabledOptions,
+            catalogActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>>());
+        IServiceRevisionCatalogProjectionPort revisionPort = new ServiceRevisionCatalogProjectionPort(
+            disabledOptions,
+            revisionActivation,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<ServiceRevisionCatalogProjectionContext>>());
+
+        await catalogPort.EnsureProjectionAsync("actor-1");
+        await revisionPort.EnsureProjectionAsync("actor-2");
+
+        catalogActivation.Calls.Should().BeEmpty();
+        revisionActivation.Calls.Should().BeEmpty();
     }
 
     [Fact]

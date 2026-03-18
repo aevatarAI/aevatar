@@ -22,6 +22,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             { new WorkflowRunEventEnvelope { RunStarted = new WorkflowRunStartedEventPayload() }, WorkflowRunEventTypes.RunStarted },
             { new WorkflowRunEventEnvelope { RunFinished = new WorkflowRunFinishedEventPayload() }, WorkflowRunEventTypes.RunFinished },
             { new WorkflowRunEventEnvelope { RunError = new WorkflowRunErrorEventPayload() }, WorkflowRunEventTypes.RunError },
+            { new WorkflowRunEventEnvelope { RunStopped = new WorkflowRunStoppedEventPayload() }, WorkflowRunEventTypes.RunStopped },
             { new WorkflowRunEventEnvelope { StepStarted = new WorkflowStepStartedEventPayload() }, WorkflowRunEventTypes.StepStarted },
             { new WorkflowRunEventEnvelope { StepFinished = new WorkflowStepFinishedEventPayload() }, WorkflowRunEventTypes.StepFinished },
             { new WorkflowRunEventEnvelope { TextMessageStart = new WorkflowTextMessageStartEventPayload() }, WorkflowRunEventTypes.TextMessageStart },
@@ -118,11 +119,14 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var resume = new WorkflowResumeCommand("actor-1", "run-1", "step-1", commandId, true, "approved");
         var signal = new WorkflowSignalCommand("actor-1", "run-1", "approve", commandId, "payload");
+        var stop = new WorkflowStopCommand("actor-1", "run-1", commandId, "stop");
 
         resume.CorrelationId.Should().Be(expectedCorrelationId);
         signal.CorrelationId.Should().Be(expectedCorrelationId);
+        stop.CorrelationId.Should().Be(expectedCorrelationId);
         resume.Headers.Should().BeNull();
         signal.Headers.Should().BeNull();
+        stop.Headers.Should().BeNull();
     }
 
     [Fact]
@@ -275,6 +279,27 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         actOnCommand.Should().Throw<ArgumentNullException>();
         actOnContext.Should().Throw<ArgumentNullException>();
         actOnSignalName.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void WorkflowStopCommandEnvelopeFactory_ShouldValidateInputs_AndNormalizeOptionalReason()
+    {
+        var factory = new WorkflowStopCommandEnvelopeFactory();
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
+
+        var envelope = factory.CreateEnvelope(
+            new WorkflowStopCommand("actor-1", "run-1", "cmd-1", null),
+            context);
+
+        envelope.Payload.Unpack<WorkflowStoppedEvent>().Reason.Should().BeEmpty();
+
+        var actOnCommand = () => factory.CreateEnvelope(null!, context);
+        var actOnContext = () => factory.CreateEnvelope(
+            new WorkflowStopCommand("actor-1", "run-1", "cmd-1", "stop"),
+            null!);
+
+        actOnCommand.Should().Throw<ArgumentNullException>();
+        actOnContext.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]

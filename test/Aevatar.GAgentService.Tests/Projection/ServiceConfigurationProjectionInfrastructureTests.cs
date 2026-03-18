@@ -23,18 +23,31 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
     [Fact]
     public async Task ConfigurationProjectionPort_ShouldIgnoreBlankActorId_AndEnsureLease()
     {
-        var options = new ServiceGovernanceProjectionOptions();
         var activationService = new RecordingConfigurationActivationService();
         var service = new ServiceConfigurationProjectionPort(
-            options,
+            new ServiceGovernanceProjectionOptions(),
             activationService,
-            new NoOpServiceConfigurationReleaseService());
+            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
 
         await service.EnsureProjectionAsync(string.Empty);
         await service.EnsureProjectionAsync("config-actor");
 
         activationService.Calls.Should().ContainSingle();
         activationService.Calls[0].Should().Be(("config-actor", "service-configuration"));
+    }
+
+    [Fact]
+    public async Task ConfigurationProjectionPort_ShouldSkipActivation_WhenDisabled()
+    {
+        var activationService = new RecordingConfigurationActivationService();
+        var service = new ServiceConfigurationProjectionPort(
+            new ServiceGovernanceProjectionOptions { Enabled = false },
+            activationService,
+            new RecordingProjectionReleaseService<ServiceConfigurationRuntimeLease>());
+
+        await service.EnsureProjectionAsync("config-actor");
+
+        activationService.Calls.Should().BeEmpty();
     }
 
     [Fact]

@@ -8,6 +8,7 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
     {
         ArgumentNullException.ThrowIfNull(metadata);
         var normalizedMappings = NormalizeObjectMap(metadata.Mappings, "DocumentIndexMetadata.Mappings");
+        EnsureStableSortFieldMapping(normalizedMappings);
         var normalizedSettings = NormalizeObjectMap(metadata.Settings, "DocumentIndexMetadata.Settings");
         var normalizedAliases = NormalizeObjectMap(metadata.Aliases, "DocumentIndexMetadata.Aliases");
         return new DocumentIndexMetadata(
@@ -133,5 +134,61 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
             return doubleValue;
 
         throw new InvalidOperationException($"{context} contains an invalid JSON number value.");
+    }
+
+    private static void EnsureStableSortFieldMapping(Dictionary<string, object?> mappings)
+    {
+        if (!mappings.TryGetValue("properties", out var propertiesValue) || propertiesValue == null)
+        {
+            mappings["properties"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField] =
+                    CreateStableSortFieldMapping(),
+            };
+            return;
+        }
+
+        if (propertiesValue is not IReadOnlyDictionary<string, object?> properties)
+        {
+            throw new InvalidOperationException(
+                "DocumentIndexMetadata.Mappings['properties'] must be an object map.");
+        }
+
+        var normalizedProperties = new Dictionary<string, object?>(properties, StringComparer.Ordinal);
+        if (normalizedProperties.TryGetValue(
+                ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField,
+                out var existingMapping))
+        {
+            if (!IsKeywordFieldMapping(existingMapping))
+            {
+                throw new InvalidOperationException(
+                    $"DocumentIndexMetadata.Mappings reserves '{ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField}' for Elasticsearch pagination and it must remain a keyword field.");
+            }
+        }
+        else
+        {
+            normalizedProperties[ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField] =
+                CreateStableSortFieldMapping();
+        }
+
+        mappings["properties"] = normalizedProperties;
+    }
+
+    private static Dictionary<string, object?> CreateStableSortFieldMapping()
+    {
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["type"] = "keyword",
+        };
+    }
+
+    private static bool IsKeywordFieldMapping(object? mapping)
+    {
+        if (mapping is not IReadOnlyDictionary<string, object?> mappingObject)
+            return false;
+
+        return mappingObject.TryGetValue("type", out var typeValue) &&
+               typeValue is string typeName &&
+               string.Equals(typeName, "keyword", StringComparison.OrdinalIgnoreCase);
     }
 }

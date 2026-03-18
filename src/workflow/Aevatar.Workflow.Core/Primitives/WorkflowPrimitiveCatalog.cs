@@ -87,8 +87,8 @@ public static class WorkflowPrimitiveCatalog
             : normalized;
     }
 
-    public static bool IsClosedWorldBlocked(string? stepType) =>
-        ClosedWorldBlockedCanonicalTypes.Contains(ToCanonicalType(stepType));
+    // Closed-world primitive blocking was removed; keep the method for compatibility.
+    public static bool IsClosedWorldBlocked(string? stepType) => false;
 
     public static bool IsStepTypeParameterKey(string key) =>
         key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) ||

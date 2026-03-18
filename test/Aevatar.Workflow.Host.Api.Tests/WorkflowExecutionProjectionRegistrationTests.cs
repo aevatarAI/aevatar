@@ -56,7 +56,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
-
         currentStateStore.Should().NotBeNull();
         timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();

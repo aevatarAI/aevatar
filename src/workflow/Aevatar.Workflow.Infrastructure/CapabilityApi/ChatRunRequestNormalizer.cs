@@ -32,6 +32,7 @@ internal static class ChatRunRequestNormalizer
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
         var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
+        var normalizedPromptInput = string.IsNullOrWhiteSpace(input.Prompt) ? string.Empty : input.Prompt.Trim();
 
         if (hasLegacyWorkflowYaml && string.IsNullOrWhiteSpace(legacyWorkflowYaml))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -43,7 +44,7 @@ internal static class ChatRunRequestNormalizer
             inlineWorkflowYamls = [legacyWorkflowYaml!];
 
         var normalizedPrompt = WorkflowAuthoringSkillPromptAugmentor.AugmentPrompt(
-            input.Prompt,
+            normalizedPromptInput,
             requestedWorkflowName,
             inlineWorkflowYamls.Count > 0,
             normalizedMetadata,

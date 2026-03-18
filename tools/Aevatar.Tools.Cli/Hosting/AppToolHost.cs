@@ -1,17 +1,22 @@
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.Bootstrap;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Tools.Cli.Bridge;
+using Aevatar.Tools.Cli.Studio.Application.Abstractions;
+using Aevatar.Tools.Cli.Studio.Application.DependencyInjection;
+using Aevatar.Tools.Cli.Studio.Infrastructure.DependencyInjection;
+using Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 using Aevatar.Workflow.Extensions.Bridge;
 using Aevatar.Workflow.Extensions.Hosting;
-using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
-using Aevatar.Workflow.Sdk.DependencyInjection;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -59,26 +64,85 @@ internal static class AppToolHost
         builder.WebHost.UseUrls(localUrl);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.Configuration.AddAevatarConfig();
+        var nyxIdAuthEnabled = NyxIdAppAuthentication.ResolveIsEnabled(builder.Configuration, embeddedWorkflowMode);
+        var nyxIdAuthOptions = NyxIdAppAuthentication.BuildOptions(builder.Configuration);
         builder.Services.Configure<JsonOptions>(json =>
         {
             json.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
             json.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         });
-        builder.Services.AddAevatarWorkflowSdk(sdk => sdk.BaseUrl = sdkBaseUrl);
+        builder.Services
+            .AddControllers()
+            .AddJsonOptions(json =>
+            {
+                json.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+                json.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+            });
+
+        if (nyxIdAuthEnabled)
+        {
+            builder.Services.AddNyxIdAppAuthentication(nyxIdAuthOptions);
+            builder.Services.AddSingleton<IStudioBackendRequestAuthSnapshotProvider, NyxIdStudioBackendRequestAuthSnapshotProvider>();
+        }
+        else
+            builder.Services.AddHttpContextAccessor();
+
+        var backendClient = builder.Services
+            .AddHttpClient("AppBridgeBackend", client => client.BaseAddress = new Uri(sdkBaseUrl))
+            .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+            });
+        if (nyxIdAuthEnabled)
+        {
+            backendClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
+        }
+
+        var nyxProxyClient = builder.Services.AddHttpClient(ChronoStorageCatalogBlobClient.NyxProxyHttpClientName);
+        if (nyxIdAuthEnabled)
+        {
+            nyxProxyClient.AddHttpMessageHandler<NyxIdAccessTokenHandler>();
+        }
+
+        builder.Services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
+        builder.Services.AddStudioInfrastructure(builder.Configuration);
+        builder.Services.AddStudioApplication();
+        builder.Services.AddSingleton(sp => new AppScopedWorkflowService(
+            sp.GetRequiredService<IHttpClientFactory>(),
+            sp.GetRequiredService<Aevatar.Tools.Cli.Studio.Application.Abstractions.IWorkflowYamlDocumentService>(),
+            sp.GetService<IScopeWorkflowQueryPort>(),
+            sp.GetService<IScopeWorkflowCommandPort>(),
+            sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>()));
+        builder.Services.Configure<StudioStorageOptions>(storage =>
+        {
+            storage.DefaultRuntimeBaseUrl = localUrl;
+            storage.ForceLocalRuntime = embeddedWorkflowMode;
+        });
 
         if (embeddedWorkflowMode)
         {
-            builder.Services.AddAevatarBootstrap(builder.Configuration);
-            builder.Services.AddAevatarAIFeatures(builder.Configuration, ai =>
+            builder.Services.AddSingleton<WorkflowGeneratePromptCatalog>();
+            builder.Services.AddSingleton<WorkflowGenerateOrchestrator>();
+            builder.Services.AddSingleton<WorkflowGenerateActorService>();
+            builder.Services.AddSingleton<Aevatar.Foundation.Core.Configurations.IAgentClassDefaultsProvider<Aevatar.AI.Core.AIAgentConfig>, WorkflowGenerateAgentDefaultsProvider>();
+            builder.Services.AddHostedService<WorkflowGenerateActorBootstrapHostedService>();
+            builder.AddAevatarDefaultHost(options =>
             {
-                ai.EnableMEAIProviders = true;
-                ai.EnableMEAIToTornadoFailover = true;
-                ai.EnableReloadableProviderFactory = true;
-                ai.EnableMCPTools = true;
-                ai.EnableSkills = true;
+                options.ServiceName = "aevatar.app";
+                options.EnableWebSockets = true;
+                options.EnableConnectorBootstrap = false;
+                options.MapRootHealthEndpoint = false;
             });
-            builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
-            builder.Services.AddWorkflowCapability(builder.Configuration);
+            builder.AddAevatarPlatform(options =>
+            {
+                options.EnableMakerExtensions = true;
+                options.ConfigureAIFeatures = ai =>
+                {
+                    ai.EnableMEAIToTornadoFailover = true;
+                    ai.EnableReloadableProviderFactory = true;
+                };
+            });
+            builder.AddGAgentServiceCapabilityBundle();
             builder.Services.AddWorkflowBridgeExtensions();
             builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
             {
@@ -100,8 +164,16 @@ internal static class AppToolHost
                 BrowserLauncher.Open(localUrl);
         });
 
+        if (nyxIdAuthEnabled)
+            app.UseNyxIdAppProtection();
+
         app.UseDefaultFiles();
         app.UseStaticFiles();
+        app.MapControllers();
+        app.MapNyxIdAppEndpoints(nyxIdAuthEnabled);
+
+        if (embeddedWorkflowMode)
+            app.UseAevatarDefaultHost();
 
         app.MapGet(
             "/api/app/health",
@@ -113,16 +185,11 @@ internal static class AppToolHost
                 sdkBaseUrl,
             }));
 
-        AppDemoPlaygroundEndpoints.Map(app, embeddedWorkflowMode);
-
-        if (embeddedWorkflowMode)
-            app.MapWorkflowChatInteractionEndpoints();
-
         AppBridgeEndpoints.Map(app, new AppBridgeRouteOptions
         {
             MapCapabilityRoutes = !embeddedWorkflowMode,
-            MapAppAliases = true,
         });
+        AppStudioEndpoints.Map(app, embeddedWorkflowMode);
 
         app.MapFallbackToFile("index.html");
         await app.RunAsync(cancellationToken);
@@ -159,7 +226,7 @@ internal static class AppToolHost
         Console.WriteLine("╔═══════════════════════════════════════════════════════════╗");
         Console.WriteLine("║                      aevatar app                          ║");
         Console.WriteLine("╠═══════════════════════════════════════════════════════════╣");
-        Console.WriteLine($"║  🌐 Playground: {localUrl,-41} ║");
+        Console.WriteLine($"║  🌐 Studio:     {localUrl,-41} ║");
         Console.WriteLine($"║  🔌 SDK base:   {sdkBaseUrl,-41} ║");
         Console.WriteLine($"║  🧠 Mode:       {(embeddedWorkflowMode ? "embedded" : "proxy"),-41} ║");
         Console.WriteLine($"║  🔗 Connectors: {connectorSummary,-41} ║");
