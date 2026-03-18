@@ -1,4 +1,4 @@
-// ─── WorkflowDefinitionRegistry 测试 ───
+// ─── WorkflowDefinitionCatalog 测试 ───
 
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -7,12 +7,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public class WorkflowDefinitionRegistryTests
+public class WorkflowDefinitionCatalogTests
 {
     [Fact]
     public void Register_And_GetYaml()
     {
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new WorkflowDefinitionCatalog();
         registry.Register("test", "name: test\nsteps: []");
 
         registry.GetYaml("test").Should().Contain("name: test");
@@ -24,7 +24,7 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void GetNames_ReturnsAll()
     {
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new WorkflowDefinitionCatalog();
         registry.Register("alpha", "a");
         registry.Register("beta", "b");
 
@@ -34,7 +34,7 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void FileLoader_NonExistentDirectory_ReturnsZero()
     {
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new WorkflowDefinitionCatalog();
         var loader = new WorkflowDefinitionFileLoader();
         var loaded = loader.LoadInto(
             registry,
@@ -57,7 +57,7 @@ public class WorkflowDefinitionRegistryTests
             File.WriteAllText(Path.Combine(tmpDir, "chat.yml"), "name: chat");
             File.WriteAllText(Path.Combine(tmpDir, "readme.txt"), "not a workflow");
 
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
             var count = loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
 
@@ -82,7 +82,7 @@ public class WorkflowDefinitionRegistryTests
             File.WriteAllText(Path.Combine(tmpDir, "review.yaml"), "name: review");
             File.WriteAllText(Path.Combine(tmpDir, "review.yml"), "name: review_2");
 
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
 
             Action act = () => loader.LoadInto(registry, [tmpDir], NullLogger.Instance);
@@ -105,7 +105,7 @@ public class WorkflowDefinitionRegistryTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "direct.yaml"), "name: direct\nsteps:\n  - id: from_file\n");
 
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             registry.Register("direct", "name: direct\nsteps:\n  - id: built_in\n");
             var loader = new WorkflowDefinitionFileLoader();
 
@@ -136,7 +136,7 @@ public class WorkflowDefinitionRegistryTests
             File.WriteAllText(Path.Combine(tmpDir, "brainstorm.yaml"), "name: brainstorm");
             var equivalentPath = Path.Combine(tmpDir, ".");
 
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             var loader = new WorkflowDefinitionFileLoader();
 
             var count = loader.LoadInto(registry, [tmpDir, equivalentPath], NullLogger.Instance);
@@ -153,27 +153,27 @@ public class WorkflowDefinitionRegistryTests
     [Fact]
     public void BuiltInAutoYaml_ShouldContainFewShotWorkflowExamples()
     {
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("Example valid workflow YAML (simple deterministic flow):");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("name: normalize_text");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("name: review_summary");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("Do not invent extra fields.");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Example valid workflow YAML (simple deterministic flow):");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: normalize_text");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("name: review_summary");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("Do not invent extra fields.");
     }
 
     [Fact]
     public void BuiltInAutoYaml_ShouldUseRouteTokenSwitchWithoutSubstringHeuristics()
     {
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("id: classify_route");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("id: route_intent");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("type: switch");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("\"workflow\": prepare_workflow_request");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().Contain("\"direct\": prepare_direct_response");
-        WorkflowDefinitionRegistry.BuiltInAutoYaml.Should().NotContain("condition: \"```y\"");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("id: classify_route");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("id: route_intent");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("type: switch");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("\"workflow\": prepare_workflow_request");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().Contain("\"direct\": prepare_direct_response");
+        WorkflowDefinitionCatalog.BuiltInAutoYaml.Should().NotContain("condition: \"```y\"");
     }
 
     [Fact]
     public void CreateBuiltInAutoYaml_ShouldKeepRouteTokenFlow()
     {
-        var autoYaml = WorkflowDefinitionRegistry.CreateBuiltInAutoYaml();
+        var autoYaml = WorkflowDefinitionCatalog.CreateBuiltInAutoYaml();
 
         autoYaml.Should().Contain("id: classify_route");
         autoYaml.Should().Contain("next: route_intent");
