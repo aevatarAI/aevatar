@@ -27,7 +27,9 @@ public static class ServiceCollectionExtensions
 
         services.AddGAgentServiceGovernanceProjection();
         services.AddGAgentServiceGovernanceProjectionReadModelProviders(configuration);
+#pragma warning disable CS0618 // Legacy migration — remove after all deployments complete governance migration
         services.TryAddSingleton<IServiceGovernanceLegacyImporter, DefaultServiceGovernanceLegacyImporter>();
+#pragma warning restore CS0618
         services.TryAddSingleton<IServiceGovernanceCommandTargetProvisioner, DefaultServiceGovernanceCommandTargetProvisioner>();
         services.TryAddSingleton<IActivationAdmissionEvaluator, DefaultActivationAdmissionEvaluator>();
         services.TryAddSingleton<IInvokeAdmissionEvaluator, DefaultInvokeAdmissionEvaluator>();
@@ -38,7 +40,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceGovernanceCommandPort, ServiceGovernanceCommandApplicationService>();
         services.TryAddSingleton<ServiceGovernanceQueryApplicationService>();
         services.TryAddSingleton<IServiceGovernanceQueryPort>(sp => sp.GetRequiredService<ServiceGovernanceQueryApplicationService>());
+#pragma warning disable CS0618 // Legacy migration — remove after all deployments complete governance migration
         services.AddHostedService<ServiceGovernanceLegacyMigrationHostedService>();
+#pragma warning restore CS0618
         return services;
     }
 

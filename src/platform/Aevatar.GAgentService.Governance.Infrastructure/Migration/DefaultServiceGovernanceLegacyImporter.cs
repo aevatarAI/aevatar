@@ -9,6 +9,23 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Governance.Infrastructure.Migration;
 
+/// <summary>
+/// One-time migration utility that reads legacy governance actor event streams
+/// (Bindings, EndpointCatalog, Policies) and consolidates them into the unified
+/// <see cref="ServiceConfigurationGAgent"/>.
+/// <para>
+/// Architecture exemption: this class directly reads <see cref="IEventStore"/> to
+/// replay committed events from legacy actors that have no corresponding read models
+/// (the legacy actors are being retired by this migration). Direct event store access
+/// is permitted here because replay belongs to the migration/disaster-recovery category,
+/// not the normal query path. See CLAUDE.md: "replay 只属于后台修复/迁移/灾难恢复".
+/// </para>
+/// <para>
+/// Remove this class and its interface once all deployments have completed the
+/// legacy governance migration.
+/// </para>
+/// </summary>
+[Obsolete("Legacy migration utility. Remove after all deployments complete governance migration.")]
 public sealed class DefaultServiceGovernanceLegacyImporter : IServiceGovernanceLegacyImporter
 {
     private readonly IEventStore _eventStore;
