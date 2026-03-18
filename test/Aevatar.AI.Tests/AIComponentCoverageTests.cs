@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -599,9 +600,10 @@ public class AIComponentCoverageTests
             allowedTools: ["tool-a"],
             allowedInputKeys: ["q"]);
 
-        SetPrivateField(connector, "_initialized", true);
-        var tools = GetPrivateField<Dictionary<string, IAgentTool>>(connector, "_tools");
-        tools["tool-a"] = new StubTool("tool-a");
+        SetPrivateField(connector, "_tools",
+            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") })));
 
         var success = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
@@ -630,7 +632,10 @@ public class AIComponentCoverageTests
             serverConfig: new MCPServerConfig { Name = "server-2", Command = "missing-cmd" },
             allowedTools: [],
             allowedInputKeys: []);
-        SetPrivateField(discoveredMiss, "_initialized", true);
+        SetPrivateField(discoveredMiss, "_tools",
+            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase))));
 
         var notDiscovered = await discoveredMiss.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
@@ -643,8 +648,10 @@ public class AIComponentCoverageTests
             name: "mcp-3",
             serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
             defaultTool: "tool-x");
-        SetPrivateField(throwingConnector, "_initialized", true);
-        GetPrivateField<Dictionary<string, IAgentTool>>(throwingConnector, "_tools")["tool-x"] = new ThrowingTool("tool-x");
+        SetPrivateField(throwingConnector, "_tools",
+            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
+                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") })));
 
         var caught = await throwingConnector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
