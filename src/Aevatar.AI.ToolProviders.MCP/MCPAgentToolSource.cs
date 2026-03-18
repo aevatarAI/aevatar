@@ -10,23 +10,33 @@ namespace Aevatar.AI.ToolProviders.MCP;
 /// </summary>
 public sealed class MCPAgentToolSource : IAgentToolSource
 {
-    private readonly Lazy<Task<IReadOnlyList<IAgentTool>>> _cachedTools;
+    private readonly MCPToolsOptions _options;
+    private readonly MCPClientManager _clientManager;
+    private readonly ILogger _logger;
+    private volatile Task<IReadOnlyList<IAgentTool>>? _cachedTools;
 
     public MCPAgentToolSource(
         MCPToolsOptions options,
         MCPClientManager clientManager,
         ILogger<MCPAgentToolSource>? logger = null)
     {
-        var log = logger ?? NullLogger<MCPAgentToolSource>.Instance;
-        _cachedTools = new Lazy<Task<IReadOnlyList<IAgentTool>>>(() => DiscoverAllAsync(options, clientManager, log));
+        _options = options;
+        _clientManager = clientManager;
+        _logger = logger ?? NullLogger<MCPAgentToolSource>.Instance;
     }
 
     /// <inheritdoc />
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-        => _cachedTools.Value;
+    {
+        var current = _cachedTools;
+        if (current is { IsFaulted: false }) return current;
+        var task = DiscoverAllAsync(_options, _clientManager, _logger, ct);
+        var winner = Interlocked.CompareExchange(ref _cachedTools, task, current);
+        return winner ?? task;
+    }
 
     private static async Task<IReadOnlyList<IAgentTool>> DiscoverAllAsync(
-        MCPToolsOptions options, MCPClientManager clientManager, ILogger logger)
+        MCPToolsOptions options, MCPClientManager clientManager, ILogger logger, CancellationToken ct)
     {
         if (options.Servers.Count == 0)
             return [];
@@ -36,7 +46,7 @@ public sealed class MCPAgentToolSource : IAgentToolSource
         {
             try
             {
-                var discovered = await clientManager.ConnectAndDiscoverAsync(server);
+                var discovered = await clientManager.ConnectAndDiscoverAsync(server, ct);
                 foreach (var tool in discovered)
                     tools[tool.Name] = tool;
             }

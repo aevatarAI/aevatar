@@ -601,9 +601,8 @@ public class AIComponentCoverageTests
             allowedInputKeys: ["q"]);
 
         SetPrivateField(connector, "_tools",
-            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
-                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") })));
+            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-a"] = new StubTool("tool-a") }));
 
         var success = await connector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
@@ -633,9 +632,8 @@ public class AIComponentCoverageTests
             allowedTools: [],
             allowedInputKeys: []);
         SetPrivateField(discoveredMiss, "_tools",
-            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
-                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase))));
+            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)));
 
         var notDiscovered = await discoveredMiss.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
@@ -649,9 +647,8 @@ public class AIComponentCoverageTests
             serverConfig: new MCPServerConfig { Name = "server-3", Command = "missing-cmd" },
             defaultTool: "tool-x");
         SetPrivateField(throwingConnector, "_tools",
-            new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-                Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
-                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") })));
+            Task.FromResult<IReadOnlyDictionary<string, IAgentTool>>(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase) { ["tool-x"] = new ThrowingTool("tool-x") }));
 
         var caught = await throwingConnector.ExecuteAsync(new Aevatar.Foundation.Abstractions.Connectors.ConnectorRequest
         {
