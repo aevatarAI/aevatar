@@ -7,13 +7,13 @@ public abstract class MaterializationProjectionPortBase<TRuntimeLease>
     where TRuntimeLease : class, IProjectionRuntimeLease
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionMaterializationActivationService<TRuntimeLease> _activationService;
-    private readonly IProjectionMaterializationReleaseService<TRuntimeLease>? _releaseService;
+    private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
+    private readonly IProjectionScopeReleaseService<TRuntimeLease>? _releaseService;
 
     protected MaterializationProjectionPortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionMaterializationActivationService<TRuntimeLease> activationService,
-        IProjectionMaterializationReleaseService<TRuntimeLease>? releaseService = null)
+        IProjectionScopeActivationService<TRuntimeLease> activationService,
+        IProjectionScopeReleaseService<TRuntimeLease>? releaseService = null)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
         _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
@@ -23,7 +23,7 @@ public abstract class MaterializationProjectionPortBase<TRuntimeLease>
     public bool ProjectionEnabled => _projectionEnabledAccessor();
 
     protected async Task<TRuntimeLease?> EnsureProjectionAsync(
-        ProjectionMaterializationStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))

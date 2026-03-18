@@ -2,20 +2,20 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public sealed class ProjectionMaterializationScopeActivationService<TLease, TContext, TScopeAgent>
-    : IProjectionMaterializationActivationService<TLease>
+public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAgent>
+    : IProjectionScopeActivationService<TLease>
     where TLease : class, IProjectionRuntimeLease
     where TContext : class, IProjectionMaterializationContext
     where TScopeAgent : IAgent
 {
     private readonly ProjectionScopeActorRuntime<TScopeAgent> _scopeRuntime;
-    private readonly Func<ProjectionMaterializationStartRequest, TContext> _contextFactory;
+    private readonly Func<ProjectionScopeStartRequest, TContext> _contextFactory;
     private readonly Func<ProjectionRuntimeScopeKey, TContext, TLease> _leaseFactory;
 
-    public ProjectionMaterializationScopeActivationService(
+    public ProjectionScopeActivationService(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        Func<ProjectionMaterializationStartRequest, TContext> contextFactory,
+        Func<ProjectionScopeStartRequest, TContext> contextFactory,
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
         IAgentTypeVerifier? agentTypeVerifier = null)
     {
@@ -25,7 +25,7 @@ public sealed class ProjectionMaterializationScopeActivationService<TLease, TCon
     }
 
     public async Task<TLease> EnsureAsync(
-        ProjectionMaterializationStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -35,7 +35,8 @@ public sealed class ProjectionMaterializationScopeActivationService<TLease, TCon
         var scopeKey = new ProjectionRuntimeScopeKey(
             context.RootActorId,
             context.ProjectionKind,
-            ProjectionRuntimeMode.DurableMaterialization);
+            request.Mode,
+            request.SessionId);
 
         await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
         await _scopeRuntime.DispatchAsync(
@@ -44,6 +45,7 @@ public sealed class ProjectionMaterializationScopeActivationService<TLease, TCon
             {
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
                 Mode = ProjectionScopeModeMapper.ToProto(scopeKey.Mode),
             },
             ct).ConfigureAwait(false);

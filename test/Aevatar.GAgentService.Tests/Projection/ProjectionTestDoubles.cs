@@ -93,7 +93,7 @@ internal sealed class RecordingDocumentStore<TReadModel> :
 }
 
 internal sealed class RecordingProjectionActivationService<TContext>
-    : IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>>
+    : IProjectionScopeActivationService<ServiceProjectionRuntimeLease<TContext>>
     where TContext : class, IProjectionMaterializationContext
 {
     private readonly Func<string, string, TContext> _contextFactory;
@@ -106,7 +106,7 @@ internal sealed class RecordingProjectionActivationService<TContext>
     public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
     public Task<ServiceProjectionRuntimeLease<TContext>> EnsureAsync(
-        ProjectionMaterializationStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         Calls.Add((request.RootActorId, request.ProjectionKind));
@@ -117,14 +117,36 @@ internal sealed class RecordingProjectionActivationService<TContext>
 }
 
 internal sealed class RecordingProjectionReleaseService<TLease>
-    : IProjectionMaterializationReleaseService<TLease>
+    : IProjectionScopeReleaseService<TLease>
     where TLease : class, IProjectionRuntimeLease
 {
     public List<TLease> Released { get; } = [];
 
     public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(lease);
         Released.Add(lease);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class NoOpProjectionReleaseService<TLease>
+    : IProjectionScopeReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
+{
+    public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class NoOpServiceConfigurationReleaseService
+    : IProjectionScopeReleaseService<ServiceConfigurationRuntimeLease>
+{
+    public Task ReleaseIfIdleAsync(ServiceConfigurationRuntimeLease lease, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
         return Task.CompletedTask;
     }
 }

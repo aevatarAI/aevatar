@@ -1,12 +1,12 @@
 namespace Aevatar.CQRS.Projection.Core.Abstractions;
 
 /// <summary>
-/// Activation contract for one externally observable projection session.
+/// Unified activation contract for projection scopes (session or materialization).
 /// </summary>
-public interface IProjectionSessionActivationService<TLease>
+public interface IProjectionScopeActivationService<TLease>
     where TLease : class, IProjectionRuntimeLease
 {
     Task<TLease> EnsureAsync(
-        ProjectionSessionStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default);
 }
