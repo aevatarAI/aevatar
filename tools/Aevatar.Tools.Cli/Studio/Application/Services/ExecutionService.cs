@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -166,6 +167,11 @@ public sealed class ExecutionService
         var runId = TryExtractRunIdFromRecord(record);
         if (string.IsNullOrWhiteSpace(runId))
         {
+            runId = actorId;
+        }
+
+        if (string.IsNullOrWhiteSpace(runId))
+        {
             throw new InvalidOperationException("Execution is missing runId and cannot be stopped.");
         }
 
@@ -190,6 +196,11 @@ public sealed class ExecutionService
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (ShouldIgnoreStopFailure(response.StatusCode, error))
+            {
+                return await GetReconciledDetailAsync(executionId, record, cancellationToken);
+            }
+
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
                 ? $"Runtime stop request failed: {(int)response.StatusCode}"
                 : error);
@@ -207,6 +218,21 @@ public sealed class ExecutionService
 
         await _store.SaveExecutionAsync(updatedRecord, cancellationToken);
         return ToDetail(updatedRecord);
+    }
+
+    private async Task<ExecutionDetail> GetReconciledDetailAsync(
+        string executionId,
+        StoredExecutionRecord fallbackRecord,
+        CancellationToken cancellationToken)
+    {
+        var latestRecord = await _store.GetExecutionAsync(executionId, cancellationToken) ?? fallbackRecord;
+        var reconciledRecord = ReconcileExecutionRecord(latestRecord);
+        if (!Equals(reconciledRecord, latestRecord))
+        {
+            await _store.SaveExecutionAsync(reconciledRecord, cancellationToken);
+        }
+
+        return ToDetail(reconciledRecord);
     }
 
     private static string? TryExtractActorId(string payload)
@@ -295,6 +321,97 @@ public sealed class ExecutionService
         }
 
         return null;
+    }
+
+    private static bool ShouldIgnoreStopFailure(
+        HttpStatusCode statusCode,
+        string? errorPayload)
+    {
+        if (statusCode != HttpStatusCode.Conflict &&
+            statusCode != HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        var message = TryExtractApiErrorMessage(errorPayload) ?? errorPayload ?? string.Empty;
+        return message.Contains("does not have a bound run id", StringComparison.OrdinalIgnoreCase) ||
+               (message.Contains("Actor '", StringComparison.OrdinalIgnoreCase) &&
+                message.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? TryExtractApiErrorMessage(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+            if (root.TryGetProperty("error", out var errorElement) &&
+                errorElement.ValueKind == JsonValueKind.String)
+            {
+                return errorElement.GetString();
+            }
+
+            if (root.TryGetProperty("message", out var messageElement) &&
+                messageElement.ValueKind == JsonValueKind.String)
+            {
+                return messageElement.GetString();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static StoredExecutionRecord ReconcileExecutionRecord(StoredExecutionRecord record)
+    {
+        if (record.Frames.Count == 0)
+            return record;
+
+        var pendingHumanSteps = new HashSet<string>(StringComparer.Ordinal);
+        var actorId = record.ActorId;
+        var runFinished = false;
+        var runFailed = false;
+        var runStopped = false;
+        var error = record.Error;
+        DateTimeOffset? completedAtUtc = null;
+
+        foreach (var frame in record.Frames)
+        {
+            actorId ??= TryExtractActorId(frame.Payload);
+            TrackExecutionState(frame.Payload, pendingHumanSteps, ref runFinished, ref runFailed, ref runStopped);
+
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                error = TryExtractExecutionError(frame.Payload);
+            }
+
+            var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
+            if (IsTerminalExecutionStatus(liveStatus))
+            {
+                completedAtUtc = frame.ReceivedAtUtc;
+            }
+        }
+
+        var status = ResolveLiveExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
+        var terminalError = status is "failed" or "stopped"
+            ? error
+            : null;
+        var nextCompletedAtUtc = IsTerminalExecutionStatus(status)
+            ? completedAtUtc ?? record.CompletedAtUtc
+            : null;
+
+        return record with
+        {
+            Status = status,
+            CompletedAtUtc = nextCompletedAtUtc,
+            ActorId = actorId,
+            Error = terminalError,
+        };
     }
 
     private async Task RunStartExecutionAsync(

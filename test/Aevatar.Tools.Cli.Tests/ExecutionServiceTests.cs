@@ -246,6 +246,93 @@ public sealed class ExecutionServiceTests
         payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.run.stop.requested");
     }
 
+    [Fact]
+    public async Task StopAsync_WhenRunIdNotObservedYet_ShouldFallbackToActorId()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            }));
+        var (service, store) = CreateService(handler);
+        var seed = new StoredExecutionRecord(
+            ExecutionId: "exec-stop-fallback-1",
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            Status: "running",
+            StartedAtUtc: DateTimeOffset.UtcNow,
+            CompletedAtUtc: null,
+            ActorId: "WorkflowRun:run-early-stop-1",
+            Error: null,
+            Frames:
+            [
+                new StoredExecutionFrame(
+                    DateTimeOffset.UtcNow,
+                    """{"custom":{"name":"aevatar.run.context","payload":{"actorId":"WorkflowRun:run-early-stop-1","workflowName":"approval"}}}""")
+            ]);
+        await store.SaveExecutionAsync(seed);
+
+        var detail = await service.StopAsync("exec-stop-fallback-1", new StopExecutionRequest("manual"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastBody.Should().NotBeNull();
+        using (var body = JsonDocument.Parse(handler.LastBody!))
+        {
+            body.RootElement.GetProperty("actorId").GetString().Should().Be("WorkflowRun:run-early-stop-1");
+            body.RootElement.GetProperty("runId").GetString().Should().Be("WorkflowRun:run-early-stop-1");
+            body.RootElement.GetProperty("reason").GetString().Should().Be("manual");
+        }
+
+        detail.Should().NotBeNull();
+        detail!.Frames.Should().HaveCount(2);
+        using var payload = JsonDocument.Parse(detail.Frames.Last().Payload);
+        payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.run.stop.requested");
+    }
+
+    [Fact]
+    public async Task StopAsync_WhenRuntimeReportsRunAlreadyClosed_ShouldReturnReconciledDetail()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+            {
+                Content = new StringContent(
+                    """{"error":"Actor 'WorkflowRun:c1a2c77d' does not have a bound run id."}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            }));
+        var (service, store) = CreateService(handler);
+        var finishedAtUtc = DateTimeOffset.UtcNow;
+        var seed = new StoredExecutionRecord(
+            ExecutionId: "exec-stop-closed-1",
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            Status: "waiting",
+            StartedAtUtc: finishedAtUtc.AddMinutes(-1),
+            CompletedAtUtc: null,
+            ActorId: "WorkflowRun:c1a2c77d",
+            Error: null,
+            Frames:
+            [
+                new StoredExecutionFrame(
+                    finishedAtUtc.AddSeconds(-2),
+                    """{"runStarted":{"threadId":"WorkflowRun:c1a2c77d","runId":"run-stop-closed-1"}}"""),
+                new StoredExecutionFrame(
+                    finishedAtUtc,
+                    """{"runFinished":{"threadId":"WorkflowRun:c1a2c77d"}}""")
+            ]);
+        await store.SaveExecutionAsync(seed);
+
+        var detail = await service.StopAsync("exec-stop-closed-1", new StopExecutionRequest("manual"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        detail.Should().NotBeNull();
+        detail!.Status.Should().Be("completed");
+        detail.CompletedAtUtc.Should().Be(finishedAtUtc);
+        detail.Frames.Should().HaveCount(2);
+    }
+
     private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
         RecordingHttpMessageHandler handler,
         IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)
