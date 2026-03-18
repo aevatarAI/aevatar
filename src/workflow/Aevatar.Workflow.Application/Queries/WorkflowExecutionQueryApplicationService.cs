@@ -6,14 +6,14 @@ namespace Aevatar.Workflow.Application.Queries;
 
 public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService
 {
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionCatalog _workflowRegistry;
     private readonly IWorkflowExecutionCurrentStateQueryPort _currentStateQueryPort;
     private readonly IWorkflowExecutionArtifactQueryPort _artifactQueryPort;
     private readonly IWorkflowCatalogPort _workflowCatalogPort;
     private readonly IWorkflowCapabilitiesPort _workflowCapabilitiesPort;
 
     public WorkflowExecutionQueryApplicationService(
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowDefinitionCatalog workflowRegistry,
         IWorkflowExecutionCurrentStateQueryPort currentStateQueryPort,
         IWorkflowExecutionArtifactQueryPort artifactQueryPort,
         IWorkflowCatalogPort workflowCatalogPort,

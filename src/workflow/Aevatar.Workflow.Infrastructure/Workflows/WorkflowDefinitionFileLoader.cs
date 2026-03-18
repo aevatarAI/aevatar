@@ -6,7 +6,7 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 public sealed class WorkflowDefinitionFileLoader
 {
     public int LoadInto(
-        IWorkflowDefinitionRegistry registry,
+        IWorkflowDefinitionCatalog registry,
         IEnumerable<string> directories,
         ILogger logger,
         WorkflowDefinitionDuplicatePolicy duplicatePolicy = WorkflowDefinitionDuplicatePolicy.Throw)

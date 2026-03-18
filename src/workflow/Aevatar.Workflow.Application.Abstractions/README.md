@@ -13,7 +13,7 @@ Aevatar.Workflow.Application.Abstractions/
 │   ├── IWorkflowExecutionQueryApplicationService.cs  # 查询门面
 │   └── WorkflowExecutionQueryModels.cs               # Summary/Report/StepTrace 等查询模型
 ├── Workflows/
-│   └── IWorkflowDefinitionRegistry.cs         # workflow 名称注册表
+│   └── IWorkflowDefinitionCatalog.cs           # workflow 定义启动缓存
 ├── Reporting/
 │   └── IWorkflowRunReportExportPort.cs         # 报告导出端口
 └── Projections/
