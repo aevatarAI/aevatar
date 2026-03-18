@@ -38,12 +38,20 @@ public sealed class RolesController : ControllerBase
         }
     }
 
-    [HttpPost("import-local")]
-    public async Task<ActionResult<ImportRoleCatalogResponse>> ImportLocal(CancellationToken cancellationToken)
+    [HttpPost("import")]
+    public async Task<ActionResult<ImportRoleCatalogResponse>> Import(
+        [FromForm] IFormFile? file,
+        CancellationToken cancellationToken)
     {
+        if (file is null || file.Length <= 0)
+        {
+            return BadRequest(new { message = "Select a role catalog JSON file to import." });
+        }
+
         try
         {
-            return Ok(await _roleCatalogService.ImportLocalCatalogAsync(cancellationToken));
+            await using var stream = file.OpenReadStream();
+            return Ok(await _roleCatalogService.ImportCatalogAsync(file.FileName, stream, cancellationToken));
         }
         catch (InvalidOperationException exception)
         {

@@ -43,9 +43,15 @@ export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
 }
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
+  const headers = new Headers(opts?.headers);
+  const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts?.headers },
     ...opts,
+    headers,
   });
 
   const contentType = res.headers.get('content-type');
@@ -227,22 +233,30 @@ export const workspace = {
 
 /* ─── Connectors ─── */
 export const connectors = {
-  getCatalog:   ()          => request<any>('/connectors'),
-  saveCatalog:  (data: any) => request<any>('/connectors', { method: 'PUT', body: JSON.stringify(data) }),
-  importLocal:  ()          => request<any>('/connectors/import-local', { method: 'POST' }),
-  getDraft:     ()          => request<any>('/connectors/draft'),
-  saveDraft:    (data: any) => request<any>('/connectors/draft', { method: 'PUT', body: JSON.stringify(data) }),
-  deleteDraft:  ()          => request<void>('/connectors/draft', { method: 'DELETE' }),
+  getCatalog:  ()          => request<any>('/connectors'),
+  saveCatalog: (data: any) => request<any>('/connectors', { method: 'PUT', body: JSON.stringify(data) }),
+  importCatalog: (file: File) => {
+    const form = new FormData();
+    form.set('file', file, file.name);
+    return request<any>('/connectors/import', { method: 'POST', body: form });
+  },
+  getDraft:    ()          => request<any>('/connectors/draft'),
+  saveDraft:   (data: any) => request<any>('/connectors/draft', { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDraft: ()          => request<void>('/connectors/draft', { method: 'DELETE' }),
 };
 
 /* ─── Roles ─── */
 export const roles = {
-  getCatalog:   ()          => request<any>('/roles'),
-  saveCatalog:  (data: any) => request<any>('/roles', { method: 'PUT', body: JSON.stringify(data) }),
-  importLocal:  ()          => request<any>('/roles/import-local', { method: 'POST' }),
-  getDraft:     ()          => request<any>('/roles/draft'),
-  saveDraft:    (data: any) => request<any>('/roles/draft', { method: 'PUT', body: JSON.stringify(data) }),
-  deleteDraft:  ()          => request<void>('/roles/draft', { method: 'DELETE' }),
+  getCatalog:  ()          => request<any>('/roles'),
+  saveCatalog: (data: any) => request<any>('/roles', { method: 'PUT', body: JSON.stringify(data) }),
+  importCatalog: (file: File) => {
+    const form = new FormData();
+    form.set('file', file, file.name);
+    return request<any>('/roles/import', { method: 'POST', body: form });
+  },
+  getDraft:    ()          => request<any>('/roles/draft'),
+  saveDraft:   (data: any) => request<any>('/roles/draft', { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDraft: ()          => request<void>('/roles/draft', { method: 'DELETE' }),
 };
 
 /* ─── Settings ─── */

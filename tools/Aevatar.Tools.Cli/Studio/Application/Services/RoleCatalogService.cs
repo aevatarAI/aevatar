@@ -1,15 +1,20 @@
 using Aevatar.Tools.Cli.Studio.Application.Abstractions;
 using Aevatar.Tools.Cli.Studio.Application.Contracts;
+using System.Text.Json;
 
 namespace Aevatar.Tools.Cli.Studio.Application.Services;
 
 public sealed class RoleCatalogService
 {
     private readonly IRoleCatalogStore _store;
+    private readonly IRoleCatalogImportParser _importParser;
 
-    public RoleCatalogService(IRoleCatalogStore store)
+    public RoleCatalogService(
+        IRoleCatalogStore store,
+        IRoleCatalogImportParser importParser)
     {
         _store = store;
+        _importParser = importParser;
     }
 
     public async Task<RoleCatalogResponse> GetCatalogAsync(CancellationToken cancellationToken = default)
@@ -49,6 +54,40 @@ public sealed class RoleCatalogService
     {
         var imported = await _store.ImportLocalCatalogAsync(cancellationToken);
         return ToImportResponse(imported);
+    }
+
+    public async Task<ImportRoleCatalogResponse> ImportCatalogAsync(
+        string sourceFilePath,
+        Stream sourceStream,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sourceFilePath))
+        {
+            throw new InvalidOperationException("Role catalog file name is required.");
+        }
+
+        IReadOnlyList<StoredRoleDefinition> roles;
+        try
+        {
+            roles = await _importParser.ParseCatalogAsync(sourceStream, cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException($"Role catalog file '{sourceFilePath}' is not valid JSON.", exception);
+        }
+
+        var saved = await SaveCatalogAsync(
+            new SaveRoleCatalogRequest(roles.Select(ToDto).ToList()),
+            cancellationToken);
+
+        return new ImportRoleCatalogResponse(
+            SourceFilePath: sourceFilePath,
+            SourceFileExists: true,
+            ImportedCount: saved.Roles.Count,
+            HomeDirectory: saved.HomeDirectory,
+            FilePath: saved.FilePath,
+            FileExists: saved.FileExists,
+            Roles: saved.Roles);
     }
 
     public async Task<RoleDraftResponse> SaveDraftAsync(
@@ -125,15 +164,7 @@ public sealed class RoleCatalogService
             catalog.HomeDirectory,
             catalog.FilePath,
             catalog.FileExists,
-            catalog.Roles
-                .Select(role => new RoleDefinitionDto(
-                    role.Id,
-                    role.Name,
-                    role.SystemPrompt,
-                    role.Provider,
-                    role.Model,
-                    role.Connectors.ToList()))
-                .ToList());
+            catalog.Roles.Select(ToDto).ToList());
 
     private static RoleDraftResponse ToDraftResponse(StoredRoleDraft draft) =>
         new(
@@ -160,13 +191,5 @@ public sealed class RoleCatalogService
             imported.Catalog.HomeDirectory,
             imported.Catalog.FilePath,
             imported.Catalog.FileExists,
-            imported.Catalog.Roles
-                .Select(role => new RoleDefinitionDto(
-                    role.Id,
-                    role.Name,
-                    role.SystemPrompt,
-                    role.Provider,
-                    role.Model,
-                    role.Connectors.ToList()))
-                .ToList());
+            imported.Catalog.Roles.Select(ToDto).ToList());
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -779,6 +779,8 @@ function App() {
   const executionActionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const executionLogsPopoutMonitorRef = useRef<number | null>(null);
   const executionLogsPopoutWindowRef = useRef<Window | null>(null);
+  const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
+  const roleImportInputRef = useRef<HTMLInputElement | null>(null);
   const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
@@ -2177,14 +2179,24 @@ function App() {
     }
   }
 
-  async function handleImportLocalConnectors() {
+  function openConnectorImportPicker() {
+    connectorImportInputRef.current?.click();
+  }
+
+  async function handleConnectorCatalogImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+
     try {
       setConnectorImportPending(true);
-      const response = await api.connectors.importLocal();
+      const response = await api.connectors.importCatalog(file);
       hydrateConnectorCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} connectors from ${response?.sourceFilePath || 'local file'}`, 'success');
+      flash(`Imported ${response?.importedCount ?? 0} connectors from ${response?.sourceFilePath || file.name}`, 'success');
     } catch (error: any) {
-      flash(error?.message || 'Failed to import local connectors', 'error');
+      flash(error?.message || 'Failed to import connector catalog', 'error');
     } finally {
       setConnectorImportPending(false);
     }
@@ -2279,14 +2291,24 @@ function App() {
     }
   }
 
-  async function handleImportLocalRoles() {
+  function openRoleImportPicker() {
+    roleImportInputRef.current?.click();
+  }
+
+  async function handleRoleCatalogImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+
     try {
       setRoleImportPending(true);
-      const response = await api.roles.importLocal();
+      const response = await api.roles.importCatalog(file);
       hydrateRoleCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} roles from ${response?.sourceFilePath || 'local file'}`, 'success');
+      flash(`Imported ${response?.importedCount ?? 0} roles from ${response?.sourceFilePath || file.name}`, 'success');
     } catch (error: any) {
-      flash(error?.message || 'Failed to import local roles', 'error');
+      flash(error?.message || 'Failed to import role catalog', 'error');
     } finally {
       setRoleImportPending(false);
     }
@@ -3139,6 +3161,13 @@ function App() {
           <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="space-y-3">
               <div className="catalog-sidebar-actions">
+                <input
+                  ref={roleImportInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={event => void handleRoleCatalogImport(event)}
+                />
                 <button
                   onClick={() => openRoleModal('catalog')}
                   className="solid-action flex-1 justify-center"
@@ -3151,15 +3180,13 @@ function App() {
                 >
                   Save
                 </button>
-                {roleCatalogIsRemote ? (
-                  <button
-                    onClick={() => void handleImportLocalRoles()}
-                    className="ghost-action catalog-save-action"
-                    disabled={roleImportPending}
-                  >
-                    <Upload size={14} /> {roleImportPending ? 'Importing...' : 'Import local'}
-                  </button>
-                ) : null}
+                <button
+                  onClick={openRoleImportPicker}
+                  className="ghost-action catalog-save-action"
+                  disabled={roleImportPending}
+                >
+                  <Upload size={14} /> {roleImportPending ? 'Importing...' : 'Import'}
+                </button>
               </div>
 
               <div className="search-field">
@@ -3356,6 +3383,13 @@ function App() {
           <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
             <div className="space-y-3">
               <div className="catalog-sidebar-actions">
+                <input
+                  ref={connectorImportInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={event => void handleConnectorCatalogImport(event)}
+                />
                 <button
                   onClick={() => openConnectorModal('http')}
                   className="solid-action flex-1 justify-center"
@@ -3368,15 +3402,13 @@ function App() {
                 >
                   Save
                 </button>
-                {connectorCatalogIsRemote ? (
-                  <button
-                    onClick={() => void handleImportLocalConnectors()}
-                    className="ghost-action catalog-save-action"
-                    disabled={connectorImportPending}
-                  >
-                    <Upload size={14} /> {connectorImportPending ? 'Importing...' : 'Import local'}
-                  </button>
-                ) : null}
+                <button
+                  onClick={openConnectorImportPicker}
+                  className="ghost-action catalog-save-action"
+                  disabled={connectorImportPending}
+                >
+                  <Upload size={14} /> {connectorImportPending ? 'Importing...' : 'Import'}
+                </button>
               </div>
 
               <div className="search-field">
