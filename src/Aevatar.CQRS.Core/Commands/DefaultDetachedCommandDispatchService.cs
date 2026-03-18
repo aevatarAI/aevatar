@@ -77,7 +77,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
     {
         var task = Task.Run(
             () => DrainAsync(target, receipt, _shutdownToken),
-            _shutdownToken);
+            CancellationToken.None);
 
         lock (_inflightLock)
         {
@@ -175,11 +175,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
                         observedCompleted,
                         observedCompletion,
                         durableCompletion),
-                    ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                // Shutdown in progress; skip cleanup.
+                    CancellationToken.None);
             }
             catch (Exception ex)
             {
