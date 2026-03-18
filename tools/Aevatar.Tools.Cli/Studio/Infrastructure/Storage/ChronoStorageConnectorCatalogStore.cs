@@ -36,13 +36,13 @@ internal sealed class ChronoStorageConnectorCatalogStore : IConnectorCatalogStor
             return await _localWorkspaceStore.GetConnectorCatalogAsync(cancellationToken);
         }
 
-        var encryptedPayload = await _blobClient.TryDownloadEncryptedAsync(remoteContext, cancellationToken);
-        if (encryptedPayload is null)
+        var downloadedPayload = await _blobClient.TryDownloadEncryptedAsync(remoteContext, cancellationToken);
+        if (downloadedPayload is null)
         {
             return CreateRemoteCatalog(remoteContext, fileExists: false, []);
         }
 
-        var plaintext = _blobClient.DecryptPayload(remoteContext, encryptedPayload);
+        var plaintext = _blobClient.DecryptPayload(remoteContext, downloadedPayload.Payload, downloadedPayload.ObjectKey);
         await using var stream = new MemoryStream(plaintext, writable: false);
         var connectors = await ConnectorCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
         return CreateRemoteCatalog(remoteContext, fileExists: true, connectors);

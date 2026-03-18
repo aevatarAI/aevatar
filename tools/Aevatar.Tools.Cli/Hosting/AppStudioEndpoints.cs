@@ -1,5 +1,8 @@
+using Aevatar.Scripting.Application.Queries;
+using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
+using Google.Protobuf;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
@@ -19,6 +22,21 @@ internal static class AppStudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct));
+        app.MapPost("/api/app/scripts/generator", (
+            HttpContext http,
+            AppScriptGenerateRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGenerateScriptAsync(http, request, services, embeddedWorkflowMode, ct));
+        app.MapPost("/api/app/scripts/validate", (
+            AppScriptValidateRequest request,
+            IServiceProvider services) =>
+            HandleValidateScript(request, services));
+        app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
+            string actorId,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGetAppScriptReadModelAsync(actorId, services, ct));
 
         app.MapPost("/api/app/scripts/draft-run", (
             AppScriptDraftRunRequest request,
@@ -88,7 +106,7 @@ internal static class AppStudioEndpoints
             },
             scriptContract = new
             {
-                inputType = Any.Pack(new StringValue()).TypeUrl,
+                inputType = Any.Pack(new AppScriptCommand()).TypeUrl,
                 readModelFields = new[]
                 {
                     AppScriptProtocol.InputField,
@@ -168,10 +186,9 @@ internal static class AppStudioEndpoints
                 ct);
 
             var runId = Guid.NewGuid().ToString("N");
-            var payload = Any.Pack(new StringValue
-            {
-                Value = request.Input ?? string.Empty,
-            });
+            var payload = Any.Pack(AppScriptProtocol.CreateCommand(
+                request.Input ?? string.Empty,
+                runId));
 
             await runtimeCommandPort.RunRuntimeAsync(
                 resolvedRuntimeActorId,
@@ -192,7 +209,7 @@ internal static class AppStudioEndpoints
                 runId,
                 sourceHash,
                 commandTypeUrl = payload.TypeUrl,
-                readModelUrl = $"/api/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
+                readModelUrl = $"/api/app/scripts/runtimes/{Uri.EscapeDataString(resolvedRuntimeActorId)}/readmodel",
             });
         }
         catch (InvalidOperationException ex)
@@ -203,6 +220,97 @@ internal static class AppStudioEndpoints
                 message = ex.Message,
             });
         }
+    }
+
+    private static IResult HandleValidateScript(
+        AppScriptValidateRequest request,
+        IServiceProvider services)
+    {
+        var validator = services.GetService<ScriptEditorValidationService>();
+        if (validator == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_VALIDATION_UNAVAILABLE",
+                message = "Script validation services are not available in the current host.",
+            });
+        }
+
+        var scriptId = NormalizeStudioDocumentId(request.ScriptId, "script");
+        var revision = NormalizeStudioDocumentId(request.ScriptRevision, "draft");
+        var result = validator.Validate(
+            scriptId,
+            revision,
+            request.Source ?? string.Empty);
+        return Results.Ok(result);
+    }
+
+    private static async Task<IResult> HandleGetAppScriptReadModelAsync(
+        string actorId,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var queryService = services.GetService<IScriptReadModelQueryApplicationService>();
+        if (queryService == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_READMODEL_UNAVAILABLE",
+                message = "Script read model queries are not available in the current host.",
+            });
+        }
+
+        var snapshot = await queryService.GetSnapshotAsync(actorId, ct);
+        if (snapshot == null)
+            return Results.NotFound();
+
+        return Results.Ok(new ScriptReadModelSnapshotHttpResponse(
+            snapshot.ActorId,
+            snapshot.ScriptId,
+            snapshot.DefinitionActorId,
+            snapshot.Revision,
+            snapshot.ReadModelTypeUrl,
+            FormatAppReadModelJson(snapshot.ReadModelPayload),
+            snapshot.StateVersion,
+            snapshot.LastEventId,
+            snapshot.UpdatedAt));
+    }
+
+    private static string FormatAppReadModelJson(Any? payload)
+    {
+        if (payload == null)
+            return "{}";
+
+        if (payload.Is(AppScriptReadModel.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<AppScriptReadModel>());
+        if (payload.Is(Struct.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Struct>());
+        if (payload.Is(Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Value>());
+        if (payload.Is(ListValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<ListValue>());
+        if (payload.Is(StringValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<StringValue>());
+        if (payload.Is(BoolValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<BoolValue>());
+        if (payload.Is(Int32Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Int32Value>());
+        if (payload.Is(Int64Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Int64Value>());
+        if (payload.Is(UInt32Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<UInt32Value>());
+        if (payload.Is(UInt64Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<UInt64Value>());
+        if (payload.Is(FloatValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<FloatValue>());
+        if (payload.Is(DoubleValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<DoubleValue>());
+        if (payload.Is(BytesValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<BytesValue>());
+        if (payload.Is(Empty.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Empty>());
+
+        return "{}";
     }
 
     private static async Task HandleGenerateWorkflowAsync(
@@ -326,6 +434,126 @@ internal static class AppStudioEndpoints
         }
     }
 
+    private static async Task HandleGenerateScriptAsync(
+        HttpContext http,
+        AppScriptGenerateRequest request,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        if (!embeddedWorkflowMode)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "SCRIPT_GENERATOR_UNAVAILABLE",
+                message = "Ask AI script generation is only available in embedded mode.",
+            }, ct);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "SCRIPT_GENERATOR_PROMPT_REQUIRED",
+                message = "Script authoring prompt is required.",
+            }, ct);
+            return;
+        }
+
+        var generator = services.GetService<ScriptGenerateActorService>();
+        if (generator == null)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(new
+            {
+                code = "SCRIPT_GENERATOR_MISSING",
+                message = "Script generator services are not available in the current host.",
+            }, ct);
+            return;
+        }
+
+        try
+        {
+            await StartSseAsync(http.Response, ct);
+            var result = await generator.GenerateAsync(
+                new ScriptGenerateRequest(
+                    request.Prompt.Trim(),
+                    request.CurrentSource,
+                    request.Metadata),
+                (delta, token) => WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_REASONING",
+                    delta,
+                }, token),
+                (progress, token) => WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_REASONING",
+                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+                }, token),
+                ct);
+
+            foreach (var chunk in ChunkText(result.Source, 320))
+            {
+                await WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_CONTENT",
+                    delta = chunk,
+                }, ct);
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = result.Source,
+                delta = string.Empty,
+            }, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    code = "SCRIPT_GENERATOR_FAILED",
+                    message = ex.Message,
+                }, ct);
+                return;
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "RUN_ERROR",
+                message = ex.Message,
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            if (!http.Response.HasStarted)
+            {
+                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                await http.Response.WriteAsJsonAsync(new
+                {
+                    code = "SCRIPT_GENERATOR_UNEXPECTED",
+                    message = ex.Message,
+                }, ct);
+                return;
+            }
+
+            await WriteSseFrameAsync(http.Response, new
+            {
+                type = "RUN_ERROR",
+                message = ex.Message,
+            }, ct);
+        }
+    }
+
     private static string ComputeSha256(string source)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(source ?? string.Empty));
@@ -371,9 +599,19 @@ internal static class AppStudioEndpoints
         string? DefinitionActorId,
         string? RuntimeActorId);
 
+    internal sealed record AppScriptValidateRequest(
+        string? ScriptId,
+        string? ScriptRevision,
+        string? Source);
+
     internal sealed record AppWorkflowGenerateRequest(
         string? Prompt,
         string? CurrentYaml,
         IReadOnlyCollection<string>? AvailableWorkflowNames,
+        IReadOnlyDictionary<string, string>? Metadata);
+
+    internal sealed record AppScriptGenerateRequest(
+        string? Prompt,
+        string? CurrentSource,
         IReadOnlyDictionary<string, string>? Metadata);
 }

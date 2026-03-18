@@ -530,6 +530,7 @@ internal sealed class SubWorkflowOrchestrator
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
             RunId = runId ?? string.Empty,
+            ScopeId = state.ScopeId ?? string.Empty,
             InlineWorkflowYamls = { inlineWorkflowYamls },
         };
 

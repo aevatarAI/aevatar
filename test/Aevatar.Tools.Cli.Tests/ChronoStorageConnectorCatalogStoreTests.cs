@@ -46,6 +46,42 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     }
 
     [Fact]
+    public async Task GetConnectorCatalogAsync_WhenLegacyOwnerKeyExists_ShouldLoadLegacyObject()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var scopeResolver = new StubAppScopeResolver("scope-legacy");
+        var storageServer = new InMemoryChronoStorageServer();
+        var httpClientFactory = storageServer.CreateHttpClientFactory();
+        var blobClient = CreateBlobClient(scopeResolver, httpClientFactory, workspaceRoot.Path);
+        var remoteContext = blobClient.TryResolveContext("aevatar/connectors/v1", "catalog.json.enc")
+                           ?? throw new InvalidOperationException("Expected remote context.");
+        remoteContext.LegacyObjectKeys.Should().ContainSingle();
+
+        await using var stream = new MemoryStream();
+        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(
+            stream,
+            [CreateConnector("legacy_connector", "https://legacy.example.com")],
+            CancellationToken.None);
+        var encryptedPayload = blobClient.EncryptPayload(remoteContext, stream.ToArray(), remoteContext.LegacyObjectKeys[0]);
+        storageServer.Objects[$"{remoteContext.Bucket}:{remoteContext.LegacyObjectKeys[0]}"] = encryptedPayload;
+
+        var store = new ChronoStorageConnectorCatalogStore(
+            new InMemoryStudioWorkspaceStore(),
+            blobClient,
+            CreateOptions(),
+            Options.Create(new StudioStorageOptions
+            {
+                RootDirectory = workspaceRoot.Path,
+            }));
+
+        var catalog = await store.GetConnectorCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Connectors.Should().ContainSingle(x => x.Name == "legacy_connector");
+        catalog.FilePath.Should().Be($"chrono-storage://{remoteContext.Bucket}/{remoteContext.ObjectKey}");
+    }
+
+    [Fact]
     public async Task ImportLocalCatalogAsync_WhenRemoteCatalogMissing_ShouldUploadLocalCatalog()
     {
         using var workspaceRoot = new TemporaryDirectory();
@@ -114,7 +150,20 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         IHttpClientFactory httpClientFactory,
         string workspaceRoot)
     {
-        var options = Options.Create(new ConnectorCatalogStorageOptions
+        var options = CreateOptions();
+        var blobClient = CreateBlobClient(scopeResolver, httpClientFactory, workspaceRoot);
+        return new ChronoStorageConnectorCatalogStore(
+            localStore,
+            blobClient,
+            options,
+            Options.Create(new StudioStorageOptions
+            {
+                RootDirectory = workspaceRoot,
+            }));
+    }
+
+    private static IOptions<ConnectorCatalogStorageOptions> CreateOptions() =>
+        Options.Create(new ConnectorCatalogStorageOptions
         {
             Enabled = true,
             UseNyxProxy = true,
@@ -126,16 +175,15 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             MasterKey = "unit-test-master-key",
             CreateBucketIfMissing = true,
         });
+
+    private static ChronoStorageCatalogBlobClient CreateBlobClient(
+        IAppScopeResolver scopeResolver,
+        IHttpClientFactory httpClientFactory,
+        string workspaceRoot)
+    {
+        var options = CreateOptions();
         var masterKeyResolver = new ChronoStorageMasterKeyResolver(workspaceRoot, allowKeychain: false);
-        var blobClient = new ChronoStorageCatalogBlobClient(scopeResolver, httpClientFactory, options, masterKeyResolver);
-        return new ChronoStorageConnectorCatalogStore(
-            localStore,
-            blobClient,
-            options,
-            Options.Create(new StudioStorageOptions
-            {
-                RootDirectory = workspaceRoot,
-            }));
+        return new ChronoStorageCatalogBlobClient(scopeResolver, httpClientFactory, options, masterKeyResolver);
     }
 
     private static StoredConnectorDefinition CreateConnector(string name, string baseUrl) =>

@@ -158,6 +158,7 @@ public static class ScopeWorkflowEndpoints
 
             await HandleRunWorkflowStreamCoreAsync(
                 http,
+                scopeId,
                 workflow,
                 request.Prompt,
                 request.SessionId,
@@ -201,6 +202,7 @@ public static class ScopeWorkflowEndpoints
 
             await HandleRunWorkflowStreamCoreAsync(
                 http,
+                scopeId,
                 workflow,
                 request.Prompt,
                 request.SessionId,
@@ -244,6 +246,16 @@ public static class ScopeWorkflowEndpoints
                 });
             }
 
+            if (!string.IsNullOrWhiteSpace(binding.ScopeId) &&
+                !string.Equals(binding.ScopeId, scopeId, StringComparison.Ordinal))
+            {
+                return Results.NotFound(new
+                {
+                    code = "USER_WORKFLOW_NOT_FOUND",
+                    message = "Workflow run actor was not found for the specified scope.",
+                });
+            }
+
             var workflow = await workflowQueryPort.GetByActorIdAsync(scopeId, binding.EffectiveDefinitionActorId, ct);
             if (workflow == null)
             {
@@ -277,6 +289,7 @@ public static class ScopeWorkflowEndpoints
 
     private static async Task HandleRunWorkflowStreamCoreAsync(
         HttpContext http,
+        string scopeId,
         ScopeWorkflowSummary workflow,
         string prompt,
         string? sessionId,
@@ -305,9 +318,7 @@ public static class ScopeWorkflowEndpoints
                     Prompt = prompt,
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
-                    Metadata = headers == null
-                        ? null
-                        : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase),
+                    Metadata = BuildScopedHeaders(scopeId, headers),
                 },
                 chatRunService,
                 ct);
@@ -319,7 +330,7 @@ public static class ScopeWorkflowEndpoints
             workflow,
             prompt,
             sessionId,
-            headers,
+            BuildScopedHeaders(scopeId, headers),
             chatRunService,
             ct);
     }
@@ -481,6 +492,19 @@ public static class ScopeWorkflowEndpoints
 
         eventFormat = ScopeWorkflowStreamEventFormat.Workflow;
         return false;
+    }
+
+    private static Dictionary<string, string> BuildScopedHeaders(
+        string scopeId,
+        IReadOnlyDictionary<string, string>? headers)
+    {
+        var scopedHeaders = headers == null
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        scopedHeaders["scope_id"] = normalizedScopeId;
+        scopedHeaders[WorkflowRunCommandMetadataKeys.ScopeId] = normalizedScopeId;
+        return scopedHeaders;
     }
 
     private static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)

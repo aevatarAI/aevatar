@@ -391,6 +391,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default)
         {
             BindCalls.Add((actor.Id, workflowName, workflowYaml));

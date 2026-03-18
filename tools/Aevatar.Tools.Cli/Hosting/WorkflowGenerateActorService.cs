@@ -127,14 +127,28 @@ internal sealed class WorkflowGenerateActorBootstrapHostedService : IHostedServi
 internal sealed class WorkflowGenerateAgentDefaultsProvider : IAgentClassDefaultsProvider<AIAgentConfig>
 {
     private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _generatorDefaults;
+    private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _scriptGeneratorDefaults;
     private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _emptyDefaults = new(new AIAgentConfig(), 0);
 
-    public WorkflowGenerateAgentDefaultsProvider(WorkflowGeneratePromptCatalog prompts)
+    public WorkflowGenerateAgentDefaultsProvider(
+        WorkflowGeneratePromptCatalog prompts,
+        ScriptGeneratePromptCatalog scriptPrompts)
     {
         _generatorDefaults = new AgentClassDefaultsSnapshot<AIAgentConfig>(
             new AIAgentConfig
             {
                 SystemPrompt = prompts.SystemPrompt,
+                Temperature = 0.1,
+                MaxTokens = 4096,
+                MaxToolRounds = 1,
+                MaxHistoryMessages = 12,
+                StreamBufferCapacity = 256,
+            },
+            1);
+        _scriptGeneratorDefaults = new AgentClassDefaultsSnapshot<AIAgentConfig>(
+            new AIAgentConfig
+            {
+                SystemPrompt = scriptPrompts.SystemPrompt,
                 Temperature = 0.1,
                 MaxTokens = 4096,
                 MaxToolRounds = 1,
@@ -154,6 +168,8 @@ internal sealed class WorkflowGenerateAgentDefaultsProvider : IAgentClassDefault
         return ValueTask.FromResult(
             agentType == typeof(WorkflowGenerateGAgent)
                 ? _generatorDefaults
+                : agentType == typeof(ScriptGenerateGAgent)
+                    ? _scriptGeneratorDefaults
                 : _emptyDefaults);
     }
 }

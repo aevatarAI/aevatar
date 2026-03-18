@@ -57,6 +57,7 @@ import {
   X,
 } from 'lucide-react';
 import * as api from './api';
+import ScriptsStudio from './ScriptsStudio';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -136,7 +137,7 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'llm' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
@@ -150,6 +151,11 @@ type AppContextState = {
   scopeResolved: boolean;
   scopeSource: string;
   workflowStorageMode: WorkflowStorageMode;
+  scriptsEnabled: boolean;
+  scriptContract: {
+    inputType: string;
+    readModelFields: string[];
+  };
 };
 
 type AuthSessionState = {
@@ -236,6 +242,11 @@ function createEmptyAppContext(): AppContextState {
     scopeResolved: false,
     scopeSource: '',
     workflowStorageMode: 'workspace',
+    scriptsEnabled: false,
+    scriptContract: {
+      inputType: '',
+      readModelFields: [],
+    },
   };
 }
 
@@ -1199,6 +1210,11 @@ function App() {
         scopeResolved: Boolean(resolvedScopeId),
         scopeSource: context?.scopeSource || '',
         workflowStorageMode,
+        scriptsEnabled: Boolean(context?.features?.scripts),
+        scriptContract: {
+          inputType: context?.scriptContract?.inputType || '',
+          readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
+        },
       });
       setWorkspaceSettings({
         runtimeBaseUrl: nextRuntime,
@@ -1510,6 +1526,14 @@ function App() {
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
+  function openScriptsPage() {
+    setWorkspacePage('scripts');
+    setRightPanelOpen(false);
+    setPaletteOpen(false);
+    setAskAiOpen(false);
+    setCanvasMenu({ open: false, x: 0, y: 0 });
+  }
+
   function openCatalogPage(page: CatalogPage) {
     setWorkspacePage(page);
     setRightPanelOpen(false);
@@ -1612,6 +1636,11 @@ function App() {
       scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
       scopeSource: context?.scopeSource || '',
       workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
+      scriptsEnabled: Boolean(context?.features?.scripts),
+      scriptContract: {
+        inputType: context?.scriptContract?.inputType || '',
+        readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
+      },
     });
     const nextSettings = {
       runtimeBaseUrl: workspaceSettings.runtimeBaseUrl,
@@ -3664,6 +3693,14 @@ function App() {
             icon={<FileText size={18} />}
             onClick={openWorkflowsPage}
           />
+          {appContext.scriptsEnabled ? (
+            <RailButton
+              active={workspacePage === 'scripts'}
+              label="Scripts"
+              icon={<Code2 size={18} />}
+              onClick={openScriptsPage}
+            />
+          ) : null}
           <RailButton
             active={workspacePage === 'roles'}
             label="Roles"
@@ -3896,6 +3933,15 @@ function App() {
           renderRolesPage()
         ) : workspacePage === 'connectors' ? (
           renderConnectorsPage()
+        ) : workspacePage === 'scripts' ? (
+          <ScriptsStudio
+            appContext={{
+              hostMode: appContext.hostMode,
+              scriptsEnabled: appContext.scriptsEnabled,
+              scriptContract: appContext.scriptContract,
+            }}
+            onFlash={flash}
+          />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">

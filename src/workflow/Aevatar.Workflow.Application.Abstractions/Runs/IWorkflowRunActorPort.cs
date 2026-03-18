@@ -26,7 +26,8 @@ public sealed record WorkflowDefinitionBinding(
     string DefinitionActorId,
     string WorkflowName,
     string WorkflowYaml,
-    IReadOnlyDictionary<string, string> InlineWorkflowYamls);
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    string ScopeId = "");
 
 public sealed record WorkflowRunCreationResult(
     IActor Actor,
@@ -40,7 +41,8 @@ public sealed record WorkflowActorBinding(
     string RunId,
     string WorkflowName,
     string WorkflowYaml,
-    IReadOnlyDictionary<string, string> InlineWorkflowYamls)
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    string ScopeId = "")
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -92,6 +94,7 @@ public interface IWorkflowRunActorPort
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+        string? scopeId = null,
         CancellationToken ct = default);
 
     Task MarkStoppedAsync(

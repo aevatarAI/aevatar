@@ -1,5 +1,3 @@
-using Google.Protobuf.WellKnownTypes;
-
 namespace Aevatar.Tools.Cli.Hosting;
 
 public static class AppScriptProtocol
@@ -10,95 +8,64 @@ public static class AppScriptProtocol
     public const string LastCommandIdField = "last_command_id";
     public const string NotesField = "notes";
 
-    public static Struct CreateState(
+    public static AppScriptCommand CreateCommand(
+        string input,
+        string? commandId = null) =>
+        new()
+        {
+            Input = input ?? string.Empty,
+            CommandId = commandId ?? string.Empty,
+        };
+
+    public static AppScriptReadModel CreateState(
         string input,
         string output,
         string status,
         string? lastCommandId = null,
         IEnumerable<string>? notes = null)
     {
-        var state = new Struct();
-        SetString(state, InputField, input);
-        SetString(state, OutputField, output);
-        SetString(state, StatusField, status);
-        SetString(state, LastCommandIdField, lastCommandId);
-        SetStringList(state, NotesField, notes);
+        var state = new AppScriptReadModel
+        {
+            Input = input ?? string.Empty,
+            Output = output ?? string.Empty,
+            Status = status ?? string.Empty,
+            LastCommandId = lastCommandId ?? string.Empty,
+        };
+        if (notes != null)
+        {
+            state.Notes.AddRange(notes.Where(static item => !string.IsNullOrWhiteSpace(item)));
+        }
+
         return state;
     }
 
-    public static string GetString(Struct? payload, string fieldName)
+    public static string GetString(AppScriptReadModel? payload, string fieldName)
     {
-        if (payload == null ||
-            string.IsNullOrWhiteSpace(fieldName) ||
-            !payload.Fields.TryGetValue(fieldName, out var value))
-        {
+        if (payload == null || string.IsNullOrWhiteSpace(fieldName))
             return string.Empty;
-        }
 
-        return value.KindCase switch
+        return fieldName switch
         {
-            Value.KindOneofCase.StringValue => value.StringValue ?? string.Empty,
-            Value.KindOneofCase.NumberValue => value.NumberValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Value.KindOneofCase.BoolValue => value.BoolValue ? "true" : "false",
+            InputField => payload.Input ?? string.Empty,
+            OutputField => payload.Output ?? string.Empty,
+            StatusField => payload.Status ?? string.Empty,
+            LastCommandIdField => payload.LastCommandId ?? string.Empty,
             _ => string.Empty,
         };
     }
 
-    public static IReadOnlyList<string> GetStringList(Struct? payload, string fieldName)
+    public static IReadOnlyList<string> GetStringList(AppScriptReadModel? payload, string fieldName)
     {
         if (payload == null ||
             string.IsNullOrWhiteSpace(fieldName) ||
-            !payload.Fields.TryGetValue(fieldName, out var value) ||
-            value.KindCase != Value.KindOneofCase.ListValue)
+            !string.Equals(fieldName, NotesField, StringComparison.Ordinal))
         {
             return [];
         }
 
-        return value.ListValue.Values
-            .Where(static item => item.KindCase == Value.KindOneofCase.StringValue)
-            .Select(static item => item.StringValue ?? string.Empty)
+        return payload.Notes
+            .Select(static item => item ?? string.Empty)
             .Where(static item => !string.IsNullOrWhiteSpace(item))
             .ToArray();
-    }
-
-    private static void SetString(Struct target, string fieldName, string? value)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-
-        if (string.IsNullOrWhiteSpace(fieldName))
-            return;
-
-        target.Fields[fieldName] = new Value
-        {
-            StringValue = value ?? string.Empty,
-        };
-    }
-
-    private static void SetStringList(Struct target, string fieldName, IEnumerable<string>? values)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-
-        if (string.IsNullOrWhiteSpace(fieldName))
-            return;
-
-        var list = new ListValue();
-        if (values != null)
-        {
-            foreach (var item in values)
-            {
-                if (string.IsNullOrWhiteSpace(item))
-                    continue;
-
-                list.Values.Add(new Value
-                {
-                    StringValue = item,
-                });
-            }
-        }
-
-        target.Fields[fieldName] = new Value
-        {
-            ListValue = list,
-        };
     }
 }

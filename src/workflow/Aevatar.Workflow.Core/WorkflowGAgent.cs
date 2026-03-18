@@ -20,6 +20,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string workflowYaml,
         string? workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+        string? scopeId = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -27,6 +28,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
+            ScopeId = scopeId?.Trim() ?? string.Empty,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -39,7 +41,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     [EventHandler]
     public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
-        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
+        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls, request.ScopeId);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -75,6 +77,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             : evt.WorkflowName.Trim();
         if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
             next.WorkflowName = incomingWorkflowName;
+        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+            next.ScopeId = evt.ScopeId.Trim();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;

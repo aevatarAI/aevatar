@@ -314,6 +314,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>

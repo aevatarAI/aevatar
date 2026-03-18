@@ -24,6 +24,7 @@ public sealed class WorkflowRunGAgent
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
     private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
+    private const string WorkflowScopeIdMetadataKey = "workflow.scope_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -167,6 +168,7 @@ public sealed class WorkflowRunGAgent
         string? workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? runId = null,
+        string? scopeId = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -177,6 +179,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
             RunId = string.IsNullOrWhiteSpace(runId) ? Id : WorkflowRunIdNormalizer.Normalize(runId),
+            ScopeId = scopeId?.Trim() ?? string.Empty,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -197,7 +200,8 @@ public sealed class WorkflowRunGAgent
             request.WorkflowYaml,
             request.WorkflowName,
             request.InlineWorkflowYamls,
-            request.RunId);
+            request.RunId,
+            request.ScopeId);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -240,6 +244,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
+            ScopeId = ResolveScopeId(request.Metadata, State.ScopeId),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -283,6 +288,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
+            ScopeId = State.ScopeId ?? string.Empty,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -602,6 +608,9 @@ public sealed class WorkflowRunGAgent
         next.RunId = string.IsNullOrWhiteSpace(evt.RunId)
             ? (string.IsNullOrWhiteSpace(current.RunId) ? Id : current.RunId)
             : WorkflowRunIdNormalizer.Normalize(evt.RunId);
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId)
+            ? current.ScopeId
+            : evt.ScopeId.Trim();
         next.Status = "bound";
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
@@ -642,6 +651,8 @@ public sealed class WorkflowRunGAgent
         next.FinalError = string.Empty;
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
             next.DefinitionActorId = evt.DefinitionActorId.Trim();
+        if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
+            next.ScopeId = evt.ScopeId.Trim();
         return next;
     }
 
@@ -857,12 +868,35 @@ public sealed class WorkflowRunGAgent
             WorkflowName = workflowName,
             WorkflowYaml = workflowYaml,
             RunId = string.IsNullOrWhiteSpace(State.RunId) ? Id : State.RunId,
+            ScopeId = State.ScopeId ?? string.Empty,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
         RebuildCompiledWorkflowCache();
         await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
         return WorkflowCompilationResult.Success(parsed);
+    }
+
+    private static string ResolveScopeId(
+        Google.Protobuf.Collections.MapField<string, string>? metadata,
+        string? fallbackScopeId)
+    {
+        if (metadata != null)
+        {
+            if (metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
+                !string.IsNullOrWhiteSpace(workflowScopeId))
+            {
+                return workflowScopeId.Trim();
+            }
+
+            if (metadata.TryGetValue("scope_id", out var scopeId) &&
+                !string.IsNullOrWhiteSpace(scopeId))
+            {
+                return scopeId.Trim();
+            }
+        }
+
+        return fallbackScopeId?.Trim() ?? string.Empty;
     }
 
     private IReadOnlyCollection<string> CaptureDerivedChildActorIdsForReset()

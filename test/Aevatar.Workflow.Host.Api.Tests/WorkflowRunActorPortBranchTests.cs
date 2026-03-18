@@ -49,8 +49,36 @@ public sealed class WorkflowRunActorPortBranchTests
         result.DefinitionActorId.Should().Be("definition-1");
         result.CreatedActorIds.Should().Equal("run-1");
         runtime.CreateRequests.Should().ContainSingle()
-            .Which.Should().Be((typeof(WorkflowRunGAgent), (string?)null));
+            .Which.Should().Match<(Type AgentType, string? RequestedId)>(x =>
+                x.AgentType == typeof(WorkflowRunGAgent) &&
+                x.RequestedId != null &&
+                x.RequestedId.StartsWith("definition-1:run:", StringComparison.Ordinal));
         runtime.Linked.Should().ContainSingle(x => x.ParentId == "definition-1" && x.ChildId == "run-1");
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_ShouldPropagateScopeIdIntoRunBindingEvent()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-scope"] = new RecordingActor("definition-scope", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-scope", new StubAgent("run-scope")));
+        var port = CreatePort(runtime);
+
+        await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-scope",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                "scope-user-1"),
+            CancellationToken.None);
+
+        var bindEvent = ((RecordingActor)runtime.StoredActors["run-scope"]).LastHandledEnvelope!.Payload!
+            .Unpack<BindWorkflowRunDefinitionEvent>();
+        bindEvent.ScopeId.Should().Be("scope-user-1");
     }
 
     [Fact]
@@ -72,7 +100,10 @@ public sealed class WorkflowRunActorPortBranchTests
 
         result.DefinitionActorId.Should().Be("definition-2");
         runtime.CreateRequests.Should().ContainSingle()
-            .Which.Should().Be((typeof(WorkflowRunGAgent), (string?)null));
+            .Which.Should().Match<(Type AgentType, string? RequestedId)>(x =>
+                x.AgentType == typeof(WorkflowRunGAgent) &&
+                x.RequestedId != null &&
+                x.RequestedId.StartsWith("definition-2:run:", StringComparison.Ordinal));
         definitionActor.LastHandledEnvelope.Should().NotBeNull();
         definitionActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
     }
@@ -99,7 +130,10 @@ public sealed class WorkflowRunActorPortBranchTests
         result.DefinitionActorId.Should().Be("definition-3");
         result.CreatedActorIds.Should().Equal("run-3");
         runtime.CreateRequests.Should().ContainSingle()
-            .Which.Should().Be((typeof(WorkflowRunGAgent), (string?)null));
+            .Which.Should().Match<(Type AgentType, string? RequestedId)>(x =>
+                x.AgentType == typeof(WorkflowRunGAgent) &&
+                x.RequestedId != null &&
+                x.RequestedId.StartsWith("definition-3:run:", StringComparison.Ordinal));
         ((RecordingActor)runtime.StoredActors["definition-3"]).LastHandledEnvelope.Should().NotBeNull();
         ((RecordingActor)runtime.StoredActors["definition-3"]).LastHandledEnvelope!.Payload!
             .Is(BindWorkflowDefinitionEvent.Descriptor)
@@ -256,7 +290,10 @@ public sealed class WorkflowRunActorPortBranchTests
 
         result.DefinitionActorId.Should().Be("definition-inline");
         runtime.CreateRequests.Should().ContainSingle()
-            .Which.Should().Be((typeof(WorkflowRunGAgent), (string?)null));
+            .Which.Should().Match<(Type AgentType, string? RequestedId)>(x =>
+                x.AgentType == typeof(WorkflowRunGAgent) &&
+                x.RequestedId != null &&
+                x.RequestedId.StartsWith("definition-inline:run:", StringComparison.Ordinal));
         ((RecordingActor)runtime.StoredActors["definition-inline"]).LastHandledEnvelope.Should().NotBeNull();
         ((RecordingActor)runtime.StoredActors["definition-inline"]).LastHandledEnvelope!.Payload!
             .Is(BindWorkflowDefinitionEvent.Descriptor)
@@ -268,7 +305,7 @@ public sealed class WorkflowRunActorPortBranchTests
     {
         var port = CreatePort(new RecordingActorRuntime());
 
-        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(null!, "name: x", "x", null, CancellationToken.None))
+        await FluentActions.Invoking(() => port.BindWorkflowDefinitionAsync(null!, "name: x", "x", null, ct: CancellationToken.None))
             .Should().ThrowAsync<ArgumentNullException>();
     }
 
@@ -288,7 +325,7 @@ public sealed class WorkflowRunActorPortBranchTests
             {
                 ["child"] = "name: child\nroles: []\nsteps: []\n",
             },
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
         actor.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
@@ -338,7 +375,10 @@ public sealed class WorkflowRunActorPortBranchTests
         result.DefinitionActorId.Should().Be("definition-proxy");
         result.CreatedActorIds.Should().Equal("run-proxy");
         runtime.CreateRequests.Should().ContainSingle()
-            .Which.Should().Be((typeof(WorkflowRunGAgent), (string?)null));
+            .Which.Should().Match<(Type AgentType, string? RequestedId)>(x =>
+                x.AgentType == typeof(WorkflowRunGAgent) &&
+                x.RequestedId != null &&
+                x.RequestedId.StartsWith("definition-proxy:run:", StringComparison.Ordinal));
         runtime.Linked.Should().ContainSingle(x => x.ParentId == "definition-proxy" && x.ChildId == "run-proxy");
     }
 
@@ -427,7 +467,10 @@ public sealed class WorkflowRunActorPortBranchTests
         result.DefinitionActorId.Should().Be("definition-race");
         result.CreatedActorIds.Should().Equal("run-race");
         runtime.CreateRequests.Should().Contain((typeof(WorkflowGAgent), "definition-race"));
-        runtime.CreateRequests.Should().Contain((typeof(WorkflowRunGAgent), (string?)null));
+        runtime.CreateRequests.Should().Contain(x =>
+            x.AgentType == typeof(WorkflowRunGAgent) &&
+            x.RequestedId != null &&
+            x.RequestedId.StartsWith("definition-race:run:", StringComparison.Ordinal));
         racedDefinition.LastHandledEnvelope.Should().NotBeNull();
         racedDefinition.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
     }

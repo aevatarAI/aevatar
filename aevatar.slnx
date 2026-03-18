@@ -96,6 +96,7 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Aevatar.App.Tests/Aevatar.App.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
