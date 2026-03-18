@@ -64,6 +64,51 @@ SYNC: <status>
 No issues found.
 ```
 
+## Step 2: Generate Architecture Audit Report
+
+After completing the scan, write an audit report to `docs/audit-scorecard/YYYY-MM-DD-architecture-audit.md` (use today's date).
+
+The report must include:
+
+```markdown
+# Architecture Audit Report — YYYY-MM-DD
+
+## Sync Status
+
+- **HEAD:** <commit hash>
+- **Changes detected:** Yes/No
+- **Merged PRs since last audit:** <list or "none">
+
+## Scan Summary
+
+| Category | Status | Details |
+|----------|--------|---------|
+| GetAwaiter().GetResult() | ✅ Clean / ❌ Found | count |
+| TypeUrl.Contains() | ✅ Clean / ❌ Found | count |
+| Workflow.Core → AI.Core dependency | ✅ Clean / ❌ Found | — |
+| Mid-layer ID-mapping Dictionary | ✅ Clean / ❌ Found | count |
+| lock/SemaphoreSlim in business logic | ✅ Clean / ❌ Found | count (excl. infra) |
+| JSON in fact storage | ✅ Clean / ❌ Found | count |
+| IEventStore in query paths | ✅ Clean / ❌ Found | count |
+| Task.Run modifying actor state | ✅ Clean / ❌ Found | count |
+| InMemory in production paths | ✅ Clean / ❌ Found | count |
+| CI guard scripts | N total | all pass / N failures |
+
+## Issues Found
+
+<flat list of issues or "No issues found.">
+
+## Known Exclusions
+
+<list of excluded items and reasons>
+
+## Previous Audit Comparison
+
+<if a previous report exists in docs/audit-scorecard/, compare: new issues, resolved issues, unchanged>
+```
+
+**IMPORTANT:** Always write this report file. If a previous report exists for today, overwrite it. This is the authoritative record of each audit cycle.
+
 ## Severity Guidelines
 
 - **CRITICAL**: Violates a "禁止" (prohibited) rule; could cause data loss, corruption, or security issues

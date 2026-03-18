@@ -50,6 +50,8 @@ Agent(
 )
 ```
 
+The auditor will also write an audit report to `docs/audit-scorecard/YYYY-MM-DD-architecture-audit.md`.
+
 If zero issues → output: "Audit clean — no new issues found." and **return**.
 
 Sort by severity: CRITICAL > HIGH > MEDIUM > LOW. Take top `max_issues`.
@@ -187,6 +189,10 @@ Ensure on `$INTEGRATION_BRANCH`. Increment `issues_processed`. Reset `round = 0`
 **Succeeded:** Y PRs
 **Skipped:** Z
 ```
+
+Then update the audit report at `docs/audit-scorecard/YYYY-MM-DD-architecture-audit.md`:
+- Update the "Issues Found" section with resolved/remaining status
+- Add a "Processing Results" section with PR links and review outcomes
 
 Then **return** — let the external loop trigger the next invocation.
 
