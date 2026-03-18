@@ -15,13 +15,13 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers Cognitive defaults:
     /// - <see cref="WorkflowModuleFactory"/>
-    /// - <see cref="IConnectorRegistry"/> (in-memory)
+    /// - <see cref="IConnectorRegistry"/> (startup-configured)
     /// </summary>
     public static IServiceCollection AddAevatarWorkflow(this IServiceCollection services)
     {
         services.AddWorkflowModulePack<WorkflowCoreModulePack>();
         services.TryAddSingleton<IEventModuleFactory<IWorkflowExecutionContext>, WorkflowModuleFactory>();
-        services.TryAddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
+        services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
         return services;
     }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
 
@@ -5,8 +6,7 @@ namespace Aevatar.Scripting.Infrastructure.Compilation;
 
 public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifactResolver
 {
-    private readonly Lock _gate = new();
-    private readonly Dictionary<string, ScriptBehaviorArtifact> _artifacts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Lazy<ScriptBehaviorArtifact>> _artifacts = new(StringComparer.Ordinal);
     private readonly IScriptBehaviorCompiler _compiler;
 
     public CachedScriptBehaviorArtifactResolver(IScriptBehaviorCompiler compiler)
@@ -19,12 +19,15 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
         ArgumentNullException.ThrowIfNull(request);
 
         var cacheKey = BuildCacheKey(request);
-        lock (_gate)
-        {
-            if (_artifacts.TryGetValue(cacheKey, out var cached))
-                return cached;
-        }
+        var lazy = _artifacts.GetOrAdd(
+            cacheKey,
+            _ => new Lazy<ScriptBehaviorArtifact>(() => CompileOrThrow(request)));
 
+        return lazy.Value;
+    }
+
+    private ScriptBehaviorArtifact CompileOrThrow(ScriptBehaviorArtifactRequest request)
+    {
         var compilation = _compiler.Compile(request.ToCompilationRequest());
         if (!compilation.IsSuccess || compilation.Artifact == null)
         {
@@ -32,17 +35,7 @@ public sealed class CachedScriptBehaviorArtifactResolver : IScriptBehaviorArtifa
                 "Script artifact resolution failed: " + string.Join("; ", compilation.Diagnostics));
         }
 
-        lock (_gate)
-        {
-            if (_artifacts.TryGetValue(cacheKey, out var cached))
-            {
-                _ = compilation.Artifact.DisposeAsync();
-                return cached;
-            }
-
-            _artifacts[cacheKey] = compilation.Artifact;
-            return compilation.Artifact;
-        }
+        return compilation.Artifact;
     }
 
     private static string BuildCacheKey(ScriptBehaviorArtifactRequest request)

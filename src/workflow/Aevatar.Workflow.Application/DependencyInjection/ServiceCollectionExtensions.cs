@@ -22,26 +22,26 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddWorkflowApplication(
         this IServiceCollection services,
-        Action<WorkflowDefinitionRegistryOptions>? configureRegistry = null,
+        Action<WorkflowDefinitionCatalogOptions>? configureRegistry = null,
         Action<WorkflowRunBehaviorOptions>? configureRunBehavior = null)
     {
-        var options = new WorkflowDefinitionRegistryOptions();
+        var options = new WorkflowDefinitionCatalogOptions();
         configureRegistry?.Invoke(options);
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
         services.AddSingleton(runBehaviorOptions);
 
-        services.AddSingleton<IWorkflowDefinitionRegistry>(_ =>
+        services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>
         {
-            var registry = new WorkflowDefinitionRegistry();
+            var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
-                registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+                catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
             if (options.RegisterBuiltInAutoWorkflow)
-                registry.Register("auto", WorkflowDefinitionRegistry.CreateBuiltInAutoYaml());
+                catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
-                registry.Register("auto_review", WorkflowDefinitionRegistry.CreateBuiltInAutoReviewYaml());
+                catalog.Register("auto_review", WorkflowDefinitionCatalog.CreateBuiltInAutoReviewYaml());
 
-            return registry;
+            return catalog;
         });
 
         services.AddSingleton<WorkflowDirectFallbackPolicy>();
@@ -49,7 +49,7 @@ public static class ServiceCollectionExtensions
             new WorkflowRunActorResolver(
                 sp.GetRequiredService<IWorkflowActorBindingReader>(),
                 sp.GetRequiredService<IWorkflowRunActorPort>(),
-                sp.GetRequiredService<IWorkflowDefinitionRegistry>(),
+                sp.GetRequiredService<IWorkflowDefinitionCatalog>(),
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();

@@ -20,7 +20,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_MissingToolParameter_ShouldPublishFailedStepCompleted()
     {
-        var module = new ToolCallModule();
+        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -42,7 +42,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_ToolNotFound_ShouldPublishToolFailureEvents()
     {
-        var module = new ToolCallModule();
+        var module = new ToolCallModule([], NullLogger<ToolCallModule>.Instance);
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -72,16 +72,13 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_WhenDiscoveryFailsThenToolFound_ShouldStillExecuteSuccessfully()
     {
-        var module = new ToolCallModule();
         var source = new CountingToolSource(
             [
                 new FakeAgentTool("echo", args => args),
             ]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(new ThrowingToolSource())
-            .AddSingleton<IAgentToolSource>(source)
-            .BuildServiceProvider();
-        var ctx = CreateContext(services);
+        IAgentToolSource[] toolSources = [new ThrowingToolSource(), source];
+        var module = new ToolCallModule(toolSources, NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
         var request = new StepRequestEvent
         {
             StepId = "step-3",
@@ -101,15 +98,12 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_ShouldCacheDiscoveredToolsAcrossCalls()
     {
-        var module = new ToolCallModule();
         var source = new CountingToolSource(
             [
                 new FakeAgentTool("cached_echo", args => args),
             ]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(source)
-            .BuildServiceProvider();
-        var ctx = CreateContext(services);
+        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent
@@ -140,15 +134,12 @@ public sealed class WorkflowCoreModulesCoverageTests
     [Fact]
     public async Task ToolCallModule_WhenToolThrows_ShouldPublishFailedStepCompleted()
     {
-        var module = new ToolCallModule();
         var source = new CountingToolSource(
             [
                 new FakeAgentTool("explode", _ => throw new InvalidOperationException("boom")),
             ]);
-        var services = new ServiceCollection()
-            .AddSingleton<IAgentToolSource>(source)
-            .BuildServiceProvider();
-        var ctx = CreateContext(services);
+        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var ctx = CreateContext();
 
         await module.HandleAsync(
             Envelope(new StepRequestEvent

@@ -7,13 +7,13 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 internal sealed class WorkflowDefinitionBootstrapHostedService : IHostedService
 {
-    private readonly IWorkflowDefinitionRegistry _registry;
+    private readonly IWorkflowDefinitionCatalog _registry;
     private readonly WorkflowDefinitionFileLoader _loader;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly ILogger<WorkflowDefinitionBootstrapHostedService> _logger;
 
     public WorkflowDefinitionBootstrapHostedService(
-        IWorkflowDefinitionRegistry registry,
+        IWorkflowDefinitionCatalog registry,
         WorkflowDefinitionFileLoader loader,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<WorkflowDefinitionBootstrapHostedService> logger)

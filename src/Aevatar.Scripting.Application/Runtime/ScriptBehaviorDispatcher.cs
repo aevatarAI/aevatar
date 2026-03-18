@@ -89,10 +89,11 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             ValidateDomainEventContract(request, artifact.Descriptor, domainEvents);
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var materializationPlan = _materializationCompiler.GetOrCompile(
-                artifact,
-                request.ReadModelSchemaHash,
-                request.ReadModelSchemaVersion);
+            var materializationPlan = request.CachedMaterializationPlan
+                ?? _materializationCompiler.Compile(
+                    artifact,
+                    request.ReadModelSchemaHash,
+                    request.ReadModelSchemaVersion);
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
             var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)

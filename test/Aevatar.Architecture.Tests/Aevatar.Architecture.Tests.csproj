@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="TngTech.ArchUnitNET" />
+    <PackageReference Include="TngTech.ArchUnitNET.xUnit" />
+  </ItemGroup>
+
+  <!-- Reference all production assemblies for architecture scanning -->
+  <ItemGroup>
+    <ProjectReference Include="../../src/Aevatar.Foundation.Abstractions/Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Core/Aevatar.Foundation.Core.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Runtime/Aevatar.Foundation.Runtime.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Foundation.Projection/Aevatar.Foundation.Projection.csproj" />
+    <ProjectReference Include="../../src/Aevatar.AI.Abstractions/Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.AI.Core/Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="../../src/Aevatar.AI.Projection/Aevatar.AI.Projection.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Core.Abstractions/Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Core/Aevatar.CQRS.Core.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Core.Abstractions/Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Core/Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Runtime/Aevatar.CQRS.Projection.Runtime.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Stores.Abstractions/Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Providers.InMemory/Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
+    <ProjectReference Include="../../src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Aevatar.CQRS.Projection.Providers.Elasticsearch.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Scripting.Abstractions/Aevatar.Scripting.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Scripting.Core/Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Scripting.Projection/Aevatar.Scripting.Projection.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Scripting.Application/Aevatar.Scripting.Application.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Core/Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Projection/Aevatar.Workflow.Projection.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
+    <ProjectReference Include="../../src/platform/Aevatar.GAgentService.Abstractions/Aevatar.GAgentService.Abstractions.csproj" />
+    <ProjectReference Include="../../src/platform/Aevatar.GAgentService.Projection/Aevatar.GAgentService.Projection.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Scripting.Infrastructure/Aevatar.Scripting.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

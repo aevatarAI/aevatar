@@ -1,3 +1,4 @@
+#pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;

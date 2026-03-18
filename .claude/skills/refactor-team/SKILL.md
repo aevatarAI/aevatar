@@ -1,133 +1,123 @@
 ---
 name: refactor-team
-description: Orchestrate a fully automated multi-agent team to audit, fix, review, and PR architectural issues against CLAUDE.md rules. Use when user wants to run automated code audit, refactoring, or architecture compliance checks.
-argument-hint: [max-issues]
+description: Orchestrate a fully automated multi-agent refactoring workflow to audit, fix, review, and PR architectural issues against CLAUDE.md rules. Use when user wants to run automated code audit, refactoring, or architecture compliance checks.
+argument-hint: [max-issues-per-cycle]
 ---
 
-# Automated Refactoring Team
+# Automated Refactoring Team — Continuous Agent Subprocess Mode
 
-You are the **Team Lead** orchestrating a fully automated software refactoring team. Your job is to coordinate a Claude Code Team of agents that audit the codebase, fix issues, review fixes, and submit PRs.
+You are the **Team Lead** orchestrating a continuous multi-agent refactoring workflow. Each agent is spawned, completes its task, and is destroyed. You directly control every step.
 
-**Max issues this run:** $ARGUMENTS (default: 5 if not specified)
+The workflow runs in a **continuous loop**: audit → fix → review → PR → sync → re-audit, until no more issues are found.
+
+**Max issues per cycle:** $ARGUMENTS (default: 5 if not specified)
 
 ---
 
 ## Phase 0: Setup
 
-### 0.1 Create the Team
-
-Use TeamCreate to establish the refactoring team:
-
-```
-TeamCreate(
-  team_name: "refactor-team",
-  description: "Automated architecture audit, fix, review, and PR workflow"
-)
-```
-
-### 0.2 Determine Branches
+### 0.1 Determine Branches
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
-INTEGRATION_BRANCH="refactor/$(date +%Y-%m-%d)_auto-audit"
+INTEGRATION_BRANCH="refactor/$(date +%Y-%m-%d)_auto-audit-base"
 ```
 
-Create the integration branch from the current working branch HEAD (if it does not already exist):
+Ensure on integration branch:
 
 ```bash
-git checkout -b "$INTEGRATION_BRANCH" "$CURRENT_BRANCH" 2>/dev/null || git checkout "$INTEGRATION_BRANCH"
-git push -u origin "$INTEGRATION_BRANCH" 2>/dev/null || true
-git checkout "$CURRENT_BRANCH"
+git checkout "$INTEGRATION_BRANCH" 2>/dev/null || git checkout -b "$INTEGRATION_BRANCH"
 ```
 
-### 0.3 Initialize Tracking
+### 0.2 Initialize Tracking
 
-- `issues_processed = 0`
-- `issues_succeeded = 0`
-- `issues_skipped = 0`
+- `cycle = 1`
+- `total_succeeded = 0`, `total_skipped = 0`
 - `max_issues` = first argument or 5
-- `round = 0` (per issue, reset for each new issue)
 
 ---
 
-## Phase 1: Audit
+## Phase 1: Sync & PR Status Check
 
-### 1.1 Load Auditor Prompt
+**Run this at the start of each cycle (including the first).**
 
-Use the Read tool to load `.claude/skills/refactor-team/auditor-prompt.md`.
+### 1.1 Fetch Latest
 
-### 1.2 Spawn Auditor as Team Member
+```bash
+git fetch origin
+git pull --ff-only origin "$INTEGRATION_BRANCH" 2>/dev/null || true
+```
+
+### 1.2 Check Previous PR Merge Status
+
+If there are PRs from previous cycles, check their merge status:
+
+```bash
+gh pr list --base "$INTEGRATION_BRANCH" --state merged --json number,title,mergedAt --limit 50
+gh pr list --base "$INTEGRATION_BRANCH" --state open --json number,title
+```
+
+Report:
+- **Merged PRs:** list with PR number and title
+- **Open PRs:** list with PR number and title (still awaiting review)
+
+If any PRs were merged since last check, pull the updated integration branch:
+
+```bash
+git pull --ff-only origin "$INTEGRATION_BRANCH"
+```
+
+This ensures the next audit runs against the latest codebase including already-merged fixes.
+
+---
+
+## Phase 2: Audit
+
+Read `.claude/skills/refactor-team/auditor-prompt.md`, then spawn auditor:
 
 ```
 Agent(
   subagent_type: "Explore",
   model: "opus",
-  name: "auditor",
-  team_name: "refactor-team",
   prompt: <auditor-prompt.md contents>
 )
 ```
 
-### 1.3 Process Auditor Results
+If zero issues → output final summary and **END**.
 
-Parse the auditor's output into a structured list of issues. If zero issues found, output "No architectural issues found.", clean up team with TeamDelete, and END.
-
-Sort issues by severity: CRITICAL → HIGH → MEDIUM → LOW. Take only the top `max_issues`.
-
-Create a TaskCreate for each issue to track in the shared task list:
-```
-TaskCreate(
-  subject: "[SEVERITY] Issue title",
-  description: <full issue details>
-)
-```
+Sort by severity: CRITICAL > HIGH > MEDIUM > LOW. Take top `max_issues`.
 
 ---
 
-## Phase 2: Issue Processing Loop
+## Phase 3: Issue Processing Loop
 
-For each issue (up to max_issues):
+For each issue (serial):
 
-### Step 2.1: Assign and Spawn Implementer
+### Step 3.1: Spawn Implementer
 
-1. Use TaskUpdate to mark the current issue task as `in_progress`
-2. Read `.claude/skills/refactor-team/implementer-prompt.md`
-3. Determine branch type based on issue category:
-   - Architecture violations → `refactor/`
-   - Bugs → `fix/`
-   - Naming/style → `chore/`
-   - Test gaps → `test/`
-4. Spawn Implementer as team member:
+Read `.claude/skills/refactor-team/implementer-prompt.md`. Determine branch type:
+- Architecture → `refactor/`
+- Bugs → `fix/`
+- Naming/style → `chore/`
+- Test gaps → `test/`
 
 ```
 Agent(
   subagent_type: "general-purpose",
   model: "opus",
-  name: "implementer",
-  team_name: "refactor-team",
-  isolation: "worktree",
   prompt: <implementer-prompt.md contents>
     + "\n\n## Issue to Fix\n\n" + <issue details>
-    + "\n\n## Branch Name\n\nCreate and work on branch: <type>/<date>_<issue-slug>"
+    + "\n\n## Branch\n\ngit checkout -b <type>/$(date +%Y-%m-%d)_<issue-slug> $INTEGRATION_BRANCH"
+    + "\n\n## After Fix\n\nCommit, push, switch back to $INTEGRATION_BRANCH. Return your report."
     + "\n\n## Relevant CLAUDE.md Rules\n\n" + <relevant rules>
 )
 ```
 
-5. **If implementer returns FAILED** (build/test failure) AND round < 3:
-   - Increment `round`
-   - Re-spawn implementer with `isolation: "worktree"`, adding to prompt:
-     - "This is a RETRY round. First recover prior work: `git fetch origin && git checkout <impl-branch>`"
-     - The failure details
-     - "Fix the issues and push to the SAME branch `<impl-branch>`"
-   - If fails on round 3 → TaskUpdate to completed with note "skipped: implementer failed after 3 attempts", increment `issues_skipped`, continue to next issue
+If FAILED and round < 3 → re-spawn with failure context. Round 3 → skip.
 
-6. **If implementer times out** → skip issue, log reason, continue
+Record branch name and changed files.
 
-7. Record the implementer's branch name and commit hash.
-
-### Step 2.2: Get Diff for Reviewers
-
-The Team Lead runs these commands itself:
+### Step 3.2: Get Diff
 
 ```bash
 git fetch origin
@@ -135,207 +125,137 @@ DIFF_OUTPUT=$(git diff $INTEGRATION_BRANCH...origin/<impl-branch>)
 CHANGED_FILES=$(git diff --name-only $INTEGRATION_BRANCH...origin/<impl-branch>)
 ```
 
-### Step 2.3: Spawn 5 Reviewers in Parallel as Team Members
+### Step 3.3: Spawn 5 Reviewers in Parallel
 
-Read ALL prompt templates first:
+Read prompt files:
 - `.claude/skills/refactor-team/arch-reviewer-prompt.md`
 - `.claude/skills/refactor-team/quality-reviewer-prompt.md`
 - `.claude/skills/refactor-team/ci-guard-runner-prompt.md`
 
-Then launch ALL 5 in a SINGLE message with 5 parallel Agent tool calls:
+Launch ALL 5 in a SINGLE message:
 
-**Arch-Reviewer-1 (Opus):**
 ```
-Agent(
-  subagent_type: "Explore",
-  model: "opus",
-  name: "arch-reviewer-opus",
-  team_name: "refactor-team",
-  prompt: <arch-reviewer-prompt.md>
-    + "\n\n## Review Context\n\nIntegration branch: $INTEGRATION_BRANCH\nImplementer branch: <impl-branch>\n\n## Diff\n\n```\n" + $DIFF_OUTPUT + "\n```\n\n## Original Issue\n\n" + <issue details>
-)
-```
+Agent(subagent_type: "Explore", model: "opus",
+  prompt: <arch-reviewer-prompt.md> + diff + issue)
 
-**Arch-Reviewer-2 (Sonnet):**
-```
-Agent(
-  subagent_type: "Explore",
-  model: "sonnet",
-  name: "arch-reviewer-sonnet",
-  team_name: "refactor-team",
-  prompt: <arch-reviewer-prompt.md>
-    + "\n\nADDITIONAL FOCUS: Pay extra attention to naming consistency, namespace/directory alignment, API field single-semantics, and Metadata naming restrictions."
-    + "\n\n## Review Context\n\n..." + <same diff and issue context>
-)
+Agent(subagent_type: "Explore", model: "sonnet",
+  prompt: <arch-reviewer-prompt.md> + "ADDITIONAL FOCUS: naming, namespace, Metadata" + diff + issue)
+
+Agent(subagent_type: "Explore", model: "opus",
+  prompt: <quality-reviewer-prompt.md> + diff + issue)
+
+Agent(subagent_type: "Explore", model: "sonnet",
+  prompt: <quality-reviewer-prompt.md> + "ADDITIONAL FOCUS: editorconfig, style" + diff + issue)
+
+Agent(subagent_type: "general-purpose", model: "sonnet",
+  prompt: <ci-guard-runner-prompt.md> + "git fetch origin && git checkout origin/<impl-branch>" + changed files)
 ```
 
-**Quality-Reviewer-1 (Opus):**
-```
-Agent(
-  subagent_type: "Explore",
-  model: "opus",
-  name: "quality-reviewer-opus",
-  team_name: "refactor-team",
-  prompt: <quality-reviewer-prompt.md>
-    + "\n\n## Review Context\n\n..." + <same diff and issue context>
-)
-```
+### Step 3.4: Convergence
 
-**Quality-Reviewer-2 (Sonnet):**
-```
-Agent(
-  subagent_type: "Explore",
-  model: "sonnet",
-  name: "quality-reviewer-sonnet",
-  team_name: "refactor-team",
-  prompt: <quality-reviewer-prompt.md>
-    + "\n\nADDITIONAL FOCUS: Pay extra attention to editorconfig compliance, import ordering, blank line conventions, and spelling consistency."
-    + "\n\n## Review Context\n\n..." + <same diff and issue context>
-)
-```
+Collect all 5 outputs.
 
-**CI-Guard-Runner (Sonnet):**
-```
-Agent(
-  subagent_type: "general-purpose",
-  model: "sonnet",
-  name: "ci-guard-runner",
-  team_name: "refactor-team",
-  isolation: "worktree",
-  prompt: <ci-guard-runner-prompt.md>
-    + "\n\n## Run Context\n\nImplementer branch: <impl-branch>\nChanged files:\n" + $CHANGED_FILES
-)
-```
-
-### Step 2.4: Convergence
-
-Collect all reviewer outputs. If any reviewer timed out or returned an error, proceed with the remaining reviewers' verdicts (minimum 1 needed; if all 5 failed, treat as CRITICAL and re-run once before skipping).
-
-**Deduplicate:**
-- Group issues by file path
-- Within same file, merge issues targeting lines within 5 lines of each other
-- Issues from different reviewers on the same file+region are considered equivalent
+**Deduplicate:** Group by file, merge issues within 5 lines.
 
 **Severity filter:**
-- CRITICAL or HIGH → must fix (any single reviewer triggers)
-- MEDIUM or LOW → must fix only if 3+ distinct reviewers flagged it
-- CI-Guard-Runner FAILED → must fix (treated as CRITICAL)
+- CRITICAL/HIGH → must fix (any single reviewer)
+- MEDIUM/LOW → must fix only if 3+ reviewers flagged
+- CI-Guard-Runner FAILED → must fix
 
 **Decision:**
-- If must-fix issues exist AND round < 3:
-  - Compile merged fix list
-  - Increment `round`
-  - Re-spawn Implementer with `isolation: "worktree"`, including:
-    - "RETRY round. First: `git fetch origin && git checkout <impl-branch>`"
-    - The merged fix list from reviewers
-    - "Push to the SAME branch `<impl-branch>`"
-  - After Implementer completes, re-collect diff and re-invoke ALL 5 reviewers
-- If must-fix issues exist AND round >= 3:
-  - TaskUpdate issue to completed with "skipped: exceeded 3 review rounds"
-  - Increment `issues_skipped`, continue to next issue
-- If no must-fix issues → APPROVED, proceed to Step 2.5
+- Must-fix AND round < 3 → re-spawn implementer with fix list, then re-review
+- Must-fix AND round >= 3 → skip issue
+- No must-fix → APPROVED → submit PR
 
-### Step 2.5: Submit PR
+### Step 3.5: Submit PR
 
 ```bash
 gh pr create \
   --base "$INTEGRATION_BRANCH" \
   --head "<impl-branch>" \
-  --title "<type>: <short issue description>" \
+  --title "<type>: <short description>" \
   --body "$(cat <<'PREOF'
 ## Issue
 
-<original issue description from audit>
+<original issue description>
 
 ## Fix Summary
 
-<implementer's summary of what was changed>
+<implementer's summary>
 
 ## Review Record
 
 | Reviewer | Model | Verdict |
 |----------|-------|---------|
-| arch-reviewer-opus | Opus | APPROVED/CHANGES_REQUESTED |
-| arch-reviewer-sonnet | Sonnet | APPROVED/CHANGES_REQUESTED |
-| quality-reviewer-opus | Opus | APPROVED/CHANGES_REQUESTED |
-| quality-reviewer-sonnet | Sonnet | APPROVED/CHANGES_REQUESTED |
-| ci-guard-runner | Sonnet | PASSED/FAILED |
+| arch-reviewer | Opus | ... |
+| arch-reviewer | Sonnet | ... |
+| quality-reviewer | Opus | ... |
+| quality-reviewer | Sonnet | ... |
+| ci-guard-runner | Sonnet | ... |
 
 **Review rounds:** N/3
-**Non-blocking notes:** <any Medium/Low issues logged but not required to fix>
-
-## CI Guard Results
-
-<CI guard runner output>
+**Non-blocking notes:** <Medium/Low not required to fix>
 
 ## Referenced CLAUDE.md Rules
 
-<quoted rules that were violated>
+<quoted rules>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code) Refactoring Team
 PREOF
 )"
 ```
 
-If PR creation fails due to merge conflict → skip issue, log as "skipped: merge conflict". Do NOT attempt rebase or force push.
+### Step 3.6: Next Issue
 
-TaskUpdate issue to completed. Increment `issues_succeeded`.
-
-### Step 2.6: Next Issue
-
-Increment `issues_processed`. Reset `round = 0`. If `issues_processed < max_issues` and issues remain → go to Step 2.1 with next issue.
+Ensure on `$INTEGRATION_BRANCH`. Increment `issues_processed`. Reset `round = 0`. Continue if issues remain.
 
 ---
 
-## Phase 3: Cleanup and Summary
+## Phase 4: Cycle Summary & Continue
 
-### 3.1 Shutdown Teammates
-
-Send shutdown request to all active teammates:
-
-```
-SendMessage(to: "auditor", message: {type: "shutdown_request"})
-SendMessage(to: "implementer", message: {type: "shutdown_request"})
-SendMessage(to: "arch-reviewer-opus", message: {type: "shutdown_request"})
-SendMessage(to: "arch-reviewer-sonnet", message: {type: "shutdown_request"})
-SendMessage(to: "quality-reviewer-opus", message: {type: "shutdown_request"})
-SendMessage(to: "quality-reviewer-sonnet", message: {type: "shutdown_request"})
-SendMessage(to: "ci-guard-runner", message: {type: "shutdown_request"})
-```
-
-### 3.2 Delete Team
-
-```
-TeamDelete()
-```
-
-### 3.3 Output Summary Report
+### 4.1 Output Cycle Summary
 
 ```markdown
-## Refactoring Team Run Summary
+## Cycle N Summary
+
+**Issues processed:** X
+**Succeeded:** Y PRs
+**Skipped:** Z
+```
+
+### 4.2 Next Cycle
+
+Increment `cycle`. Go back to **Phase 1** (Sync & PR Status Check → Audit → Process).
+
+The loop ends when the auditor finds **zero new issues**.
+
+---
+
+## Phase 5: Final Summary (on loop end)
+
+```markdown
+## Refactoring Team Final Summary
 
 **Date:** YYYY-MM-DD
-**Integration branch:** refactor/YYYY-MM-DD_auto-audit
-**Base branch:** <original working branch>
-**Team:** refactor-team (7 agents)
+**Integration branch:** $INTEGRATION_BRANCH
+**Total cycles:** N
 
-### Results
+### All PRs
 
-| # | Issue | Severity | Status | PR |
-|---|-------|----------|--------|-----|
-| 1 | <title> | CRITICAL | ✅ PR #XX | <url> |
-| 2 | <title> | HIGH | ❌ Skipped (reason) | — |
-| 3 | <title> | HIGH | ✅ PR #XX | <url> |
+| # | Cycle | Issue | Severity | Status | PR |
+|---|-------|-------|----------|--------|-----|
+| 1 | 1 | <title> | HIGH | ✅ PR #XX | <url> |
+| 2 | 1 | <title> | HIGH | ❌ Skipped | — |
+| 3 | 2 | <title> | MEDIUM | ✅ PR #XX | <url> |
 
-**Processed:** X / max_issues
-**Succeeded:** Y PRs created
-**Skipped:** Z (reasons listed above)
+### PR Merge Status
 
-### Next Steps
+| PR | Status |
+|----|--------|
+| #XX | ✅ Merged |
+| #XX | ⏳ Open |
 
-To merge the integration branch into your working branch:
-```bash
-git checkout <working-branch>
-git merge refactor/YYYY-MM-DD_auto-audit
-```
+**Total succeeded:** X PRs
+**Total skipped:** Y
+**Audit clean:** Yes (no more issues found)
 ```

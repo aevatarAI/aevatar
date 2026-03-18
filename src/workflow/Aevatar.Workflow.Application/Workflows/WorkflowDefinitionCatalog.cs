@@ -1,14 +1,35 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 
 namespace Aevatar.Workflow.Application.Workflows;
 
 /// <summary>
-/// Workflow YAML definition registry keyed by workflow name.
+/// Read-only catalog of workflow YAML definitions, populated identically on every node
+/// at application startup from built-in constants and on-disk YAML files.
+///
+/// <para>
+/// This is a <b>startup-loaded configuration cache</b> — not a runtime-mutable fact source.
+/// <see cref="Register"/> is called only during the DI factory and
+/// <c>WorkflowDefinitionBootstrapHostedService</c>. After startup completes, the catalog
+/// is effectively frozen and all access is read-only.
+/// </para>
+///
+/// <para>
+/// <b>Multi-node deployment requirement:</b> All nodes must share the same set of workflow
+/// definition files and built-in registration options so that every instance of this catalog
+/// contains identical entries. The catalog is not replicated or synchronized at runtime.
+/// </para>
+///
+/// <para>
+/// The backing store uses <see cref="ImmutableDictionary{TKey,TValue}"/> to make the
+/// read-only-after-startup semantics explicit. Writes during bootstrap use atomic swap
+/// via <see cref="ImmutableInterlocked"/>.
+/// </para>
 /// </summary>
-public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
+public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
 {
-    private readonly ConcurrentDictionary<string, WorkflowDefinitionRegistration> _workflows = new(StringComparer.OrdinalIgnoreCase);
+    private ImmutableDictionary<string, WorkflowDefinitionRegistration> _workflows =
+        ImmutableDictionary.Create<string, WorkflowDefinitionRegistration>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Built-in direct workflow used for explicit direct runs and fallback recovery.
@@ -60,24 +81,37 @@ public sealed class WorkflowDefinitionRegistry : IWorkflowDefinitionRegistry
             approveTarget: "done",
             includeExecuteStep: false);
 
+    /// <inheritdoc />
     public void Register(string name, string yaml)
     {
         var normalizedName = NormalizeName(name);
-        _workflows[normalizedName] = new WorkflowDefinitionRegistration(
+        ImmutableInterlocked.AddOrUpdate(
+            ref _workflows,
             normalizedName,
-            yaml,
-            WorkflowDefinitionActorId.Format(normalizedName));
+            _ => new WorkflowDefinitionRegistration(
+                normalizedName,
+                yaml,
+                WorkflowDefinitionActorId.Format(normalizedName)),
+            (_, _) => new WorkflowDefinitionRegistration(
+                normalizedName,
+                yaml,
+                WorkflowDefinitionActorId.Format(normalizedName)));
     }
 
+    /// <inheritdoc />
     public WorkflowDefinitionRegistration? GetDefinition(string name)
     {
         var normalizedName = NormalizeName(name);
-        return _workflows.GetValueOrDefault(normalizedName);
+        return _workflows.TryGetValue(normalizedName, out var registration)
+            ? registration
+            : null;
     }
 
+    /// <inheritdoc />
     public string? GetYaml(string name) =>
         GetDefinition(name)?.WorkflowYaml;
 
+    /// <inheritdoc />
     public IReadOnlyList<string> GetNames() =>
         _workflows.Keys.OrderBy(static x => x, StringComparer.OrdinalIgnoreCase).ToList();
 

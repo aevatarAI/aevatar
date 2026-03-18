@@ -16,7 +16,7 @@ public sealed class ServiceInvocationResolutionServiceTests
     public async Task ResolveAsync_ShouldUseTrafficViewTargetAndArtifactEndpoint()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "r2",
@@ -84,7 +84,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     [],
                     DateTimeOffset.UtcNow),
             },
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -103,7 +103,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -121,7 +121,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -141,7 +141,7 @@ public sealed class ServiceInvocationResolutionServiceTests
         var service = new ServiceInvocationResolutionService(
             new RecordingCatalogQueryReader(),
             new RecordingTrafficViewQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -164,7 +164,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                 GetResult = CreateCatalogSnapshot(identity),
             },
             new RecordingTrafficViewQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {
@@ -206,7 +206,7 @@ public sealed class ServiceInvocationResolutionServiceTests
                     ],
                     DateTimeOffset.UtcNow),
             },
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var act = () => service.ResolveAsync(new ServiceInvocationRequest
         {

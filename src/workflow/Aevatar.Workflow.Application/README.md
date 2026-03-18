@@ -19,7 +19,7 @@
 把所有输入统一折叠成可执行 target：
 
 - `workflowYamls` 优先于 `workflow`
-- `workflow` 走 `IWorkflowDefinitionRegistry`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
+- `workflow` 走 `IWorkflowDefinitionCatalog`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
 - `actorId` 作为 definition source lookup
 - source actor 会先经 `IWorkflowActorBindingReader.GetAsync()` 解析成 `WorkflowActorBinding`
 - 若 source actor 是 run actor 且缺失 `DefinitionActorId`，resolver 会回落到 registry 中该 workflow 的规范 definition actor id
@@ -86,6 +86,6 @@ Aevatar.Workflow.Application/
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs
 ├── Workflows/
-│   └── WorkflowDefinitionRegistry.cs
+│   └── WorkflowDefinitionCatalog.cs
 └── Reporting/
 ```

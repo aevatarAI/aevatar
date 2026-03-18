@@ -5,9 +5,9 @@ namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 public sealed class RegistryWorkflowDefinitionResolver : IWorkflowDefinitionResolver
 {
-    private readonly IWorkflowDefinitionRegistry _registry;
+    private readonly IWorkflowDefinitionCatalog _registry;
 
-    public RegistryWorkflowDefinitionResolver(IWorkflowDefinitionRegistry registry)
+    public RegistryWorkflowDefinitionResolver(IWorkflowDefinitionCatalog registry)
     {
         _registry = registry;
     }
