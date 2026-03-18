@@ -260,6 +260,11 @@ internal static class AppStudioEndpoints
                     type = "TEXT_MESSAGE_REASONING",
                     delta,
                 }, token),
+                (progress, token) => WriteSseFrameAsync(http.Response, new
+                {
+                    type = "TEXT_MESSAGE_REASONING",
+                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+                }, token),
                 ct);
 
             foreach (var chunk in ChunkText(result.Yaml, 320))
