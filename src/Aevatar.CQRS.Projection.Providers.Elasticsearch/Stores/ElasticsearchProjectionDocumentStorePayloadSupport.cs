@@ -6,8 +6,11 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 {
+    internal const string StableSortDocumentIdField = "ProjectionDocumentId";
     private const string DefaultQueryPrimarySortField = "CreatedAt";
-    private const string DefaultQueryTiebreakSortField = "_id";
+    // Elasticsearch forbids sorting on `_id`. For search_after pagination we persist
+    // a provider-owned duplicate key with doc_values instead of falling back to `_id` or `_doc`.
+    private const string DefaultQueryTiebreakSortField = StableSortDocumentIdField;
 
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,
@@ -202,12 +205,16 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 
     private static object BuildTiebreakSortClause()
     {
+        var spec = new Dictionary<string, object?>
+        {
+            ["order"] = "desc",
+            ["missing"] = "_last",
+            ["unmapped_type"] = "keyword",
+        };
+
         return new Dictionary<string, object?>
         {
-            [DefaultQueryTiebreakSortField] = new Dictionary<string, object?>
-            {
-                ["order"] = "desc",
-            },
+            [DefaultQueryTiebreakSortField] = spec,
         };
     }
 

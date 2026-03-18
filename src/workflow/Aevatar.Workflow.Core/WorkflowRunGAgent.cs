@@ -3,12 +3,12 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -22,6 +22,8 @@ public sealed class WorkflowRunGAgent
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
+    private const string StoppedStatus = "stopped";
+    private const string WorkflowCommandIdMetadataKey = "workflow.command_id";
 
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
@@ -216,6 +218,17 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
+        if (request.Metadata.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
+            !string.IsNullOrWhiteSpace(commandId))
+        {
+            await PersistDomainEventAsync(
+                new WorkflowCommandObservedEvent
+                {
+                    CommandId = commandId,
+                },
+                CancellationToken.None);
+        }
+
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
@@ -321,6 +334,7 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _executionItems.Clear();
+        DisableExecutionModules();
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -344,6 +358,59 @@ public sealed class WorkflowRunGAgent
         {
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
         }, TopologyAudience.Parent);
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowStopped(WorkflowStoppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+
+        if (!TryPrepareStop(evt.RunId, nameof(WorkflowStoppedEvent), out var runId))
+            return;
+
+        var persistedEvent = new WorkflowStoppedEvent
+        {
+            WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName) ? State.WorkflowName : evt.WorkflowName,
+            RunId = runId,
+            Reason = evt.Reason ?? string.Empty,
+        };
+
+        await CompleteStopAsync(
+            runId,
+            persistedEvent.WorkflowName,
+            persistedEvent.Reason,
+            ct => PersistDomainEventAsync(persistedEvent, ct),
+            CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleWorkflowRunStoppedAsync(WorkflowRunStoppedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!TryPrepareStop(evt.RunId, nameof(WorkflowRunStoppedEvent), out var runId))
+            return;
+
+        var persistedEvent = new WorkflowRunStoppedEvent
+        {
+            RunId = runId,
+            Reason = evt.Reason ?? string.Empty,
+        };
+
+        await CompleteStopAsync(
+            runId,
+            State.WorkflowName,
+            persistedEvent.Reason,
+            ct => PersistDomainEventAsync(persistedEvent, ct),
+            CancellationToken.None);
+    }
+
+    [AllEventHandler(Priority = 40, AllowSelfHandling = true)]
+    public async Task HandleWorkflowArtifactObservationEnvelope(EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        if (WorkflowArtifactFactBuilder.TryBuild(envelope, Id, State.RunId, out var artifactFact))
+            await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
 
     private async Task CleanupRoleAgentTreeAsync(CancellationToken ct)
@@ -406,13 +473,24 @@ public sealed class WorkflowRunGAgent
 
         foreach (var role in _compiledWorkflow.Roles)
         {
+            if (string.IsNullOrWhiteSpace(role.Id))
+                continue;
+
             var childActorId = BuildChildActorId(role.Id);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
-            await _dispatchPort.DispatchAsync(actor.Id, CreateRoleAgentInitializeEnvelope(role));
+            await _dispatchPort.DispatchAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
             _childAgentIds.Add(actor.Id);
+            await PersistDomainEventAsync(new WorkflowRoleActorLinkedEvent
+            {
+                RunId = string.IsNullOrWhiteSpace(State.RunId)
+                    ? WorkflowRunIdNormalizer.Normalize(Id)
+                    : WorkflowRunIdNormalizer.Normalize(State.RunId),
+                RoleId = role.Id ?? string.Empty,
+                ChildActorId = actor.Id,
+            });
         }
 
         Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
@@ -431,6 +509,16 @@ public sealed class WorkflowRunGAgent
         if (_compiledWorkflow == null)
         {
             Logger.LogDebug("Workflow run definition is not bound yet; skipping module installation for actor {ActorId}.", Id);
+            SetModules([]);
+            return;
+        }
+
+        if (IsTerminalStatus(State.Status))
+        {
+            Logger.LogDebug(
+                "Workflow run is terminal; skipping module installation for actor {ActorId} status={Status}.",
+                Id,
+                State.Status);
             SetModules([]);
             return;
         }
@@ -476,6 +564,8 @@ public sealed class WorkflowRunGAgent
         SetModules(workflowModules);
     }
 
+    private void DisableExecutionModules() => SetModules([]);
+
     private void ConfigureModule(IEventModule<IWorkflowExecutionContext> module)
     {
         if (_compiledWorkflow == null)
@@ -489,10 +579,13 @@ public sealed class WorkflowRunGAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
+            .On<WorkflowCommandObservedEvent>(ApplyWorkflowCommandObserved)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
             .On<WorkflowExecutionStateUpsertedEvent>(ApplyWorkflowExecutionStateUpserted)
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
+            .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
+            .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
@@ -518,6 +611,7 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
+        next.LastCommandId = string.Empty;
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -551,6 +645,13 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowCommandObserved(WorkflowRunState current, WorkflowCommandObservedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastCommandId = evt.CommandId?.Trim() ?? string.Empty;
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowExecutionStateUpserted(WorkflowRunState current, WorkflowExecutionStateUpsertedEvent evt)
     {
         var next = current.Clone();
@@ -573,6 +674,20 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowStopped(WorkflowRunState current, WorkflowStoppedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = StoppedStatus;
+        next.FinalOutput = string.Empty;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            next.FinalError = evt.Reason;
+        next.ExecutionStates.Clear();
+        next.PendingSubWorkflowInvocations.Clear();
+        next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
+        next.PendingChildRunIdsByParentRunId.Clear();
+        return next;
+    }
+
     private static WorkflowRunState ApplyWorkflowCompleted(WorkflowRunState current, WorkflowCompletedEvent evt)
     {
         var next = current.Clone();
@@ -580,6 +695,91 @@ public sealed class WorkflowRunGAgent
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
         return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunStopped(WorkflowRunState current, WorkflowRunStoppedEvent evt)
+    {
+        var next = current.Clone();
+        next.Status = StoppedStatus;
+        next.FinalOutput = string.Empty;
+        if (!string.IsNullOrWhiteSpace(evt.Reason))
+            next.FinalError = evt.Reason;
+        next.ExecutionStates.Clear();
+        next.PendingSubWorkflowInvocations.Clear();
+        next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
+        next.PendingChildRunIdsByParentRunId.Clear();
+        return next;
+    }
+
+    private static bool IsTerminalStatus(string? status) =>
+        string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildStoppedMessage(string? reason) =>
+        string.IsNullOrWhiteSpace(reason)
+            ? "Workflow execution stopped."
+            : $"Workflow execution stopped: {reason}";
+
+    private bool TryPrepareStop(
+        string? requestedRunId,
+        string eventName,
+        out string runId)
+    {
+        runId = string.IsNullOrWhiteSpace(requestedRunId)
+            ? RunId
+            : WorkflowRunIdNormalizer.Normalize(requestedRunId);
+        if (!string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(State.RunId, runId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Ignore {EventName} with mismatched run id. actor={ActorId} stateRun={StateRunId} eventRun={EventRunId}",
+                eventName,
+                Id,
+                State.RunId,
+                runId);
+            return false;
+        }
+
+        if (!IsTerminalStatus(State.Status))
+            return true;
+
+        Logger.LogInformation(
+            "Ignore {EventName} for terminal run. actor={ActorId} run={RunId} status={Status}",
+            eventName,
+            Id,
+            runId,
+            State.Status);
+        return false;
+    }
+
+    private async Task CompleteStopAsync(
+        string runId,
+        string? workflowName,
+        string? reason,
+        Func<CancellationToken, Task> persistAsync,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentNullException.ThrowIfNull(persistAsync);
+
+        var stateBeforeStop = State.Clone();
+        await persistAsync(ct);
+        await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, stateBeforeStop, CancellationToken.None);
+        await CleanupRoleAgentTreeAsync(CancellationToken.None);
+        _executionItems.Clear();
+        DisableExecutionModules();
+
+        Logger.LogInformation(
+            "Workflow run {Name} stopped: run={RunId} reason={Reason}",
+            workflowName,
+            runId,
+            string.IsNullOrWhiteSpace(reason) ? "(none)" : reason);
+
+        await PublishAsync(new TextMessageEndEvent
+        {
+            Content = BuildStoppedMessage(reason),
+        }, TopologyAudience.Parent);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
@@ -758,87 +958,6 @@ public sealed class WorkflowRunGAgent
             new(false, error ?? string.Empty, null);
     }
 
-    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow)
-    {
-        var knownStepTypes = new HashSet<string>(_knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
-        knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
-        ExpandKnownStepTypesFromFactory(workflow, knownStepTypes);
-
-        return WorkflowValidator.Validate(
-            workflow,
-            new WorkflowValidator.WorkflowValidationOptions
-            {
-                RequireKnownStepTypes = true,
-                KnownStepTypes = knownStepTypes,
-            },
-            availableWorkflowNames: null);
-    }
-
-    private void ExpandKnownStepTypesFromFactory(WorkflowDefinition workflow, ISet<string> knownStepTypes)
-    {
-        foreach (var stepType in EnumerateReferencedStepTypes(workflow.Steps))
-        {
-            var canonical = WorkflowPrimitiveCatalog.ToCanonicalType(stepType);
-            if (string.IsNullOrWhiteSpace(canonical) || knownStepTypes.Contains(canonical))
-                continue;
-
-            if (_stepExecutorFactory.TryCreate(canonical, out _))
-                knownStepTypes.Add(canonical);
-        }
-    }
-
-    private static IEnumerable<string> EnumerateReferencedStepTypes(IEnumerable<StepDefinition> steps)
-    {
-        foreach (var step in steps)
-        {
-            yield return step.Type;
-
-            foreach (var (key, value) in step.Parameters)
-            {
-                if (WorkflowPrimitiveCatalog.IsStepTypeParameterKey(key) &&
-                    !string.IsNullOrWhiteSpace(value))
-                {
-                    yield return value;
-                }
-            }
-
-            if (step.Children is { Count: > 0 })
-            {
-                foreach (var childType in EnumerateReferencedStepTypes(step.Children))
-                    yield return childType;
-            }
-        }
-    }
-
-    private EventEnvelope CreateRoleAgentInitializeEnvelope(RoleDefinition role)
-    {
-        var initialize = new InitializeRoleAgentEvent
-        {
-            RoleName = role.Name ?? string.Empty,
-            ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
-            Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,
-            SystemPrompt = role.SystemPrompt ?? string.Empty,
-            MaxTokens = role.MaxTokens ?? 0,
-            MaxToolRounds = role.MaxToolRounds ?? 0,
-            MaxHistoryMessages = role.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = role.StreamBufferCapacity ?? 0,
-            EventModules = role.EventModules ?? string.Empty,
-            EventRoutes = role.EventRoutes ?? string.Empty,
-        };
-
-        if (role.Temperature.HasValue)
-            initialize.Temperature = role.Temperature.Value;
-
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(initialize),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = Guid.NewGuid().ToString("N"),
-            },
-        };
-    }
+    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow) =>
+        WorkflowRunDefinitionValidationSupport.Validate(workflow, _knownModuleStepTypes, _stepExecutorFactory);
 }

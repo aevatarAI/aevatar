@@ -11,10 +11,13 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     [Fact]
     public async Task QueryMethods_ShouldShortCircuit_WhenActorQueriesDisabled()
     {
-        var projectionPort = new FakeProjectionQueryPort { EnableActorQueryEndpoints = false };
+        var calls = new List<string>();
+        var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = false };
+        var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = false };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry(["direct", "auto"]),
-            projectionPort,
+            currentStatePort,
+            artifactPort,
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
 
@@ -25,25 +28,26 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         (await service.ListActorGraphEdgesAsync("actor-1")).Should().BeEmpty();
         var subgraph = await service.GetActorGraphSubgraphAsync("actor-1");
         subgraph.RootNodeId.Should().Be("actor-1");
-        (await service.GetActorGraphEnrichedSnapshotAsync("actor-1")).Should().BeNull();
         service.ListWorkflows().Should().Equal("direct", "auto");
-        projectionPort.Calls.Should().BeEmpty();
+        calls.Should().BeEmpty();
     }
 
     [Fact]
     public async Task GraphQueries_ShouldShortCircuit_WhenActorIdBlank()
     {
-        var projectionPort = new FakeProjectionQueryPort { EnableActorQueryEndpoints = true };
+        var calls = new List<string>();
+        var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = true };
+        var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = true };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry([]),
-            projectionPort,
+            currentStatePort,
+            artifactPort,
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
 
         (await service.ListActorGraphEdgesAsync(" ")).Should().BeEmpty();
         (await service.GetActorGraphSubgraphAsync(" ")).RootNodeId.Should().Be(" ");
-        (await service.GetActorGraphEnrichedSnapshotAsync(" ")).Should().BeNull();
-        projectionPort.Calls.Should().BeEmpty();
+        calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -77,20 +81,19 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             Nodes = { new WorkflowActorGraphNode { NodeId = "actor-1" } },
             Edges = { new WorkflowActorGraphEdge { EdgeId = "edge-2" } },
         };
-        var enriched = new WorkflowActorGraphEnrichedSnapshot
-        {
-            Snapshot = snapshot,
-            Subgraph = subgraph,
-        };
-        var projectionPort = new FakeProjectionQueryPort
+        var calls = new List<string>();
+        var currentStatePort = new FakeCurrentStateQueryPort(calls)
         {
             EnableActorQueryEndpoints = true,
             Snapshots = [snapshot],
             SingleSnapshot = snapshot,
+        };
+        var artifactPort = new FakeArtifactQueryPort(calls)
+        {
+            EnableActorQueryEndpoints = true,
             Timeline = timeline,
             Edges = edges,
             Subgraph = subgraph,
-            EnrichedSnapshot = enriched,
         };
         var options = new WorkflowActorGraphQueryOptions
         {
@@ -99,7 +102,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         };
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry(["direct"]),
-            projectionPort,
+            currentStatePort,
+            artifactPort,
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
 
@@ -108,21 +112,18 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var actorTimeline = await service.ListActorTimelineAsync("actor-1", 5);
         var actorEdges = await service.ListActorGraphEdgesAsync("actor-1", 7, options);
         var actorSubgraph = await service.GetActorGraphSubgraphAsync("actor-1", 3, 9, options);
-        var actorEnriched = await service.GetActorGraphEnrichedSnapshotAsync("actor-1", 4, 11, options);
 
         agents.Should().ContainSingle().Which.Should().Be(new WorkflowAgentSummary("actor-1", "WorkflowRunGAgent", "WorkflowRunGAgent[direct]"));
         actorSnapshot.Should().BeSameAs(snapshot);
         actorTimeline.Should().Equal(timeline);
         actorEdges.Should().Equal(edges);
         actorSubgraph.Should().BeSameAs(subgraph);
-        actorEnriched.Should().BeSameAs(enriched);
-        projectionPort.Calls.Should().ContainInOrder(
+        calls.Should().ContainInOrder(
             "ListActorSnapshots:200",
             "GetActorSnapshot:actor-1",
             "ListActorTimeline:actor-1:5",
             "GetActorGraphEdges:actor-1:7:Outbound:child",
-            "GetActorGraphSubgraph:actor-1:3:9:Outbound:child",
-            "GetActorGraphEnrichedSnapshot:actor-1:4:11:Outbound:child");
+            "GetActorGraphSubgraph:actor-1:3:9:Outbound:child");
     }
 
     [Fact]
@@ -130,7 +131,8 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     {
         var service = new WorkflowExecutionQueryApplicationService(
             new StaticWorkflowDefinitionRegistry([]),
-            new FakeProjectionQueryPort { EnableActorQueryEndpoints = false },
+            new FakeCurrentStateQueryPort([]) { EnableActorQueryEndpoints = false },
+            new FakeArtifactQueryPort([]) { EnableActorQueryEndpoints = false },
             new StaticWorkflowCatalogPort(),
             new StaticWorkflowCapabilitiesPort());
         using var cts = new CancellationTokenSource();
@@ -164,57 +166,54 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         public WorkflowCapabilitiesDocument GetCapabilities() => new();
     }
 
-    private sealed class FakeProjectionQueryPort : IWorkflowExecutionProjectionQueryPort
+    private sealed class FakeCurrentStateQueryPort(List<string> calls) : IWorkflowExecutionCurrentStateQueryPort
     {
         public bool EnableActorQueryEndpoints { get; set; }
         public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorSnapshot? SingleSnapshot { get; init; }
-        public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
-        public IReadOnlyList<WorkflowActorGraphEdge> Edges { get; init; } = [];
-        public WorkflowActorGraphSubgraph Subgraph { get; init; } = new();
-        public WorkflowActorGraphEnrichedSnapshot? EnrichedSnapshot { get; init; }
-        public List<string> Calls { get; } = [];
 
         public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorSnapshot:{actorId}");
+            calls.Add($"GetActorSnapshot:{actorId}");
             return Task.FromResult(SingleSnapshot);
         }
 
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default)
         {
-            Calls.Add($"ListActorSnapshots:{take}");
+            calls.Add($"ListActorSnapshots:{take}");
             return Task.FromResult(Snapshots);
         }
 
         public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorProjectionState:{actorId}");
+            calls.Add($"GetActorProjectionState:{actorId}");
             return Task.FromResult<WorkflowActorProjectionState?>(null);
         }
+    }
+
+    private sealed class FakeArtifactQueryPort(List<string> calls) : IWorkflowExecutionArtifactQueryPort
+    {
+        public bool EnableActorQueryEndpoints { get; set; }
+        public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
+        public IReadOnlyList<WorkflowActorGraphEdge> Edges { get; init; } = [];
+        public WorkflowActorGraphSubgraph Subgraph { get; init; } = new();
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
         {
-            Calls.Add($"ListActorTimeline:{actorId}:{take}");
+            calls.Add($"ListActorTimeline:{actorId}:{take}");
             return Task.FromResult(Timeline);
         }
 
         public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(string actorId, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorGraphEdges:{actorId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
+            calls.Add($"GetActorGraphEdges:{actorId}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(Edges);
         }
 
         public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
         {
-            Calls.Add($"GetActorGraphSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
+            calls.Add($"GetActorGraphSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(Subgraph);
-        }
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
-        {
-            Calls.Add($"GetActorGraphEnrichedSnapshot:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
-            return Task.FromResult(EnrichedSnapshot);
         }
     }
 }

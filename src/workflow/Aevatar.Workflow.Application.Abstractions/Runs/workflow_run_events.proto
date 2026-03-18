@@ -35,11 +35,13 @@ message WorkflowRunEventEnvelope {
     WorkflowToolCallStartEventPayload tool_call_start = 11;
     WorkflowToolCallEndEventPayload tool_call_end = 12;
     WorkflowCustomEventPayload custom = 13;
+    WorkflowRunStoppedEventPayload run_stopped = 14;
   }
 }
 
 message WorkflowRunStartedEventPayload {
   string thread_id = 1;
+  string run_id = 2;
 }
 
 message WorkflowRunFinishedEventPayload {
@@ -50,6 +52,11 @@ message WorkflowRunFinishedEventPayload {
 message WorkflowRunErrorEventPayload {
   string message = 1;
   google.protobuf.StringValue code = 2;
+}
+
+message WorkflowRunStoppedEventPayload {
+  string run_id = 1;
+  string reason = 2;
 }
 
 message WorkflowStepStartedEventPayload {
@@ -208,4 +215,13 @@ message WorkflowProjectionSinkFailureCustomPayload {
   string code = 1;
   string event_type = 2;
   string reason = 3;
+}
+
+message WorkflowObservedEnvelopeCustomPayload {
+  string event_id = 1;
+  string payload_type_url = 2;
+  string publisher_actor_id = 3;
+  string correlation_id = 4;
+  int64 state_version = 5;
+  google.protobuf.Any payload = 6;
 }

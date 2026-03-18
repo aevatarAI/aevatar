@@ -871,7 +871,7 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeFalse();
         completion.Error.Should().Contain("already active");
     }
@@ -897,10 +897,44 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeFalse();
         completion.Error.Should().Contain("无步骤");
         ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel").Active.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WorkflowLoop_ShouldPublishCompletionToSelfAndParent_WhenRunTerminates()
+    {
+        var ctx = new SchedulingContext();
+        var module = CreateKernel(new WorkflowDefinition
+        {
+            Name = "wf-empty-directions",
+            Roles = [],
+            Steps = [],
+        }, ctx);
+
+        await module.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                WorkflowName = "wf-empty-directions",
+                RunId = "run-empty-directions",
+                Input = "input",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completions = WorkflowCompletions(ctx);
+
+        completions.Should().HaveCount(2);
+        completions.Select(x => x.Direction).Should().BeEquivalentTo(new[]
+        {
+            TopologyAudience.Self,
+            TopologyAudience.Parent,
+        });
+        completions.Select(x => x.Event.RunId).Should().OnlyContain(runId => runId == "run-empty-directions");
+        completions.Select(x => x.Event.Success).Should().OnlyContain(success => !success);
+        completions.Select(x => x.Event.Error).Should().OnlyContain(error => error.Contains("无步骤", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -948,7 +982,7 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeTrue();
         completion.Output.Should().Be("skipped-output");
     }
@@ -1055,7 +1089,7 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeFalse();
         completion.Error.Should().Contain("invalid next_step");
     }
@@ -1161,7 +1195,7 @@ public class RuntimeCallbackEventizationTests
             ctx,
             CancellationToken.None);
 
-        var completion = ctx.Published.Select(x => x.Event).OfType<WorkflowCompletedEvent>().Single();
+        var completion = SingleWorkflowCompletion(ctx);
         completion.Success.Should().BeFalse();
         completion.Error.Should().Be(error);
         ctx.Scheduled.Should().BeEmpty();
@@ -1197,6 +1231,22 @@ public class RuntimeCallbackEventizationTests
             FireIndex = fireIndex,
             FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
+
+    private static WorkflowCompletedEvent SingleWorkflowCompletion(
+        SchedulingContext ctx,
+        TopologyAudience direction = TopologyAudience.Parent) =>
+        ctx.Published
+            .Where(x => x.Direction == direction)
+            .Select(x => x.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Single();
+
+    private static IReadOnlyList<(WorkflowCompletedEvent Event, TopologyAudience Direction)> WorkflowCompletions(
+        SchedulingContext ctx) =>
+        ctx.Published
+            .Where(x => x.Event is WorkflowCompletedEvent)
+            .Select(x => ((WorkflowCompletedEvent)x.Event, x.Direction))
+            .ToList();
 
     private static WorkflowExecutionKernel CreateKernel(
         WorkflowDefinition workflow,

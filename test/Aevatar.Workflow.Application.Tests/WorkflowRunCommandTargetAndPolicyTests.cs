@@ -53,13 +53,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     }
 
     [Fact]
-    public async Task ReleaseAfterInteractionAsync_WhenNonTerminal_ShouldScheduleDetachedCleanupAndTransferOwnership()
+    public async Task ReleaseAfterInteractionAsync_WhenNonTerminal_ShouldReleaseProjectionWithoutDestroyingActors()
     {
         var projectionPort = new FakeProjectionPort();
-        var cleanupScheduler = new FakeDetachedCleanupScheduler();
         var target = CreateTarget(
             projectionPort: projectionPort,
-            cleanupScheduler: cleanupScheduler,
             createdActorIds: ["definition-1", "run-1"]);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         target.BindLiveObservation(lease, new FakeEventSink());
@@ -72,10 +70,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
                 Aevatar.CQRS.Core.Abstractions.Interactions.CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete),
             CancellationToken.None);
 
-        projectionPort.Events.Should().Equal("detach:run-1");
-        cleanupScheduler.Requests.Should().ContainSingle();
-        cleanupScheduler.Requests.Single().ActorId.Should().Be("run-1");
-        lease.OwnershipHeartbeatStopCalls.Should().Be(1);
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
         target.ProjectionLease.Should().BeNull();
         target.LiveSink.Should().BeNull();
     }
@@ -152,6 +147,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     [Theory]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunFinished, true, WorkflowProjectionCompletionStatus.Completed)]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunError, true, WorkflowProjectionCompletionStatus.Failed)]
+    [InlineData(WorkflowRunEventEnvelope.EventOneofCase.RunStopped, true, WorkflowProjectionCompletionStatus.Stopped)]
     [InlineData(WorkflowRunEventEnvelope.EventOneofCase.None, false, WorkflowProjectionCompletionStatus.Unknown)]
     public void WorkflowRunCompletionPolicy_ShouldResolveTerminalStatus(
         WorkflowRunEventEnvelope.EventOneofCase eventCase,
@@ -168,6 +164,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             WorkflowRunEventEnvelope.EventOneofCase.RunError => new WorkflowRunEventEnvelope
             {
                 RunError = new WorkflowRunErrorEventPayload(),
+            },
+            WorkflowRunEventEnvelope.EventOneofCase.RunStopped => new WorkflowRunEventEnvelope
+            {
+                RunStopped = new WorkflowRunStoppedEventPayload(),
             },
             _ => new WorkflowRunEventEnvelope(),
         };
@@ -201,24 +201,36 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     private static WorkflowRunCommandTarget CreateTarget(
         FakeProjectionPort? projectionPort = null,
         FakeWorkflowRunActorPort? actorPort = null,
-        FakeDetachedCleanupScheduler? cleanupScheduler = null,
-        IReadOnlyList<string>? createdActorIds = null) =>
-        new(
+        IReadOnlyList<string>? createdActorIds = null)
+    {
+        projectionPort ??= new FakeProjectionPort();
+        actorPort ??= new FakeWorkflowRunActorPort();
+        return new WorkflowRunCommandTarget(
             new FakeActor("run-1"),
             "direct",
             createdActorIds ?? [],
-            projectionPort ?? new FakeProjectionPort(),
-            actorPort ?? new FakeWorkflowRunActorPort(),
-            cleanupScheduler ?? new FakeDetachedCleanupScheduler());
+            projectionPort,
+            projectionPort,
+            actorPort);
+    }
 
-    private sealed class FakeProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class FakeProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
         public Exception? DetachException { get; set; }
         public Exception? ReleaseException { get; set; }
         public List<string> Events { get; } = [];
 
-        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(string rootActorId, string workflowName, string input, string commandId, CancellationToken ct = default) =>
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
+        public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(string rootActorId, string commandId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
@@ -241,44 +253,10 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         }
     }
 
-    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionOwnershipLease
+    private sealed class FakeProjectionLease(string actorId, string commandId) : IWorkflowExecutionProjectionLease
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
-        public int OwnershipHeartbeatStopCalls { get; private set; }
-
-        public ValueTask StopOwnershipHeartbeatAsync()
-        {
-            OwnershipHeartbeatStopCalls++;
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class FakeDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public List<WorkflowRunDetachedCleanupRequest> Requests { get; } = [];
-
-        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>
@@ -327,6 +305,13 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
 
         public Task BindWorkflowDefinitionAsync(IActor actor, string workflowYaml, string workflowName, IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();

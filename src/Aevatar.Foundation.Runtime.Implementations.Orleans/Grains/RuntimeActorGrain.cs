@@ -71,7 +71,21 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         if (_selfStreamHandle != null)
         {
-            await _selfStreamHandle.UnsubscribeAsync();
+            try
+            {
+                await _selfStreamHandle.UnsubscribeAsync();
+            }
+            catch (Exception ex)
+            {
+                if (!ShouldIgnoreSelfStreamUnsubscribeFailure(ex))
+                    throw;
+
+                _logger.LogWarning(
+                    ex,
+                    "Failed to unsubscribe self stream for actor {ActorId} during deactivation.",
+                    this.GetPrimaryKeyString());
+            }
+
             _selfStreamHandle = null;
         }
 
@@ -83,6 +97,18 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         TriggerDeactivationHook();
+    }
+
+    private static bool ShouldIgnoreSelfStreamUnsubscribeFailure(Exception ex)
+    {
+        return ex switch
+        {
+            ObjectDisposedException => true,
+            OrleansMessageRejectionException => true,
+            AggregateException aggregate => aggregate.InnerExceptions.All(ShouldIgnoreSelfStreamUnsubscribeFailure),
+            _ when ex.InnerException != null => ShouldIgnoreSelfStreamUnsubscribeFailure(ex.InnerException),
+            _ => false,
+        };
     }
 
     public async Task<bool> InitializeAgentAsync(string agentTypeName)

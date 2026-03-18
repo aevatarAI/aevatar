@@ -32,6 +32,28 @@ public class AgentBaseCounterAgent : TestGAgentBase<CounterState>
         Task.FromResult($"Counter:{State.Count}");
 }
 
+public class OverloadedHandlerAgent : TestGAgentBase<CounterState>
+{
+    public int IncrementCalls { get; private set; }
+    public int DecrementCalls { get; private set; }
+
+    [EventHandler]
+    public Task HandleChange(IncrementEvent evt)
+    {
+        State.Count += evt.Amount;
+        IncrementCalls++;
+        return Task.CompletedTask;
+    }
+
+    [EventHandler]
+    public Task HandleChange(DecrementEvent evt)
+    {
+        State.Count -= evt.Amount;
+        DecrementCalls++;
+        return Task.CompletedTask;
+    }
+}
+
 // Test modules.
 
 public class TestModule : IEventModule<IEventHandlerContext>
@@ -79,6 +101,20 @@ public class AgentBaseTests
 
         agent.State.Count.ShouldBe(7);
         agent.HandleCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task HandleEvent_OverloadedHandlers_AreDiscoveredByParameterType()
+    {
+        var agent = new OverloadedHandlerAgent();
+        agent.SetId("test-2b");
+
+        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 10 }));
+        await agent.HandleEventAsync(TestHelper.Envelope(new DecrementEvent { Amount = 3 }));
+
+        agent.State.Count.ShouldBe(7);
+        agent.IncrementCalls.ShouldBe(1);
+        agent.DecrementCalls.ShouldBe(1);
     }
 
     [Fact]

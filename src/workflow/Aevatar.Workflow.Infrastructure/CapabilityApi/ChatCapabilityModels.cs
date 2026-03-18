@@ -68,6 +68,14 @@ public sealed record WorkflowSignalInput
     public string? Payload { get; init; }
 }
 
+public sealed record WorkflowStopInput
+{
+    public required string ActorId { get; init; }
+    public required string RunId { get; init; }
+    public string? CommandId { get; init; }
+    public string? Reason { get; init; }
+}
+
 internal sealed record ChatWsCommand
 {
     public string Type { get; init; } = ChatCapabilityMessageTypes.ChatCommand;

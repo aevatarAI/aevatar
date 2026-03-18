@@ -6,7 +6,7 @@ using Aevatar.Workflow.Projection.Orchestration;
 namespace Aevatar.Workflow.Projection.Projectors;
 
 public sealed class WorkflowActorBindingProjector
-    : IProjectionProjector<WorkflowBindingProjectionContext, IReadOnlyList<string>>
+    : IProjectionArtifactMaterializer<WorkflowBindingProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<WorkflowActorBindingDocument> _writeDispatcher;
     private readonly IProjectionDocumentReader<WorkflowActorBindingDocument, string> _documentReader;
@@ -20,13 +20,6 @@ public sealed class WorkflowActorBindingProjector
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(WorkflowBindingProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(
@@ -74,17 +67,6 @@ public sealed class WorkflowActorBindingProjector
         ReplaceInlineWorkflowYamls(runDocument.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
         ApplyProjectionMetadata(runDocument, eventId, stateVersion, updatedAt);
         await _writeDispatcher.UpsertAsync(runDocument, ct);
-    }
-
-    public ValueTask CompleteAsync(
-        WorkflowBindingProjectionContext context,
-        IReadOnlyList<string> projectionResult,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = projectionResult;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     private static void ApplyProjectionMetadata(

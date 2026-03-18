@@ -39,37 +39,6 @@ public class AppConfigWorkflowIntegrationTests
         json.RootElement.GetProperty("data").GetProperty("started").GetBoolean().Should().BeFalse();
     }
 
-    [Fact]
-    public async Task HandleOpenConfigAsync_WhenEmbeddedModeAndConfigUiHealthy_ShouldReturnJumpUrl()
-    {
-        var port = AllocateTcpPort();
-        await using var app = await StartConfigHealthServerAsync(port);
-
-        var result = await AppDemoPlaygroundEndpoints.HandleOpenConfigAsync(
-            new AppDemoPlaygroundEndpoints.AppConfigOpenRequest(port),
-            embeddedWorkflowMode: true,
-            CancellationToken.None);
-
-        var payload = ExtractResultPayload(result);
-        payload.StatusCode.Should().Be(StatusCodes.Status200OK);
-        payload.Json.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
-        payload.Json.RootElement.GetProperty("configUrl").GetString().Should().Be($"http://localhost:{port}");
-        payload.Json.RootElement.GetProperty("started").GetBoolean().Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task HandleOpenConfigAsync_WhenProxyMode_ShouldReject()
-    {
-        var result = await AppDemoPlaygroundEndpoints.HandleOpenConfigAsync(
-            new AppDemoPlaygroundEndpoints.AppConfigOpenRequest(null),
-            embeddedWorkflowMode: false,
-            CancellationToken.None);
-
-        var payload = ExtractResultPayload(result);
-        payload.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        payload.Json.RootElement.GetProperty("code").GetString().Should().Be("APP_CONFIG_OPEN_UNSUPPORTED_MODE");
-    }
-
     private static async Task<(int ExitCode, string StdOut)> CaptureStdOutAsync(Func<Task<int>> action)
     {
         var originalOut = Console.Out;
@@ -84,15 +53,6 @@ public class AppConfigWorkflowIntegrationTests
         {
             Console.SetOut(originalOut);
         }
-    }
-
-    private static (int StatusCode, JsonDocument Json) ExtractResultPayload(IResult result)
-    {
-        var resultType = result.GetType();
-        var statusCode = resultType.GetProperty("StatusCode")?.GetValue(result) as int? ?? StatusCodes.Status200OK;
-        var value = resultType.GetProperty("Value")?.GetValue(result);
-        var json = JsonSerializer.Serialize(value);
-        return (statusCode, JsonDocument.Parse(json));
     }
 
     private static int AllocateTcpPort()

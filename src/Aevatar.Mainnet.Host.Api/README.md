@@ -76,9 +76,21 @@ bash tools/ci/distributed_3node_smoke.sh
 
 ## 端点
 
+`Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。workflow authoring、user workflow publish/run、resume/signal 都应接到 mainnet，不再额外依赖独立的 workflow host。
+
 - `POST /api/chat`
 - `GET /api/ws/chat`
 - `GET /api/agents`
 - `GET /api/workflows`
 - `GET /api/actors/{actorId}`
 - `GET /api/actors/{actorId}/timeline`
+- `GET /api/scopes/{scopeId}/workflows`
+- `GET /api/scopes/{scopeId}/workflows/{workflowId}`
+- `PUT /api/scopes/{scopeId}/workflows/{workflowId}`
+- `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+- `POST /api/scopes/{scopeId}/workflow-runs:stream`（兼容旧 actorId 调用）
+
+`/api/scopes/{scopeId}/workflows/{workflowId}/runs:stream` 支持请求体字段 `eventFormat`：
+
+- `workflow`：返回现有 workflow frame SSE。
+- `agui`：返回 AGUI 原始事件 SSE，供 app 前端展示 workflow execution 过程。

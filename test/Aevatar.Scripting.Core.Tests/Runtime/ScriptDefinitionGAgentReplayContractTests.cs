@@ -244,8 +244,8 @@ public class ScriptDefinitionGAgentReplayContractTests
                     builder
                         .OnCommand<InvalidProfileCommand>(HandleAsync)
                         .OnEvent<InvalidProfileUpdated>(
-                            apply: static (_, evt, _) => new InvalidProfileState { CommandCount = 1 },
-                            project: static (_, evt, _) => evt.Current);
+                            apply: static (_, evt, _) => new InvalidProfileState { CommandCount = 1 })
+                        .ProjectState(static (_, _) => new InvalidProfileReadModel());
                 }
 
                 private static Task HandleAsync(
@@ -402,10 +402,35 @@ public class ScriptDefinitionGAgentReplayContractTests
                         apply: static (state, evt, _) => new ScriptProfileState
                         {
                             CommandCount = (state?.CommandCount ?? 0) + 1,
+                            ActorId = evt.Current?.ActorId ?? string.Empty,
+                            PolicyId = evt.Current?.PolicyId ?? string.Empty,
                             LastCommandId = evt.CommandId ?? string.Empty,
+                            InputText = evt.Current?.InputText ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
-                        },
-                        project: static (_, evt, _) => evt.Current);
+                            Tags = { evt.Current == null ? global::System.Array.Empty<string>() : (global::System.Collections.Generic.IEnumerable<string>)evt.Current.Tags },
+                        })
+                    .ProjectState(static (state, _) => state == null
+                        ? new ScriptProfileReadModel()
+                        : new ScriptProfileReadModel
+                        {
+                            HasValue = true,
+                            ActorId = state.ActorId,
+                            PolicyId = state.PolicyId,
+                            LastCommandId = state.LastCommandId,
+                            InputText = state.InputText,
+                            NormalizedText = state.NormalizedText,
+                            Search = new ScriptProfileSearchIndex
+                            {
+                                LookupKey = $"{state.ActorId}:{state.PolicyId}".ToLowerInvariant(),
+                                SortKey = state.NormalizedText ?? string.Empty,
+                            },
+                            Refs = new ScriptProfileDocumentRef
+                            {
+                                ActorId = state.ActorId ?? string.Empty,
+                                PolicyId = state.PolicyId ?? string.Empty,
+                            },
+                            Tags = { state.Tags },
+                        });
             }
 
             private static Task HandleAsync(

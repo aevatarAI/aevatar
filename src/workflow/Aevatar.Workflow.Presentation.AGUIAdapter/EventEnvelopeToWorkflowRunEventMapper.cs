@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Google.Protobuf.WellKnownTypes;
@@ -34,15 +35,22 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
             return [];
 
         var output = new List<WorkflowRunEventEnvelope>();
+        var handled = false;
         foreach (var handler in _handlers)
         {
-            if (!handler.TryMap(mappedEnvelope, out var mapped) || mapped.Count == 0)
+            if (!handler.TryMap(mappedEnvelope, out var mapped))
                 continue;
 
-            output.AddRange(mapped);
+            handled = true;
+            if (mapped.Count > 0)
+                output.AddRange(mapped);
         }
 
-        return output;
+        if (handled)
+            return output;
+
+        var rawObservedEvent = CreateRawObservedEvent(envelope, mappedEnvelope);
+        return rawObservedEvent == null ? [] : [rawObservedEvent];
     }
 
     private static EventEnvelope? ResolveMappedEnvelope(EventEnvelope envelope)
@@ -54,6 +62,60 @@ public sealed class EventEnvelopeToWorkflowRunEventMapper : IEventEnvelopeToWork
         }
 
         return envelope.Payload == null ? null : envelope;
+    }
+
+    private static WorkflowRunEventEnvelope? CreateRawObservedEvent(
+        EventEnvelope sourceEnvelope,
+        EventEnvelope mappedEnvelope)
+    {
+        if (mappedEnvelope.Payload == null)
+            return null;
+
+        var eventId = mappedEnvelope.Id ?? string.Empty;
+        var stateVersion = 0L;
+        if (CommittedStateEventEnvelope.TryGetObservedPayload(sourceEnvelope, out _, out var observedEventId, out var observedStateVersion))
+        {
+            if (!string.IsNullOrWhiteSpace(observedEventId))
+                eventId = observedEventId;
+            stateVersion = observedStateVersion;
+        }
+
+        return new WorkflowRunEventEnvelope
+        {
+            Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(mappedEnvelope.Timestamp),
+            Custom = new WorkflowCustomEventPayload
+            {
+                Name = "aevatar.raw.observed",
+                Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                {
+                    EventId = eventId,
+                    PayloadTypeUrl = mappedEnvelope.Payload.TypeUrl ?? string.Empty,
+                    PublisherActorId = mappedEnvelope.Route?.PublisherActorId ?? string.Empty,
+                    CorrelationId = mappedEnvelope.Propagation?.CorrelationId ?? string.Empty,
+                    StateVersion = stateVersion,
+                    Payload = mappedEnvelope.Payload.Clone(),
+                }),
+            },
+        };
+    }
+}
+
+public sealed class WorkflowRunExecutionStartedEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => -10;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        if (envelope.Payload?.Is(WorkflowRunExecutionStartedEvent.Descriptor) != true)
+        {
+            events = [];
+            return false;
+        }
+
+        // This committed event is runtime bookkeeping only.
+        // StartWorkflowEvent remains the user-facing run-start signal.
+        events = [];
+        return true;
     }
 }
 
@@ -79,6 +141,7 @@ public sealed class StartWorkflowRunEventEnvelopeMappingHandler : IWorkflowRunEv
                 RunStarted = new WorkflowRunStartedEventPayload
                 {
                     ThreadId = threadId,
+                    RunId = evt.RunId,
                 },
             },
         ];
@@ -409,6 +472,56 @@ public sealed class WorkflowCompletedRunEventEnvelopeMappingHandler : IWorkflowR
             },
         ];
         return true;
+    }
+}
+
+public sealed class WorkflowStoppedRunEventEnvelopeMappingHandler : IWorkflowRunEventEnvelopeMappingHandler
+{
+    public int Order => 45;
+
+    public bool TryMap(EventEnvelope envelope, out IReadOnlyList<WorkflowRunEventEnvelope> events)
+    {
+        events = [];
+        if (envelope.Payload == null)
+            return false;
+
+        if (envelope.Payload.Is(WorkflowStoppedEvent.Descriptor))
+        {
+            var evt = envelope.Payload.Unpack<WorkflowStoppedEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    RunStopped = new WorkflowRunStoppedEventPayload
+                    {
+                        RunId = evt.RunId,
+                        Reason = evt.Reason,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        if (envelope.Payload.Is(WorkflowRunStoppedEvent.Descriptor))
+        {
+            var evt = envelope.Payload.Unpack<WorkflowRunStoppedEvent>();
+            events =
+            [
+                new WorkflowRunEventEnvelope
+                {
+                    Timestamp = AGUIEventEnvelopeMappingHelpers.ToUnixMs(envelope.Timestamp),
+                    RunStopped = new WorkflowRunStoppedEventPayload
+                    {
+                        RunId = evt.RunId,
+                        Reason = evt.Reason,
+                    },
+                },
+            ];
+            return true;
+        }
+
+        return false;
     }
 }
 

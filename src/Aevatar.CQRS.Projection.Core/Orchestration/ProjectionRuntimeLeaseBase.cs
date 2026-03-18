@@ -1,12 +1,9 @@
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public abstract class ProjectionRuntimeLeaseBase<TSink>
-    : IProjectionRuntimeLease
-    where TSink : class
+public abstract class ProjectionRuntimeLeaseBase : IProjectionRuntimeLease
 {
-    private readonly object _liveSinkGate = new();
-    private readonly List<LiveSinkSubscription> _liveSinkSubscriptions = [];
-
     protected ProjectionRuntimeLeaseBase(string rootEntityId)
     {
         ArgumentNullException.ThrowIfNull(rootEntityId);
@@ -14,9 +11,22 @@ public abstract class ProjectionRuntimeLeaseBase<TSink>
     }
 
     public string RootEntityId { get; }
+}
+
+public abstract class EventSinkProjectionRuntimeLeaseBase<TEvent>
+    : ProjectionRuntimeLeaseBase
+    where TEvent : class
+{
+    private readonly object _liveSinkGate = new();
+    private readonly List<LiveSinkSubscription> _liveSinkSubscriptions = [];
+
+    protected EventSinkProjectionRuntimeLeaseBase(string rootEntityId)
+        : base(rootEntityId)
+    {
+    }
 
     public IAsyncDisposable? AttachOrReplaceLiveSinkSubscription(
-        TSink sink,
+        IEventSink<TEvent> sink,
         IAsyncDisposable streamSubscription)
     {
         ArgumentNullException.ThrowIfNull(sink);
@@ -37,7 +47,7 @@ public abstract class ProjectionRuntimeLeaseBase<TSink>
         }
     }
 
-    public IAsyncDisposable? DetachLiveSinkSubscription(TSink sink)
+    public IAsyncDisposable? DetachLiveSinkSubscription(IEventSink<TEvent> sink)
     {
         ArgumentNullException.ThrowIfNull(sink);
 
@@ -53,13 +63,7 @@ public abstract class ProjectionRuntimeLeaseBase<TSink>
         }
     }
 
-    public int GetLiveSinkSubscriptionCount()
-    {
-        lock (_liveSinkGate)
-            return _liveSinkSubscriptions.Count;
-    }
-
     private sealed record LiveSinkSubscription(
-        TSink Sink,
+        IEventSink<TEvent> Sink,
         IAsyncDisposable StreamSubscription);
 }

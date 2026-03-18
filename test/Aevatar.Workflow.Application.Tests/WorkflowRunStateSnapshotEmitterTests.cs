@@ -27,7 +27,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
         WorkflowProjectionCompletionStatus status,
         WorkflowProjectionCompletionStatusPayload expected)
     {
-        var emitter = new WorkflowRunFinalizeEmitter(new FakeProjectionQueryPort());
+        var emitter = new WorkflowRunFinalizeEmitter(new FakeCurrentStateQueryPort());
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
         WorkflowRunEventEnvelope? emitted = null;
 
@@ -74,7 +74,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
             LastUpdatedAt = new DateTimeOffset(2026, 3, 11, 9, 30, 0, TimeSpan.Zero),
         };
         var emitter = new WorkflowRunFinalizeEmitter(
-            new FakeProjectionQueryPort
+            new FakeCurrentStateQueryPort
             {
                 Snapshot = snapshot,
                 ProjectionState = projectionState,
@@ -113,7 +113,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
     public async Task EmitAsync_ShouldSwallowSnapshotLookupFailures_AndEmitUnavailableSnapshot()
     {
         var emitter = new WorkflowRunFinalizeEmitter(
-            new FakeProjectionQueryPort { SnapshotException = new InvalidOperationException("boom") });
+            new FakeCurrentStateQueryPort { SnapshotException = new InvalidOperationException("boom") });
         WorkflowProjectionStateSnapshotPayload? payload = null;
 
         await emitter.EmitAsync(
@@ -138,7 +138,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var emitter = new WorkflowRunFinalizeEmitter(
-            new FakeProjectionQueryPort { SnapshotException = new OperationCanceledException(cts.Token) });
+            new FakeCurrentStateQueryPort { SnapshotException = new OperationCanceledException(cts.Token) });
 
         var act = async () => await emitter.EmitAsync(
             new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
@@ -150,7 +150,7 @@ public sealed class WorkflowRunFinalizeEmitterTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    private sealed class FakeProjectionQueryPort : IWorkflowExecutionProjectionQueryPort
+    private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {
         public bool EnableActorQueryEndpoints => true;
         public WorkflowActorSnapshot? Snapshot { get; set; }
@@ -178,16 +178,5 @@ public sealed class WorkflowRunFinalizeEmitterTests
             return Task.FromResult(ProjectionState);
         }
 
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> GetActorGraphEdgesAsync(string actorId, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 }

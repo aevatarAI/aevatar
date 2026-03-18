@@ -133,8 +133,9 @@ public class WorkflowYamlScriptParityTests
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
 
-        const string definitionActorId = "yaml-script-parity-definition";
-        const string runtimeActorId = "yaml-script-parity-runtime";
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var definitionActorId = "yaml-script-parity-definition-" + suffix;
+        var runtimeActorId = "yaml-script-parity-runtime-" + suffix;
         const string revision = "rev-1";
 
         var definition = await definitionPort.UpsertDefinitionWithSnapshotAsync(
@@ -164,13 +165,14 @@ public class WorkflowYamlScriptParityTests
                 definitionActorId,
                 TextNormalizationRequested.Descriptor.FullName,
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
                 sink,
                 "run-parity",
                 CancellationToken.None);
-
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
-            snapshot.Should().NotBeNull();
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
             return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>().NormalizedText;
         }
         finally

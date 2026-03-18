@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -193,7 +194,7 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
             await EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
 
         var keyValue = ResolveReadModelKey(readModel);
-        var payload = JsonSerializer.Serialize(readModel, _jsonOptions);
+        var payload = SerializePayload(readModel, keyValue);
         var startedAt = DateTimeOffset.UtcNow;
         try
         {
@@ -382,6 +383,19 @@ public sealed partial class ElasticsearchProjectionDocumentStore<TReadModel, TKe
     {
         var keyValue = _keyFormatter(key)?.Trim() ?? "";
         return keyValue;
+    }
+
+    private string SerializePayload(TReadModel readModel, string keyValue)
+    {
+        var payload = JsonSerializer.SerializeToNode(readModel, _jsonOptions) as JsonObject;
+        if (payload == null)
+        {
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' could not be serialized into a JSON object for Elasticsearch persistence.");
+        }
+
+        payload[ElasticsearchProjectionDocumentStorePayloadSupport.StableSortDocumentIdField] = keyValue;
+        return payload.ToJsonString(_jsonOptions);
     }
 
     private TReadModel? DeserializeOrNull(string json)

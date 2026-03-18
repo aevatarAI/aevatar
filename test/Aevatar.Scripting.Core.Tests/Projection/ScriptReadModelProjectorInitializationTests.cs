@@ -13,17 +13,15 @@ namespace Aevatar.Scripting.Core.Tests.Projection;
 public sealed class ScriptReadModelProjectorInitializationTests
 {
     [Fact]
-    public async Task InitializeAsync_ShouldNotSeedDocument()
+    public async Task ProjectAsync_ShouldNotSeedDocumentBeforeCommittedObservation()
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "runtime-1:read-model",
             RootActorId = "runtime-1",
+            ProjectionKind = "script-execution-read-model",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         var document = await dispatcher.GetAsync("runtime-1", CancellationToken.None);
         document.Should().BeNull();
@@ -34,10 +32,10 @@ public sealed class ScriptReadModelProjectorInitializationTests
     {
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = CreateProjector(dispatcher);
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "runtime-2:read-model",
             RootActorId = "runtime-2",
+            ProjectionKind = "script-execution-read-model",
         };
 
         await projector.ProjectAsync(

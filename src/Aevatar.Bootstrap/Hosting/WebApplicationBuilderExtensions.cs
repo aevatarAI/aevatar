@@ -21,6 +21,8 @@ public sealed class AevatarDefaultHostOptions
     public bool EnableConnectorBootstrap { get; set; } = true;
 
     public bool AutoMapCapabilities { get; set; } = true;
+
+    public bool MapRootHealthEndpoint { get; set; } = true;
 }
 
 public static class WebApplicationBuilderExtensions
@@ -34,6 +36,7 @@ public static class WebApplicationBuilderExtensions
         var hostOptions = new AevatarDefaultHostOptions();
         configureHost?.Invoke(hostOptions);
 
+        AddApplicationBaseConfiguration(builder);
         builder.Configuration.AddAevatarConfig();
         builder.Services.AddAevatarBootstrap(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
@@ -47,6 +50,27 @@ public static class WebApplicationBuilderExtensions
         return builder;
     }
 
+    private static void AddApplicationBaseConfiguration(WebApplicationBuilder builder)
+    {
+        var applicationBasePath = AppContext.BaseDirectory;
+        if (string.IsNullOrWhiteSpace(applicationBasePath) || !Directory.Exists(applicationBasePath))
+            return;
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(applicationBasePath, "appsettings.json"),
+            optional: true,
+            reloadOnChange: false);
+
+        var environmentName = builder.Environment.EnvironmentName?.Trim();
+        if (string.IsNullOrWhiteSpace(environmentName))
+            return;
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(applicationBasePath, $"appsettings.{environmentName}.json"),
+            optional: true,
+            reloadOnChange: false);
+    }
+
     public static WebApplication UseAevatarDefaultHost(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -58,7 +82,8 @@ public static class WebApplicationBuilderExtensions
         if (options.EnableWebSockets)
             app.UseWebSockets();
 
-        app.MapGet("/", () => Results.Ok(new { name = options.ServiceName, status = "running" }));
+        if (options.MapRootHealthEndpoint)
+            app.MapGet("/", () => Results.Ok(new { name = options.ServiceName, status = "running" }));
 
         if (options.AutoMapCapabilities)
             app.MapAevatarCapabilities();

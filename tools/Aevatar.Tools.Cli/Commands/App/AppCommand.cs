@@ -7,7 +7,7 @@ internal static class AppCommand
 {
     public static Command Create()
     {
-        var command = new Command("app", "Launch embedded workflow playground app.");
+        var command = new Command("app", "Launch embedded workflow studio app.");
         var portOption = CreatePortOption();
         var noBrowserOption = CreateNoBrowserOption();
         var apiBaseOption = CreateApiBaseOption();

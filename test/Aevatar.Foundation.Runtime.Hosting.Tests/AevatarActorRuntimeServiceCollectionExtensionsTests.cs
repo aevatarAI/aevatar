@@ -132,7 +132,10 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
 
         services.Should().Contain(x => x.ServiceType == typeof(IMassTransitEnvelopeTransport));
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
-                                       x.ImplementationType == typeof(OrleansStreamProviderAdapter));
+                                       x.ImplementationType == typeof(MassTransitStreamProvider));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorEventSubscriptionProvider) &&
+                                       x.ImplementationType == typeof(MassTransitActorEventSubscriptionProvider));
+        services.Should().Contain(x => x.ServiceType == typeof(OrleansStreamProviderAdapter));
 
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
@@ -161,6 +164,8 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IMassTransitEnvelopeTransport));
         services.Should().Contain(x => x.ServiceType == typeof(Aevatar.Foundation.Abstractions.IStreamProvider) &&
                                        x.ImplementationType == typeof(MassTransitStreamProvider));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorEventSubscriptionProvider) &&
+                                       x.ImplementationType == typeof(MassTransitActorEventSubscriptionProvider));
 
         var actorRuntimeDescriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
         actorRuntimeDescriptor.Should().NotBeNull();
