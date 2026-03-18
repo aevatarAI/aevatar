@@ -125,6 +125,9 @@ public sealed class ChatRuntime
             CancellationToken = runToken,
         };
 
+        // Collect history mutations from the background thread; apply on caller context after task completes.
+        var pendingHistoryMessages = new List<ChatMessage>();
+
         var runTask = Task.Run(async () =>
         {
             var wroteOutput = false;
@@ -134,11 +137,13 @@ public sealed class ChatRuntime
                 {
                     if (runContext.Terminate) return;
 
-                    _history.Add(ChatMessage.User(runContext.UserMessage));
+                    var userMsg = ChatMessage.User(runContext.UserMessage);
+                    pendingHistoryMessages.Add(userMsg);
                     var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                     var provider = _providerFactory();
                     runContext.Items["gen_ai.provider.name"] = provider.Name;
-                    var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
+                    // Build messages from a local snapshot + pending user message instead of mutating _history.
+                    var messages = BuildMessagesWithPending(baseRequest, userMsg);
 
                     var request = new LLMRequest
                     {
@@ -212,7 +217,7 @@ public sealed class ChatRuntime
 
                     if (!string.IsNullOrEmpty(streamedContent) || streamedToolCalls is { Count: > 0 })
                     {
-                        _history.Add(new ChatMessage
+                        pendingHistoryMessages.Add(new ChatMessage
                         {
                             Role = "assistant",
                             Content = streamedContent,
@@ -247,7 +252,26 @@ public sealed class ChatRuntime
         {
             linkedCts.Cancel();
             try { await runTask.ConfigureAwait(false); } catch { /* best-effort */ }
+
+            // Apply collected history mutations on the caller context after the background task completes.
+            foreach (var msg in pendingHistoryMessages)
+                _history.Add(msg);
         }
+    }
+
+    /// <summary>
+    /// Build the LLM messages list from the current history snapshot plus a pending user message,
+    /// without mutating <see cref="_history"/>. Used by the streaming path to avoid cross-thread mutation.
+    /// </summary>
+    private List<ChatMessage> BuildMessagesWithPending(LLMRequest baseRequest, ChatMessage pendingUserMessage)
+    {
+        var systemPrompt = baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content;
+        var messages = new List<ChatMessage>();
+        if (!string.IsNullOrEmpty(systemPrompt))
+            messages.Add(ChatMessage.System(systemPrompt));
+        messages.AddRange(_history.Messages);
+        messages.Add(pendingUserMessage);
+        return messages;
     }
 
     private static LLMRequest ApplyRequestIdentity(
