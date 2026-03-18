@@ -14,14 +14,16 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>> _toolIndex;
+    private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly ILogger _logger;
+    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger<ToolCallModule> logger)
     {
-        _toolIndex = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-            () => DiscoverAllToolsAsync(toolSources, logger));
+        _toolSources = toolSources;
+        _logger = logger;
     }
 
     public string Name => "tool_call";
@@ -63,7 +65,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
         }, TopologyAudience.Self, ct);
 
-        var toolIndex = await _toolIndex.Value;
+        var toolIndex = await GetOrDiscoverAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
         {
             const string notFound = "tool not found or no tool sources configured";
@@ -97,9 +99,19 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
+    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
+    {
+        var current = _toolIndex;
+        if (current is { IsFaulted: false }) return current;
+        var task = DiscoverAllToolsAsync(_toolSources, _logger, ct);
+        var winner = Interlocked.CompareExchange(ref _toolIndex, task, current);
+        return winner ?? task;
+    }
+
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
         IEnumerable<IAgentToolSource> toolSources,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken ct)
     {
         var index = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in toolSources)
@@ -107,7 +119,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             IReadOnlyList<IAgentTool> tools;
             try
             {
-                tools = await source.DiscoverToolsAsync();
+                tools = await source.DiscoverToolsAsync(ct);
             }
             catch (Exception ex)
             {

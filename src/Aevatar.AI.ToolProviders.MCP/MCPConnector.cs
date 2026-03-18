@@ -19,7 +19,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
-    private readonly Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>> _tools;
+    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _tools;
     private readonly ILogger _logger;
 
     public MCPConnector(
@@ -39,7 +39,6 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _clientManager = clientManager ?? new MCPClientManager(logger);
         _logger = logger ?? NullLogger.Instance;
-        _tools = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(ConnectAndIndexToolsAsync);
     }
 
     /// <inheritdoc />
@@ -54,7 +53,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         var sw = Stopwatch.StartNew();
         try
         {
-            var tools = await _tools.Value;
+            var tools = await GetOrConnectAsync(ct);
 
             var toolName = ResolveToolName(request);
             if (string.IsNullOrWhiteSpace(toolName))
@@ -133,9 +132,18 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         return _defaultTool ?? "";
     }
 
-    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync()
+    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {
-        var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig);
+        var current = _tools;
+        if (current is { IsFaulted: false }) return current;
+        var task = ConnectAndIndexToolsAsync(ct);
+        var winner = Interlocked.CompareExchange(ref _tools, task, current);
+        return winner ?? task;
+    }
+
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(CancellationToken ct)
+    {
+        var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
         return discovered.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
     }
 
