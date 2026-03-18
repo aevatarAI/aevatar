@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.CQRS.Core.Commands;
 
 public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>
-    : ICommandDispatchService<TCommand, TReceipt, TError>, IDisposable
+    : ICommandDispatchService<TCommand, TReceipt, TError>, IAsyncDisposable
     where TTarget : class, ICommandEventTarget<TEvent>, ICommandInteractionCleanupTarget<TReceipt, TCompletion>
 {
     private readonly ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> _dispatchPipeline;
@@ -16,23 +16,25 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
     private readonly ICommandDurableCompletionResolver<TReceipt, TCompletion> _durableCompletionResolver;
     private readonly ILogger<DefaultDetachedCommandDispatchService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>> _logger;
     private readonly CancellationToken _shutdownToken;
-    private readonly HashSet<Task> _inflightTasks = [];
-    private readonly object _inflightLock = new();
+    private int _inflightCount;
+    private TaskCompletionSource _drainComplete = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public DefaultDetachedCommandDispatchService(
         ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> dispatchPipeline,
         IEventOutputStream<TEvent, TFrame> outputStream,
         ICommandCompletionPolicy<TEvent, TCompletion> completionPolicy,
         ICommandDurableCompletionResolver<TReceipt, TCompletion> durableCompletionResolver,
-        CancellationToken shutdownToken = default,
+        ICommandDispatchShutdownSignal? shutdownSignal = null,
         ILogger<DefaultDetachedCommandDispatchService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null)
     {
         _dispatchPipeline = dispatchPipeline ?? throw new ArgumentNullException(nameof(dispatchPipeline));
         _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
         _completionPolicy = completionPolicy ?? throw new ArgumentNullException(nameof(completionPolicy));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
-        _shutdownToken = shutdownToken;
+        _shutdownToken = shutdownSignal?.ShutdownToken ?? CancellationToken.None;
         _logger = logger ?? NullLogger<DefaultDetachedCommandDispatchService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>.Instance;
+        // Start in signaled state since there are no inflight tasks initially.
+        _drainComplete.TrySetResult();
     }
 
     public async Task<CommandDispatchResult<TReceipt, TError>> DispatchAsync(
@@ -50,24 +52,18 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
         return CommandDispatchResult<TReceipt, TError>.Success(execution.Receipt);
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        Task[] snapshot;
-        lock (_inflightLock)
-        {
-            snapshot = [.. _inflightTasks];
-        }
+        if (Volatile.Read(ref _inflightCount) == 0)
+            return;
 
-        if (snapshot.Length > 0)
+        try
         {
-            try
-            {
-                Task.WaitAll(snapshot, TimeSpan.FromSeconds(30));
-            }
-            catch (AggregateException)
-            {
-                // Tasks may have been cancelled or faulted during shutdown; swallow.
-            }
+            await _drainComplete.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            // Drain did not complete within timeout; swallow.
         }
     }
 
@@ -75,22 +71,19 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
         TTarget target,
         TReceipt receipt)
     {
+        // Reset drain signal if transitioning from 0 to 1.
+        if (Interlocked.Increment(ref _inflightCount) == 1)
+            _drainComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var task = Task.Run(
             () => DrainAsync(target, receipt, _shutdownToken),
             CancellationToken.None);
 
-        lock (_inflightLock)
-        {
-            _inflightTasks.Add(task);
-        }
-
         task.ContinueWith(
-            t =>
+            _ =>
             {
-                lock (_inflightLock)
-                {
-                    _inflightTasks.Remove(t);
-                }
+                if (Interlocked.Decrement(ref _inflightCount) == 0)
+                    _drainComplete.TrySetResult();
             },
             TaskContinuationOptions.ExecuteSynchronously);
     }

@@ -59,7 +59,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
     }
 
     [Fact]
-    public async Task ShutdownToken_ShouldCancelInflightDrain()
+    public async Task ShutdownSignal_ShouldCancelInflightDrain()
     {
         using var cts = new CancellationTokenSource();
         var sink = new EventChannel<string>();
@@ -80,7 +80,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
             outputStream,
             new DetachedCompletionPolicy(),
             new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
-            shutdownToken: cts.Token);
+            shutdownSignal: new TestShutdownSignal(cts.Token));
 
         await service.DispatchAsync("command-2", CancellationToken.None);
         await pumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -93,7 +93,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
     }
 
     [Fact]
-    public async Task Dispose_ShouldDrainInflightTasks()
+    public async Task DisposeAsync_ShouldDrainInflightTasks()
     {
         var sink = new EventChannel<string>();
         sink.Push("done:ok");
@@ -117,11 +117,13 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
 
         await service.DispatchAsync("command-3", CancellationToken.None);
 
-        service.Dispose();
+        await service.DisposeAsync();
 
         target.ReleaseCalls.Should().ContainSingle();
         target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeTrue();
     }
+
+    private sealed record TestShutdownSignal(CancellationToken ShutdownToken) : ICommandDispatchShutdownSignal;
 
     private sealed record DetachedReceipt(string TargetId, string ReceiptId);
 
