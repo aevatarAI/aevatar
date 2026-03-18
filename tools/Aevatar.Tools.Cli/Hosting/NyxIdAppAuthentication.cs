@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -258,15 +259,41 @@ internal static class NyxIdAppAuthentication
             });
         });
 
-        app.MapGet("/auth/login", (HttpContext context, string? returnUrl) =>
+        app.MapGet("/auth/login", async (HttpContext context, string? returnUrl) =>
         {
             if (!authEnabled)
                 return Results.Redirect("/");
 
             var redirectUri = string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl.Trim();
-            return Results.Challenge(
-                new AuthenticationProperties { RedirectUri = redirectUri },
-                [OpenIdConnectDefaults.AuthenticationScheme]);
+            var authOptions = context.RequestServices.GetService<IOptions<NyxIdAppAuthOptions>>()?.Value;
+
+            try
+            {
+                await context.ChallengeAsync(
+                    OpenIdConnectDefaults.AuthenticationScheme,
+                    new AuthenticationProperties { RedirectUri = redirectUri });
+                return Results.Empty;
+            }
+            catch (Exception ex) when (TryBuildNyxIdLoginFailureMessage(ex, authOptions, out var message))
+            {
+                return Results.Content(
+                    RenderHtmlPage(
+                        "NyxID unavailable",
+                        WebUtility.HtmlEncode(message),
+                        "Try again",
+                        BuildLoginUrl(redirectUri)),
+                    "text/html; charset=utf-8");
+            }
+            catch
+            {
+                return Results.Content(
+                    RenderHtmlPage(
+                        "Authentication unavailable",
+                        "Aevatar app could not start NyxID sign-in. Check the NyxID authority configuration and try again.",
+                        "Try again",
+                        BuildLoginUrl(redirectUri)),
+                    "text/html; charset=utf-8");
+            }
         });
 
         app.MapGet("/auth/logout", async (HttpContext context) =>
@@ -327,6 +354,41 @@ internal static class NyxIdAppAuthentication
         return $"/auth/login?returnUrl={Uri.EscapeDataString(redirectUri)}";
     }
 
+    internal static bool TryBuildNyxIdLoginFailureMessage(
+        Exception exception,
+        NyxIdAppAuthOptions? options,
+        out string message)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        var authority = string.IsNullOrWhiteSpace(options?.Authority)
+            ? "the configured NyxID authority"
+            : options!.Authority.Trim();
+        var authorityHost = TryGetHost(authority);
+
+        if (FindException<SocketException>(exception) != null ||
+            FindException<HttpRequestException>(exception) != null)
+        {
+            message =
+                $"Aevatar app could not reach NyxID at {authority}. " +
+                $"Check the authority URL, DNS, VPN or proxy settings, and whether {authorityHost ?? authority} is reachable.";
+            return true;
+        }
+
+        if (ExceptionChainContains(exception, "IDX20803") ||
+            ExceptionChainContains(exception, "IDX20804") ||
+            ExceptionChainContains(exception, ".well-known/openid-configuration"))
+        {
+            message =
+                $"Aevatar app could not load NyxID OpenID configuration from {authority}. " +
+                $"Check the authority URL and network connectivity, then try again.";
+            return true;
+        }
+
+        message = string.Empty;
+        return false;
+    }
+
     private static void EnsureScopeClaim(ClaimsPrincipal? principal)
     {
         if (principal?.Identity is not ClaimsIdentity identity)
@@ -353,6 +415,43 @@ internal static class NyxIdAppAuthentication
             return;
 
         identity.AddClaim(new Claim("scope_id", genericIdClaim.Value.Trim()));
+    }
+
+    private static bool ExceptionChainContains(Exception exception, string value)
+    {
+        foreach (var current in EnumerateExceptionChain(exception))
+        {
+            if (current.Message.Contains(value, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static TException? FindException<TException>(Exception exception)
+        where TException : Exception
+    {
+        foreach (var current in EnumerateExceptionChain(exception))
+        {
+            if (current is TException typed)
+                return typed;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<Exception> EnumerateExceptionChain(Exception exception)
+    {
+        for (var current = exception; current != null; current = current.InnerException!)
+            yield return current;
+    }
+
+    private static string? TryGetHost(string authority)
+    {
+        if (!Uri.TryCreate(authority, UriKind.Absolute, out var uri))
+            return null;
+
+        return uri.Host;
     }
 
     private static string RenderHtmlPage(
