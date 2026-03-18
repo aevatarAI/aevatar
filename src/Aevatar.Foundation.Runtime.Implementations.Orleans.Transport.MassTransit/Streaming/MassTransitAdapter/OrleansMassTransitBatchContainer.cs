@@ -4,9 +4,21 @@ using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 
+[GenerateSerializer]
 internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
 {
-    private readonly EventEnvelope _envelope;
+    [Id(0)]
+    public StreamId StreamId { get; private set; } = default!;
+
+    [Id(1)]
+    public EventEnvelope Envelope { get; private set; } = default!;
+
+    [Id(2)]
+    public EventSequenceTokenV2 BatchSequenceToken { get; private set; } = default!;
+
+    private OrleansMassTransitBatchContainer()
+    {
+    }
 
     public OrleansMassTransitBatchContainer(
         StreamId streamId,
@@ -14,20 +26,18 @@ internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
         EventSequenceTokenV2 sequenceToken)
     {
         StreamId = streamId;
-        _envelope = envelope;
-        SequenceToken = sequenceToken;
+        Envelope = envelope;
+        BatchSequenceToken = sequenceToken;
     }
 
-    public StreamId StreamId { get; }
-
-    public StreamSequenceToken SequenceToken { get; }
+    public StreamSequenceToken SequenceToken => BatchSequenceToken;
 
     public IEnumerable<Tuple<T, StreamSequenceToken>> GetEvents<T>()
     {
         if (typeof(T) != typeof(EventEnvelope))
             return [];
 
-        return [Tuple.Create((T)(object)_envelope, SequenceToken)];
+        return [Tuple.Create((T)(object)Envelope, SequenceToken)];
     }
 
     public bool ImportRequestContext() => false;

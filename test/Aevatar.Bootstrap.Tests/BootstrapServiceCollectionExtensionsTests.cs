@@ -70,6 +70,49 @@ public class BootstrapServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddAevatarDefaultHost_ShouldLoadEnvironmentAppSettingsFromApplicationBaseDirectory()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var environmentName = $"BootstrapBaseDir{Guid.NewGuid():N}";
+        var appSettingsPath = Path.Combine(AppContext.BaseDirectory, $"appsettings.{environmentName}.json");
+        var contentRoot = Path.Combine(Path.GetTempPath(), $"aevatar-bootstrap-content-root-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(contentRoot);
+        File.WriteAllText(
+            appSettingsPath,
+            """
+            {
+              "BootstrapTest": {
+                "Value": "loaded-from-app-base"
+              }
+            }
+            """);
+
+        try
+        {
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = environmentName,
+                ContentRootPath = contentRoot,
+            });
+
+            builder.AddAevatarDefaultHost(options =>
+            {
+                options.EnableConnectorBootstrap = false;
+                options.EnableCors = false;
+            });
+
+            builder.Configuration["BootstrapTest:Value"].Should().Be("loaded-from-app-base");
+        }
+        finally
+        {
+            if (File.Exists(appSettingsPath))
+                File.Delete(appSettingsPath);
+            if (Directory.Exists(contentRoot))
+                Directory.Delete(contentRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void UseAevatarDefaultHost_WhenAutoMapCapabilitiesDisabled_ShouldOnlyMapRootHealthRoute()
     {
         using var home = new TemporaryAevatarHomeScope();

@@ -36,6 +36,7 @@ public static class WebApplicationBuilderExtensions
         var hostOptions = new AevatarDefaultHostOptions();
         configureHost?.Invoke(hostOptions);
 
+        AddApplicationBaseConfiguration(builder);
         builder.Configuration.AddAevatarConfig();
         builder.Services.AddAevatarBootstrap(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
@@ -47,6 +48,27 @@ public static class WebApplicationBuilderExtensions
             AddDefaultCorsPolicy(builder, hostOptions.CorsPolicyName);
 
         return builder;
+    }
+
+    private static void AddApplicationBaseConfiguration(WebApplicationBuilder builder)
+    {
+        var applicationBasePath = AppContext.BaseDirectory;
+        if (string.IsNullOrWhiteSpace(applicationBasePath) || !Directory.Exists(applicationBasePath))
+            return;
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(applicationBasePath, "appsettings.json"),
+            optional: true,
+            reloadOnChange: false);
+
+        var environmentName = builder.Environment.EnvironmentName?.Trim();
+        if (string.IsNullOrWhiteSpace(environmentName))
+            return;
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(applicationBasePath, $"appsettings.{environmentName}.json"),
+            optional: true,
+            reloadOnChange: false);
     }
 
     public static WebApplication UseAevatarDefaultHost(this WebApplication app)
