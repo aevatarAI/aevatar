@@ -19,7 +19,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_ShouldInvokeRegisteredConnector_AndPublishMetadata()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         registry.Register(new FakeConnector("fake_connector", "echo://done"));
         await using var env = BuildEnvironment(registry);
 
@@ -52,7 +52,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenMissingAndSkip_ShouldKeepInput()
     {
-        await using var env = BuildEnvironment(new InMemoryConnectorRegistry());
+        await using var env = BuildEnvironment(new ConfiguredConnectorRegistry());
 
         const string yaml = """
             name: connector_flow_skip
@@ -79,7 +79,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenConnectorFailsAndContinue_ShouldKeepInput()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         registry.Register(new FakeFailConnector("unstable_connector"));
         await using var env = BuildEnvironment(registry);
 
@@ -108,7 +108,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorInList_ShouldSucceed()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         registry.Register(new FakeConnector("allowed_connector", "ok"));
         await using var env = BuildEnvironment(registry);
 
@@ -139,7 +139,7 @@ public class ConnectorCallIntegrationTests
     [Fact]
     public async Task ConnectorCall_WhenRoleHasConnectorsAllowlist_AndConnectorNotInList_ShouldFailStep()
     {
-        var registry = new InMemoryConnectorRegistry();
+        var registry = new ConfiguredConnectorRegistry();
         registry.Register(new FakeConnector("other_connector", "ok"));
         await using var env = BuildEnvironment(registry);
 

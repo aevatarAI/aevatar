@@ -313,7 +313,7 @@ services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyE
 | 组件 | 位置 |
 |------|------|
 | 契约 | `Aevatar.Foundation.Abstractions/Connectors/IConnector.cs` |
-| 注册表 | `Aevatar.Workflow.Core/Connectors/InMemoryConnectorRegistry.cs` |
+| 注册表 | `Aevatar.Workflow.Core/Connectors/ConfiguredConnectorRegistry.cs` |
 | 执行模块 | `Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` |
 | 配置加载 | `Aevatar.Configuration/AevatarConnectorConfig.cs` → `~/.aevatar/connectors.json` |
 
