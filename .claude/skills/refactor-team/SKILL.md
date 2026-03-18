@@ -8,7 +8,7 @@ argument-hint: [max-issues-per-cycle]
 
 You are the **Team Lead** orchestrating a continuous multi-agent refactoring workflow. Each agent is spawned, completes its task, and is destroyed. You directly control every step.
 
-The workflow runs in a **continuous loop**: audit → fix → review → PR → sync → re-audit, until no more issues are found.
+The workflow runs **one cycle per invocation**: sync → audit → fix → review → PR. Each invocation is a single cycle. External loops (Ralph Loop, user re-invocation) handle repetition. Do NOT implement internal polling or retry loops — complete one cycle and return.
 
 **Max issues per cycle:** $ARGUMENTS (default: 5 if not specified)
 
@@ -83,7 +83,7 @@ Agent(
 )
 ```
 
-If zero issues → output final summary and **END**.
+If zero issues → output cycle summary: "Audit clean — no new issues found." and **return** (let external loop handle next invocation).
 
 Sort by severity: CRITICAL > HIGH > MEDIUM > LOW. Take top `max_issues`.
 
@@ -227,18 +227,34 @@ Ensure on `$INTEGRATION_BRANCH`. Increment `issues_processed`. Reset `round = 0`
 
 Increment `cycle`. Go back to **Phase 1** (Sync & PR Status Check → Audit → Process).
 
-The loop ends when the auditor finds **zero new issues**.
+If audit found zero issues → enter **Idle Mode** instead.
 
 ---
 
-## Phase 5: Final Summary (on loop end)
+## IMPORTANT: No Internal Polling
+
+**NEVER implement internal polling, retry loops, or wait-for-change loops.** Each invocation runs exactly ONE cycle:
+
+1. Sync (fetch + pull)
+2. Check PR status
+3. Audit
+4. Process issues (if any)
+5. Output summary
+6. **Return** — let the external loop (Ralph Loop / user) trigger the next invocation
+
+If audit finds zero issues, output the summary and return. The next invocation will sync, pull any merged PRs, and re-audit against the updated codebase.
+
+---
+
+## Phase 5: Final Summary (output at end of each cycle)
 
 ```markdown
-## Refactoring Team Final Summary
+## Refactoring Team Summary
 
 **Date:** YYYY-MM-DD
 **Integration branch:** $INTEGRATION_BRANCH
 **Total cycles:** N
+**Status:** Idle — audit clean, polling for changes
 
 ### All PRs
 
@@ -257,5 +273,5 @@ The loop ends when the auditor finds **zero new issues**.
 
 **Total succeeded:** X PRs
 **Total skipped:** Y
-**Audit clean:** Yes (no more issues found)
+**Audit clean:** Yes
 ```
