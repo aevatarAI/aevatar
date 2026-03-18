@@ -5387,7 +5387,11 @@ function AppAuthenticationGate(props: {
   errorMessage: string;
 }) {
   return (
-    <div className="min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800">
+    <div
+      className="studio-shell min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800"
+      data-appearance="blue"
+      data-color-mode="light"
+    >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1040px] items-center justify-center">
         <div className="grid w-full max-w-[920px] gap-6 rounded-[36px] border border-[#E6E3DE] bg-white/96 p-6 shadow-[0_30px_72px_rgba(15,23,42,0.08)] md:grid-cols-[minmax(0,1.1fr)_320px] md:p-8">
           <div className="rounded-[28px] border border-[#ECE7DF] bg-[#FAF8F4] p-6 md:p-7">
