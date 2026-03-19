@@ -119,6 +119,7 @@
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Databases & Storage                                         -->
     <!-- ════════════════════════════════════════════════════════════ -->
+    <PackageVersion Include="Confluent.Kafka" Version="2.12.0" />
     <PackageVersion Include="MongoDB.Driver" Version="3.6.0" />
     <PackageVersion Include="Neo4j.Driver" Version="6.0.0" />
     <PackageVersion Include="Minio" Version="7.0.0" />

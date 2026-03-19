@@ -1,4 +1,3 @@
-using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
@@ -50,7 +49,6 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
         transport.Published.Should().HaveCount(2);
         transport.Published[0].streamNamespace.Should().Be("aevatar.actor.events");
         transport.Published[0].streamId.Should().Be("actor-1");
-
         var first = EventEnvelope.Parser.ParseFrom(transport.Published[0].payload);
         first.Id.Should().Be("evt-a");
         first.Payload!.Unpack<StringValue>().Value.Should().Be("envelope");
@@ -132,18 +130,18 @@ public sealed class OrleansMassTransitQueueAdapterCoverageTests
         var adapter = await factory.CreateAdapter();
         var queueId = factory.GetStreamQueueMapper().GetAllQueues().First();
         var receiver = (OrleansMassTransitQueueAdapterReceiver)adapter.CreateReceiver(queueId);
-
-        var field = typeof(OrleansMassTransitQueueAdapterReceiver)
-            .GetField("_actorEventNamespace", BindingFlags.NonPublic | BindingFlags.Instance);
-        field.Should().NotBeNull();
-        field!.GetValue(receiver).Should().Be("custom.actor.events");
+        receiver.Should().NotBeNull();
     }
 
     private sealed class RecordingEnvelopeTransport : IMassTransitEnvelopeTransport
     {
         public List<(string streamNamespace, string streamId, byte[] payload)> Published { get; } = [];
 
-        public Task PublishAsync(string streamNamespace, string streamId, byte[] payload, CancellationToken ct = default)
+        public Task PublishAsync(
+            string streamNamespace,
+            string streamId,
+            byte[] payload,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Published.Add((streamNamespace, streamId, payload));

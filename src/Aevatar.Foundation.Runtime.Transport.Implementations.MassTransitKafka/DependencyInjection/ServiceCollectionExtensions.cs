@@ -31,7 +31,7 @@ public static class ServiceCollectionExtensions
             x.AddRider(rider =>
             {
                 rider.AddConsumer<MassTransitKafkaEnvelopeConsumer>();
-                rider.AddProducer<KafkaStreamEnvelopeMessage>(options.TopicName);
+                rider.AddProducer<string, KafkaStreamEnvelopeMessage>(options.TopicName);
 
                 rider.UsingKafka((context, kafka) =>
                 {
@@ -41,7 +41,11 @@ public static class ServiceCollectionExtensions
                         options.ConsumerGroup,
                         endpoint =>
                         {
-                            endpoint.CreateIfMissing(_ => { });
+                            endpoint.CreateIfMissing(topicOptions =>
+                            {
+                                if (options.TopicPartitionCount > 0)
+                                    topicOptions.NumPartitions = (ushort)options.TopicPartitionCount;
+                            });
                             endpoint.AutoOffsetReset = AutoOffsetReset.Earliest;
                             endpoint.ConfigureConsumer<MassTransitKafkaEnvelopeConsumer>(context);
                         });

@@ -5,15 +5,18 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -178,6 +181,66 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         options.MassTransitKafkaBootstrapServers.Should().Be("localhost:29092");
         options.MassTransitKafkaTopicName.Should().Be("direct-events");
         options.MassTransitKafkaConsumerGroup.Should().Be("direct-runtime-group");
+    }
+
+    [Fact]
+    public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaPartitionAwareBackend_ShouldRegisterStrictBackendTransport()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansQueueCount"] = "6",
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansQueueCacheSize"] = "512",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"] = "localhost:19092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"] = "runtime-strict-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"] = "runtime-strict-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicPartitionCount"] = "99",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IQueueAdapterFactory) &&
+                                       x.ImplementationType == typeof(KafkaPartitionAwareQueueAdapterFactory));
+
+        await using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
+        var orleansOptions = provider.GetRequiredService<AevatarOrleansRuntimeOptions>();
+        var transportOptions = provider.GetRequiredService<KafkaPartitionAwareTransportOptions>();
+        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware);
+        options.OrleansQueueCount.Should().Be(6);
+        options.OrleansQueueCacheSize.Should().Be(512);
+        orleansOptions.QueueCount.Should().Be(6);
+        orleansOptions.QueueCacheSize.Should().Be(512);
+        transportOptions.TopicPartitionCount.Should().Be(6);
+        provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaPartitionAwareQueueAdapterFactory>();
+        provider.GetRequiredService<IPartitionAssignmentManager>().Should().BeOfType<KafkaPartitionAssignmentManager>();
+        provider.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>().GetType().Name.Should().Be("KafkaPartitionAwareEnvelopeTransport");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenEventSourcingUsesNestedSectionKeys_ShouldBindNestedValues()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableSnapshots"] = "false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:SnapshotInterval"] = "17",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableEventCompaction"] = "false",
+            [$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:RetainedEventsAfterSnapshot"] = "9",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
+
+        options.EventSourcingEnableSnapshots.Should().BeFalse();
+        options.EventSourcingSnapshotInterval.Should().Be(17);
+        options.EventSourcingEnableEventCompaction.Should().BeFalse();
+        options.EventSourcingRetainedEventsAfterSnapshot.Should().Be(9);
     }
 
     [Fact]

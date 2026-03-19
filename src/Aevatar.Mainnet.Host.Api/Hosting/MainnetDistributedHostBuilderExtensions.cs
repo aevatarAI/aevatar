@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Orleans.Configuration;
@@ -46,6 +47,20 @@ public static class MainnetDistributedHostBuilderExtensions
                     });
                 });
                 siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
+            }
+
+            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware, StringComparison.OrdinalIgnoreCase))
+            {
+                siloBuilder.ConfigureServices(services =>
+                {
+                    services.AddAevatarFoundationRuntimeOrleansKafkaPartitionAwareTransport(options =>
+                    {
+                        options.BootstrapServers = runtimeOptions.MassTransitKafkaBootstrapServers;
+                        options.TopicName = runtimeOptions.MassTransitKafkaTopicName;
+                        options.ConsumerGroup = runtimeOptions.MassTransitKafkaConsumerGroup;
+                        options.TopicPartitionCount = hostOptions.QueueCount;
+                    });
+                });
             }
         });
 
@@ -116,6 +131,15 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
         if (!string.IsNullOrWhiteSpace(configuredGarnetConnectionString))
             options.OrleansGarnetConnectionString = configuredGarnetConnectionString;
+        var configuredKafkaBootstrapServers = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrapServers))
+            options.MassTransitKafkaBootstrapServers = configuredKafkaBootstrapServers;
+        var configuredKafkaTopicName = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaTopicName))
+            options.MassTransitKafkaTopicName = configuredKafkaTopicName;
+        var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
+            options.MassTransitKafkaConsumerGroup = configuredKafkaConsumerGroup;
 
         return options;
     }

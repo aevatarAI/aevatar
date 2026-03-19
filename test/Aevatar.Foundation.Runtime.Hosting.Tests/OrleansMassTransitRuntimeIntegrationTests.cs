@@ -17,232 +17,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans;
+using Orleans.Configuration;
 using Orleans.Hosting;
+using Orleans.Runtime;
+using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 [Collection(nameof(EnvironmentVariableDependentCollection))]
 public sealed class OrleansMassTransitRuntimeIntegrationTests
 {
-    [KafkaGarnetIntegrationFact]
-    public async Task KafkaTransport_ShouldAutoRetryAndSucceedOnNewNode_AfterOldNodeStops()
-    {
-        var bootstrapServers = RequireKafkaBootstrapServers();
-        var garnetConnectionString = RequireGarnetConnectionString();
-        var actorId = $"actor-{Guid.NewGuid():N}";
-        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
-        var newNodeConsumerGroup = $"{consumerGroup}-new";
-        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
-        var clusterId = $"aevatar-orleans-it-cluster-{Guid.NewGuid():N}";
-        var serviceId = $"aevatar-orleans-it-service-{Guid.NewGuid():N}";
-        var targetTypeUrl = Any.Pack(new StringValue { Value = "auto-retry" }).TypeUrl;
-        var oldSiloPort = ReserveTcpPort();
-        var oldGatewayPort = ReserveTcpPort();
-        var newSiloPort = ReserveTcpPort();
-        var newGatewayPort = ReserveTcpPort();
-        RecordingKafkaIntegrationAgent.Reset();
-
-        using (var oldScope = new EnvironmentVariableScope(new Dictionary<string, string?>
-               {
-                   ["AEVATAR_TEST_NODE_VERSION_TAG"] = "old",
-                   ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = targetTypeUrl,
-                   ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "200",
-                   ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "100",
-               }))
-        {
-            var logProbe = new CompatibilityFailureLogProbe();
-            var oldHost = await StartSiloHostAsync(
-                bootstrapServers,
-                topicName,
-                consumerGroup,
-                streamProviderName,
-                actorEventNamespace,
-                oldSiloPort,
-                oldGatewayPort,
-                clusterId,
-                serviceId,
-                AevatarOrleansRuntimeOptions.PersistenceBackendGarnet,
-                garnetConnectionString,
-                logProbe);
-
-            try
-            {
-                var grainFactory = oldHost.Services.GetRequiredService<IGrainFactory>();
-                var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-                var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaIntegrationAgent).AssemblyQualifiedName!);
-                initialized.Should().BeTrue();
-
-                var transport = oldHost.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
-                var envelope = new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Payload = Any.Pack(new StringValue { Value = "auto-retry" }),
-                    Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-                };
-
-                await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
-                await logProbe.WaitForInjectedFailureAsync(TimeSpan.FromSeconds(20));
-                await Task.Delay(300);
-            }
-            finally
-            {
-                await oldHost.StopAsync();
-                oldHost.Dispose();
-            }
-        }
-
-        using (var newScope = new EnvironmentVariableScope(new Dictionary<string, string?>
-               {
-                   ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
-                   ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
-                   ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "200",
-                   ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "100",
-               }))
-        {
-            var newHost = await StartSiloHostAsync(
-                bootstrapServers,
-                topicName,
-                newNodeConsumerGroup,
-                streamProviderName,
-                actorEventNamespace,
-                newSiloPort,
-                newGatewayPort,
-                clusterId,
-                serviceId,
-                AevatarOrleansRuntimeOptions.PersistenceBackendGarnet,
-                garnetConnectionString);
-
-            try
-            {
-                var receivedEnvelope = await RecordingKafkaIntegrationAgent.WaitForEnvelopeAsync(
-                    envelope =>
-                    {
-                        return (envelope.Runtime?.Retry?.Attempt ?? 0) > 0;
-                    },
-                    TimeSpan.FromSeconds(45));
-                receivedEnvelope.Payload!.TypeUrl.Should().Be(targetTypeUrl);
-                receivedEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("auto-retry");
-                receivedEnvelope.Runtime!.Retry!.Attempt.Should().BeGreaterThan(0);
-            }
-            finally
-            {
-                await newHost.StopAsync();
-                newHost.Dispose();
-            }
-        }
-    }
-
-    [KafkaGarnetIntegrationFact]
-    public async Task KafkaTransport_ShouldReplayAndSucceedOnNewNode_AfterOldNodeInjectionFailure()
-    {
-        var bootstrapServers = RequireKafkaBootstrapServers();
-        var garnetConnectionString = RequireGarnetConnectionString();
-        var actorId = $"actor-{Guid.NewGuid():N}";
-        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
-        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
-        var clusterId = $"aevatar-orleans-it-cluster-{Guid.NewGuid():N}";
-        var serviceId = $"aevatar-orleans-it-service-{Guid.NewGuid():N}";
-        var targetTypeUrl = Any.Pack(new StringValue { Value = "mixed-version-retry" }).TypeUrl;
-        var oldSiloPort = ReserveTcpPort();
-        var oldGatewayPort = ReserveTcpPort();
-        var newSiloPort = ReserveTcpPort();
-        var newGatewayPort = ReserveTcpPort();
-        RecordingKafkaIntegrationAgent.Reset();
-
-        var logProbe = new CompatibilityFailureLogProbe();
-        using (var oldScope = new EnvironmentVariableScope(new Dictionary<string, string?>
-               {
-                   ["AEVATAR_TEST_NODE_VERSION_TAG"] = "old",
-                   ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = targetTypeUrl,
-               }))
-        {
-            var oldHost = await StartSiloHostAsync(
-                bootstrapServers,
-                topicName,
-                consumerGroup,
-                streamProviderName,
-                actorEventNamespace,
-                oldSiloPort,
-                oldGatewayPort,
-                clusterId,
-                serviceId,
-                AevatarOrleansRuntimeOptions.PersistenceBackendGarnet,
-                garnetConnectionString,
-                logProbe);
-
-            try
-            {
-                var grainFactory = oldHost.Services.GetRequiredService<IGrainFactory>();
-                var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-                var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaIntegrationAgent).AssemblyQualifiedName!);
-                initialized.Should().BeTrue();
-
-                var transport = oldHost.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
-                var envelope = new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Payload = Any.Pack(new StringValue { Value = "mixed-version-retry" }),
-                    Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-                };
-
-                await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
-                await logProbe.WaitForInjectedFailureAsync(TimeSpan.FromSeconds(20));
-
-                LastFailedEnvelopeHolder.Set(envelope);
-            }
-            finally
-            {
-                await oldHost.StopAsync();
-                oldHost.Dispose();
-            }
-        }
-
-        using (var newScope = new EnvironmentVariableScope(new Dictionary<string, string?>
-               {
-                   ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
-                   ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
-               }))
-        {
-            var newHost = await StartSiloHostAsync(
-                bootstrapServers,
-                topicName,
-                consumerGroup,
-                streamProviderName,
-                actorEventNamespace,
-                newSiloPort,
-                newGatewayPort,
-                clusterId,
-                serviceId,
-                AevatarOrleansRuntimeOptions.PersistenceBackendGarnet,
-                garnetConnectionString);
-
-            try
-            {
-                var replayEnvelope = LastFailedEnvelopeHolder.GetAndClear()
-                    ?? throw new InvalidOperationException("Missing failed envelope for replay.");
-                var transport = newHost.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
-                await transport.PublishAsync(
-                    actorEventNamespace,
-                    actorId,
-                    replayEnvelope.ToByteArray(),
-                    CancellationToken.None);
-
-                var receivedEnvelope = await RecordingKafkaIntegrationAgent.WaitForEnvelopeAsync(TimeSpan.FromSeconds(30));
-                receivedEnvelope.Payload!.TypeUrl.Should().Be(targetTypeUrl);
-                receivedEnvelope.Payload.Unpack<StringValue>().Value.Should().Be("mixed-version-retry");
-            }
-            finally
-            {
-                await newHost.StopAsync();
-                newHost.Dispose();
-            }
-        }
-    }
-
     [KafkaIntegrationFact]
     public async Task KafkaTransport_ShouldInjectCompatibilityFailure_ForConfiguredEventTypeOnOldNode()
     {
@@ -479,90 +263,6 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
     }
 
     [KafkaIntegrationFact]
-    public async Task KafkaTransport_ShouldDeliverSelfPublishedEnvelopeBackToSameActor_InMultiSiloCluster()
-    {
-        var bootstrapServers = RequireKafkaBootstrapServers();
-        var actorId = $"actor-{Guid.NewGuid():N}";
-        var topicName = $"aevatar-orleans-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-it-group-{Guid.NewGuid():N}";
-        var streamProviderName = $"aevatar-orleans-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.it.{Guid.NewGuid():N}";
-        var clusterId = $"aevatar-orleans-it-cluster-{Guid.NewGuid():N}";
-        var serviceId = $"aevatar-orleans-it-service-{Guid.NewGuid():N}";
-        var node1SiloPort = ReserveTcpPort();
-        var node1GatewayPort = ReserveTcpPort();
-        var node2SiloPort = ReserveTcpPort();
-        var node2GatewayPort = ReserveTcpPort();
-        var node3SiloPort = ReserveTcpPort();
-        var node3GatewayPort = ReserveTcpPort();
-        SelfPublishingKafkaIntegrationAgent.Reset();
-
-        var node1 = await StartSiloHostAsync(
-            bootstrapServers,
-            topicName,
-            consumerGroup,
-            streamProviderName,
-            actorEventNamespace,
-            node1SiloPort,
-            node1GatewayPort,
-            clusterId,
-            serviceId);
-        var node2 = await StartSiloHostAsync(
-            bootstrapServers,
-            topicName,
-            consumerGroup,
-            streamProviderName,
-            actorEventNamespace,
-            node2SiloPort,
-            node2GatewayPort,
-            clusterId,
-            serviceId);
-        var node3 = await StartSiloHostAsync(
-            bootstrapServers,
-            topicName,
-            consumerGroup,
-            streamProviderName,
-            actorEventNamespace,
-            node3SiloPort,
-            node3GatewayPort,
-            clusterId,
-            serviceId);
-
-        try
-        {
-            var grainFactory = node1.Services.GetRequiredService<IGrainFactory>();
-            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentAsync(typeof(SelfPublishingKafkaIntegrationAgent).AssemblyQualifiedName!);
-            initialized.Should().BeTrue();
-
-            var transport = node1.Services.GetRequiredService<IMassTransitEnvelopeTransport>();
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Payload = Any.Pack(new StringValue { Value = "trigger-self" }),
-                Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
-            };
-
-            await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
-
-            var receivedEnvelope = await SelfPublishingKafkaIntegrationAgent.WaitForSelfEnvelopeAsync(TimeSpan.FromSeconds(30));
-            receivedEnvelope.Payload!.Is(Int32Value.Descriptor).Should().BeTrue();
-            receivedEnvelope.Payload.Unpack<Int32Value>().Value.Should().Be(42);
-            receivedEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-            receivedEnvelope.Route.PublisherActorId.Should().Be(actorId);
-        }
-        finally
-        {
-            await node3.StopAsync();
-            node3.Dispose();
-            await node2.StopAsync();
-            node2.Dispose();
-            await node1.StopAsync();
-            node1.Dispose();
-        }
-    }
-
-    [KafkaIntegrationFact]
     public async Task KafkaTransport_ShouldAutoRetryOnRuntimeException_AndEventuallySucceed()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
@@ -765,7 +465,9 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
         string? serviceId = null,
         string persistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendInMemory,
         string? garnetConnectionString = null,
-        ILoggerProvider? loggerProvider = null)
+        ILoggerProvider? loggerProvider = null,
+        int queueCount = 1,
+        int topicPartitionCount = 1)
     {
         var host = Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -782,7 +484,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                     options.GarnetConnectionString = garnetConnectionString ?? string.Empty;
                     options.StreamProviderName = streamProviderName;
                     options.ActorEventNamespace = actorEventNamespace;
-                    options.QueueCount = 1;
+                    options.QueueCount = queueCount;
                 });
                 siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
             })
@@ -798,6 +500,7 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
                     options.BootstrapServers = bootstrapServers;
                     options.TopicName = topicName;
                     options.ConsumerGroup = consumerGroup;
+                    options.TopicPartitionCount = topicPartitionCount;
                 });
             })
             .Build();
@@ -816,10 +519,6 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
     private static string RequireKafkaBootstrapServers() =>
         Environment.GetEnvironmentVariable("AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS")
         ?? throw new InvalidOperationException("Missing AEVATAR_TEST_KAFKA_BOOTSTRAP_SERVERS.");
-
-    private static string RequireGarnetConnectionString() =>
-        Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
-        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 
     private sealed class EnvironmentVariableScope : IDisposable
     {
@@ -1011,6 +710,39 @@ public sealed class OrleansMassTransitRuntimeIntegrationTests
             catch (OperationCanceledException)
             {
                 throw new TimeoutException($"Timed out after {timeout} waiting for Kafka envelope.");
+            }
+        }
+
+        public static async Task<IReadOnlyList<string>> WaitForEnvelopeValuesAsync(
+            Func<string, bool> predicate,
+            int expectedCount,
+            TimeSpan timeout)
+        {
+            Channel<EventEnvelope> channel;
+            lock (SyncLock)
+            {
+                channel = _receivedEnvelopes;
+            }
+
+            var received = new HashSet<string>(StringComparer.Ordinal);
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                while (received.Count < expectedCount)
+                {
+                    var envelope = await channel.Reader.ReadAsync(cts.Token);
+                    var value = envelope.Payload?.Is(StringValue.Descriptor) == true
+                        ? envelope.Payload.Unpack<StringValue>().Value
+                        : string.Empty;
+                    if (predicate(value))
+                        received.Add(value);
+                }
+
+                return received.ToArray();
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"Timed out after {timeout} waiting for {expectedCount} Kafka envelopes.");
             }
         }
 

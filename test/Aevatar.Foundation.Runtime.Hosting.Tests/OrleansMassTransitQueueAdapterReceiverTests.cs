@@ -12,7 +12,7 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 public sealed class OrleansMassTransitQueueAdapterReceiverTests
 {
     [Fact]
-    public async Task Initialize_WhenNamespaceMatchesConfiguredValue_ShouldEnqueueMessage()
+    public async Task Initialize_WhenNamespaceAndQueueMatch_ShouldEnqueueMessage()
     {
         var transport = new RecordingTransport();
         var mapper = new HashRingBasedStreamQueueMapper(
@@ -21,8 +21,8 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
         var queueId = mapper.GetAllQueues().Single();
         var receiver = new OrleansMassTransitQueueAdapterReceiver(
             queueId,
-            mapper,
             transport,
+            mapper,
             "aevatar.custom.events");
 
         await receiver.Initialize(TimeSpan.FromSeconds(5));
@@ -35,10 +35,37 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
 
         var messages = await receiver.GetQueueMessagesAsync(10);
 
-        messages.Should().HaveCount(1);
-        var events = messages[0].GetEvents<EventEnvelope>().ToList();
-        events.Should().ContainSingle();
-        events[0].Item1.Payload!.Unpack<StringValue>().Value.Should().Be("payload");
+        messages.Should().ContainSingle();
+        messages[0].GetEvents<EventEnvelope>().Single().Item1.Payload!.Unpack<StringValue>().Value.Should().Be("payload");
+        await receiver.Shutdown(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Initialize_WhenMappedQueueDoesNotMatchReceiver_ShouldDropMessage()
+    {
+        var transport = new RecordingTransport();
+        var mapper = new HashRingBasedStreamQueueMapper(
+            new HashRingStreamQueueMapperOptions { TotalQueueCount = 2 },
+            "test-provider");
+        var queues = mapper.GetAllQueues().ToArray();
+        var targetStreamId = FindStreamIdForQueue(mapper, "aevatar.custom.events", queues[1]);
+        var receiver = new OrleansMassTransitQueueAdapterReceiver(
+            queues[0],
+            transport,
+            mapper,
+            "aevatar.custom.events");
+
+        await receiver.Initialize(TimeSpan.FromSeconds(5));
+        await transport.PushAsync(new MassTransitEnvelopeRecord
+        {
+            StreamNamespace = "aevatar.custom.events",
+            StreamId = targetStreamId,
+            Payload = CreateEnvelopeBytes("payload"),
+        });
+
+        var messages = await receiver.GetQueueMessagesAsync(10);
+
+        messages.Should().BeEmpty();
         await receiver.Shutdown(TimeSpan.FromSeconds(1));
     }
 
@@ -52,8 +79,8 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
         var queueId = mapper.GetAllQueues().Single();
         var receiver = new OrleansMassTransitQueueAdapterReceiver(
             queueId,
-            mapper,
             transport,
+            mapper,
             "aevatar.custom.events");
 
         await receiver.Initialize(TimeSpan.FromSeconds(5));
@@ -78,6 +105,19 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
             Payload = Any.Pack(new StringValue { Value = value }),
         };
         return envelope.ToByteArray();
+    }
+
+    private static string FindStreamIdForQueue(IStreamQueueMapper mapper, string streamNamespace, QueueId queueId)
+    {
+        for (var i = 0; i < 1024; i++)
+        {
+            var candidate = $"actor-{i}";
+            var streamId = StreamId.Create(streamNamespace, candidate);
+            if (mapper.GetQueueForStream(streamId) == queueId)
+                return candidate;
+        }
+
+        throw new InvalidOperationException($"Unable to find a stream id for queue '{queueId}'.");
     }
 
     private sealed class RecordingTransport : IMassTransitEnvelopeTransport
@@ -115,19 +155,17 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
 
         public async Task PushAsync(MassTransitEnvelopeRecord record)
         {
-            Func<MassTransitEnvelopeRecord, Task>[] handlers;
+            List<Func<MassTransitEnvelopeRecord, Task>> handlers;
             lock (_handlersLock)
             {
-                handlers = _handlers.ToArray();
+                handlers = _handlers.ToList();
             }
 
             foreach (var handler in handlers)
-            {
                 await handler(record);
-            }
         }
 
-        private void Unsubscribe(Func<MassTransitEnvelopeRecord, Task> handler)
+        private void Remove(Func<MassTransitEnvelopeRecord, Task> handler)
         {
             lock (_handlersLock)
             {
@@ -149,10 +187,10 @@ public sealed class OrleansMassTransitQueueAdapterReceiverTests
 
             public ValueTask DisposeAsync()
             {
-                if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
+                if (Interlocked.Exchange(ref _disposed, 1) == 1)
                     return ValueTask.CompletedTask;
 
-                _owner.Unsubscribe(_handler);
+                _owner.Remove(_handler);
                 return ValueTask.CompletedTask;
             }
         }

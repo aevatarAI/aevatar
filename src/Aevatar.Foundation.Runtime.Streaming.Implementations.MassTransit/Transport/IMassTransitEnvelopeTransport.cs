@@ -6,7 +6,8 @@ public interface IMassTransitEnvelopeTransport
         string streamNamespace,
         string streamId,
         byte[] payload,
-        CancellationToken ct = default);
+        CancellationToken ct = default)
+    ;
 
     Task<IAsyncDisposable> SubscribeAsync(
         Func<MassTransitEnvelopeRecord, Task> handler,

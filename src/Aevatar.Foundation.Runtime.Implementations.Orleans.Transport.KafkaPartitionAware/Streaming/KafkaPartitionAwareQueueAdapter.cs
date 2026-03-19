@@ -1,36 +1,30 @@
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
 
-internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
+internal sealed class KafkaPartitionAwareQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly Lazy<IMassTransitEnvelopeTransport> _transport;
-    private readonly IStreamQueueMapper _queueMapper;
+    private readonly Lazy<IKafkaPartitionAwareEnvelopeTransport> _transport;
+    private readonly Func<LocalPartitionRecordRouter> _resolveLocalRouter;
+    private readonly StrictQueuePartitionMapper _mapper;
     private readonly string _actorEventNamespace;
 
-    public OrleansMassTransitQueueAdapter(
+    public KafkaPartitionAwareQueueAdapter(
         string providerName,
-        IMassTransitEnvelopeTransport transport,
-        IStreamQueueMapper queueMapper,
-        string actorEventNamespace)
-        : this(providerName, () => transport, queueMapper, actorEventNamespace)
-    {
-    }
-
-    public OrleansMassTransitQueueAdapter(
-        string providerName,
-        Func<IMassTransitEnvelopeTransport> resolveTransport,
-        IStreamQueueMapper queueMapper,
+        Func<IKafkaPartitionAwareEnvelopeTransport> resolveTransport,
+        Func<LocalPartitionRecordRouter> resolveLocalRouter,
+        StrictQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _providerName = providerName;
-        _transport = new Lazy<IMassTransitEnvelopeTransport>(resolveTransport);
-        _queueMapper = queueMapper;
+        _transport = new Lazy<IKafkaPartitionAwareEnvelopeTransport>(resolveTransport);
+        _resolveLocalRouter = resolveLocalRouter;
+        _mapper = mapper;
         _actorEventNamespace = actorEventNamespace;
     }
 
@@ -77,9 +71,9 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
     }
 
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
-        new OrleansMassTransitQueueAdapterReceiver(
+        new KafkaPartitionAwareQueueAdapterReceiver(
             queueId,
-            () => _transport.Value,
-            _queueMapper,
+            _resolveLocalRouter,
+            _mapper,
             _actorEventNamespace);
 }

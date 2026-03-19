@@ -4,6 +4,7 @@ public sealed class AevatarOrleansRuntimeOptions
 {
     public const string StreamBackendInMemory = "InMemory";
     public const string StreamBackendMassTransitAdapter = "MassTransitAdapter";
+    public const string StreamBackendKafkaPartitionAware = "KafkaPartitionAware";
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";

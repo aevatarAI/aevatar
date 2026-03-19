@@ -3,21 +3,23 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit</AssemblyName>
-    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit</RootNamespace>
+    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware</AssemblyName>
+    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
-    <ProjectReference Include="..\Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit\Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />
     <PackageReference Include="Microsoft.Orleans.Sdk" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Google.Protobuf" />
   </ItemGroup>
 </Project>

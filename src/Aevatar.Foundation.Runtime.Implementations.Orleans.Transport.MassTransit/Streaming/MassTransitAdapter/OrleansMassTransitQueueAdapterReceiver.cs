@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
-using Orleans.Providers.Streams.Common;
 using Orleans.Runtime;
+using Orleans.Providers.Streams.Common;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
@@ -9,8 +9,8 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTrans
 internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterReceiver
 {
     private readonly QueueId _queueId;
-    private readonly IStreamQueueMapper _queueMapper;
     private readonly Lazy<IMassTransitEnvelopeTransport> _transport;
+    private readonly IStreamQueueMapper _queueMapper;
     private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
     private long _sequence;
@@ -18,60 +18,34 @@ internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterRece
 
     public OrleansMassTransitQueueAdapterReceiver(
         QueueId queueId,
-        IStreamQueueMapper queueMapper,
         IMassTransitEnvelopeTransport transport,
+        IStreamQueueMapper queueMapper,
         string actorEventNamespace)
-        : this(queueId, queueMapper, () => transport, actorEventNamespace)
+        : this(queueId, () => transport, queueMapper, actorEventNamespace)
     {
     }
 
     public OrleansMassTransitQueueAdapterReceiver(
         QueueId queueId,
-        IStreamQueueMapper queueMapper,
         Func<IMassTransitEnvelopeTransport> resolveTransport,
+        IStreamQueueMapper queueMapper,
         string actorEventNamespace)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(actorEventNamespace);
         _queueId = queueId;
-        _queueMapper = queueMapper;
         _transport = new Lazy<IMassTransitEnvelopeTransport>(resolveTransport);
+        _queueMapper = queueMapper;
         _actorEventNamespace = actorEventNamespace;
     }
 
-    public async Task Initialize(TimeSpan timeout)
+    public Task Initialize(TimeSpan timeout)
     {
         _ = timeout;
+        return InitializeAsync();
+    }
 
-        _subscription = await _transport.Value.SubscribeAsync(async record =>
-        {
-            if (record.Payload is not { Length: > 0 })
-                return;
-
-            if (!string.Equals(record.StreamNamespace, _actorEventNamespace, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            var streamId = StreamId.Create(record.StreamNamespace, record.StreamId);
-            var mapped = _queueMapper.GetQueueForStream(streamId);
-            if (mapped != _queueId)
-                return;
-
-            EventEnvelope envelope;
-            try
-            {
-                envelope = EventEnvelope.Parser.ParseFrom(record.Payload);
-            }
-            catch
-            {
-                return;
-            }
-
-            var sequence = Interlocked.Increment(ref _sequence);
-            var token = new EventSequenceTokenV2(sequence);
-            _messages.Enqueue(new OrleansMassTransitBatchContainer(streamId, envelope, token));
-            await Task.CompletedTask;
-        });
+    private async Task InitializeAsync()
+    {
+        _subscription = await _transport.Value.SubscribeAsync(HandleRecordAsync);
     }
 
     public Task<IList<IBatchContainer>> GetQueueMessagesAsync(int maxCount)
@@ -101,5 +75,31 @@ internal sealed class OrleansMassTransitQueueAdapterReceiver : IQueueAdapterRece
 
         await _subscription.DisposeAsync();
         _subscription = null;
+    }
+
+    private Task HandleRecordAsync(MassTransitEnvelopeRecord record)
+    {
+        if (!string.Equals(record.StreamNamespace, _actorEventNamespace, StringComparison.Ordinal) ||
+            record.Payload is not { Length: > 0 })
+            return Task.CompletedTask;
+
+        EventEnvelope envelope;
+        var streamId = StreamId.Create(record.StreamNamespace, record.StreamId);
+        if (_queueMapper.GetQueueForStream(streamId) != _queueId)
+            return Task.CompletedTask;
+
+        try
+        {
+            envelope = EventEnvelope.Parser.ParseFrom(record.Payload);
+        }
+        catch
+        {
+            return Task.CompletedTask;
+        }
+
+        var sequence = Interlocked.Increment(ref _sequence);
+        var token = new EventSequenceTokenV2(sequence);
+        _messages.Enqueue(new OrleansMassTransitBatchContainer(streamId, envelope, token));
+        return Task.CompletedTask;
     }
 }

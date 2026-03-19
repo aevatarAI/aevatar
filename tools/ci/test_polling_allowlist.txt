@@ -5,3 +5,4 @@ test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
+test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaPartitionAwareRuntimeIntegrationTests.cs

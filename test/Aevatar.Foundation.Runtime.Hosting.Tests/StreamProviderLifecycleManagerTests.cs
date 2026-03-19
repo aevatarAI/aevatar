@@ -23,7 +23,11 @@ public sealed class StreamProviderLifecycleManagerTests
 
     private sealed class NoOpKafkaEnvelopeTransport : IMassTransitEnvelopeTransport
     {
-        public Task PublishAsync(string streamNamespace, string streamId, byte[] payload, CancellationToken ct = default)
+        public Task PublishAsync(
+            string streamNamespace,
+            string streamId,
+            byte[] payload,
+            CancellationToken ct = default)
         {
             _ = streamNamespace;
             _ = streamId;

@@ -186,7 +186,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
     [Fact]
     public async Task MassTransitKafkaEnvelopeTransport_ShouldValidateArgumentsAndWireDispatcher()
     {
-        var producer = DispatchProxy.Create<ITopicProducer<KafkaStreamEnvelopeMessage>, TopicProducerProxy>();
+        var producer = DispatchProxy.Create<ITopicProducer<string, KafkaStreamEnvelopeMessage>, TopicProducerProxy>();
         var producerProxy = (TopicProducerProxy)(object)producer;
         var dispatcher = new MassTransitKafkaEnvelopeDispatcher();
         var transport = new MassTransitKafkaEnvelopeTransport(producer, dispatcher);
@@ -197,6 +197,7 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
 
         await transport.PublishAsync("aevatar.events", "actor-3", new byte[] { 3, 2, 1 });
         producerProxy.ProduceCallCount.Should().Be(1);
+        producerProxy.ProducedMessageKey.Should().Be("actor-3");
         producerProxy.ProducedMessage.Should().NotBeNull();
         producerProxy.ProducedMessage!.StreamNamespace.Should().Be("aevatar.events");
         producerProxy.ProducedMessage.StreamId.Should().Be("actor-3");
@@ -387,14 +388,27 @@ public sealed class MassTransitStreamingAndKafkaCoverageTests
 
         public KafkaStreamEnvelopeMessage? ProducedMessage { get; private set; }
 
+        public string? ProducedMessageKey { get; private set; }
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             if (targetMethod?.Name == "Produce" &&
-                args is { Length: > 0 } &&
-                args[0] is KafkaStreamEnvelopeMessage message)
+                args is { Length: >= 2 } &&
+                args[0] is string key &&
+                args[1] is KafkaStreamEnvelopeMessage message)
             {
                 ProduceCallCount++;
+                ProducedMessageKey = key;
                 ProducedMessage = message;
+                return Task.CompletedTask;
+            }
+
+            if (targetMethod?.Name == "Produce" &&
+                args is { Length: > 0 } &&
+                args[0] is KafkaStreamEnvelopeMessage producedMessage)
+            {
+                ProduceCallCount++;
+                ProducedMessage = producedMessage;
                 return Task.CompletedTask;
             }
 
