@@ -125,11 +125,12 @@ public sealed class ChatRuntime
             CancellationToken = runToken,
         };
 
-        // Collect history mutations from the background thread; apply on caller context after task completes.
-        var pendingHistoryMessages = new List<ChatMessage>();
-
+        // The background task collects history mutations and returns them as its result.
+        // The caller applies them to _history after awaiting, making the producer-consumer
+        // contract explicit through the Task<List<ChatMessage>> return type.
         var runTask = Task.Run(async () =>
         {
+            var pendingHistoryMessages = new List<ChatMessage>();
             var wroteOutput = false;
             try
             {
@@ -236,10 +237,12 @@ public sealed class ChatRuntime
                 }
 
                 channel.Writer.TryComplete();
+                return pendingHistoryMessages;
             }
             catch (Exception ex)
             {
                 channel.Writer.TryComplete(ex);
+                return pendingHistoryMessages;
             }
         });
 
@@ -251,11 +254,19 @@ public sealed class ChatRuntime
         finally
         {
             linkedCts.Cancel();
-            try { await runTask.ConfigureAwait(false); } catch { /* best-effort */ }
+            List<ChatMessage>? collectedHistory = null;
+            try
+            {
+                collectedHistory = await runTask.ConfigureAwait(false);
+            }
+            catch { /* best-effort — errors already surfaced via channel */ }
 
             // Apply collected history mutations on the caller context after the background task completes.
-            foreach (var msg in pendingHistoryMessages)
-                _history.Add(msg);
+            if (collectedHistory != null)
+            {
+                foreach (var msg in collectedHistory)
+                    _history.Add(msg);
+            }
         }
     }
 
