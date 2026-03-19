@@ -24,21 +24,33 @@ internal sealed class ScriptEditorValidationService
         string scriptId,
         string revision,
         string source)
+        => Validate(scriptId, revision, package: null, source);
+
+    public ScriptEditorValidationResult Validate(
+        string scriptId,
+        string revision,
+        AppScriptPackage? package,
+        string? source = null)
     {
         var normalizedScriptId = AppStudioEndpoints.NormalizeStudioDocumentId(scriptId, "script");
         var normalizedRevision = AppStudioEndpoints.NormalizeStudioDocumentId(revision, "draft");
 
         try
         {
-            var request = ScriptBehaviorCompilationRequest.FromPersistedSource(
-                normalizedScriptId,
-                normalizedRevision,
-                source ?? string.Empty);
-            var package = request.Package.Normalize();
-            var primarySourcePath = package.CSharpSources.FirstOrDefault()?.NormalizedPath ?? "Behavior.cs";
+            var request = AppScriptPackagePayloads.HasFiles(package)
+                ? new ScriptBehaviorCompilationRequest(
+                    normalizedScriptId,
+                    normalizedRevision,
+                    AppScriptPackagePayloads.ResolvePackage(package, source))
+                : ScriptBehaviorCompilationRequest.FromPersistedSource(
+                    normalizedScriptId,
+                    normalizedRevision,
+                    source ?? string.Empty);
+            var normalizedPackage = request.Package.Normalize();
+            var primarySourcePath = normalizedPackage.CSharpSources.FirstOrDefault()?.NormalizedPath ?? "Behavior.cs";
             var diagnostics = new List<ScriptEditorValidationDiagnostic>();
 
-            if (string.IsNullOrWhiteSpace(source))
+            if (!AppScriptPackagePayloads.HasFiles(package) && string.IsNullOrWhiteSpace(source))
             {
                 diagnostics.Add(new ScriptEditorValidationDiagnostic(
                     "error",
@@ -53,7 +65,7 @@ internal sealed class ScriptEditorValidationService
                 return BuildResult(normalizedScriptId, normalizedRevision, primarySourcePath, diagnostics);
             }
 
-            if (package.CSharpSources.Count == 0)
+            if (normalizedPackage.CSharpSources.Count == 0)
             {
                 diagnostics.Add(new ScriptEditorValidationDiagnostic(
                     "error",
@@ -68,10 +80,10 @@ internal sealed class ScriptEditorValidationService
                 return BuildResult(normalizedScriptId, normalizedRevision, primarySourcePath, diagnostics);
             }
 
-            var syntaxTrees = new List<SyntaxTree>(package.CSharpSources.Count);
+            var syntaxTrees = new List<SyntaxTree>(normalizedPackage.CSharpSources.Count);
             var syntaxDiagnostics = new List<Diagnostic>();
 
-            foreach (var sourceFile in package.CSharpSources)
+            foreach (var sourceFile in normalizedPackage.CSharpSources)
             {
                 var sandboxResult = _sandboxPolicy.Validate(sourceFile.Content ?? string.Empty);
                 diagnostics.AddRange(sandboxResult.Violations.Select(violation => new ScriptEditorValidationDiagnostic(

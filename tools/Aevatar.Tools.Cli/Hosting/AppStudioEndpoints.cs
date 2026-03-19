@@ -189,10 +189,8 @@ internal static class AppStudioEndpoints
             });
         }
 
-        var source = string.IsNullOrWhiteSpace(request.Source)
-            ? string.Empty
-            : request.Source.Trim();
-        if (source.Length == 0)
+        var source = AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.Source);
+        if (string.IsNullOrWhiteSpace(source))
         {
             return Results.BadRequest(new
             {
@@ -213,7 +211,7 @@ internal static class AppStudioEndpoints
         var runtimeActorId = string.IsNullOrWhiteSpace(request.RuntimeActorId)
             ? $"app-script-runtime:{scopeToken}:{scriptId}:{revision}"
             : request.RuntimeActorId.Trim();
-        var sourceHash = ComputeSha256(source);
+        var sourceHash = AppScriptPackagePayloads.ComputeSourceHash(request.Package, source);
 
         try
         {
@@ -551,7 +549,8 @@ internal static class AppStudioEndpoints
         var result = validator.Validate(
             scriptId,
             revision,
-            request.Source ?? string.Empty);
+            request.Package,
+            request.Source);
         return Results.Ok(result);
     }
 
@@ -781,7 +780,9 @@ internal static class AppStudioEndpoints
                 new ScriptGenerateRequest(
                     request.Prompt.Trim(),
                     request.CurrentSource,
-                    request.Metadata),
+                    request.Metadata,
+                    request.CurrentPackage,
+                    request.CurrentFilePath),
                 (delta, token) => WriteSseFrameAsync(http.Response, new
                 {
                     type = "TEXT_MESSAGE_REASONING",
@@ -808,6 +809,24 @@ internal static class AppStudioEndpoints
                 type = "TEXT_MESSAGE_END",
                 message = result.Source,
                 delta = string.Empty,
+                currentFilePath = result.CurrentFilePath ?? string.Empty,
+                scriptPackage = result.Package == null
+                    ? null
+                    : new
+                    {
+                        csharpSources = (result.Package.CsharpSources ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        protoFiles = (result.Package.ProtoFiles ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        entryBehaviorTypeName = result.Package.EntryBehaviorTypeName,
+                        entrySourcePath = result.Package.EntrySourcePath,
+                    },
             }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -894,6 +913,7 @@ internal static class AppStudioEndpoints
         string? ScriptId,
         string? ScriptRevision,
         string? Source,
+        AppScriptPackage? Package,
         string? Input,
         string? DefinitionActorId,
         string? RuntimeActorId);
@@ -901,7 +921,8 @@ internal static class AppStudioEndpoints
     internal sealed record AppScriptValidateRequest(
         string? ScriptId,
         string? ScriptRevision,
-        string? Source);
+        string? Source,
+        AppScriptPackage? Package);
 
     internal sealed record AppWorkflowGenerateRequest(
         string? Prompt,
@@ -912,5 +933,7 @@ internal static class AppStudioEndpoints
     internal sealed record AppScriptGenerateRequest(
         string? Prompt,
         string? CurrentSource,
+        AppScriptPackage? CurrentPackage,
+        string? CurrentFilePath,
         IReadOnlyDictionary<string, string>? Metadata);
 }

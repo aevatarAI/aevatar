@@ -80,8 +80,103 @@ public class ScriptGenerateOrchestratorTests
         prompts.Should().HaveCount(2);
         prompts[0].Should().Contain("AppScriptCommand");
         prompts[0].Should().Contain("only inbound command contract");
+        prompts[0].Should().Contain("scriptPackage");
         prompts[1].Should().Contain("AppScriptCommand");
         prompts[1].Should().Contain("parse it from AppScriptCommand.Input");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ShouldAcceptFullPackageJson_AndCompileReturnedPackage()
+    {
+        ScriptBehaviorCompilationRequest? capturedRequest = null;
+        var compiler = new FakeCompiler([
+            (
+                CreateSuccessResult(),
+                (Action<ScriptBehaviorCompilationRequest>?)(request => capturedRequest = request)
+            ),
+        ]);
+        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+
+        var result = await orchestrator.GenerateAsync(
+            new ScriptGenerateRequest(
+                "Split the behavior into helper files",
+                null,
+                null),
+            static (prompt, metadata, ct) =>
+            {
+                _ = prompt;
+                _ = metadata;
+                _ = ct;
+                return Task.FromResult<string?>(
+                    """
+                    {
+                      "currentFilePath": "Behavior.cs",
+                      "scriptPackage": {
+                        "csharpSources": [
+                          { "path": "Behavior.cs", "content": "public sealed class DraftBehavior {}" },
+                          { "path": "Helper.cs", "content": "internal static class Helper {}" }
+                        ],
+                        "protoFiles": [],
+                        "entryBehaviorTypeName": "DraftBehavior",
+                        "entrySourcePath": "Behavior.cs"
+                      }
+                    }
+                    """);
+            },
+            null,
+            CancellationToken.None);
+
+        result.Package.Should().NotBeNull();
+        result.Package!.CsharpSources.Should().HaveCount(2);
+        result.CurrentFilePath.Should().Be("Behavior.cs");
+        result.Source.Should().Contain("DraftBehavior");
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.Package.CSharpSources.Select(static file => file.Path)
+            .Should().Contain(new[] { "Behavior.cs", "Helper.cs" });
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ShouldMergeCurrentFileEditsIntoExistingPackage_WhenAiReturnsSourceOnly()
+    {
+        ScriptBehaviorCompilationRequest? capturedRequest = null;
+        var compiler = new FakeCompiler([
+            (
+                CreateSuccessResult(),
+                (Action<ScriptBehaviorCompilationRequest>?)(request => capturedRequest = request)
+            ),
+        ]);
+        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+
+        var result = await orchestrator.GenerateAsync(
+            new ScriptGenerateRequest(
+                "Only update the behavior file",
+                "public sealed class DraftBehavior { }",
+                null,
+                new AppScriptPackage(
+                    [
+                        new AppScriptPackageFile("Behavior.cs", "public sealed class DraftBehavior { }"),
+                        new AppScriptPackageFile("Helper.cs", "internal static class Helper { }"),
+                    ],
+                    [],
+                    "DraftBehavior",
+                    "Behavior.cs"),
+                "Behavior.cs"),
+            static (prompt, metadata, ct) =>
+            {
+                _ = prompt;
+                _ = metadata;
+                _ = ct;
+                return Task.FromResult<string?>("public sealed class DraftBehavior { public const int Version = 2; }");
+            },
+            null,
+            CancellationToken.None);
+
+        result.Package.Should().NotBeNull();
+        result.Package!.CsharpSources.Should().HaveCount(2);
+        result.Package.CsharpSources.Single(file => file.Path == "Helper.cs").Content.Should().Contain("Helper");
+        result.Package.CsharpSources.Single(file => file.Path == "Behavior.cs").Content.Should().Contain("Version = 2");
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.Package.CSharpSources.Should().HaveCount(2);
     }
 
     [Fact]
@@ -124,18 +219,38 @@ public class ScriptGenerateOrchestratorTests
             });
     }
 
+    private static ScriptBehaviorCompilationResult CreateSuccessResult()
+    {
+        return new ScriptBehaviorCompilationResult(
+            true,
+            CreateArtifact(() => { }),
+            Array.Empty<string>());
+    }
+
     private sealed class FakeCompiler : IScriptBehaviorCompiler
     {
         private readonly Queue<ScriptBehaviorCompilationResult> _results;
+        private readonly Queue<Action<ScriptBehaviorCompilationRequest>?> _hooks = new();
 
         public FakeCompiler(IEnumerable<ScriptBehaviorCompilationResult> results)
         {
             _results = new Queue<ScriptBehaviorCompilationResult>(results);
         }
 
+        public FakeCompiler(IEnumerable<(ScriptBehaviorCompilationResult Result, Action<ScriptBehaviorCompilationRequest>? Hook)> results)
+        {
+            _results = new Queue<ScriptBehaviorCompilationResult>();
+            foreach (var item in results)
+            {
+                _results.Enqueue(item.Result);
+                _hooks.Enqueue(item.Hook);
+            }
+        }
+
         public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
         {
-            _ = request;
+            if (_hooks.Count > 0)
+                _hooks.Dequeue()?.Invoke(request);
             if (_results.Count == 0)
                 throw new InvalidOperationException("No more compile results are available.");
 

@@ -219,7 +219,9 @@ public sealed class AppScopedScriptService
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var sourceText = NormalizeRequired(request.SourceText, nameof(request.SourceText));
+        var sourceText = NormalizeRequired(
+            AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.SourceText),
+            nameof(request.SourceText));
         var scriptId = string.IsNullOrWhiteSpace(request.ScriptId)
             ? AppStudioEndpoints.NormalizeStudioDocumentId(request.ScriptId, "script")
             : NormalizeRequired(request.ScriptId, nameof(request.ScriptId));
@@ -260,6 +262,12 @@ public sealed class AppScopedScriptService
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var scriptId = NormalizeRequired(request.ScriptId ?? string.Empty, nameof(request.ScriptId));
+        var candidateSource = NormalizeRequired(
+            AppScriptPackagePayloads.ResolvePersistedSource(request.CandidatePackage, request.CandidateSource),
+            nameof(request.CandidateSource));
+        var candidateSourceHash = string.IsNullOrWhiteSpace(request.CandidateSourceHash)
+            ? AppScriptPackagePayloads.ComputeSourceHash(request.CandidatePackage, candidateSource)
+            : request.CandidateSourceHash.Trim();
         if (_scriptEvolutionService != null)
         {
             return await _scriptEvolutionService.ProposeAsync(
@@ -267,8 +275,8 @@ public sealed class AppScopedScriptService
                     ScriptId: scriptId,
                     BaseRevision: request.BaseRevision ?? string.Empty,
                     CandidateRevision: request.CandidateRevision ?? string.Empty,
-                    CandidateSource: request.CandidateSource ?? string.Empty,
-                    CandidateSourceHash: request.CandidateSourceHash ?? string.Empty,
+                    CandidateSource: candidateSource,
+                    CandidateSourceHash: candidateSourceHash,
                     Reason: request.Reason ?? string.Empty,
                     ProposalId: request.ProposalId ?? string.Empty,
                     ScopeId: normalizedScopeId),
@@ -281,8 +289,8 @@ public sealed class AppScopedScriptService
                    new RemoteProposeEvolutionRequest(
                        request.BaseRevision,
                        request.CandidateRevision,
-                       request.CandidateSource,
-                       request.CandidateSourceHash,
+                       candidateSource,
+                       candidateSourceHash,
                        request.Reason,
                        request.ProposalId),
                    ct) ??
@@ -547,9 +555,10 @@ public sealed class AppScopedScriptService
 
 public sealed record AppScopeScriptSaveRequest(
     string? ScriptId,
-    string SourceText,
+    string? SourceText = null,
     string? RevisionId = null,
-    string? ExpectedBaseRevision = null);
+    string? ExpectedBaseRevision = null,
+    AppScriptPackage? Package = null);
 
 public sealed record AppScopeScriptEvolutionRequest(
     string? ScriptId,
@@ -558,7 +567,8 @@ public sealed record AppScopeScriptEvolutionRequest(
     string? CandidateSource,
     string? CandidateSourceHash,
     string? Reason,
-    string? ProposalId);
+    string? ProposalId,
+    AppScriptPackage? CandidatePackage = null);
 
 public sealed record AppScriptCatalogSnapshot(
     string ScriptId,

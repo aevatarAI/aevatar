@@ -65,6 +65,16 @@ export function InspectorPanel(props: {
           </div>
         </CollapsibleSection>
 
+        <CollapsibleSection eyebrow="Package" title="Draft package" defaultOpen={false} bodyClassName="border-t border-[#EEEAE4] px-4 pb-4">
+          <div className="space-y-2 break-all pt-4 text-[12px] leading-6 text-gray-600">
+            <div>selectedFile: {selectedDraft.selectedFilePath || '-'}</div>
+            <div>entrySourcePath: {selectedDraft.package.entrySourcePath || '-'}</div>
+            <div>entryBehaviorTypeName: {selectedDraft.package.entryBehaviorTypeName || '-'}</div>
+            <div>csharpFiles: {selectedDraft.package.csharpSources.length}</div>
+            <div>protoFiles: {selectedDraft.package.protoFiles.length}</div>
+          </div>
+        </CollapsibleSection>
+
         <CollapsibleSection eyebrow="Scope Snapshot" title="Saved scope state" defaultOpen={false} bodyClassName="border-t border-[#EEEAE4] px-4 pb-4">
           {selectedDraft.scopeDetail?.script ? (
             <div className="space-y-2 break-all pt-4 text-[12px] leading-6 text-gray-600">

@@ -328,6 +328,71 @@ public sealed class AppScriptsStudioApiTests
         decision.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
     }
 
+    [Fact]
+    public async Task PackageRequests_ShouldValidateSaveAndRunSplitScriptPackage()
+    {
+        var scopeId = $"nyx-user-{Guid.NewGuid():N}";
+        var scriptId = $"package-script-{Guid.NewGuid():N}";
+        var package = AppTestData.CreateSplitScriptPackage();
+
+        using var validation = await _fixture.PostJsonAsync("/api/app/scripts/validate", new
+        {
+            scriptId,
+            scriptRevision = "rev-1",
+            package,
+        });
+        validation.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        validation.RootElement.GetProperty("primarySourcePath").GetString().Should().Be("Behavior.cs");
+
+        using var saved = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts",
+            new
+            {
+                scriptId,
+                revisionId = "rev-1",
+                package,
+            },
+            scopeId);
+        saved.RootElement.GetProperty("source").GetProperty("sourceText").GetString()
+            .Should().Contain("\"format\":\"aevatar.scripting.package.v1\"");
+
+        using var draftRun = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts/draft-run",
+            new
+            {
+                scriptId,
+                scriptRevision = "rev-1",
+                package,
+                input = "  split package  ",
+            },
+            scopeId);
+
+        draftRun.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
+        var readModelUrl = draftRun.RootElement.GetProperty("readModelUrl").GetString();
+        readModelUrl.Should().NotBeNullOrWhiteSpace();
+
+        using var snapshot = await _fixture.WaitForJsonAsync(
+            readModelUrl!,
+            static document =>
+            {
+                var payloadJson = document.RootElement.GetProperty("readModelPayloadJson").GetString();
+                if (string.IsNullOrWhiteSpace(payloadJson))
+                    return false;
+
+                using var payload = JsonDocument.Parse(payloadJson);
+                return string.Equals(payload.RootElement.GetProperty("output").GetString(), "SPLIT PACKAGE", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(30));
+
+        using var payloadDocument = JsonDocument.Parse(snapshot.RootElement.GetProperty("readModelPayloadJson").GetString()!);
+        payloadDocument.RootElement.GetProperty("output").GetString().Should().Be("SPLIT PACKAGE");
+        payloadDocument.RootElement.GetProperty("notes").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Contain("multi-file");
+    }
+
     private async Task<JsonDocument> SendScopedJsonAsync(
         HttpMethod method,
         string path,

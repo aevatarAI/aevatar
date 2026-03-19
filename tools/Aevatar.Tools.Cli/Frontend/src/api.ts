@@ -326,6 +326,8 @@ export const assistant = {
     data: {
       prompt: string;
       currentSource?: string;
+      currentPackage?: any;
+      currentFilePath?: string;
       metadata?: Record<string, string>;
     },
     options?: {
@@ -336,6 +338,8 @@ export const assistant = {
   ) => {
     let text = '';
     let reasoning = '';
+    let scriptPackage: any = null;
+    let currentFilePath = '';
     await streamSse('/app/scripts/generator', data, frame => {
       const normalized = normalizeAssistantFrame(frame);
       if (!normalized) {
@@ -356,6 +360,8 @@ export const assistant = {
 
       if (normalized.type === 'TEXT_MESSAGE_END') {
         text = text || normalized.message || normalized.delta || '';
+        scriptPackage = normalized.scriptPackage || null;
+        currentFilePath = normalized.currentFilePath || '';
         options?.onText?.(text);
         return;
       }
@@ -365,7 +371,11 @@ export const assistant = {
       }
     }, options?.signal);
 
-    return text;
+    return {
+      text,
+      scriptPackage,
+      currentFilePath,
+    };
   },
 };
 

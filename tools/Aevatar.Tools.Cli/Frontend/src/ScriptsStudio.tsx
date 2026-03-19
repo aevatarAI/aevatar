@@ -19,12 +19,15 @@ import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
 import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
 import * as api from './api';
 import { InspectorPanel } from './scripts-studio/components/InspectorPanel';
+import { PackageFileTree } from './scripts-studio/components/PackageFileTree';
 import { ResourceRail } from './scripts-studio/components/ResourceRail';
 import { EmptyState, ScriptsStudioModal, StudioResultCard } from './scripts-studio/components/StudioChrome';
 import type {
   ScriptCatalogSnapshot,
   DraftRunResult,
+  ScriptPackage,
   ScriptDraft,
+  StudioEditorView,
   ScriptPromotionDecision,
   ScriptReadModelSnapshot,
   ScriptValidationDiagnostic,
@@ -34,9 +37,24 @@ import type {
   SnapshotView,
   StudioResultView,
 } from './scripts-studio/models';
+import {
+  addPackageFile,
+  coerceScriptPackage,
+  createScriptPackage,
+  createSingleSourcePackage,
+  deserializePersistedSource,
+  getPackageEntries,
+  getSelectedPackageEntry,
+  removePackageFile,
+  renamePackageFile,
+  serializePersistedSource,
+  setEntrySourcePath,
+  updateEntryBehaviorTypeName,
+  updatePackageFileContent,
+} from './scripts-studio/package';
 import { formatDateTime, isScopeDetailDirty } from './scripts-studio/utils';
 
-const STORAGE_KEY = 'aevatar:scripts-studio:v3';
+const STORAGE_KEY = 'aevatar:scripts-studio:v4';
 
 const STARTER_SOURCE = `using System;
 using System.Threading;
@@ -124,8 +142,8 @@ function normalizeStudioId(value: string, fallbackPrefix: string) {
   return `${fallbackPrefix}-${timestamp}`;
 }
 
-function createStarterSource() {
-  return STARTER_SOURCE;
+function createStarterPackage() {
+  return createSingleSourcePackage(STARTER_SOURCE);
 }
 
 function isLegacyStarterSource(source: string) {
@@ -141,30 +159,45 @@ function isLegacyStarterSource(source: string) {
       normalized.includes('struct'));
 }
 
-function normalizeDraftSourceForAppRuntime(source: string) {
-  const text = String(source || '');
-  if (!text.trim()) {
+function normalizeDraftPackageForAppRuntime(rawPackage?: ScriptPackage | null, rawSource?: string) {
+  const packageModel = rawPackage
+    ? createScriptPackage(
+        rawPackage.csharpSources,
+        rawPackage.protoFiles,
+        rawPackage.entryBehaviorTypeName,
+        rawPackage.entrySourcePath,
+      )
+    : deserializePersistedSource(String(rawSource || ''));
+  const activeEntry = getSelectedPackageEntry(packageModel, packageModel.entrySourcePath);
+  const primarySource = activeEntry?.content || '';
+
+  if (!primarySource.trim()) {
     return {
-      source: STARTER_SOURCE,
+      package: createStarterPackage(),
       migrated: true,
     };
   }
 
-  if (isLegacyStarterSource(text)) {
+  if (isLegacyStarterSource(primarySource)) {
     return {
-      source: STARTER_SOURCE,
+      package: createStarterPackage(),
       migrated: true,
     };
   }
 
   return {
-    source: text,
+    package: packageModel,
     migrated: false,
   };
 }
 
 function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraft {
   const now = new Date().toISOString();
+  const normalizedPackage = normalizeDraftPackageForAppRuntime(seed.package);
+  const selectedEntry = getSelectedPackageEntry(
+    normalizedPackage.package,
+    seed.selectedFilePath || normalizedPackage.package.entrySourcePath,
+  );
   return {
     key: seed.key || `draft-${Date.now()}-${index}`,
     scriptId: seed.scriptId || `script-${index}`,
@@ -172,7 +205,8 @@ function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraf
     baseRevision: seed.baseRevision || '',
     reason: seed.reason || '',
     input: seed.input || '',
-    source: seed.source || createStarterSource(),
+    package: normalizedPackage.package,
+    selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
     definitionActorId: seed.definitionActorId || '',
     runtimeActorId: seed.runtimeActorId || '',
     updatedAtUtc: seed.updatedAtUtc || now,
@@ -201,7 +235,11 @@ function readStoredDrafts(): ScriptDraft[] {
     }
 
     return parsed.map((item: any, index: number) => {
-      const normalizedSource = normalizeDraftSourceForAppRuntime(String(item?.source || ''));
+      const normalizedPackage = normalizeDraftPackageForAppRuntime(item?.package || null, String(item?.source || ''));
+      const selectedEntry = getSelectedPackageEntry(
+        normalizedPackage.package,
+        String(item?.selectedFilePath || normalizedPackage.package.entrySourcePath || ''),
+      );
       return {
         key: String(item?.key || `draft-${Date.now()}-${index + 1}`),
         scriptId: String(item?.scriptId || `script-${index + 1}`),
@@ -209,15 +247,16 @@ function readStoredDrafts(): ScriptDraft[] {
         baseRevision: String(item?.baseRevision || ''),
         reason: String(item?.reason || ''),
         input: String(item?.input || ''),
-        source: normalizedSource.source,
-        definitionActorId: normalizedSource.migrated ? '' : String(item?.definitionActorId || ''),
-        runtimeActorId: normalizedSource.migrated ? '' : String(item?.runtimeActorId || ''),
+        package: normalizedPackage.package,
+        selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
+        definitionActorId: normalizedPackage.migrated ? '' : String(item?.definitionActorId || ''),
+        runtimeActorId: normalizedPackage.migrated ? '' : String(item?.runtimeActorId || ''),
         updatedAtUtc: String(item?.updatedAtUtc || new Date().toISOString()),
-        lastSourceHash: normalizedSource.migrated ? '' : String(item?.lastSourceHash || ''),
-        lastRun: normalizedSource.migrated ? null : item?.lastRun || null,
-        lastSnapshot: normalizedSource.migrated ? null : item?.lastSnapshot || null,
-        lastPromotion: normalizedSource.migrated ? null : item?.lastPromotion || null,
-        scopeDetail: normalizedSource.migrated ? null : item?.scopeDetail || null,
+        lastSourceHash: normalizedPackage.migrated ? '' : String(item?.lastSourceHash || ''),
+        lastRun: normalizedPackage.migrated ? null : item?.lastRun || null,
+        lastSnapshot: normalizedPackage.migrated ? null : item?.lastSnapshot || null,
+        lastPromotion: normalizedPackage.migrated ? null : item?.lastPromotion || null,
+        scopeDetail: normalizedPackage.migrated ? null : item?.scopeDetail || null,
       };
     });
   } catch {
@@ -258,7 +297,10 @@ function parseSnapshotView(snapshot: ScriptReadModelSnapshot | null): SnapshotVi
   }
 }
 
-function buildEditorMarkers(validation: ScriptValidationResult | null): monacoEditor.editor.IMarkerData[] {
+function buildEditorMarkers(
+  validation: ScriptValidationResult | null,
+  activeFilePath: string,
+): monacoEditor.editor.IMarkerData[] {
   if (!validation) {
     return [];
   }
@@ -269,7 +311,7 @@ function buildEditorMarkers(validation: ScriptValidationResult | null): monacoEd
         return false;
       }
 
-      return !diagnostic.filePath || diagnostic.filePath === validation.primarySourcePath;
+      return !diagnostic.filePath || diagnostic.filePath === activeFilePath;
     })
     .map(diagnostic => ({
       startLineNumber: diagnostic.startLine || 1,
@@ -328,8 +370,11 @@ function prettyPrintJson(rawJson: string | null | undefined) {
 }
 
 function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, existing?: ScriptDraft): ScriptDraft {
-  const sourceText = detail.source?.sourceText || existing?.source || createStarterSource();
-  const normalizedSource = normalizeDraftSourceForAppRuntime(sourceText);
+  const normalizedPackage = normalizeDraftPackageForAppRuntime(existing?.package || null, detail.source?.sourceText || '');
+  const selectedEntry = getSelectedPackageEntry(
+    normalizedPackage.package,
+    existing?.selectedFilePath || normalizedPackage.package.entrySourcePath,
+  );
   const scriptId = detail.script?.scriptId || existing?.scriptId || `script-${index}`;
   const revision = detail.script?.activeRevision || detail.source?.revision || existing?.revision || `draft-rev-${index}`;
 
@@ -340,7 +385,8 @@ function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, 
     baseRevision: detail.script?.activeRevision || detail.source?.revision || existing?.baseRevision || '',
     reason: existing?.reason || '',
     input: existing?.input || '',
-    source: normalizedSource.source,
+    package: normalizedPackage.package,
+    selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
     definitionActorId: detail.script?.definitionActorId || detail.source?.definitionActorId || existing?.definitionActorId || '',
     runtimeActorId: existing?.runtimeActorId || '',
     updatedAtUtc: detail.script?.updatedAt || existing?.updatedAtUtc,
@@ -381,6 +427,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [askAiReasoning, setAskAiReasoning] = useState('');
   const [askAiAnswer, setAskAiAnswer] = useState('');
   const [askAiGeneratedSource, setAskAiGeneratedSource] = useState('');
+  const [askAiGeneratedPackage, setAskAiGeneratedPackage] = useState<ScriptPackage | null>(null);
+  const [askAiGeneratedFilePath, setAskAiGeneratedFilePath] = useState('');
   const [askAiTargetDraftKey, setAskAiTargetDraftKey] = useState<string | null>(null);
   const [askAiPending, setAskAiPending] = useState(false);
   const [runModalOpen, setRunModalOpen] = useState(false);
@@ -389,6 +437,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [validationResult, setValidationResult] = useState<ScriptValidationResult | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
   const [resultsCollapsed, setResultsCollapsed] = useState(true);
+  const [editorView, setEditorView] = useState<StudioEditorView>('source');
   const [resultView, setResultView] = useState<StudioResultView>('runtime');
   const [selectedRuntimeActorId, setSelectedRuntimeActorId] = useState('');
   const [selectedProposalId, setSelectedProposalId] = useState('');
@@ -452,9 +501,25 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     () => drafts.find(draft => draft.key === selectedDraftKey) || drafts[0] || null,
     [drafts, selectedDraftKey],
   );
-  const askAiTargetDraft = useMemo(
-    () => drafts.find(draft => draft.key === askAiTargetDraftKey) || null,
-    [drafts, askAiTargetDraftKey],
+  const askAiPreviewEntry = useMemo(
+    () => askAiGeneratedPackage
+      ? getSelectedPackageEntry(askAiGeneratedPackage, askAiGeneratedFilePath || askAiGeneratedPackage.entrySourcePath)
+      : null,
+    [askAiGeneratedFilePath, askAiGeneratedPackage],
+  );
+  const selectedPackageEntries = useMemo(
+    () => selectedDraft ? getPackageEntries(selectedDraft.package) : [],
+    [selectedDraft],
+  );
+  const selectedPackageEntry = useMemo(
+    () => selectedDraft ? getSelectedPackageEntry(selectedDraft.package, selectedDraft.selectedFilePath) : null,
+    [selectedDraft],
+  );
+  const storedScopePackage = useMemo(
+    () => selectedDraft?.scopeDetail?.source?.sourceText
+      ? deserializePersistedSource(selectedDraft.scopeDetail.source.sourceText)
+      : null,
+    [selectedDraft?.scopeDetail?.source?.sourceText],
   );
   const activeCatalog = useMemo(() => {
     const scopeScriptId = selectedDraft?.scopeDetail?.script?.scriptId || '';
@@ -510,8 +575,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const snapshotView = parseSnapshotView(activeRuntimeSnapshot);
   const validationSummary = summarizeValidation(validationResult, validationPending);
   const validationMarkers = useMemo(
-    () => buildEditorMarkers(validationResult),
-    [validationResult],
+    () => buildEditorMarkers(validationResult, selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'),
+    [selectedPackageEntry?.path, validationResult],
   );
   const visibleProblems = validationResult?.diagnostics || [];
   const showValidationBadge = validationPending || validationResult != null;
@@ -549,7 +614,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         const result = await api.app.validateDraftScript({
           scriptId: selectedDraft.scriptId,
           scriptRevision: selectedDraft.revision,
-          source: selectedDraft.source,
+          package: selectedDraft.package,
         }, controller.signal) as ScriptValidationResult;
 
         if (validationRequestRef.current !== validationToken) {
@@ -566,7 +631,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
           success: false,
           scriptId: selectedDraft.scriptId,
           scriptRevision: selectedDraft.revision,
-          primarySourcePath: 'Behavior.cs',
+          primarySourcePath: selectedDraft.selectedFilePath || 'Behavior.cs',
           errorCount: 1,
           warningCount: 0,
           diagnostics: [
@@ -594,7 +659,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [selectedDraft?.key, selectedDraft?.scriptId, selectedDraft?.revision, selectedDraft?.source]);
+  }, [selectedDraft?.key, selectedDraft?.scriptId, selectedDraft?.revision, selectedDraft?.selectedFilePath, selectedDraft?.package]);
 
   useEffect(() => {
     if (!scopeBacked) {
@@ -628,7 +693,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedDraft?.key, selectedDraft?.scriptId, selectedDraft?.revision, selectedDraft?.source, selectedDraft?.baseRevision, scopeBacked]);
+  }, [selectedDraft?.key, selectedDraft?.scriptId, selectedDraft?.revision, selectedDraft?.package, selectedDraft?.baseRevision, scopeBacked]);
 
   useEffect(() => {
     if (!selectedDraft) {
@@ -716,10 +781,22 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   };
 
   function jumpToDiagnostic(diagnostic: ScriptValidationDiagnostic) {
+    const diagnosticFilePath = diagnostic.filePath || selectedDraft?.selectedFilePath || '';
+    if (selectedDraft && diagnosticFilePath && diagnosticFilePath !== selectedDraft.selectedFilePath) {
+      setEditorView('source');
+      updateDraft(selectedDraft.key, draft => ({
+        ...draft,
+        selectedFilePath: diagnosticFilePath,
+      }));
+      window.setTimeout(() => jumpToDiagnostic(diagnostic), 0);
+      return;
+    }
+
     if (!diagnostic.startLine || !diagnostic.startColumn) {
       return;
     }
 
+    setEditorView('source');
     editorRef.current?.revealPositionInCenter({
       lineNumber: diagnostic.startLine,
       column: diagnostic.startColumn,
@@ -748,6 +825,88 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     setSelectedDraftKey(nextDraft.key);
     setLibraryOpen(false);
     setResultsCollapsed(true);
+  }
+
+  function handleSelectDraftFile(filePath: string) {
+    if (!selectedDraft) {
+      return;
+    }
+
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      selectedFilePath: filePath,
+    }));
+    setEditorView('source');
+  }
+
+  function handleAddPackageFile(kind: 'csharp' | 'proto') {
+    if (!selectedDraft) {
+      return;
+    }
+
+    const defaultPath = kind === 'csharp'
+      ? `NewFile${selectedDraft.package.csharpSources.length + 1}.cs`
+      : `schema${selectedDraft.package.protoFiles.length + 1}.proto`;
+    const nextPath = window.prompt(`Add ${kind === 'csharp' ? 'C#' : 'proto'} file`, defaultPath);
+    if (!nextPath?.trim()) {
+      return;
+    }
+
+    const nextPackage = addPackageFile(selectedDraft.package, kind, nextPath.trim());
+    const addedEntry = getSelectedPackageEntry(nextPackage, nextPath.trim());
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      package: nextPackage,
+      selectedFilePath: addedEntry?.path || draft.selectedFilePath,
+    }));
+    setEditorView('source');
+  }
+
+  function handleRenamePackageFile(filePath: string) {
+    if (!selectedDraft) {
+      return;
+    }
+
+    const nextPath = window.prompt('Rename file', filePath);
+    if (!nextPath?.trim() || nextPath.trim() === filePath) {
+      return;
+    }
+
+    const nextPackage = renamePackageFile(selectedDraft.package, filePath, nextPath.trim());
+    const renamedEntry = getSelectedPackageEntry(nextPackage, nextPath.trim());
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      package: nextPackage,
+      selectedFilePath: draft.selectedFilePath === filePath
+        ? (renamedEntry?.path || draft.selectedFilePath)
+        : draft.selectedFilePath,
+    }));
+  }
+
+  function handleRemovePackageFile(filePath: string) {
+    if (!selectedDraft) {
+      return;
+    }
+
+    const nextPackage = removePackageFile(selectedDraft.package, filePath);
+    const nextSelected = getSelectedPackageEntry(nextPackage, selectedDraft.selectedFilePath);
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      package: nextPackage,
+      selectedFilePath: nextSelected?.path || '',
+    }));
+  }
+
+  function handleSetEntryFile(filePath: string) {
+    if (!selectedDraft) {
+      return;
+    }
+
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      package: setEntrySourcePath(draft.package, filePath),
+      selectedFilePath: filePath,
+    }));
   }
 
   async function loadScopeScripts(silent = false) {
@@ -1040,7 +1199,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    if (!selectedDraft.source.trim()) {
+    const persistedSource = serializePersistedSource(selectedDraft.package);
+    if (!persistedSource.trim()) {
       onFlash('Script source is required', 'error');
       return;
     }
@@ -1060,15 +1220,19 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         scriptId,
         revisionId: revision,
         expectedBaseRevision,
-        sourceText: selectedDraft.source,
+        package: selectedDraft.package,
       }) as ScopedScriptDetail;
+
+      const savedPackage = normalizeDraftPackageForAppRuntime(null, detail.source?.sourceText || persistedSource).package;
+      const savedEntry = getSelectedPackageEntry(savedPackage, selectedDraft.selectedFilePath);
 
       updateDraft(selectedDraft.key, draft => ({
         ...draft,
         scriptId: detail.script?.scriptId || scriptId,
         revision: detail.script?.activeRevision || detail.source?.revision || revision,
         baseRevision: detail.script?.activeRevision || detail.source?.revision || revision,
-        source: detail.source?.sourceText || draft.source,
+        package: savedPackage,
+        selectedFilePath: savedEntry?.path || draft.selectedFilePath,
         definitionActorId: detail.script?.definitionActorId || detail.source?.definitionActorId || draft.definitionActorId,
         lastSourceHash: detail.source?.sourceHash || detail.script?.activeSourceHash || draft.lastSourceHash,
         scopeDetail: detail,
@@ -1127,8 +1291,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    const normalizedSource = normalizeDraftSourceForAppRuntime(selectedDraft.source);
-    if (!normalizedSource.source.trim()) {
+    const normalizedPackage = normalizeDraftPackageForAppRuntime(selectedDraft.package);
+    const persistedSource = serializePersistedSource(normalizedPackage.package);
+    if (!persistedSource.trim()) {
       onFlash('Script source is required', 'error');
       return;
     }
@@ -1136,10 +1301,11 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     const scriptId = normalizeStudioId(selectedDraft.scriptId, 'script');
     const revision = normalizeStudioId(selectedDraft.revision, 'draft');
 
-    if (normalizedSource.migrated) {
+    if (normalizedPackage.migrated) {
       updateDraft(selectedDraft.key, draft => ({
         ...draft,
-        source: normalizedSource.source,
+        package: normalizedPackage.package,
+        selectedFilePath: normalizedPackage.package.entrySourcePath || draft.selectedFilePath,
         definitionActorId: '',
         runtimeActorId: '',
         lastSourceHash: '',
@@ -1160,10 +1326,10 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       const response = await api.app.runDraftScript({
         scriptId,
         scriptRevision: revision,
-        source: normalizedSource.source,
+        package: normalizedPackage.package,
         input: inputText,
-        definitionActorId: normalizedSource.migrated ? '' : selectedDraft.definitionActorId,
-        runtimeActorId: normalizedSource.migrated ? '' : selectedDraft.runtimeActorId,
+        definitionActorId: normalizedPackage.migrated ? '' : selectedDraft.definitionActorId,
+        runtimeActorId: normalizedPackage.migrated ? '' : selectedDraft.runtimeActorId,
       }) as DraftRunResult;
 
       updateDraft(selectedDraft.key, draft => ({
@@ -1196,7 +1362,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    if (!selectedDraft.source.trim()) {
+    const persistedSource = serializePersistedSource(selectedDraft.package);
+    if (!persistedSource.trim()) {
       onFlash('Script source is required', 'error');
       return;
     }
@@ -1212,8 +1379,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         scriptId,
         baseRevision,
         candidateRevision,
-        candidateSource: selectedDraft.source,
-        candidateSourceHash: selectedDraft.lastSourceHash,
+        candidatePackage: selectedDraft.package,
+        candidateSourceHash: '',
         reason: selectedDraft.reason,
         proposalId: `${scriptId}-${candidateRevision}-${Date.now()}`,
       }) as ScriptPromotionDecision;
@@ -1264,11 +1431,15 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     setAskAiReasoning('');
     setAskAiAnswer('');
     setAskAiGeneratedSource('');
+    setAskAiGeneratedPackage(null);
+    setAskAiGeneratedFilePath('');
 
     try {
-      const source = await api.assistant.authorScript({
+      const response = await api.assistant.authorScript({
         prompt: askAiPrompt.trim(),
-        currentSource: selectedDraft.source,
+        currentSource: selectedPackageEntry?.content || '',
+        currentPackage: selectedDraft.package,
+        currentFilePath: selectedDraft.selectedFilePath,
         metadata: {
           script_id: selectedDraft.scriptId,
           revision: selectedDraft.revision,
@@ -1278,9 +1449,18 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         onText: text => setAskAiAnswer(text),
       });
 
-      setAskAiAnswer(source);
-      setAskAiGeneratedSource(source);
-      onFlash('AI source is ready to apply', 'success');
+      const generatedPackage = coerceScriptPackage(response.scriptPackage);
+      const generatedFilePath = response.currentFilePath || selectedDraft.selectedFilePath;
+      const generatedEntry = generatedPackage
+        ? getSelectedPackageEntry(generatedPackage, generatedFilePath)
+        : null;
+      const generatedSource = generatedEntry?.content || response.text || '';
+
+      setAskAiAnswer(response.text || generatedSource);
+      setAskAiGeneratedSource(generatedSource);
+      setAskAiGeneratedPackage(generatedPackage);
+      setAskAiGeneratedFilePath(generatedEntry?.path || generatedFilePath);
+      onFlash(generatedPackage ? 'AI package is ready to apply' : 'AI source is ready to apply', 'success');
     } catch (error: any) {
       onFlash(error?.message || 'Failed to generate script source', 'error');
     } finally {
@@ -1308,10 +1488,14 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     updateDraft(targetKey, draft => ({
       ...draft,
-      source: askAiGeneratedSource,
+      package: askAiGeneratedPackage || updatePackageFileContent(draft.package, draft.selectedFilePath, askAiGeneratedSource),
+      selectedFilePath: askAiGeneratedPackage
+        ? (getSelectedPackageEntry(askAiGeneratedPackage, askAiGeneratedFilePath || draft.selectedFilePath)?.path || draft.selectedFilePath)
+        : draft.selectedFilePath,
     }));
     setSelectedDraftKey(targetKey);
-    onFlash('AI source applied to the editor', 'success');
+    setEditorView('source');
+    onFlash(askAiGeneratedPackage ? 'AI package applied to the editor' : 'AI source applied to the editor', 'success');
   }
 
   async function handleCopyAskAiSource() {
@@ -1488,9 +1672,37 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
                 <div>
                   <div className="panel-eyebrow">Editor</div>
-                  <div className="mt-1 text-[15px] font-semibold text-gray-800">Behavior.cs</div>
+                  <div className="mt-1 text-[15px] font-semibold text-gray-800">
+                    {editorView === 'source'
+                      ? (selectedPackageEntry?.path || selectedDraft.selectedFilePath || 'Behavior.cs')
+                      : 'Package manifest'}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <div className="mr-1 flex items-center rounded-full border border-[#E5DED3] bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditorView('source')}
+                      className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                        editorView === 'source'
+                          ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
+                          : 'text-gray-400 hover:text-gray-600'
+                      }`}
+                    >
+                      Source
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorView('package')}
+                      className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                        editorView === 'package'
+                          ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
+                          : 'text-gray-400 hover:text-gray-600'
+                      }`}
+                    >
+                      Package
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setLibraryOpen(true)}
@@ -1525,52 +1737,122 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </div>
 
               <div className="min-h-0 flex-1 bg-[#FCFBF8]">
-                <Editor
-                  path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                  language="csharp"
-                  theme="aevatar-script-light"
-                  value={selectedDraft.source}
-                  beforeMount={handleMonacoBeforeMount}
-                  onMount={handleEditorMount}
-                  onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
-                  loading={(
-                    <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                      Loading
+                {editorView === 'source' ? (
+                  <div className="flex h-full min-h-0">
+                    <div className="w-[268px] min-w-[240px] max-w-[320px]">
+                      <PackageFileTree
+                        entries={selectedPackageEntries}
+                        selectedFilePath={selectedPackageEntry?.path || selectedDraft.selectedFilePath}
+                        entrySourcePath={selectedDraft.package.entrySourcePath}
+                        onSelectFile={handleSelectDraftFile}
+                        onAddFile={handleAddPackageFile}
+                        onRenameFile={handleRenamePackageFile}
+                        onRemoveFile={handleRemovePackageFile}
+                        onSetEntry={handleSetEntryFile}
+                      />
                     </div>
-                  )}
-                  options={{
-                    automaticLayout: true,
-                    minimap: { enabled: false },
-                    scrollBeyondLastLine: false,
-                    smoothScrolling: true,
-                    fontSize: 13,
-                    lineHeight: 23,
-                    fontLigatures: true,
-                    tabSize: 4,
-                    insertSpaces: true,
-                    renderWhitespace: 'selection',
-                    renderValidationDecorations: 'on',
-                    lineNumbersMinChars: 3,
-                    quickSuggestions: false,
-                    suggestOnTriggerCharacters: false,
-                    wordWrap: 'off',
-                    stickyScroll: { enabled: false },
-                    bracketPairColorization: { enabled: true },
-                    guides: {
-                      indentation: true,
-                      bracketPairs: true,
-                    },
-                    folding: true,
-                    padding: {
-                      top: 18,
-                      bottom: 18,
-                    },
-                    scrollbar: {
-                      verticalScrollbarSize: 10,
-                      horizontalScrollbarSize: 10,
-                    },
-                  }}
-                />
+                    <div className="min-h-0 flex-1">
+                      <Editor
+                        path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                        language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
+                        theme="aevatar-script-light"
+                        value={selectedPackageEntry?.content || ''}
+                        beforeMount={handleMonacoBeforeMount}
+                        onMount={handleEditorMount}
+                        onChange={value => updateDraft(selectedDraft.key, draft => ({
+                          ...draft,
+                          package: updatePackageFileContent(
+                            draft.package,
+                            draft.selectedFilePath,
+                            value ?? '',
+                          ),
+                        }))}
+                        loading={(
+                          <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                            Loading
+                          </div>
+                        )}
+                        options={{
+                          automaticLayout: true,
+                          minimap: { enabled: false },
+                          scrollBeyondLastLine: false,
+                          smoothScrolling: true,
+                          fontSize: 13,
+                          lineHeight: 23,
+                          fontLigatures: true,
+                          tabSize: 4,
+                          insertSpaces: true,
+                          renderWhitespace: 'selection',
+                          renderValidationDecorations: 'on',
+                          lineNumbersMinChars: 3,
+                          quickSuggestions: false,
+                          suggestOnTriggerCharacters: false,
+                          wordWrap: 'off',
+                          stickyScroll: { enabled: false },
+                          bracketPairColorization: { enabled: true },
+                          guides: {
+                            indentation: true,
+                            bracketPairs: true,
+                          },
+                          folding: true,
+                          padding: {
+                            top: 18,
+                            bottom: 18,
+                          },
+                          scrollbar: {
+                            verticalScrollbarSize: 10,
+                            horizontalScrollbarSize: 10,
+                          },
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-full overflow-y-auto bg-[#FCFBF8] p-5">
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                        <div className="section-heading">Entry contract</div>
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="field-label">Entry Behavior Type</label>
+                            <input
+                              className="panel-input mt-1"
+                              placeholder="DraftBehavior"
+                              value={selectedDraft.package.entryBehaviorTypeName}
+                              onChange={event => updateDraft(selectedDraft.key, draft => ({
+                                ...draft,
+                                package: updateEntryBehaviorTypeName(draft.package, event.target.value),
+                              }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="field-label">Entry Source Path</label>
+                            <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
+                              {selectedDraft.package.entrySourcePath || '-'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                        <div className="section-heading">Package summary</div>
+                        <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
+                          <div>format: {selectedDraft.package.format}</div>
+                          <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
+                          <div>proto files: {selectedDraft.package.protoFiles.length}</div>
+                          <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                      <div className="section-heading">Persisted source preview</div>
+                      <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                        {serializePersistedSource(selectedDraft.package) || '-'}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
@@ -1657,7 +1939,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </div>
 
               <p className="mt-3 text-[12px] leading-6 text-gray-500">
-                Describe the script change you want. The generated source stays here until you apply it into the editor.
+                Describe the script change you want. Ask AI now returns a full script package and previews the active file here until you apply it.
               </p>
 
               <textarea
@@ -1671,10 +1953,10 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               <div className="mt-3 flex items-center justify-between gap-2">
                 <div className="text-[11px] text-gray-400">
                   {askAiPending
-                    ? 'Generating and compiling source...'
+                    ? 'Generating and compiling file content...'
                     : askAiGeneratedSource
-                      ? `Ready to apply to ${askAiTargetDraft?.scriptId || 'the original draft'}`
-                      : 'Return format: script source only'}
+                      ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
+                      : 'Return format: script package JSON'}
                 </div>
                 <button
                   type="button"
@@ -1696,7 +1978,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
                 <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Source</div>
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Preview</div>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
@@ -1720,8 +2002,13 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                       </button>
                     </div>
                   </div>
+                  {askAiGeneratedPackage ? (
+                    <div className="mt-2 text-[11px] leading-5 text-gray-400">
+                      {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} · {askAiGeneratedPackage.csharpSources.length} C# · {askAiGeneratedPackage.protoFiles.length} proto
+                    </div>
+                  ) : null}
                   <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                    {askAiAnswer || 'Generated script source will appear here.'}
+                    {askAiGeneratedSource || askAiAnswer || 'Generated file content will appear here.'}
                   </pre>
                 </div>
               </div>
@@ -1930,11 +2217,18 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
                           <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
                             <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                              Stored Source
+                              Stored Package
                             </summary>
-                            <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                              {selectedDraft.scopeDetail?.source?.sourceText || '-'}
-                            </pre>
+                            <div className="mt-3 space-y-3">
+                              <div className="text-[12px] leading-6 text-gray-600">
+                                files: {storedScopePackage ? getPackageEntries(storedScopePackage).length : 0} · entry: {storedScopePackage?.entrySourcePath || '-'}
+                              </div>
+                              <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                                {storedScopePackage
+                                  ? (getSelectedPackageEntry(storedScopePackage, storedScopePackage.entrySourcePath)?.content || '-')
+                                  : '-'}
+                              </pre>
+                            </div>
                           </details>
                         </div>
                       ) : (

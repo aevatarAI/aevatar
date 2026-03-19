@@ -115,8 +115,8 @@ internal sealed class ScriptGeneratePromptCatalog
         {
             var builder = new StringBuilder();
             builder.AppendLine("You are ScriptGenerateGAgent for aevatar app.");
-            builder.AppendLine("Author and repair Aevatar ScriptBehavior C# source.");
-            builder.AppendLine("Return C# source only. Do not wrap it in markdown fences. Do not explain.");
+            builder.AppendLine("Author and repair Aevatar script packages and ScriptBehavior source.");
+            builder.AppendLine("Return only the payload shape requested by the caller. Do not wrap it in markdown fences. Do not explain.");
             builder.AppendLine("The source must compile with the aevatar scripting compiler.");
             builder.AppendLine("When current source is provided, treat the task as an edit and preserve unrelated sections.");
             builder.AppendLine("If compilation diagnostics are provided, fix every listed issue before returning.");

@@ -1,4 +1,5 @@
 import type { ScriptDraft } from './models';
+import { serializePersistedSource } from './package';
 
 export function formatDateTime(value: string | null | undefined) {
   if (!value) {
@@ -20,5 +21,5 @@ export function isScopeDetailDirty(draft: ScriptDraft | null) {
 
   const savedSource = draft.scopeDetail.source.sourceText || '';
   const savedRevision = draft.scopeDetail.script?.activeRevision || draft.scopeDetail.source.revision || '';
-  return savedSource !== draft.source || (savedRevision && savedRevision !== draft.revision);
+  return savedSource !== serializePersistedSource(draft.package) || (savedRevision && savedRevision !== draft.revision);
 }

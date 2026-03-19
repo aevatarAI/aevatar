@@ -68,6 +68,108 @@ internal static class AppTestData
         }
         """;
 
+    public const string SplitScriptBehaviorSource =
+        """
+        using System;
+        using System.Threading;
+        using System.Threading.Tasks;
+        using Aevatar.Scripting.Abstractions;
+        using Aevatar.Scripting.Abstractions.Behaviors;
+        using Aevatar.Tools.Cli.Hosting;
+
+        public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
+        {
+            protected override void Configure(IScriptBehaviorBuilder<AppScriptReadModel, AppScriptReadModel> builder)
+            {
+                builder
+                    .OnCommand<AppScriptCommand>(HandleAsync)
+                    .OnEvent<AppScriptUpdated>(
+                        apply: static (_, evt, _) => evt.Current == null ? new AppScriptReadModel() : evt.Current.Clone())
+                    .ProjectState(static (state, _) => state == null ? new AppScriptReadModel() : state.Clone());
+            }
+
+            private static Task HandleAsync(
+                AppScriptCommand input,
+                ScriptCommandContext<AppScriptReadModel> context,
+                CancellationToken ct)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var commandId = context.CommandId ?? input?.CommandId ?? string.Empty;
+                var text = input?.Input ?? string.Empty;
+                var current = AppScriptProtocol.CreateState(
+                    text,
+                    ScriptTextTransforms.Normalize(text),
+                    "ok",
+                    commandId,
+                    ScriptTextTransforms.Notes);
+
+                context.Emit(new AppScriptUpdated
+                {
+                    CommandId = commandId,
+                    Current = current,
+                });
+                return Task.CompletedTask;
+            }
+        }
+        """;
+
+    public const string SplitScriptHelperSource =
+        """
+        using System;
+
+        internal static class ScriptTextTransforms
+        {
+            public static string[] Notes { get; } =
+            {
+                "trimmed",
+                "uppercased",
+                "multi-file",
+            };
+
+            public static string Normalize(string text) =>
+                (text ?? string.Empty).Trim().ToUpperInvariant();
+        }
+        """;
+
+    public static object CreateSingleFilePackage(
+        string source,
+        string path = "Behavior.cs",
+        string entryBehaviorTypeName = "") => new
+    {
+        csharpSources = new[]
+        {
+            new
+            {
+                path,
+                content = source,
+            },
+        },
+        protoFiles = Array.Empty<object>(),
+        entryBehaviorTypeName,
+        entrySourcePath = path,
+    };
+
+    public static object CreateSplitScriptPackage() => new
+    {
+        csharpSources = new object[]
+        {
+            new
+            {
+                path = "Behavior.cs",
+                content = SplitScriptBehaviorSource,
+            },
+            new
+            {
+                path = "ScriptTextTransforms.cs",
+                content = SplitScriptHelperSource,
+            },
+        },
+        protoFiles = Array.Empty<object>(),
+        entryBehaviorTypeName = "DraftBehavior",
+        entrySourcePath = "Behavior.cs",
+    };
+
     public static object CreateConnector(string name) => new
     {
         name,

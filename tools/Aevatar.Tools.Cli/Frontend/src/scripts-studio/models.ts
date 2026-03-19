@@ -1,6 +1,27 @@
 export type FlashType = 'success' | 'error' | 'info';
 export type ScriptStorageMode = 'draft' | 'scope';
 export type StudioResultView = 'runtime' | 'save' | 'promotion';
+export type StudioEditorView = 'source' | 'package';
+export type ScriptPackageFileKind = 'csharp' | 'proto';
+
+export type ScriptPackageFile = {
+  path: string;
+  content: string;
+};
+
+export type ScriptPackage = {
+  format: string;
+  csharpSources: ScriptPackageFile[];
+  protoFiles: ScriptPackageFile[];
+  entryBehaviorTypeName: string;
+  entrySourcePath: string;
+};
+
+export type ScriptPackageEntry = {
+  kind: ScriptPackageFileKind;
+  path: string;
+  content: string;
+};
 
 export type ScriptsStudioProps = {
   appContext: {
@@ -132,7 +153,8 @@ export type ScriptDraft = {
   baseRevision: string;
   reason: string;
   input: string;
-  source: string;
+  package: ScriptPackage;
+  selectedFilePath: string;
   definitionActorId: string;
   runtimeActorId: string;
   updatedAtUtc: string;
