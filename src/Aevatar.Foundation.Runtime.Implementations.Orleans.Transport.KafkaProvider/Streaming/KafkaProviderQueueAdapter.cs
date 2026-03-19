@@ -4,20 +4,20 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
+internal sealed class KafkaProviderQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly KafkaStrictProviderProducer _producer;
-    private readonly KafkaStrictProviderTransportOptions _transportOptions;
+    private readonly KafkaProviderProducer _producer;
+    private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
 
-    public KafkaStrictProviderQueueAdapter(
+    public KafkaProviderQueueAdapter(
         string providerName,
-        KafkaStrictProviderProducer producer,
-        KafkaStrictProviderTransportOptions transportOptions,
-        StrictQueuePartitionMapper mapper,
+        KafkaProviderProducer producer,
+        KafkaProviderTransportOptions transportOptions,
+        KafkaQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _providerName = providerName;
@@ -33,7 +33,7 @@ internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
 
     public StreamProviderDirection Direction => StreamProviderDirection.ReadWrite;
 
-    internal StrictQueuePartitionMapper Mapper { get; }
+    internal KafkaQueuePartitionMapper Mapper { get; }
 
     public async Task QueueMessageBatchAsync<T>(
         StreamId streamId,
@@ -72,7 +72,7 @@ internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
     }
 
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
-        new KafkaStrictProviderQueueAdapterReceiver(
+        new KafkaProviderQueueAdapterReceiver(
             queueId,
             _producer,
             _transportOptions,

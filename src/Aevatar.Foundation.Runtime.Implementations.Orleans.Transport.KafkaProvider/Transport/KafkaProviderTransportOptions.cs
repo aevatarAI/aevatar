@@ -1,6 +1,6 @@
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-public sealed class KafkaStrictProviderTransportOptions
+public sealed class KafkaProviderTransportOptions
 {
     public string BootstrapServers { get; set; } = "localhost:9092";
 

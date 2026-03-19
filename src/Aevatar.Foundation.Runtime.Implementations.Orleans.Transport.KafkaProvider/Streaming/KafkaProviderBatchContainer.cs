@@ -3,10 +3,10 @@ using Orleans.Providers.Streams.Common;
 using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
 [GenerateSerializer]
-internal sealed class KafkaStrictProviderBatchContainer : IBatchContainer
+internal sealed class KafkaProviderBatchContainer : IBatchContainer
 {
     [Id(0)]
     public StreamId StreamId { get; private set; } = default!;
@@ -20,11 +20,11 @@ internal sealed class KafkaStrictProviderBatchContainer : IBatchContainer
     [Id(3)]
     public long KafkaOffset { get; private set; }
 
-    private KafkaStrictProviderBatchContainer()
+    private KafkaProviderBatchContainer()
     {
     }
 
-    public KafkaStrictProviderBatchContainer(
+    public KafkaProviderBatchContainer(
         StreamId streamId,
         EventEnvelope envelope,
         EventSequenceTokenV2 sequenceToken,

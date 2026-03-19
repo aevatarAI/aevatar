@@ -23,7 +23,7 @@ NEO4J_PASSWORD="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_PASSWORD:-password}"
 NEO4J_HTTP_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_HTTP_PORT:-7474}"
 NEO4J_BOLT_HOST="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_HOST:-127.0.0.1}"
 NEO4J_BOLT_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_PORT:-7687}"
-STREAM_BACKEND="${AEVATAR_DISTRIBUTED_SMOKE_STREAM_BACKEND:-KafkaStrictProvider}"
+STREAM_BACKEND="${AEVATAR_DISTRIBUTED_SMOKE_STREAM_BACKEND:-KafkaProvider}"
 BOOTSTRAP_DOCKER_INFRA="${AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA:-true}"
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
 APP_DLL="${PUBLISH_DIR}/Aevatar.Mainnet.Host.Api.dll"
@@ -37,6 +37,7 @@ LOCK_OWNER="distributed_3node_smoke"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 cluster_id="aevatar-mainnet-ci-cluster-${timestamp}"
 service_id="aevatar-mainnet-host-api"
+kafka_consumer_group="aevatar-mainnet-ci-group-${timestamp}"
 log_dir="/tmp/aevatar-distributed-smoke-${timestamp}"
 mkdir -p "${log_dir}"
 
@@ -81,7 +82,7 @@ start_node() {
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
     AEVATAR_ActorRuntime__KafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
     AEVATAR_ActorRuntime__KafkaTopicName=aevatar-mainnet-agent-events \
-    AEVATAR_ActorRuntime__KafkaConsumerGroup="aevatar-mainnet-ci-node${node}-${timestamp}" \
+    AEVATAR_ActorRuntime__KafkaConsumerGroup="${kafka_consumer_group}" \
     AEVATAR_Orleans__ClusteringMode=Development \
     AEVATAR_Orleans__ClusterId="${cluster_id}" \
     AEVATAR_Orleans__ServiceId="${service_id}" \
@@ -108,6 +109,20 @@ start_node() {
 echo "Starting Kafka, Garnet, Elasticsearch and Neo4j..."
 acquire_distributed_smoke_lock "${LOCK_OWNER}"
 if [[ "${BOOTSTRAP_DOCKER_INFRA}" == "true" ]]; then
+  require_bootstrapped_docker_infra_defaults \
+    "${LOCK_OWNER}" \
+    "KAFKA_CONTAINER=${KAFKA_CONTAINER}|aevatar-kafka" \
+    "KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}|localhost:9092" \
+    "KAFKA_HOST=${KAFKA_HOST}|127.0.0.1" \
+    "KAFKA_PORT=${KAFKA_PORT}|9092" \
+    "GARNET_HOST=${GARNET_HOST}|127.0.0.1" \
+    "GARNET_PORT=${GARNET_PORT}|6379" \
+    "ELASTICSEARCH_ENDPOINT=${ELASTICSEARCH_ENDPOINT}|http://127.0.0.1:9200" \
+    "ELASTICSEARCH_PORT=${ELASTICSEARCH_PORT}|9200" \
+    "ELASTICSEARCH_TRANSPORT_PORT=${ELASTICSEARCH_TRANSPORT_PORT}|9300" \
+    "NEO4J_HTTP_PORT=${NEO4J_HTTP_PORT}|7474" \
+    "NEO4J_BOLT_HOST=${NEO4J_BOLT_HOST}|127.0.0.1" \
+    "NEO4J_BOLT_PORT=${NEO4J_BOLT_PORT}|7687"
   ensure_local_tcp_ports_free \
     "${LOCK_OWNER}" \
     "${KAFKA_PORT}" \

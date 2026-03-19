@@ -15,7 +15,7 @@ services:
       KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_NUM_PARTITIONS: 4
+      KAFKA_CFG_NUM_PARTITIONS: 8
       KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
       KAFKA_CFG_LOG_RETENTION_HOURS: 24
     volumes:
@@ -54,13 +54,12 @@ services:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
@@ -102,13 +101,12 @@ services:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
@@ -150,13 +148,12 @@ services:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api

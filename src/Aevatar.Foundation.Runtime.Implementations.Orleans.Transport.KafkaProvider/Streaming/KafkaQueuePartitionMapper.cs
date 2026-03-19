@@ -5,14 +5,14 @@ using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IConsistentRingStreamQueueMapper
+public sealed class KafkaQueuePartitionMapper : IStreamQueueMapper, IConsistentRingStreamQueueMapper
 {
     private readonly HashRingBasedStreamQueueMapper _sourceMapper;
     private readonly QueueId[] _queues;
 
-    public StrictQueuePartitionMapper(string providerName, int partitionCount)
+    public KafkaQueuePartitionMapper(string providerName, int partitionCount)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerName);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(partitionCount);
@@ -63,6 +63,6 @@ public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IConsistent
                 return i;
         }
 
-        throw new InvalidOperationException($"Queue '{queueId}' is not part of the strict queue-partition mapping.");
+        throw new InvalidOperationException($"Queue '{queueId}' is not part of the Kafka queue-partition mapping.");
     }
 }

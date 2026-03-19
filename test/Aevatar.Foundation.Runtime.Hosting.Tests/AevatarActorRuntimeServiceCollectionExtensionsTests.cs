@@ -7,7 +7,7 @@ using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -116,42 +116,42 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaStrictProviderBackend_ShouldRegisterStrictBackendTransport()
+    public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaProviderBackend_ShouldRegisterKafkaProviderTransport()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansQueueCount"] = "6",
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansQueueCacheSize"] = "512",
             [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "localhost:19092",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-strict-events",
-            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-strict-group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "runtime-kafka-provider-events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "runtime-kafka-provider-group",
         });
 
         services.AddAevatarActorRuntime(configuration);
 
         services.Should().Contain(x => x.ServiceType == typeof(IQueueAdapterFactory) &&
-                                       x.ImplementationType == typeof(KafkaStrictProviderQueueAdapterFactory));
+                                       x.ImplementationType == typeof(KafkaProviderQueueAdapterFactory));
 
         await using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
         var orleansOptions = provider.GetRequiredService<AevatarOrleansRuntimeOptions>();
-        var transportOptions = provider.GetRequiredService<KafkaStrictProviderTransportOptions>();
-        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider);
+        var transportOptions = provider.GetRequiredService<KafkaProviderTransportOptions>();
+        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider);
         options.OrleansQueueCount.Should().Be(6);
         options.OrleansQueueCacheSize.Should().Be(512);
         options.KafkaBootstrapServers.Should().Be("localhost:19092");
-        options.KafkaTopicName.Should().Be("runtime-strict-events");
-        options.KafkaConsumerGroup.Should().Be("runtime-strict-group");
+        options.KafkaTopicName.Should().Be("runtime-kafka-provider-events");
+        options.KafkaConsumerGroup.Should().Be("runtime-kafka-provider-group");
         orleansOptions.QueueCount.Should().Be(6);
         orleansOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
-        provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
-        provider.GetRequiredService<KafkaStrictProviderProducer>().Should().NotBeNull();
+        provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaProviderQueueAdapterFactory>();
+        provider.GetRequiredService<KafkaProviderProducer>().Should().NotBeNull();
     }
 
     [Fact]

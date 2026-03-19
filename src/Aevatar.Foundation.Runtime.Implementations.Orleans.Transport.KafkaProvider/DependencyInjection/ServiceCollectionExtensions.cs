@@ -4,11 +4,11 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(this IServiceCollection services)
+    public static IServiceCollection AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -16,14 +16,14 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(
+    public static IServiceCollection AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(
         this IServiceCollection services,
-        Action<KafkaStrictProviderTransportOptions> configure)
+        Action<KafkaProviderTransportOptions> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var options = new KafkaStrictProviderTransportOptions();
+        var options = new KafkaProviderTransportOptions();
         configure(options);
 
         ArgumentException.ThrowIfNullOrWhiteSpace(options.BootstrapServers);
@@ -31,35 +31,35 @@ public static class ServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ConsumerGroup);
 
         AddSharedRegistrations(services);
-        services.RemoveAll<KafkaStrictProviderTransportOptions>();
+        services.RemoveAll<KafkaProviderTransportOptions>();
         services.AddSingleton(options);
-        services.RemoveAll<KafkaStrictProviderProducer>();
-        services.AddSingleton<KafkaStrictProviderProducer>();
+        services.RemoveAll<KafkaProviderProducer>();
+        services.AddSingleton<KafkaProviderProducer>();
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHostedService, KafkaStrictProviderProducerHostedService>());
+            ServiceDescriptor.Singleton<IHostedService, KafkaProviderProducerHostedService>());
         return services;
     }
 
-    public static ISiloBuilder AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(this ISiloBuilder builder)
+    public static ISiloBuilder AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(this ISiloBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.ConfigureServices(services =>
         {
-            services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport();
+            services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport();
         });
         return builder;
     }
 
     private static void AddSharedRegistrations(IServiceCollection services)
     {
-        services.TryAddSingleton(new KafkaStrictProviderTransportOptions
+        services.TryAddSingleton(new KafkaProviderTransportOptions
         {
             BootstrapServers = "localhost:9092",
             TopicName = "aevatar-foundation-agent-events",
             ConsumerGroup = "aevatar-foundation-kafka-streaming",
             TopicPartitionCount = 8,
         });
-        services.TryAddSingleton<IQueueAdapterFactory, KafkaStrictProviderQueueAdapterFactory>();
+        services.TryAddSingleton<IQueueAdapterFactory, KafkaProviderQueueAdapterFactory>();
     }
 }

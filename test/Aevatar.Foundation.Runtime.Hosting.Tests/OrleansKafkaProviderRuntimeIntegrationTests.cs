@@ -8,8 +8,8 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -20,21 +20,21 @@ using Orleans;
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 [Collection(nameof(EnvironmentVariableDependentCollection))]
-public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
+public sealed class OrleansKafkaProviderRuntimeIntegrationTests
 {
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaStrictProviderTransport_ShouldDeliverEnvelopeToRuntimeActorGrain()
+    public async Task KafkaProviderTransport_ShouldDeliverEnvelopeToRuntimeActorGrain()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
         var actorId = $"actor-{Guid.NewGuid():N}";
-        var topicName = $"aevatar-orleans-strict-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-strict-group-{Guid.NewGuid():N}";
-        var streamProviderName = $"aevatar-orleans-strict-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.strict.it.{Guid.NewGuid():N}";
+        var topicName = $"aevatar-orleans-kafka-provider-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-kafka-provider-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-kafka-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.kafka.provider.it.{Guid.NewGuid():N}";
         var siloPort = ReserveTcpPort();
         var gatewayPort = ReserveTcpPort();
-        RecordingStrictKafkaIntegrationAgent.Reset();
+        RecordingKafkaProviderIntegrationAgent.Reset();
 
         var host = await StartSiloHostAsync(
             bootstrapServers,
@@ -52,20 +52,20 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
         {
             var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentAsync(typeof(RecordingStrictKafkaIntegrationAgent).AssemblyQualifiedName!);
+            var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaProviderIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
 
-            var transport = host.Services.GetRequiredService<KafkaStrictProviderProducer>();
+            var transport = host.Services.GetRequiredService<KafkaProviderProducer>();
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
-                Payload = Any.Pack(new StringValue { Value = "strict-ping" }),
+                Payload = Any.Pack(new StringValue { Value = "kafka-provider-ping" }),
                 Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
             };
 
             await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
-            var receivedEnvelope = await RecordingStrictKafkaIntegrationAgent.WaitForEnvelopeAsync(TimeSpan.FromSeconds(30));
-            receivedEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("strict-ping");
+            var receivedEnvelope = await RecordingKafkaProviderIntegrationAgent.WaitForEnvelopeAsync(TimeSpan.FromSeconds(30));
+            receivedEnvelope.Payload!.Unpack<StringValue>().Value.Should().Be("kafka-provider-ping");
         }
         finally
         {
@@ -75,17 +75,17 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
     }
 
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaStrictProviderTransport_ShouldDeliverMessagesAcrossMultipleQueues_InMultiSiloSharedGroup()
+    public async Task KafkaProviderTransport_ShouldDeliverMessagesAcrossMultipleQueues_InMultiSiloSharedGroup()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
-        var topicName = $"aevatar-orleans-strict-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-strict-group-{Guid.NewGuid():N}";
-        var streamProviderName = $"aevatar-orleans-strict-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.strict.it.{Guid.NewGuid():N}";
-        var clusterId = $"aevatar-orleans-strict-cluster-{Guid.NewGuid():N}";
-        var serviceId = $"aevatar-orleans-strict-service-{Guid.NewGuid():N}";
-        RecordingStrictKafkaIntegrationAgent.Reset();
+        var topicName = $"aevatar-orleans-kafka-provider-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-kafka-provider-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-kafka-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.kafka.provider.it.{Guid.NewGuid():N}";
+        var clusterId = $"aevatar-orleans-kafka-provider-cluster-{Guid.NewGuid():N}";
+        var serviceId = $"aevatar-orleans-kafka-provider-service-{Guid.NewGuid():N}";
+        RecordingKafkaProviderIntegrationAgent.Reset();
 
         var host1 = await StartSiloHostAsync(
             bootstrapServers,
@@ -116,12 +116,12 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
 
         try
         {
-            var mapper = new StrictQueuePartitionMapper(streamProviderName, 4);
+            var mapper = new KafkaQueuePartitionMapper(streamProviderName, 4);
             var actorIds = FindActorIdsForAllPartitions(mapper, actorEventNamespace, 4);
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            var transport = host1.Services.GetRequiredService<KafkaStrictProviderProducer>();
+            var transport = host1.Services.GetRequiredService<KafkaProviderProducer>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope
@@ -133,7 +133,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
             }
 
-            var received = await RecordingStrictKafkaIntegrationAgent.WaitForEnvelopeValuesAsync(
+            var received = await RecordingKafkaProviderIntegrationAgent.WaitForEnvelopeValuesAsync(
                 value => actorIds.Contains(value, StringComparer.Ordinal),
                 actorIds.Count,
                 TimeSpan.FromSeconds(30));
@@ -149,17 +149,17 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
     }
 
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaStrictProviderTransport_ShouldDeliverMessagesWithoutWaitingForLocalHandoffAlignment()
+    public async Task KafkaProviderTransport_ShouldDeliverMessagesWithoutWaitingForLocalHandoffAlignment()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
-        var topicName = $"aevatar-orleans-strict-it-{Guid.NewGuid():N}";
-        var consumerGroup = $"aevatar-orleans-strict-group-{Guid.NewGuid():N}";
-        var streamProviderName = $"aevatar-orleans-strict-provider-{Guid.NewGuid():N}";
-        var actorEventNamespace = $"aevatar.orleans.strict.it.{Guid.NewGuid():N}";
-        var clusterId = $"aevatar-orleans-strict-cluster-{Guid.NewGuid():N}";
-        var serviceId = $"aevatar-orleans-strict-service-{Guid.NewGuid():N}";
-        RecordingStrictKafkaIntegrationAgent.Reset();
+        var topicName = $"aevatar-orleans-kafka-provider-it-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-orleans-kafka-provider-group-{Guid.NewGuid():N}";
+        var streamProviderName = $"aevatar-orleans-kafka-provider-{Guid.NewGuid():N}";
+        var actorEventNamespace = $"aevatar.orleans.kafka.provider.it.{Guid.NewGuid():N}";
+        var clusterId = $"aevatar-orleans-kafka-provider-cluster-{Guid.NewGuid():N}";
+        var serviceId = $"aevatar-orleans-kafka-provider-service-{Guid.NewGuid():N}";
+        RecordingKafkaProviderIntegrationAgent.Reset();
 
         var host1 = await StartSiloHostAsync(
             bootstrapServers,
@@ -190,12 +190,12 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
 
         try
         {
-            var mapper = new StrictQueuePartitionMapper(streamProviderName, 4);
+            var mapper = new KafkaQueuePartitionMapper(streamProviderName, 4);
             var actorIds = FindActorIdsForAllPartitions(mapper, actorEventNamespace, 4);
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            var transport = host1.Services.GetRequiredService<KafkaStrictProviderProducer>();
+            var transport = host1.Services.GetRequiredService<KafkaProviderProducer>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope
@@ -207,7 +207,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
                 await transport.PublishAsync(actorEventNamespace, actorId, envelope.ToByteArray(), CancellationToken.None);
             }
 
-            var received = await RecordingStrictKafkaIntegrationAgent.WaitForEnvelopeValuesAsync(
+            var received = await RecordingKafkaProviderIntegrationAgent.WaitForEnvelopeValuesAsync(
                 value => actorIds.Contains(value, StringComparer.Ordinal),
                 actorIds.Count,
                 TimeSpan.FromSeconds(30));
@@ -242,11 +242,11 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
                 siloBuilder.UseLocalhostClustering(
                     siloPort: siloPort,
                     gatewayPort: gatewayPort,
-                    serviceId: serviceId ?? $"aevatar-orleans-strict-service-{Guid.NewGuid():N}",
-                    clusterId: clusterId ?? $"aevatar-orleans-strict-cluster-{Guid.NewGuid():N}");
+                    serviceId: serviceId ?? $"aevatar-orleans-kafka-provider-service-{Guid.NewGuid():N}",
+                    clusterId: clusterId ?? $"aevatar-orleans-kafka-provider-cluster-{Guid.NewGuid():N}");
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
-                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider;
+                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaProvider;
                     options.PersistenceBackend = string.IsNullOrWhiteSpace(garnetConnectionString)
                         ? AevatarOrleansRuntimeOptions.PersistenceBackendInMemory
                         : AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
@@ -255,11 +255,11 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
                     options.ActorEventNamespace = actorEventNamespace;
                     options.QueueCount = queueCount;
                 });
-                siloBuilder.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport();
+                siloBuilder.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport();
             })
             .ConfigureServices(services =>
             {
-                services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(options =>
+                services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
                     options.TopicName = topicName;
@@ -280,7 +280,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
         foreach (var actorId in actorIds)
         {
             var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
-            var initialized = await grain.InitializeAgentAsync(typeof(RecordingStrictKafkaIntegrationAgent).AssemblyQualifiedName!);
+            var initialized = await grain.InitializeAgentAsync(typeof(RecordingKafkaProviderIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
         }
     }
@@ -301,7 +301,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
     }
 
     private static IReadOnlyList<string> FindActorIdsForAllPartitions(
-        StrictQueuePartitionMapper mapper,
+        KafkaQueuePartitionMapper mapper,
         string streamNamespace,
         int partitionCount)
     {
@@ -309,7 +309,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
         var remaining = partitionCount;
         for (var index = 0; index < 2048 && remaining > 0; index++)
         {
-            var candidate = $"strict-actor-{index}";
+            var candidate = $"kafka-provider-actor-{index}";
             var partitionId = mapper.GetPartitionId(streamNamespace, candidate);
             if (actorIds[partitionId] != null)
                 continue;
@@ -319,17 +319,17 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
         }
 
         if (remaining > 0)
-            throw new InvalidOperationException("Unable to find actor ids for all strict partitions.");
+            throw new InvalidOperationException("Unable to find actor ids for all Kafka provider partitions.");
 
         return actorIds!;
     }
 
-    public sealed class RecordingStrictKafkaIntegrationAgent : IAgent
+    public sealed class RecordingKafkaProviderIntegrationAgent : IAgent
     {
         private static readonly Lock SyncLock = new();
         private static Channel<EventEnvelope> _receivedEnvelopes = CreateChannel();
 
-        public string Id => "recording-strict-kafka-integration-agent";
+        public string Id => "recording-kafka-provider-integration-agent";
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
@@ -343,7 +343,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
         }
 
         public Task<string> GetDescriptionAsync() =>
-            Task.FromResult("recording-strict-kafka-integration-agent");
+            Task.FromResult("recording-kafka-provider-integration-agent");
 
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
             Task.FromResult<IReadOnlyList<System.Type>>([]);
@@ -383,7 +383,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
             }
             catch (OperationCanceledException)
             {
-                throw new TimeoutException($"Timed out after {timeout} waiting for strict Kafka envelope.");
+                throw new TimeoutException($"Timed out after {timeout} waiting for Kafka provider envelope.");
             }
         }
 
@@ -418,7 +418,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
             {
                 var ordered = received.OrderBy(x => x, StringComparer.Ordinal).ToArray();
                 throw new TimeoutException(
-                    $"Timed out after {timeout} waiting for {expectedCount} strict Kafka envelopes. Received {received.Count}: [{string.Join(", ", ordered)}].");
+                    $"Timed out after {timeout} waiting for {expectedCount} Kafka provider envelopes. Received {received.Count}: [{string.Join(", ", ordered)}].");
             }
         }
 

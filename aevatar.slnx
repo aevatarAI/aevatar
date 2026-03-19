@@ -24,7 +24,7 @@
   <Folder Name="/src/">
     <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
-    <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.csproj" />
+    <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />

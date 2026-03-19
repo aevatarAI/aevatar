@@ -6,7 +6,7 @@ public sealed class AevatarActorRuntimeOptions
     public const string ProviderInMemory = "InMemory";
     public const string ProviderOrleans = "Orleans";
     public const string OrleansStreamBackendInMemory = "InMemory";
-    public const string OrleansStreamBackendKafkaStrictProvider = "KafkaStrictProvider";
+    public const string OrleansStreamBackendKafkaProvider = "KafkaProvider";
     public const string OrleansPersistenceBackendInMemory = "InMemory";
     public const string OrleansPersistenceBackendGarnet = "Garnet";
     public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";

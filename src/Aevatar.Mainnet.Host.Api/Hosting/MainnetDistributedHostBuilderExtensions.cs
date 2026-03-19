@@ -1,6 +1,6 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -35,11 +35,11 @@ public static class MainnetDistributedHostBuilderExtensions
                 orleansOptions.QueueCacheSize = hostOptions.QueueCacheSize;
             });
 
-            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider, StringComparison.OrdinalIgnoreCase))
             {
                 siloBuilder.ConfigureServices(services =>
                 {
-                    services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(options =>
+                    services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                     {
                         options.BootstrapServers = runtimeOptions.KafkaBootstrapServers;
                         options.TopicName = runtimeOptions.KafkaTopicName;

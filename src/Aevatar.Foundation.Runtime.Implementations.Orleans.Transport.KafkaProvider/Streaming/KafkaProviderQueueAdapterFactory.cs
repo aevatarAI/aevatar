@@ -6,23 +6,23 @@ using Orleans.Configuration;
 using Orleans.Providers.Streams.Common;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-public sealed class KafkaStrictProviderQueueAdapterFactory : IQueueAdapterFactory
+public sealed class KafkaProviderQueueAdapterFactory : IQueueAdapterFactory
 {
     private readonly IQueueAdapterCache _cache;
-    private readonly KafkaStrictProviderQueueAdapter _adapter;
+    private readonly KafkaProviderQueueAdapter _adapter;
     private static readonly IStreamFailureHandler NoOpFailureHandler = new NoOpStreamDeliveryFailureHandler();
 
     [ActivatorUtilitiesConstructor]
-    public KafkaStrictProviderQueueAdapterFactory(
+    public KafkaProviderQueueAdapterFactory(
         AevatarOrleansRuntimeOptions runtimeOptions,
-        KafkaStrictProviderProducer transport,
-        KafkaStrictProviderTransportOptions transportOptions,
+        KafkaProviderProducer transport,
+        KafkaProviderTransportOptions transportOptions,
         ILoggerFactory? loggerFactory = null)
     {
         var providerName = runtimeOptions.StreamProviderName;
-        var mapper = new StrictQueuePartitionMapper(
+        var mapper = new KafkaQueuePartitionMapper(
             providerName,
             Math.Max(1, runtimeOptions.QueueCount));
 
@@ -36,7 +36,7 @@ public sealed class KafkaStrictProviderQueueAdapterFactory : IQueueAdapterFactor
             ? OrleansRuntimeConstants.ActorEventStreamNamespace
             : runtimeOptions.ActorEventNamespace;
 
-        _adapter = new KafkaStrictProviderQueueAdapter(
+        _adapter = new KafkaProviderQueueAdapter(
             providerName,
             transport,
             transportOptions,

@@ -9,7 +9,7 @@
 - `builder.AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })`
 - `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 
-## 分布式模式（Orleans + KafkaStrictProvider）
+## 分布式模式（Orleans + KafkaProvider）
 
 1. 启动 Kafka 与 Garnet（仓库根目录）：
 
@@ -26,7 +26,7 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 3. `src/Aevatar.Mainnet.Host.Api/appsettings.Distributed.json` 默认启用：
 
 - `ActorRuntime:Provider=Orleans`
-- `ActorRuntime:OrleansStreamBackend=KafkaStrictProvider`
+- `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
 - `Orleans:ClusteringMode=Localhost`
 

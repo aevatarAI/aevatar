@@ -4,15 +4,15 @@ using Confluent.Kafka;
 using Orleans.Providers.Streams.Common;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterReceiver
+internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 {
     private static readonly TimeSpan ConsumePollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly int _partitionId;
-    private readonly KafkaStrictProviderProducer _producer;
-    private readonly KafkaStrictProviderTransportOptions _transportOptions;
+    private readonly KafkaProviderProducer _producer;
+    private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
     private readonly Lock _stateLock = new();
@@ -31,11 +31,11 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
 
-    public KafkaStrictProviderQueueAdapterReceiver(
+    public KafkaProviderQueueAdapterReceiver(
         QueueId queueId,
-        KafkaStrictProviderProducer producer,
-        KafkaStrictProviderTransportOptions transportOptions,
-        StrictQueuePartitionMapper mapper,
+        KafkaProviderProducer producer,
+        KafkaProviderTransportOptions transportOptions,
+        KafkaQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _partitionId = mapper.GetPartitionId(queueId);
@@ -93,7 +93,7 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
 
     public Task MessagesDeliveredAsync(IList<IBatchContainer> messages)
     {
-        foreach (var message in messages.OfType<KafkaStrictProviderBatchContainer>())
+        foreach (var message in messages.OfType<KafkaProviderBatchContainer>())
         {
             lock (_stateLock)
             {
@@ -142,7 +142,7 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
 
     private async Task ConsumeLoopAsync(CancellationToken ct)
     {
-        var consumer = _consumer ?? throw new InvalidOperationException("Kafka strict queue receiver consumer is not initialized.");
+        var consumer = _consumer ?? throw new InvalidOperationException("Kafka queue receiver consumer is not initialized.");
 
         try
         {
@@ -174,7 +174,7 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
         }
     }
 
-    private KafkaStrictProviderBatchContainer? TryCreateBatch(ConsumeResult<Ignore, byte[]> consumeResult)
+    private KafkaProviderBatchContainer? TryCreateBatch(ConsumeResult<Ignore, byte[]> consumeResult)
     {
         if (Volatile.Read(ref _shuttingDown) == 1 ||
             consumeResult.Message.Value is not { Length: > 0 })
@@ -209,7 +209,7 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
         var streamId = StreamId.Create(streamNamespace, streamIdValue);
         var sequence = Interlocked.Increment(ref _sequence);
         var token = new EventSequenceTokenV2(sequence);
-        return new KafkaStrictProviderBatchContainer(streamId, envelope, token, consumeResult.Offset.Value);
+        return new KafkaProviderBatchContainer(streamId, envelope, token, consumeResult.Offset.Value);
     }
 
     private void RegisterOffset(long offset)

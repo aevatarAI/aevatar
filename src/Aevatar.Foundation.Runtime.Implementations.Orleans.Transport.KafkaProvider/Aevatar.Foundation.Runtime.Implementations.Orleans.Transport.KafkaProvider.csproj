@@ -3,8 +3,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider</AssemblyName>
-    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider</RootNamespace>
+    <AssemblyName>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider</AssemblyName>
+    <RootNamespace>Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />

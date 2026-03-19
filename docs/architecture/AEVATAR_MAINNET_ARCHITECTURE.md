@@ -204,7 +204,7 @@ block-beta
 | `Aevatar.Foundation.Runtime` | 本地单进程运行时（InMemory Actor / Stream / Store） |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans` | Orleans 分布式 Actor 运行时 |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming` | Orleans 流适配 + Stream Forward 拓扑 |
-| `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider` | Orleans Kafka strict provider backend |
+| `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider` | Orleans Kafka strict provider backend |
 
 ---
 
@@ -627,8 +627,8 @@ flowchart LR
 | 模式 | Actor Runtime | Stream 实现 | 状态持久化 | Forward 拓扑存储 | 适用场景 |
 |---|---|---|---|---|---|
 | InMemory | `LocalActorRuntime` | `InMemoryStream` | `InMemoryStateStore` | 进程内字典 | 开发 / 单元测试 |
-| MassTransit | `LocalActorRuntime` | `MassTransitStream` | InMemory | 进程内字典 | 单节点 + 消息总线 |
-| Orleans | Orleans Silo | Orleans + MassTransit + Kafka | Garnet (Redis) | `IStreamTopologyGrain` | 生产分布式部署 |
+| MassTransit（历史路径） | `LocalActorRuntime` | `MassTransitStream` | InMemory | 进程内字典 | 旧版单节点消息总线 |
+| Orleans | Orleans Silo | `KafkaProvider`（Orleans Persistent Streams QueueAdapter/Receiver） | Garnet (Redis) | `IStreamTopologyGrain` | 生产分布式部署 |
 
 ### 8.2 Orleans 分布式拓扑
 
@@ -676,7 +676,7 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 | 配置项 | 说明 | Distributed 模板值 |
 |---|---|---|
 | `ActorRuntime:Provider` | 运行时提供者 | `Orleans` |
-| `ActorRuntime:OrleansStreamBackend` | 流后端 | `KafkaStrictProvider` |
+| `ActorRuntime:OrleansStreamBackend` | 流后端 | `KafkaProvider` |
 | `ActorRuntime:OrleansPersistenceBackend` | 持久化后端 | `InMemory` / `Garnet` |
 | `ActorRuntime:OrleansGarnetConnectionString` | Garnet 连接串 | `localhost:6379` |
 | `ActorRuntime:KafkaBootstrapServers` | Kafka 地址 | `localhost:9092` |
@@ -1135,7 +1135,7 @@ flowchart LR
 
 **3) Kafka 与流并行度（P0）**
 
-- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。当前主链已收敛到 `KafkaStrictProvider`；同一 `runId` 的 Kafka 路由键必须保持稳定，并通过统一的 `StreamId -> PartitionId` 映射进入同一分区，避免同一 Run 的事件乱序到达投影端。
+- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。当前主链已收敛到 `KafkaProvider`；同一 `runId` 的 Kafka 路由键必须保持稳定，并通过统一的 `StreamId -> PartitionId` 映射进入同一分区，避免同一 Run 的事件乱序到达投影端。
 - 分区数至少满足 `num_partitions >= max(silo_replicas, target_parallelism)`。
 - 消费组按环境/业务域隔离，避免不同流量池互相争抢。
 - 对于多租户隔离要求极高的场景，考虑为高流量租户/App 部署独立 Mainnet 实例并配置独立 Kafka Topic/ConsumerGroup（实例级环境变量），从传输层实现硬隔离。
@@ -1602,7 +1602,7 @@ flowchart LR
 |---|---|
 | `ASPNETCORE_ENVIRONMENT` | 运行环境（`Distributed` 启用分布式模式） |
 | `AEVATAR_ActorRuntime__Provider` | `Orleans` / `InMemory` |
-| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `KafkaStrictProvider` / `InMemory` |
+| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `KafkaProvider` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansPersistenceBackend` | `Garnet` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansGarnetConnectionString` | Garnet 连接串 |
 | `AEVATAR_ActorRuntime__KafkaBootstrapServers` | Kafka 地址 |

@@ -144,6 +144,30 @@ wait_kafka_health() {
   return 1
 }
 
+require_bootstrapped_docker_infra_defaults() {
+  local scope="$1"
+  shift
+
+  local failed=0
+  local entry
+  for entry in "$@"; do
+    local name="${entry%%=*}"
+    local remainder="${entry#*=}"
+    local actual="${remainder%%|*}"
+    local expected="${remainder#*|}"
+
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "Docker-bootstrap validation failed for ${scope}: ${name}='${actual}' must stay '${expected}' while AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA=true." >&2
+      failed=1
+    fi
+  done
+
+  if (( failed != 0 )); then
+    echo "Use the compose defaults above, or set AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA=false and point the script at external infrastructure explicitly." >&2
+    return 1
+  fi
+}
+
 wait_tcp_endpoint() {
   local host="$1"
   local port="$2"

@@ -6,33 +6,33 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-public sealed class KafkaStrictProviderProducer :
+public sealed class KafkaProviderProducer :
     IHostedService,
     IAsyncDisposable
 {
     private const string StreamNamespaceHeader = "aevatar-stream-namespace";
     private const string StreamIdHeader = "aevatar-stream-id";
 
-    private readonly KafkaStrictProviderTransportOptions _transportOptions;
-    private readonly StrictQueuePartitionMapper _mapper;
-    private readonly ILogger<KafkaStrictProviderProducer> _logger;
+    private readonly KafkaProviderTransportOptions _transportOptions;
+    private readonly KafkaQueuePartitionMapper _mapper;
+    private readonly ILogger<KafkaProviderProducer> _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
 
     private IProducer<Null, byte[]>? _producer;
     private bool _started;
 
-    public KafkaStrictProviderProducer(
-        KafkaStrictProviderTransportOptions transportOptions,
+    public KafkaProviderProducer(
+        KafkaProviderTransportOptions transportOptions,
         AevatarOrleansRuntimeOptions runtimeOptions,
         ILoggerFactory? loggerFactory = null)
     {
         _transportOptions = transportOptions;
-        _mapper = new StrictQueuePartitionMapper(
+        _mapper = new KafkaQueuePartitionMapper(
             runtimeOptions.StreamProviderName,
             Math.Max(1, runtimeOptions.QueueCount));
-        _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaStrictProviderProducer>();
+        _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaProviderProducer>();
     }
 
     public async Task PublishAsync(

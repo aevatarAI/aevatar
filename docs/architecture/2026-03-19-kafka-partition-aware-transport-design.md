@@ -1,19 +1,19 @@
-# Orleans Kafka Strict Provider Backend Architecture
+# Orleans Kafka Provider Backend Architecture
 
 ## Status
 
-This document describes the current Orleans-native strict Kafka backend in the repository after the provider-native cleanup.
+This document describes the current Orleans-native Kafka provider backend in the repository after the provider-native cleanup.
 
 It is used when:
 
 - `Provider = Orleans`
-- `OrleansStreamBackend = KafkaStrictProvider`
+- `OrleansStreamBackend = KafkaProvider`
 
 Its purpose is to make Kafka partition binding and Orleans queue ownership converge to one runtime slot, so multi-pod shared-group consumption remains correct during rebalance and rolling update.
 
 ## Core Design
 
-The strict path keeps only one business identity in the message contract:
+The Kafka provider path keeps only one business identity in the message contract:
 
 - `StreamNamespace`
 - `StreamId`
@@ -36,13 +36,13 @@ So the two sides meet on one shared slot, instead of each side making an indepen
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     A1["Producer<br/>StreamNamespace + StreamId + Payload"]
-    A2["StrictQueuePartitionMapper<br/>Resolve PartitionId"]
-    A3["KafkaStrictProviderProducer<br/>Publish to explicit partition"]
+    A2["KafkaQueuePartitionMapper<br/>Resolve PartitionId"]
+    A3["KafkaProviderProducer<br/>Publish to explicit partition"]
     A4["Kafka Topic Partition"]
 
     B1["Orleans Queue Balancer"]
-    B2["StrictQueuePartitionMapper<br/>PartitionId <-> QueueId"]
-    B3["KafkaStrictProviderQueueAdapterReceiver(queueId)"]
+    B2["KafkaQueuePartitionMapper<br/>PartitionId <-> QueueId"]
+    B3["KafkaProviderQueueAdapterReceiver(queueId)"]
     B4["Kafka Consumer<br/>Assign(partitionId)"]
     B5["Inflight batches / commit watermark"]
     B6["MessagesDeliveredAsync(...)"]
@@ -112,14 +112,14 @@ They are both talking about the same slot from opposite sides.
 ### Producer path
 
 1. application publishes an envelope with `StreamNamespace + StreamId + Payload`
-2. `StrictQueuePartitionMapper` computes the target `PartitionId`
-3. `KafkaStrictProviderProducer` publishes directly to that partition
+2. `KafkaQueuePartitionMapper` computes the target `PartitionId`
+3. `KafkaProviderProducer` publishes directly to that partition
 
 ### Consumer path
 
 1. Orleans queue balancing activates `QueueAdapterReceiver(queueId)`
-2. `StrictQueuePartitionMapper` resolves `queueId -> partitionId`
-3. `KafkaStrictProviderQueueAdapterReceiver` directly binds that partition with Kafka `Assign(partitionId)`
+2. `KafkaQueuePartitionMapper` resolves `queueId -> partitionId`
+3. `KafkaProviderQueueAdapterReceiver` directly binds that partition with Kafka `Assign(partitionId)`
 4. receiver polls records from that partition
 5. receiver converts records into Orleans `IBatchContainer`
 6. Orleans stream runtime pulls the batches
@@ -130,37 +130,37 @@ They are both talking about the same slot from opposite sides.
 1. Orleans queue ownership moves from old pod to new pod
 2. old receiver stops polling and does not commit beyond the last contiguous acknowledged watermark
 3. unacknowledged offsets remain replayable
-4. new pod activates the same strict queue
+4. new pod activates the same queue ownership
 5. new receiver binds the same partition and resumes from Kafka committed offsets
 
 ## Commit Boundary
 
-The strict backend commits Kafka offsets only after Orleans delivery acknowledgement reaches the bound queue receiver.
+The Kafka provider backend commits Kafka offsets only after Orleans delivery acknowledgement reaches the bound queue receiver.
 
 This means:
 
 - polling a Kafka record is not enough
 - decoding a record is not enough
 - putting a record into an intermediate local queue is not enough
-- offset commit becomes eligible only after the strict local handoff boundary is acknowledged
+- offset commit becomes eligible only after the local handoff boundary is acknowledged
 
 So the path is honest about `at-least-once` delivery.
 If revoke or crash happens before local handoff acknowledgement, the offset stays replayable.
 
 ## Required Topology Invariants
 
-The strict path depends on these invariants:
+The Kafka provider path depends on these invariants:
 
 - `QueueCount == TopicPartitionCount`
-- actual Kafka topic partition count must equal the configured strict partition count
-- producer and consumer must use the same `StrictQueuePartitionMapper`
-- `KafkaStrictProvider` multi-silo mode requires shared persistent runtime state instead of `InMemory` pubsub
+- actual Kafka topic partition count must equal the configured partition count
+- producer and consumer must use the same `KafkaQueuePartitionMapper`
+- `KafkaProvider` multi-silo mode requires shared persistent runtime state instead of `InMemory` pubsub
 
 If those invariants are broken, startup must fail instead of silently degrading.
 
 ## Failure Handling
 
-The strict path does not silently swallow lifecycle failures.
+The Kafka provider path does not silently swallow lifecycle failures.
 
 Current policy:
 
@@ -172,31 +172,31 @@ This keeps the projection chain observable without turning a local backend issue
 
 ## Main Components
 
-### `StrictQueuePartitionMapper`
+### `KafkaQueuePartitionMapper`
 
 - computes `StreamNamespace + StreamId -> PartitionId`
 - resolves `PartitionId -> QueueId`
 - resolves `QueueId -> PartitionId`
 - is the single mapping contract shared by producer path and Orleans runtime
 
-### `KafkaStrictProviderProducer`
+### `KafkaProviderProducer`
 
 - publishes envelopes to explicit partitions
-- validates strict topic topology
+- validates Kafka topic topology
 - owns producer lifecycle only
 
-### `KafkaStrictProviderQueueAdapterReceiver`
+### `KafkaProviderQueueAdapterReceiver`
 
-- is the Orleans queue receiver bound to one strict queue
+- is the Orleans queue receiver bound to one queue
 - directly owns Kafka partition consumption for that queue
 - tracks inflight offsets and commit watermark
-- completes strict acknowledgement at the Orleans delivery boundary
+- completes acknowledgement at the Orleans delivery boundary
 
 ## What This Design Guarantees
 
 - no second routing fact is added to the message contract
-- producer-side routing and consumer-side queue ownership come from the same strict mapper
-- multi-pod shared-group consumption is driven by strict `QueueId <-> PartitionId` ownership
+- producer-side routing and consumer-side queue ownership come from the same mapper
+- multi-pod shared-group consumption is driven by `QueueId <-> PartitionId` ownership
 - rolling update correctness depends on receiver handoff and Kafka committed offsets, not on local best-effort drop/retry
 - local handoff and offset commit boundaries are explicit and honest
 
@@ -206,4 +206,4 @@ This design does not claim:
 
 - exactly-once processing
 - free partition-count expansion without migration
-- compatibility with `InMemory` multi-silo pubsub for strict shared-group correctness
+- compatibility with `InMemory` multi-silo pubsub for shared-group correctness
