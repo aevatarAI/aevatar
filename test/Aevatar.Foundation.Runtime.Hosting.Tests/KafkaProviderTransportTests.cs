@@ -82,4 +82,78 @@ public sealed class KafkaProviderTransportTests
         adapter.GetType().Name.Should().Be("KafkaProviderQueueAdapter");
         receiver.GetType().Name.Should().Be("KafkaProviderQueueAdapterReceiver");
     }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleansKafkaProviderTransport_WhenOptionsMissing_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+
+        var act = () => services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
+        {
+            options.BootstrapServers = string.Empty;
+            options.TopicName = "kafka-provider-topic";
+            options.ConsumerGroup = "kafka-provider-group";
+        });
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void AddAevatarFoundationRuntimeOrleansKafkaProviderTransport_WhenServicesNull_ShouldThrow()
+    {
+        var act = () => ((IServiceCollection)null!).AddAevatarFoundationRuntimeOrleansKafkaProviderTransport();
+        var actWithConfigure = () => ((IServiceCollection)null!).AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(_ => { });
+
+        act.Should().Throw<ArgumentNullException>();
+        actWithConfigure.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task KafkaProviderProducer_ShouldValidateStartPartitionsBeforeKafkaCall()
+    {
+        var runtimeOptions = new AevatarOrleansRuntimeOptions
+        {
+            StreamProviderName = "kafka-provider",
+            QueueCount = 4,
+        };
+        var transportOptions = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = "localhost:19092",
+            TopicName = "kafka-topic-validation",
+            ConsumerGroup = "kafka-group-validation",
+            TopicPartitionCount = 2,
+        };
+        var producer = new KafkaProviderProducer(transportOptions, runtimeOptions);
+
+        var act = () => producer.StartAsync();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*QueueCount == TopicPartitionCount*");
+    }
+
+    [Fact]
+    public async Task KafkaProviderProducer_ShouldValidatePayloadBeforeStart()
+    {
+        var runtimeOptions = new AevatarOrleansRuntimeOptions
+        {
+            StreamProviderName = "kafka-provider",
+            QueueCount = 4,
+        };
+        var transportOptions = new KafkaProviderTransportOptions
+        {
+            BootstrapServers = "localhost:19092",
+            TopicName = "kafka-topic-validation",
+            ConsumerGroup = "kafka-group-validation",
+            TopicPartitionCount = 4,
+        };
+        var producer = new KafkaProviderProducer(transportOptions, runtimeOptions);
+
+        var emptyNamespace = () => producer.PublishAsync(string.Empty, "actor-id", [1, 2, 3]);
+        var emptyStreamId = () => producer.PublishAsync("aevatar.events", "   ", [1, 2, 3]);
+        var nullPayload = () => producer.PublishAsync("aevatar.events", "actor-id", null!);
+
+        await emptyNamespace.Should().ThrowAsync<ArgumentException>();
+        await emptyStreamId.Should().ThrowAsync<ArgumentException>();
+        await nullPayload.Should().ThrowAsync<ArgumentNullException>();
+    }
+
 }
