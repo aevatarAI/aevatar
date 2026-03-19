@@ -143,3 +143,70 @@ wait_kafka_health() {
   docker logs "${container_name}" || true
   return 1
 }
+
+wait_garnet_health() {
+  local host="${1:-127.0.0.1}"
+  local port="${2:-6379}"
+  local attempts="${3:-30}"
+  local sleep_seconds="${4:-1}"
+  local try=0
+
+  while (( try < attempts )); do
+    if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
+      echo "Garnet is reachable on ${host}:${port}."
+      return 0
+    fi
+
+    echo "Waiting for Garnet on ${host}:${port}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "Garnet failed to become reachable."
+  return 1
+}
+
+wait_elasticsearch_health() {
+  local endpoint="${1:-http://127.0.0.1:9200}"
+  local attempts="${2:-90}"
+  local sleep_seconds="${3:-2}"
+  local try=0
+
+  while (( try < attempts )); do
+    local status
+    status="$(curl --max-time 2 -s "${endpoint}/_cluster/health" | rg -o "\"status\":\"[^\"]+\"" || true)"
+    if [[ "${status}" == "\"status\":\"green\"" || "${status}" == "\"status\":\"yellow\"" ]]; then
+      echo "Elasticsearch is ready: ${status}"
+      return 0
+    fi
+
+    echo "Waiting for Elasticsearch on ${endpoint}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "Elasticsearch failed to become ready."
+  return 1
+}
+
+wait_neo4j_bolt() {
+  local host="${1:-127.0.0.1}"
+  local port="${2:-7687}"
+  local attempts="${3:-90}"
+  local sleep_seconds="${4:-2}"
+  local try=0
+
+  while (( try < attempts )); do
+    if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
+      echo "Neo4j bolt endpoint is reachable on ${host}:${port}."
+      return 0
+    fi
+
+    echo "Waiting for Neo4j bolt endpoint on ${host}:${port}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "Neo4j failed to become reachable."
+  return 1
+}

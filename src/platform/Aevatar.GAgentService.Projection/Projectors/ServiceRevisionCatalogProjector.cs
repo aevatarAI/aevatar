@@ -1,11 +1,9 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Contexts;
-using Aevatar.GAgentService.Projection.Internal;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 
@@ -15,144 +13,77 @@ public sealed class ServiceRevisionCatalogProjector
     : IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel> _storeDispatcher;
-    private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentReader;
     private readonly IProjectionClock _clock;
 
     public ServiceRevisionCatalogProjector(
         IProjectionWriteDispatcher<ServiceRevisionCatalogReadModel> storeDispatcher,
-        IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> documentReader,
         IProjectionClock clock)
     {
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
-        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
     public async ValueTask ProjectAsync(ServiceRevisionCatalogProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
     {
-        if (!ServiceCommittedStateSupport.TryGetObservedPayload(
+        if (!CommittedStateEventEnvelope.TryUnpackState<ServiceRevisionCatalogState>(
                 envelope,
-                _clock,
-                out var payload,
-                out var eventId,
-                out var stateVersion,
-                out var observedAt) ||
-            payload == null)
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent == null ||
+            state == null ||
+            state.Identity == null)
         {
             return;
         }
 
-        if (payload.Is(ServiceRevisionCreatedEvent.Descriptor))
+        var serviceKey = ServiceKeys.Build(state.Identity);
+        if (string.IsNullOrWhiteSpace(serviceKey))
         {
-            var evt = payload.Unpack<ServiceRevisionCreatedEvent>();
-            await UpsertRevisionAsync(context.RootActorId, evt.Spec.Identity, evt.Spec.RevisionId, eventId, stateVersion, observedAt, entry =>
-            {
-                entry.RevisionId = evt.Spec.RevisionId ?? string.Empty;
-                entry.ImplementationKind = evt.Spec.ImplementationKind.ToString();
-                entry.Status = ServiceRevisionStatus.Created.ToString();
-                entry.CreatedAt = ToDateTimeOffset(evt.CreatedAt);
-            }, ct);
             return;
         }
 
-        if (payload.Is(ServiceRevisionPreparedEvent.Descriptor))
+        var readModel = new ServiceRevisionCatalogReadModel
         {
-            var evt = payload.Unpack<ServiceRevisionPreparedEvent>();
-            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
-            {
-                entry.RevisionId = evt.RevisionId ?? string.Empty;
-                entry.ImplementationKind = evt.ImplementationKind.ToString();
-                entry.Status = ServiceRevisionStatus.Prepared.ToString();
-                entry.ArtifactHash = evt.ArtifactHash ?? string.Empty;
-                entry.FailureReason = string.Empty;
-                entry.PreparedAt = ToDateTimeOffset(evt.PreparedAt);
-                entry.Endpoints = evt.Endpoints.Select(MapEndpoint).ToList();
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceRevisionPreparationFailedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceRevisionPreparationFailedEvent>();
-            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
-            {
-                entry.RevisionId = evt.RevisionId ?? string.Empty;
-                entry.Status = ServiceRevisionStatus.PreparationFailed.ToString();
-                entry.FailureReason = evt.FailureReason ?? string.Empty;
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceRevisionPublishedEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceRevisionPublishedEvent>();
-            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
-            {
-                entry.RevisionId = evt.RevisionId ?? string.Empty;
-                entry.Status = ServiceRevisionStatus.Published.ToString();
-                entry.PublishedAt = ToDateTimeOffset(evt.PublishedAt);
-            }, ct);
-            return;
-        }
-
-        if (payload.Is(ServiceRevisionRetiredEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ServiceRevisionRetiredEvent>();
-            await UpsertRevisionAsync(context.RootActorId, evt.Identity, evt.RevisionId, eventId, stateVersion, observedAt, entry =>
-            {
-                entry.RevisionId = evt.RevisionId ?? string.Empty;
-                entry.Status = ServiceRevisionStatus.Retired.ToString();
-                entry.RetiredAt = ToDateTimeOffset(evt.RetiredAt);
-            }, ct);
-        }
+            Id = serviceKey,
+            ActorId = context.RootActorId,
+            StateVersion = stateEvent.Version,
+            LastEventId = stateEvent.EventId ?? string.Empty,
+            UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
+            Revisions = state.Revisions
+                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                .Select(x => MapRevision(x.Key, x.Value))
+                .ToList(),
+        };
+        await _storeDispatcher.UpsertAsync(readModel, ct);
     }
 
-    private async Task UpsertRevisionAsync(
-        string actorId,
-        ServiceIdentity identity,
+    private static ServiceRevisionEntryReadModel MapRevision(
         string revisionId,
-        string eventId,
-        long stateVersion,
-        DateTimeOffset observedAt,
-        Action<ServiceRevisionEntryReadModel> mutate,
-        CancellationToken ct)
+        ServiceRevisionRecordState state)
     {
-        var serviceKey = ServiceKeys.Build(identity);
-        var existing = await _documentReader.GetAsync(serviceKey, ct);
-        if (existing == null)
+        return new ServiceRevisionEntryReadModel
         {
-            existing = new ServiceRevisionCatalogReadModel
-            {
-                Id = serviceKey,
-            };
-            var entry = new ServiceRevisionEntryReadModel();
-            mutate(entry);
-            existing.Revisions.Add(entry);
-            existing.ActorId = actorId;
-            existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
-            existing.LastEventId = eventId;
-            existing.UpdatedAt = observedAt;
-            await _storeDispatcher.UpsertAsync(existing, ct);
-            return;
-        }
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            ImplementationKind = ResolveImplementationKind(state),
+            Status = state.Status.ToString(),
+            ArtifactHash = state.ArtifactHash ?? string.Empty,
+            FailureReason = state.FailureReason ?? string.Empty,
+            CreatedAt = ToDateTimeOffset(state.CreatedAt),
+            PreparedAt = ToDateTimeOffset(state.PreparedAt),
+            PublishedAt = ToDateTimeOffset(state.PublishedAt),
+            RetiredAt = ToDateTimeOffset(state.RetiredAt),
+            Endpoints = state.Endpoints
+                .Select(MapEndpoint)
+                .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
+                .ToList(),
+        };
+    }
 
-        var existingEntry = existing.Revisions.FirstOrDefault(x =>
-            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
-        if (existingEntry == null)
-        {
-            existingEntry = new ServiceRevisionEntryReadModel
-            {
-                RevisionId = revisionId ?? string.Empty,
-            };
-            existing.Revisions.Add(existingEntry);
-        }
-
-        mutate(existingEntry);
-        existing.ActorId = actorId;
-        existing.StateVersion = ServiceCommittedStateSupport.ResolveNextStateVersion(existing.StateVersion, stateVersion);
-        existing.LastEventId = eventId;
-        existing.UpdatedAt = observedAt;
-        await _storeDispatcher.UpsertAsync(existing, ct);
+    private static string ResolveImplementationKind(ServiceRevisionRecordState state)
+    {
+        return state.Spec?.ImplementationKind.ToString() ??
+               ServiceImplementationKind.Unspecified.ToString();
     }
 
     private static ServiceCatalogEndpointReadModel MapEndpoint(ServiceEndpointDescriptor endpoint) =>

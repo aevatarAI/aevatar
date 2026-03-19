@@ -7,9 +7,18 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
+COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.projection-providers.yml)
 KAFKA_CONTAINER="aevatar-kafka"
 GARNET_HOST="127.0.0.1"
 GARNET_PORT=6379
+ELASTICSEARCH_ENDPOINT="http://127.0.0.1:9200"
+ELASTICSEARCH_PORT=9200
+ELASTICSEARCH_TRANSPORT_PORT=9300
+NEO4J_URI="bolt://127.0.0.1:7687"
+NEO4J_USERNAME="neo4j"
+NEO4J_PASSWORD="password"
+NEO4J_HTTP_PORT=7474
+NEO4J_BOLT_PORT=7687
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
 DEFAULT_APP_DLL="${PUBLISH_DIR}/Aevatar.Mainnet.Host.Api.dll"
 WAIT_SECONDS="${WAIT_SECONDS:-180}"
@@ -45,25 +54,10 @@ cleanup() {
     fi
   done
 
-  docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
-
-wait_garnet() {
-  for _ in {1..30}; do
-    if (echo >"/dev/tcp/${GARNET_HOST}/${GARNET_PORT}") >/dev/null 2>&1; then
-      echo "Garnet is reachable on ${GARNET_HOST}:${GARNET_PORT}."
-      return 0
-    fi
-
-    echo "Waiting for Garnet on ${GARNET_HOST}:${GARNET_PORT}..."
-    sleep 1
-  done
-
-  echo "Garnet failed to become reachable."
-  return 1
-}
 
 publish_default_app() {
   echo "Publishing host app for default old/new binary..." >&2
@@ -131,6 +125,15 @@ start_node() {
     AEVATAR_Orleans__SiloPort="${silo_port}" \
     AEVATAR_Orleans__GatewayPort="${gateway_port}" \
     AEVATAR_Orleans__ListenOnAnyHostAddress=true \
+    Projection__Document__Providers__Elasticsearch__Enabled=true \
+    Projection__Document__Providers__Elasticsearch__Endpoints__0="${ELASTICSEARCH_ENDPOINT}" \
+    Projection__Document__Providers__Elasticsearch__IndexPrefix="aevatar-mainnet-mixed-ci-${timestamp}" \
+    Projection__Document__Providers__InMemory__Enabled=false \
+    Projection__Graph__Providers__Neo4j__Enabled=true \
+    Projection__Graph__Providers__Neo4j__Uri="${NEO4J_URI}" \
+    Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}" \
+    Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}" \
+    Projection__Graph__Providers__InMemory__Enabled=false \
     AEVATAR_TEST_NODE_VERSION_TAG="${version_tag}" \
     AEVATAR_TEST_FAIL_EVENT_TYPE_URLS="${fail_event_type_urls}" \
     dotnet "${app_dll}" >"${log_file}" 2>&1
@@ -293,7 +296,7 @@ PY
   return 0
 }
 
-echo "Starting Kafka and Garnet..."
+echo "Starting Kafka, Garnet, Elasticsearch and Neo4j..."
 total_nodes=$((OLD_NODE_COUNT + NEW_NODE_COUNT))
 if (( total_nodes > 6 || total_nodes < 2 )); then
   echo "Unsupported node count: old(${OLD_NODE_COUNT}) + new(${NEW_NODE_COUNT}) must be between 2 and 6."
@@ -305,12 +308,18 @@ ensure_local_tcp_ports_free \
   "${LOCK_OWNER}" \
   9092 \
   "${GARNET_PORT}" \
+  "${ELASTICSEARCH_PORT}" \
+  "${ELASTICSEARCH_TRANSPORT_PORT}" \
+  "${NEO4J_HTTP_PORT}" \
+  "${NEO4J_BOLT_PORT}" \
   "${HTTP_PORTS[@]:0:${total_nodes}}" \
   "${SILO_PORTS[@]:0:${total_nodes}}" \
   "${GATEWAY_PORTS[@]:0:${total_nodes}}"
-docker compose up -d kafka garnet
+docker compose "${COMPOSE_ARGS[@]}" up -d kafka garnet elasticsearch neo4j
 wait_kafka_health "${KAFKA_CONTAINER}"
-wait_garnet
+wait_garnet_health "${GARNET_HOST}" "${GARNET_PORT}"
+wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
+wait_neo4j_bolt "127.0.0.1" "${NEO4J_BOLT_PORT}"
 
 dll_spec="$(resolve_app_dlls)"
 old_app_dll="${dll_spec%%|*}"

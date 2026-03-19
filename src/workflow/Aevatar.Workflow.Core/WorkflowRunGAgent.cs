@@ -12,9 +12,14 @@ using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Aevatar.Workflow.Core;
 
+[SuppressMessage(
+    "Maintainability",
+    "CA1506:Avoid excessive class coupling",
+    Justification = "WorkflowRunGAgent is the run-scoped orchestration boundary and intentionally coordinates workflow execution dependencies.")]
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost
@@ -479,10 +484,13 @@ public sealed class WorkflowRunGAgent
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            if (string.IsNullOrWhiteSpace(role.Id))
-                continue;
+            var roleId = role.Id;
+            if (string.IsNullOrWhiteSpace(roleId))
+            {
+                throw new InvalidOperationException("Role id is required to create child actor.");
+            }
 
-            var childActorId = BuildChildActorId(role.Id);
+            var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
@@ -494,7 +502,7 @@ public sealed class WorkflowRunGAgent
                 RunId = string.IsNullOrWhiteSpace(State.RunId)
                     ? WorkflowRunIdNormalizer.Normalize(Id)
                     : WorkflowRunIdNormalizer.Normalize(State.RunId),
-                RoleId = role.Id ?? string.Empty,
+                RoleId = roleId,
                 ChildActorId = actor.Id,
             });
         }

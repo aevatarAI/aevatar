@@ -11,8 +11,8 @@ public static class ProjectionRuntimeServiceCollectionExtensions
         services.TryAddSingleton(new ProjectionStoreDispatchOptions());
         services.TryAddSingleton(typeof(IProjectionStoreDispatchCompensator<>), typeof(LoggingProjectionStoreDispatchCompensator<>));
         services.TryAddSingleton(typeof(IProjectionWriteDispatcher<>), typeof(ProjectionStoreDispatcher<>));
+        services.TryAddSingleton(typeof(IProjectionGraphWriter<>), typeof(ProjectionGraphWriter<>));
         services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IProjectionWriteSink<>), typeof(ProjectionDocumentStoreBinding<>)));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton(typeof(IProjectionWriteSink<>), typeof(ProjectionGraphStoreBinding<>)));
         return services;
     }
 }

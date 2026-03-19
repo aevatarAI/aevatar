@@ -131,7 +131,6 @@ public sealed class WorkflowExecutionReadModelMapper
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
-
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)
     {

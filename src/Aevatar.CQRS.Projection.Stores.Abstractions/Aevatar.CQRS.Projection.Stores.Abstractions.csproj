@@ -6,4 +6,7 @@
     <AssemblyName>Aevatar.CQRS.Projection.Stores.Abstractions</AssemblyName>
     <RootNamespace>Aevatar.CQRS.Projection.Stores.Abstractions</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+  </ItemGroup>
 </Project>

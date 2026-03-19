@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.GAgentService.Governance.Projection.Configuration;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Governance.Projection.Queries;
@@ -11,17 +12,23 @@ namespace Aevatar.GAgentService.Governance.Projection.Queries;
 public sealed class ServiceConfigurationQueryReader : IServiceConfigurationQueryReader
 {
     private readonly IProjectionDocumentReader<ServiceConfigurationReadModel, string> _documentReader;
+    private readonly bool _enabled;
 
     public ServiceConfigurationQueryReader(
-        IProjectionDocumentReader<ServiceConfigurationReadModel, string> documentReader)
+        IProjectionDocumentReader<ServiceConfigurationReadModel, string> documentReader,
+        ServiceGovernanceProjectionOptions? options = null)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _enabled = options?.Enabled ?? true;
     }
 
     public async Task<ServiceConfigurationSnapshot?> GetAsync(
         ServiceIdentity identity,
         CancellationToken ct = default)
     {
+        if (!_enabled)
+            return null;
+
         ArgumentNullException.ThrowIfNull(identity);
         var serviceKey = ServiceKeys.Build(identity);
         var readModel = await _documentReader.GetAsync(serviceKey, ct);

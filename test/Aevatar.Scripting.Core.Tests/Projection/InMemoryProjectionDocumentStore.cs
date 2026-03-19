@@ -1,12 +1,13 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Google.Protobuf;
 
 namespace Aevatar.Scripting.Core.Tests.Projection;
 
 internal sealed class InMemoryProjectionDocumentStore<TReadModel>
     : IProjectionDocumentReader<TReadModel, string>,
       IProjectionWriteDispatcher<TReadModel>
-    where TReadModel : class, IProjectionReadModel
+    where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private readonly Dictionary<string, TReadModel> _items = new(StringComparer.Ordinal);
 
@@ -44,11 +45,5 @@ internal sealed class InMemoryProjectionDocumentStore<TReadModel>
         });
     }
 
-    private static TReadModel Clone(TReadModel readModel)
-    {
-        if (readModel is IProjectionReadModelCloneable<TReadModel> cloneable)
-            return cloneable.DeepClone();
-
-        return readModel;
-    }
+    private static TReadModel Clone(TReadModel readModel) => readModel.Clone();
 }

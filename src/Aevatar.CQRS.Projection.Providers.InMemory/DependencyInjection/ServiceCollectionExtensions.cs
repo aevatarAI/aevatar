@@ -12,7 +12,7 @@ public static class InMemoryProjectionServiceCollectionExtensions
         Func<TKey, string>? keyFormatter = null,
         Func<TReadModel, object?>? defaultSortSelector = null,
         int queryTakeMax = 200)
-        where TReadModel : class, IProjectionReadModel
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         ArgumentNullException.ThrowIfNull(keySelector);
 

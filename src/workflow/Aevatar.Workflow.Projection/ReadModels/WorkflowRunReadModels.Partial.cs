@@ -3,7 +3,6 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Projection.ReadModels;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
-using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Projection.ReadModels;
 
@@ -32,12 +31,10 @@ public enum WorkflowExecutionCompletionStatus
 }
 
 public sealed partial class WorkflowRunInsightReportDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowRunInsightReportDocument>,
+    : IProjectionReadModel<WorkflowRunInsightReportDocument>,
       IHasProjectionTimeline,
       IHasProjectionRoleReplies
 {
-    [JsonIgnore]
     public string ActorId => RootActorId;
 
     public DateTimeOffset CreatedAt
@@ -118,8 +115,6 @@ public sealed partial class WorkflowRunInsightReportDocument
         set => SummaryValue = value ?? new WorkflowExecutionSummary();
     }
 
-    public WorkflowRunInsightReportDocument DeepClone() => Clone();
-
     public void AddTimeline(ProjectionTimelineEvent timelineEvent)
     {
         ArgumentNullException.ThrowIfNull(timelineEvent);
@@ -159,11 +154,8 @@ public sealed partial class WorkflowRunInsightReportDocument
 
 }
 
-public sealed partial class WorkflowExecutionCurrentStateDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowExecutionCurrentStateDocument>
+public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionReadModel<WorkflowExecutionCurrentStateDocument>
 {
-    [JsonIgnore]
     public string ActorId => RootActorId;
 
     public DateTimeOffset UpdatedAt
@@ -177,15 +169,10 @@ public sealed partial class WorkflowExecutionCurrentStateDocument
         get => SuccessWrapper;
         set => SuccessWrapper = value;
     }
-
-    public WorkflowExecutionCurrentStateDocument DeepClone() => Clone();
 }
 
-public sealed partial class WorkflowRunTimelineDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowRunTimelineDocument>
+public sealed partial class WorkflowRunTimelineDocument : IProjectionReadModel<WorkflowRunTimelineDocument>
 {
-    [JsonIgnore]
     public string ActorId => RootActorId;
 
     public DateTimeOffset UpdatedAt
@@ -199,15 +186,10 @@ public sealed partial class WorkflowRunTimelineDocument
         get => TimelineEntries;
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(TimelineEntries, value);
     }
-
-    public WorkflowRunTimelineDocument DeepClone() => Clone();
 }
 
-public sealed partial class WorkflowRunGraphArtifactDocument
-    : IProjectionReadModel,
-      IProjectionReadModelCloneable<WorkflowRunGraphArtifactDocument>
+public sealed partial class WorkflowRunGraphArtifactDocument : IProjectionReadModel<WorkflowRunGraphArtifactDocument>
 {
-    [JsonIgnore]
     public string ActorId => RootActorId;
 
     public DateTimeOffset UpdatedAt
@@ -227,8 +209,6 @@ public sealed partial class WorkflowRunGraphArtifactDocument
         get => StepEntries;
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(StepEntries, value);
     }
-
-    public WorkflowRunGraphArtifactDocument DeepClone() => Clone();
 }
 
 public sealed partial class WorkflowExecutionSummary

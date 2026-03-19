@@ -127,14 +127,14 @@ public sealed class WorkflowActorBindingProjectorTests
         public Task<ProjectionWriteResult> UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Documents[readModel.Id] = readModel.DeepClone();
+            Documents[readModel.Id] = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.DeepClone() : null);
+            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.Clone() : null);
         }
 
         public Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>> QueryAsync(
@@ -146,7 +146,7 @@ public sealed class WorkflowActorBindingProjectorTests
             {
                 Items = Documents.Values
                     .Take(query.Take <= 0 ? 50 : query.Take)
-                    .Select(static x => x.DeepClone())
+                    .Select(static x => x.Clone())
                     .ToList(),
             });
         }

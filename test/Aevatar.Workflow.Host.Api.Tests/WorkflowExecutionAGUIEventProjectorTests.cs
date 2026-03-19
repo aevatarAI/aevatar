@@ -178,7 +178,7 @@ public sealed class WorkflowExecutionAGUIEventProjectorTests
     {
         SessionId = sessionId,
         RootActorId = "actor-1",
-        ProjectionKind = "workflow-execution",
+        ProjectionKind = "workflow-execution-session",
     };
 
     private static WorkflowRunEventEnvelope BuildRunFinished(string threadId, string output) =>

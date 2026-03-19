@@ -832,7 +832,7 @@ fi
 
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
-  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
 )
 
 for provider_store_file in "${projection_provider_store_files[@]}"; do
