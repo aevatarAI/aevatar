@@ -182,3 +182,44 @@ PY
   echo "${label} failed to become reachable on ${host}:${port}."
   return 1
 }
+
+wait_garnet_health() {
+  local host="${1:-127.0.0.1}"
+  local port="${2:-6379}"
+  local attempts="${3:-30}"
+  local sleep_seconds="${4:-1}"
+
+  wait_tcp_endpoint "${host}" "${port}" "Garnet" "${attempts}" "${sleep_seconds}"
+}
+
+wait_elasticsearch_health() {
+  local endpoint="${1:-http://127.0.0.1:9200}"
+  local attempts="${2:-90}"
+  local sleep_seconds="${3:-2}"
+  local try=0
+
+  while (( try < attempts )); do
+    local status
+    status="$(curl --max-time 2 -s "${endpoint}/_cluster/health" | rg -o "\"status\":\"[^\"]+\"" || true)"
+    if [[ "${status}" == "\"status\":\"green\"" || "${status}" == "\"status\":\"yellow\"" ]]; then
+      echo "Elasticsearch is ready: ${status}"
+      return 0
+    fi
+
+    echo "Waiting for Elasticsearch on ${endpoint}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "Elasticsearch failed to become ready."
+  return 1
+}
+
+wait_neo4j_bolt() {
+  local host="${1:-127.0.0.1}"
+  local port="${2:-7687}"
+  local attempts="${3:-90}"
+  local sleep_seconds="${4:-2}"
+
+  wait_tcp_endpoint "${host}" "${port}" "Neo4j bolt endpoint" "${attempts}" "${sleep_seconds}"
+}

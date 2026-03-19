@@ -7,12 +7,22 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
+COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.projection-providers.yml)
 KAFKA_CONTAINER="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_CONTAINER:-aevatar-kafka}"
 KAFKA_BOOTSTRAP_SERVERS="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 KAFKA_HOST="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_HOST:-127.0.0.1}"
 KAFKA_PORT="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_PORT:-9092}"
 GARNET_HOST="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_HOST:-127.0.0.1}"
 GARNET_PORT="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_PORT:-6379}"
+ELASTICSEARCH_ENDPOINT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_ENDPOINT:-http://127.0.0.1:9200}"
+ELASTICSEARCH_PORT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_PORT:-9200}"
+ELASTICSEARCH_TRANSPORT_PORT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_TRANSPORT_PORT:-9300}"
+NEO4J_URI="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_URI:-bolt://127.0.0.1:7687}"
+NEO4J_USERNAME="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_USERNAME:-neo4j}"
+NEO4J_PASSWORD="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_PASSWORD:-password}"
+NEO4J_HTTP_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_HTTP_PORT:-7474}"
+NEO4J_BOLT_HOST="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_HOST:-127.0.0.1}"
+NEO4J_BOLT_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_PORT:-7687}"
 STREAM_BACKEND="${AEVATAR_DISTRIBUTED_SMOKE_STREAM_BACKEND:-KafkaStrictProvider}"
 BOOTSTRAP_DOCKER_INFRA="${AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA:-true}"
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
@@ -48,7 +58,7 @@ cleanup() {
   done
 
   if [[ "${STARTED_DOCKER_INFRA}" == "1" ]]; then
-    docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   release_distributed_smoke_lock
 }
@@ -80,26 +90,41 @@ start_node() {
     AEVATAR_Orleans__SiloPort="${silo_port}" \
     AEVATAR_Orleans__GatewayPort="${gateway_port}" \
     AEVATAR_Orleans__ListenOnAnyHostAddress=true \
+    Projection__Document__Providers__Elasticsearch__Enabled=true \
+    Projection__Document__Providers__Elasticsearch__Endpoints__0="${ELASTICSEARCH_ENDPOINT}" \
+    Projection__Document__Providers__Elasticsearch__IndexPrefix="aevatar-mainnet-ci-${timestamp}" \
+    Projection__Document__Providers__InMemory__Enabled=false \
+    Projection__Graph__Providers__Neo4j__Enabled=true \
+    Projection__Graph__Providers__Neo4j__Uri="${NEO4J_URI}" \
+    Projection__Graph__Providers__Neo4j__Username="${NEO4J_USERNAME}" \
+    Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}" \
+    Projection__Graph__Providers__InMemory__Enabled=false \
     dotnet "${APP_DLL}" >"${log_file}" 2>&1
   ) &
 
   pids+=("$!")
 }
 
-echo "Starting Kafka..."
+echo "Starting Kafka, Garnet, Elasticsearch and Neo4j..."
 acquire_distributed_smoke_lock "${LOCK_OWNER}"
 if [[ "${BOOTSTRAP_DOCKER_INFRA}" == "true" ]]; then
   ensure_local_tcp_ports_free \
     "${LOCK_OWNER}" \
     "${KAFKA_PORT}" \
     "${GARNET_PORT}" \
+    "${ELASTICSEARCH_PORT}" \
+    "${ELASTICSEARCH_TRANSPORT_PORT}" \
+    "${NEO4J_HTTP_PORT}" \
+    "${NEO4J_BOLT_PORT}" \
     "${HTTP_PORTS[@]}" \
     "${SILO_PORTS[@]}" \
     "${GATEWAY_PORTS[@]}"
-  docker compose up -d kafka garnet
+  docker compose "${COMPOSE_ARGS[@]}" up -d kafka garnet elasticsearch neo4j
   STARTED_DOCKER_INFRA=1
   wait_kafka_health "${KAFKA_CONTAINER}"
-  wait_tcp_endpoint "${GARNET_HOST}" "${GARNET_PORT}" "Garnet"
+  wait_garnet_health "${GARNET_HOST}" "${GARNET_PORT}"
+  wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
+  wait_neo4j_bolt "${NEO4J_BOLT_HOST}" "${NEO4J_BOLT_PORT}"
 else
   ensure_local_tcp_ports_free \
     "${LOCK_OWNER}" \
@@ -108,6 +133,8 @@ else
     "${GATEWAY_PORTS[@]}"
   wait_tcp_endpoint "${KAFKA_HOST}" "${KAFKA_PORT}" "Kafka"
   wait_tcp_endpoint "${GARNET_HOST}" "${GARNET_PORT}" "Garnet"
+  wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
+  wait_neo4j_bolt "${NEO4J_BOLT_HOST}" "${NEO4J_BOLT_PORT}"
 fi
 
 echo "Publishing host app..."

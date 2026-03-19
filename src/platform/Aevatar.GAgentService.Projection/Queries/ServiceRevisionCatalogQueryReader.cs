@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Queries;
@@ -10,17 +11,23 @@ namespace Aevatar.GAgentService.Projection.Queries;
 public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
 {
     private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _documentStore;
+    private readonly bool _enabled;
 
     public ServiceRevisionCatalogQueryReader(
-        IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> documentStore)
+        IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> documentStore,
+        ServiceProjectionOptions? options = null)
     {
         _documentStore = documentStore ?? throw new ArgumentNullException(nameof(documentStore));
+        _enabled = options?.Enabled ?? true;
     }
 
     public async Task<ServiceRevisionCatalogSnapshot?> GetAsync(
         ServiceIdentity identity,
         CancellationToken ct = default)
     {
+        if (!_enabled)
+            return null;
+
         var readModel = await _documentStore.GetAsync(ServiceKeys.Build(identity), ct);
         if (readModel == null)
             return null;

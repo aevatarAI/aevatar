@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Core;
@@ -11,13 +12,13 @@ public sealed class WorkflowRunInsightReportArtifactProjector
     private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _reportWriter;
     private readonly IProjectionWriteDispatcher<WorkflowRunTimelineDocument> _timelineWriter;
-    private readonly IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument> _graphWriter;
+    private readonly IProjectionGraphWriter<WorkflowRunInsightReportDocument> _graphWriter;
 
     public WorkflowRunInsightReportArtifactProjector(
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> reportWriter,
         IProjectionWriteDispatcher<WorkflowRunTimelineDocument> timelineWriter,
-        IProjectionWriteDispatcher<WorkflowRunGraphArtifactDocument> graphWriter)
+        IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _reportWriter = reportWriter ?? throw new ArgumentNullException(nameof(reportWriter));
@@ -40,7 +41,7 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             return;
 
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
-        var readModel = existing?.DeepClone() ??
+        var readModel = existing?.Clone() ??
                         WorkflowExecutionArtifactMaterializationSupport.CreateReportDocument(
                             context,
                             state,
@@ -53,8 +54,6 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         await _timelineWriter.UpsertAsync(
             WorkflowExecutionArtifactMaterializationSupport.BuildTimelineDocument(readModel),
             ct);
-        await _graphWriter.UpsertAsync(
-            WorkflowExecutionArtifactMaterializationSupport.BuildGraphDocument(readModel),
-            ct);
+        await _graphWriter.UpsertAsync(readModel, ct);
     }
 }

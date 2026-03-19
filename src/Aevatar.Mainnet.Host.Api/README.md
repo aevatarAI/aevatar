@@ -49,7 +49,7 @@ export AEVATAR_Orleans__GatewayPort=30000
 
 ## 多机集群测试（Docker）
 
-仓库提供了 `docker-compose.mainnet-cluster.yml`（3 节点 Mainnet + Kafka + Garnet）。
+仓库提供的集群启动脚本会拉起 3 节点 Mainnet + Kafka + Garnet + Elasticsearch + Neo4j。
 
 ```bash
 bash tools/cluster/start-mainnet-cluster.sh
@@ -71,6 +71,12 @@ bash tools/ci/orleans_garnet_persistence_smoke.sh
 
 ```bash
 bash tools/ci/distributed_3node_smoke.sh
+```
+
+三节点 Orleans scripting 集群测试（Kafka + Garnet + Elasticsearch + Neo4j）：
+
+```bash
+bash tools/ci/orleans_3node_real_env_smoke.sh
 ```
 
 ## 端点

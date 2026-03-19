@@ -35,11 +35,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>, WorkflowRunTimelineDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunGraphArtifactDocument>, WorkflowRunGraphArtifactDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
-        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunGraphArtifactDocument>, WorkflowRunGraphArtifactMaterializer>();
+        services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportGraphMaterializer>();
         services.AddProjectionMaterializationRuntimeCore<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionMaterializationRuntimeLease,

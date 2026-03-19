@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Orchestration;
 
 namespace Aevatar.GAgentService.Tests.Projection;
