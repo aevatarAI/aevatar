@@ -81,7 +81,7 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
-    public async Task HandleInvokeRequestedAsync_WhenDefinitionResolverUnavailable_ShouldPublishFailure()
+    public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMissing_ShouldPublishFailure()
     {
         var harness = CreateHarness();
 
@@ -98,16 +98,18 @@ public sealed class SubWorkflowOrchestratorTests
 
         harness.Published.Should().ContainSingle();
         harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Which.Error
-            .Should().Contain("IWorkflowDefinitionResolver");
+            .Should().Contain("definition actor");
         harness.Runtime.CreateRequests.Should().BeEmpty();
         harness.Persisted.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleInvokeRequestedAsync_WhenSingletonBindingExistsAndActorIsAlive_ShouldReuseActor()
+    public async Task HandleDefinitionResolvedAsync_WhenSingletonBindingExistsAndActorIsAlive_ShouldReuseActor()
     {
-        const string childActorId = "owner-1:workflow:sub_flow";
+        const string definitionActorId = "workflow-definition:sub_flow";
+        const string childActorId = "owner-1:workflow:workflow-definition-sub_flow";
         var harness = CreateHarness();
+        harness.Runtime.StoredActors[definitionActorId] = new RecordingActor(definitionActorId);
         harness.Runtime.StoredActors[childActorId] = new RecordingActor(childActorId);
 
         var state = new WorkflowRunState();
@@ -116,6 +118,8 @@ public sealed class SubWorkflowOrchestratorTests
             WorkflowName = "sub_flow",
             ChildActorId = childActorId,
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            DefinitionActorId = definitionActorId,
+            DefinitionVersion = 7,
         });
 
         await harness.Orchestrator.HandleInvokeRequestedAsync(
@@ -131,6 +135,30 @@ public sealed class SubWorkflowOrchestratorTests
             state,
             CancellationToken.None);
 
+        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowDefinitionResolutionRegisteredEvent);
+        harness.Sent.Should().ContainSingle(x => x.TargetActorId == definitionActorId);
+        var resolutionState = SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered(
+            state,
+            harness.Persisted.OfType<SubWorkflowDefinitionResolutionRegisteredEvent>().Single());
+
+        harness.Persisted.Clear();
+        harness.Sent.Clear();
+
+        await harness.Orchestrator.HandleDefinitionResolvedAsync(
+            new SubWorkflowDefinitionResolvedEvent
+            {
+                InvocationId = "invoke-1",
+                Definition = new WorkflowDefinitionSnapshot
+                {
+                    DefinitionActorId = definitionActorId,
+                    WorkflowName = "sub_flow",
+                    WorkflowYaml = "name: sub_flow\nroles: []\nsteps: []\n",
+                    DefinitionVersion = 7,
+                },
+            },
+            resolutionState,
+            CancellationToken.None);
+
         harness.Runtime.CreateRequests.Should().BeEmpty();
         harness.Runtime.Linked.Should().BeEmpty();
         harness.Persisted.Should().ContainSingle(x => x is SubWorkflowInvocationRegisteredEvent);
@@ -143,32 +171,44 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
-    public async Task HandleInvokeRequestedAsync_WhenBindingStale_ShouldCreateAndBindNewChildActor()
+    public async Task HandleDefinitionResolvedAsync_WhenBindingStale_ShouldCreateAndBindNewChildActor()
     {
-        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["sub flow"] = "name: sub flow\nroles: []\nsteps: []\n",
-        });
-        var services = new SingleServiceProvider(typeof(IWorkflowDefinitionResolver), resolver);
-        var harness = CreateHarness(serviceProvider: services);
+        const string definitionActorId = "workflow-definition:sub flow";
+        var harness = CreateHarness();
         var state = new WorkflowRunState();
         state.InlineWorkflowYamls["sub flow"] = "name: inline\nroles: []\nsteps: []\n";
+        state.PendingSubWorkflowDefinitionResolutions.Add(new WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution
+        {
+            InvocationId = "invoke-2",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-b",
+            WorkflowName = "sub flow",
+            DefinitionActorId = definitionActorId,
+            Input = "payload-b",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+        });
+        state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId["invoke-2"] = 0;
         state.SubWorkflowBindings.Add(new WorkflowRunState.Types.SubWorkflowBinding
         {
             WorkflowName = "sub flow",
-            ChildActorId = "owner-1:workflow:sub-flow",
+            ChildActorId = "owner-1:workflow:workflow-definition-sub-flow",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            DefinitionActorId = definitionActorId,
+            DefinitionVersion = 1,
         });
 
-        await harness.Orchestrator.HandleInvokeRequestedAsync(
-            new SubWorkflowInvokeRequestedEvent
+        await harness.Orchestrator.HandleDefinitionResolvedAsync(
+            new SubWorkflowDefinitionResolvedEvent
             {
                 InvocationId = "invoke-2",
-                ParentRunId = "parent-run",
-                ParentStepId = "step-b",
-                WorkflowName = "sub flow",
-                Input = "payload-b",
-                Lifecycle = WorkflowCallLifecycle.Singleton,
+                Definition = new WorkflowDefinitionSnapshot
+                {
+                    DefinitionActorId = definitionActorId,
+                    WorkflowName = "sub flow",
+                    WorkflowYaml = "name: sub flow\nroles: []\nsteps: []\n",
+                    ScopeId = "scope-a",
+                    DefinitionVersion = 2,
+                },
             },
             state,
             CancellationToken.None);
@@ -176,21 +216,27 @@ public sealed class SubWorkflowOrchestratorTests
         harness.Runtime.CreateRequests.Should().ContainSingle();
         var createdRequest = harness.Runtime.CreateRequests.Single();
         createdRequest.AgentType.Should().Be(typeof(WorkflowRunGAgent));
-        createdRequest.RequestedId.Should().Be("owner-1:workflow:sub-flow");
+        createdRequest.RequestedId.Should().Be("owner-1:workflow:workflow-definition-sub-flow");
         harness.Runtime.Linked.Should().ContainSingle(x =>
             x.ParentId == "owner-1" &&
-            x.ChildId == "owner-1:workflow:sub-flow");
+            x.ChildId == "owner-1:workflow:workflow-definition-sub-flow");
         harness.Persisted.OfType<SubWorkflowBindingUpsertedEvent>().Should().ContainSingle(x =>
             x.WorkflowName == "sub flow" &&
-            x.ChildActorId == "owner-1:workflow:sub-flow");
+            x.ChildActorId == "owner-1:workflow:workflow-definition-sub-flow" &&
+            x.DefinitionActorId == definitionActorId &&
+            x.DefinitionVersion == 2);
         harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x =>
-            x.ChildRunId == "invoke-2");
-        var childActor = harness.Runtime.StoredActors["owner-1:workflow:sub-flow"];
+            x.ChildRunId == "invoke-2" &&
+            x.DefinitionActorId == definitionActorId &&
+            x.DefinitionVersion == 2);
+        state.ScopeId = "scope-a";
+        var childActor = harness.Runtime.StoredActors["owner-1:workflow:workflow-definition-sub-flow"];
         childActor.LastHandledEnvelope.Should().NotBeNull();
         childActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
         var bindEvent = childActor.LastHandledEnvelope.Payload.Unpack<BindWorkflowRunDefinitionEvent>();
         bindEvent.RunId.Should().Be("invoke-2");
         bindEvent.WorkflowName.Should().Be("sub flow");
+        bindEvent.DefinitionActorId.Should().Be(definitionActorId);
         bindEvent.InlineWorkflowYamls.Should().ContainKey("sub flow");
     }
 
@@ -199,10 +245,9 @@ public sealed class SubWorkflowOrchestratorTests
     {
         const string childActorId = "owner-1:workflow:sub_flow";
         var racedActor = new RecordingActor(childActorId);
-        var harness = CreateHarness(new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
-        {
-            ["sub_flow"] = "name: sub_flow\nroles: []\nsteps: []\n",
-        }));
+        var harness = CreateHarness();
+        var state = new WorkflowRunState();
+        state.InlineWorkflowYamls["sub_flow"] = "name: sub_flow\nroles: []\nsteps: []\n";
         harness.Runtime.EnqueueGet(childActorId, null);
         harness.Runtime.EnqueueGet(childActorId, racedActor);
         harness.Runtime.FailCreateActorIds.Add(childActorId);
@@ -216,13 +261,46 @@ public sealed class SubWorkflowOrchestratorTests
                 WorkflowName = "sub_flow",
                 Lifecycle = WorkflowCallLifecycle.Singleton,
             },
-            new WorkflowRunState(),
+            state,
             CancellationToken.None);
 
         racedActor.LastHandledEnvelope.Should().NotBeNull();
         racedActor.LastHandledEnvelope!.Payload!.Is(BindWorkflowRunDefinitionEvent.Descriptor).Should().BeTrue();
         harness.Persisted.Should().Contain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleDefinitionResolveFailedAsync_WhenPendingResolutionExists_ShouldClearAndPublishFailure()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState();
+        state.PendingSubWorkflowDefinitionResolutions.Add(new WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution
+        {
+            InvocationId = "invoke-failed",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-failed",
+            WorkflowName = "sub_flow",
+            DefinitionActorId = "workflow-definition:sub_flow",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+        });
+        state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId["invoke-failed"] = 0;
+
+        await harness.Orchestrator.HandleDefinitionResolveFailedAsync(
+            new SubWorkflowDefinitionResolveFailedEvent
+            {
+                InvocationId = "invoke-failed",
+                Error = "definition lookup failed",
+            },
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowDefinitionResolutionClearedEvent);
+        var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.RunId.Should().Be("parent-run");
+        failure.StepId.Should().Be("step-failed");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Be("definition lookup failed");
     }
 
     [Fact]
@@ -402,12 +480,16 @@ public sealed class SubWorkflowOrchestratorTests
             WorkflowName = "sub_flow",
             ChildActorId = "child-1",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            DefinitionActorId = "workflow-definition:sub_flow",
+            DefinitionVersion = 1,
         });
         state = SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted(state, new SubWorkflowBindingUpsertedEvent
         {
             WorkflowName = "sub_flow",
             ChildActorId = "child-2",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            DefinitionActorId = "workflow-definition:sub_flow",
+            DefinitionVersion = 2,
         });
         state = SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted(state, new SubWorkflowBindingUpsertedEvent
         {
@@ -418,6 +500,20 @@ public sealed class SubWorkflowOrchestratorTests
 
         state.SubWorkflowBindings.Should().ContainSingle();
         state.SubWorkflowBindings.Single().ChildActorId.Should().Be("child-2");
+        state.SubWorkflowBindings.Single().DefinitionVersion.Should().Be(2);
+
+        state = SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered(state, new SubWorkflowDefinitionResolutionRegisteredEvent
+        {
+            InvocationId = "invoke-a",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-a",
+            WorkflowName = "sub_flow",
+            DefinitionActorId = "workflow-definition:sub_flow",
+            Input = "payload-a",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+        });
+        state.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-a");
+        state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId["invoke-a"].Should().Be(0);
 
         state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(state, new SubWorkflowInvocationRegisteredEvent
         {
@@ -428,6 +524,8 @@ public sealed class SubWorkflowOrchestratorTests
             ChildActorId = "child-2",
             ChildRunId = "child-run-a",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            DefinitionActorId = "workflow-definition:sub_flow",
+            DefinitionVersion = 2,
         });
         state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(state, new SubWorkflowInvocationRegisteredEvent
         {
@@ -438,6 +536,8 @@ public sealed class SubWorkflowOrchestratorTests
             ChildActorId = "child-3",
             ChildRunId = "child-run-b",
             Lifecycle = WorkflowCallLifecycle.Transient,
+            DefinitionActorId = "workflow-definition:sub_flow",
+            DefinitionVersion = 2,
         });
         state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(state, new SubWorkflowInvocationRegisteredEvent
         {
@@ -448,9 +548,13 @@ public sealed class SubWorkflowOrchestratorTests
             ChildActorId = "child-4",
             ChildRunId = "child-run-a",
             Lifecycle = WorkflowCallLifecycle.Scope,
+            DefinitionActorId = "workflow-definition:sub_flow",
+            DefinitionVersion = 2,
         });
 
         state.PendingSubWorkflowInvocations.Should().HaveCount(2);
+        state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Should().NotContainKey("invoke-a");
+        state.PendingSubWorkflowDefinitionResolutions.Should().BeEmpty();
         state.PendingSubWorkflowInvocationIndexByChildRunId["child-run-a"].Should().BeGreaterThanOrEqualTo(0);
         state.PendingChildRunIdsByParentRunId["parent-run"].ChildRunIds.Should().Contain(["child-run-a", "child-run-b"]);
 
@@ -548,9 +652,7 @@ public sealed class SubWorkflowOrchestratorTests
         state.SubWorkflowBindings.Select(x => x.WorkflowName).Should().BeEquivalentTo("wf_ref", "wf_nested", "wf_pending");
     }
 
-    private static OrchestratorHarness CreateHarness(
-        IWorkflowDefinitionResolver? resolver = null,
-        IServiceProvider? serviceProvider = null)
+    private static OrchestratorHarness CreateHarness()
     {
         var runtime = new RecordingActorRuntime();
         var persisted = new List<IMessage>();
@@ -560,8 +662,6 @@ public sealed class SubWorkflowOrchestratorTests
         var orchestrator = new SubWorkflowOrchestrator(
             runtime,
             runtime,
-            resolver,
-            () => serviceProvider,
             () => "owner-1",
             () => NullLogger.Instance,
             (evt, _) =>
@@ -579,7 +679,7 @@ public sealed class SubWorkflowOrchestratorTests
                 published.Add(new PublishedMessage(evt, direction));
                 return Task.CompletedTask;
             },
-            (targetActorId, evt) =>
+            (targetActorId, evt, _) =>
             {
                 sent.Add(new SentMessage(targetActorId, evt));
                 return Task.CompletedTask;
@@ -755,16 +855,6 @@ public sealed class SubWorkflowOrchestratorTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StaticWorkflowDefinitionResolver(IReadOnlyDictionary<string, string> yamls)
-        : IWorkflowDefinitionResolver
-    {
-        public Task<string?> GetWorkflowYamlAsync(string workflowName, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(yamls.TryGetValue(workflowName, out var yaml) ? yaml : null);
-        }
-    }
-
     private sealed record PublishedMessage(
         IMessage Message,
         TopologyAudience Direction);
@@ -772,11 +862,4 @@ public sealed class SubWorkflowOrchestratorTests
     private sealed record SentMessage(
         string TargetActorId,
         IMessage Message);
-
-    private sealed class SingleServiceProvider(global::System.Type serviceType, object service)
-        : IServiceProvider
-    {
-        public object? GetService(global::System.Type requestedServiceType) =>
-            requestedServiceType == serviceType ? service : null;
-    }
 }

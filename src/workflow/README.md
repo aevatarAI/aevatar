@@ -10,9 +10,9 @@
 
 更完整的设计说明见：
 
-- `docs/architecture/workflow-run-actorized-state-boundary-blueprint-2026-03-08.md`
-- `docs/architecture/workflow-run-actorized-target-architecture-2026-03-08.md`
-- `docs/architecture/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
+- `docs/architecture/2026-03-19-workflow-call-actor-to-actor-refactor-plan.md`
+- `docs/architecture/archive/2026-03/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
+- `docs/architecture/archive/2026-03/2026-03-16-workflow-fact-sources-event-and-projection-refactor.md`
 
 ## 当前运行语义
 

@@ -39,7 +39,6 @@ public sealed class WorkflowRunGAgent
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IRoleAgentTypeResolver _roleAgentTypeResolver;
     private readonly IEventModuleFactory<IWorkflowExecutionContext> _stepExecutorFactory;
-    private readonly IWorkflowDefinitionResolver? _workflowDefinitionResolver;
     private readonly IReadOnlyList<IWorkflowModuleDependencyExpander> _moduleDependencyExpanders;
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
     private readonly ISet<string> _knownModuleStepTypes;
@@ -57,7 +56,7 @@ public sealed class WorkflowRunGAgent
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _roleAgentTypeResolver = roleAgentTypeResolver ?? throw new ArgumentNullException(nameof(roleAgentTypeResolver));
         _stepExecutorFactory = stepExecutorFactory ?? throw new ArgumentNullException(nameof(stepExecutorFactory));
-        _workflowDefinitionResolver = workflowDefinitionResolver;
+        _ = workflowDefinitionResolver;
 
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
@@ -84,14 +83,12 @@ public sealed class WorkflowRunGAgent
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
             _dispatchPort,
-            _workflowDefinitionResolver,
-            () => Services,
             () => Id,
             () => Logger,
             (evt, token) => PersistDomainEventAsync(evt, token),
             (events, token) => PersistDomainEventsAsync(events, token),
             (evt, direction, token) => PublishAsync(evt, direction, token),
-            (actorId, evt) => SendToAsync(actorId, evt));
+            (actorId, evt, token) => SendToAsync(actorId, evt, token));
     }
 
     public string RunId => string.IsNullOrWhiteSpace(State.RunId)
@@ -310,6 +307,18 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.HandleInvokeRequestedAsync(request, State, CancellationToken.None);
     }
 
+    [EventHandler]
+    public async Task HandleSubWorkflowDefinitionResolved(SubWorkflowDefinitionResolvedEvent resolved)
+    {
+        await _subWorkflowOrchestrator.HandleDefinitionResolvedAsync(resolved, State, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleSubWorkflowDefinitionResolveFailed(SubWorkflowDefinitionResolveFailedEvent failed)
+    {
+        await _subWorkflowOrchestrator.HandleDefinitionResolveFailedAsync(failed, State, CancellationToken.None);
+    }
+
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
     public async Task HandleWorkflowCompletionEnvelope(EventEnvelope envelope)
     {
@@ -487,7 +496,11 @@ public sealed class WorkflowRunGAgent
             var roleId = role.Id;
             if (string.IsNullOrWhiteSpace(roleId))
             {
-                throw new InvalidOperationException("Role id is required to create child actor.");
+                Logger.LogWarning(
+                    "Skip workflow role without id while building agent tree. workflow={WorkflowName} actor={ActorId}",
+                    _compiledWorkflow.Name,
+                    Id);
+                continue;
             }
 
             var childActorId = BuildChildActorId(roleId);
@@ -600,6 +613,8 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
+            .On<SubWorkflowDefinitionResolutionRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered)
+            .On<SubWorkflowDefinitionResolutionClearedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionCleared)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
             .On<SubWorkflowInvocationCompletedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationCompleted)
@@ -625,6 +640,8 @@ public sealed class WorkflowRunGAgent
         next.FinalError = string.Empty;
         next.ExecutionStates.Clear();
         next.SubWorkflowBindings.Clear();
+        next.PendingSubWorkflowDefinitionResolutions.Clear();
+        next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
@@ -701,6 +718,8 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.PendingSubWorkflowDefinitionResolutions.Clear();
+        next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
@@ -713,6 +732,8 @@ public sealed class WorkflowRunGAgent
         next.Status = evt.Success ? CompletedStatus : FailedStatus;
         next.FinalOutput = evt.Output ?? string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
+        next.PendingSubWorkflowDefinitionResolutions.Clear();
+        next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         return next;
     }
 
@@ -724,6 +745,8 @@ public sealed class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.ExecutionStates.Clear();
+        next.PendingSubWorkflowDefinitionResolutions.Clear();
+        next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
