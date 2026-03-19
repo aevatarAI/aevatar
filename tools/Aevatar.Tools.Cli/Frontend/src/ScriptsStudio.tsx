@@ -3,16 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
-  ChevronDown,
   Code2,
   Copy,
-  FolderOpen,
   Play,
   Plus,
   RefreshCw,
   Save,
-  SlidersHorizontal,
-  X,
 } from 'lucide-react';
 import * as monacoEditor from 'monaco-editor/esm/vs/editor/editor.api.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
@@ -435,8 +431,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [runInputDraft, setRunInputDraft] = useState('');
   const [validationPending, setValidationPending] = useState(false);
   const [validationResult, setValidationResult] = useState<ScriptValidationResult | null>(null);
-  const [problemsOpen, setProblemsOpen] = useState(false);
-  const [resultsCollapsed, setResultsCollapsed] = useState(true);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [filesPaneOpen, setFilesPaneOpen] = useState(false);
   const [editorView, setEditorView] = useState<StudioEditorView>('source');
   const [resultView, setResultView] = useState<StudioResultView>('runtime');
   const [selectedRuntimeActorId, setSelectedRuntimeActorId] = useState('');
@@ -584,7 +581,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
   useEffect(() => {
     setValidationResult(null);
-    setProblemsOpen(false);
+    setDiagnosticsOpen(false);
   }, [selectedDraft?.key]);
 
   useEffect(() => {
@@ -824,7 +821,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     setDrafts(prev => [nextDraft, ...prev]);
     setSelectedDraftKey(nextDraft.key);
     setLibraryOpen(false);
-    setResultsCollapsed(true);
+    setActivityOpen(false);
   }
 
   function handleSelectDraftFile(filePath: string) {
@@ -837,6 +834,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       selectedFilePath: filePath,
     }));
     setEditorView('source');
+    setFilesPaneOpen(true);
   }
 
   function handleAddPackageFile(kind: 'csharp' | 'proto') {
@@ -860,6 +858,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       selectedFilePath: addedEntry?.path || draft.selectedFilePath,
     }));
     setEditorView('source');
+    setFilesPaneOpen(true);
   }
 
   function handleRenamePackageFile(filePath: string) {
@@ -881,6 +880,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         ? (renamedEntry?.path || draft.selectedFilePath)
         : draft.selectedFilePath,
     }));
+    setFilesPaneOpen(true);
   }
 
   function handleRemovePackageFile(filePath: string) {
@@ -907,6 +907,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       package: setEntrySourcePath(draft.package, filePath),
       selectedFilePath: filePath,
     }));
+    setFilesPaneOpen(true);
   }
 
   async function loadScopeScripts(silent = false) {
@@ -1059,7 +1060,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     setResultView('save');
     setSelectedProposalId(scopeCatalogsByScriptId[scriptId]?.lastProposalId || '');
     setLibraryOpen(false);
-    setResultsCollapsed(true);
+    setActivityOpen(false);
     onFlash('Saved script loaded into the editor', 'success');
   }
 
@@ -1089,7 +1090,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       upsertRuntimeSnapshot(snapshot);
       setSelectedRuntimeActorId(snapshot.actorId || normalizedActorId);
       setResultView('runtime');
-      setResultsCollapsed(false);
+      if (!silent) {
+        setActivityOpen(true);
+      }
 
       if (!silent) {
         onFlash('Runtime snapshot refreshed', 'success');
@@ -1128,7 +1131,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   async function handleSelectRuntime(actorId: string) {
     setSelectedRuntimeActorId(actorId);
     setResultView('runtime');
-    setResultsCollapsed(false);
+    setActivityOpen(true);
 
     const knownSnapshot = runtimeSnapshots.find(snapshot => snapshot.actorId === actorId);
     if (!knownSnapshot) {
@@ -1139,7 +1142,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   function handleSelectProposal(proposalId: string) {
     setSelectedProposalId(proposalId);
     setResultView('promotion');
-    setResultsCollapsed(false);
+    setActivityOpen(true);
   }
 
   async function refreshCurrentCatalog() {
@@ -1238,7 +1241,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         scopeDetail: detail,
       }));
       setResultView('save');
-      setResultsCollapsed(false);
+      setActivityOpen(true);
       setSelectedProposalId('');
       await loadScopeScripts(true);
       onFlash('Script saved to the current scope', 'success');
@@ -1345,7 +1348,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       setRunModalOpen(false);
       setResultView('runtime');
-      setResultsCollapsed(false);
+      setActivityOpen(true);
       setSelectedRuntimeActorId(response.runtimeActorId || '');
       const snapshot = await waitForSnapshot(response.runtimeActorId || '');
       await loadRuntimeSnapshots(true);
@@ -1400,7 +1403,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       setPromotionModalOpen(false);
       setResultView('promotion');
-      setResultsCollapsed(false);
+      setActivityOpen(true);
       if (scopeBacked) {
         await loadScopeScripts(true);
       }
@@ -1495,6 +1498,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }));
     setSelectedDraftKey(targetKey);
     setEditorView('source');
+    setAskAiOpen(false);
     onFlash(askAiGeneratedPackage ? 'AI package applied to the editor' : 'AI source applied to the editor', 'success');
   }
 
@@ -1545,33 +1549,278 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       ? `Latest proposal · ${activeCatalog.lastProposalId}`
       : 'Submit a promotion proposal when this draft is ready.';
   const scopeSelectionId = selectedDraft.scopeDetail?.script?.scriptId || '';
+  const showFilesPane = editorView === 'source' && filesPaneOpen;
+  const surfaceActionClass = (active = false) => `rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+    active
+      ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]'
+      : 'border-[#E5DED3] bg-white text-gray-500 hover:bg-[#F9F6F0]'
+  }`;
+
+  function renderResultDetailContent() {
+    if (resultView === 'runtime') {
+      if (!(selectedDraft.lastRun || activeRuntimeSnapshot)) {
+        return (
+          <EmptyState
+            title="No runtime output yet"
+            copy="Run the current draft. The materialized read model will appear here."
+          />
+        );
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[14px] font-semibold text-gray-800">Runtime output</div>
+              <div className="mt-1 text-[12px] text-gray-400">{activeRuntimeSnapshot?.actorId || selectedDraft.lastRun?.runId || '-'}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              {(activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId) ? (
+                <button
+                  type="button"
+                  onClick={() => { void refreshSnapshot(activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId); }}
+                  className="panel-icon-button execution-logs-copy-action"
+                  title="Refresh runtime result"
+                  aria-label="Refresh runtime result"
+                  disabled={snapshotPending}
+                >
+                  <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
+                </button>
+              ) : null}
+              <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
+                {snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : 'pending')}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Input</div>
+              <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.input || selectedDraft.input || '-'}</pre>
+            </div>
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Output</div>
+              <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
+            </div>
+          </div>
+
+          <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
+            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+              Runtime details
+            </summary>
+            <div className="mt-3 grid gap-4 xl:grid-cols-2">
+              <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+                <div className="section-heading">Notes</div>
+                <div className="mt-2 text-[12px] leading-6 text-gray-600">
+                  {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+                <div className="section-heading">Metadata</div>
+                <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                  <div>scriptId: {activeRuntimeSnapshot?.scriptId || selectedDraft.scriptId || '-'}</div>
+                  <div>runtimeActorId: {activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId || '-'}</div>
+                  <div>definitionActorId: {activeRuntimeSnapshot?.definitionActorId || selectedDraft.definitionActorId || '-'}</div>
+                  <div>stateVersion: {activeRuntimeSnapshot?.stateVersion ?? '-'}</div>
+                  <div>updatedAt: {formatDateTime(activeRuntimeSnapshot?.updatedAt)}</div>
+                </div>
+              </div>
+            </div>
+
+            <pre className="mt-4 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+              {prettyPrintJson(activeRuntimeSnapshot?.readModelPayloadJson)}
+            </pre>
+          </details>
+        </div>
+      );
+    }
+
+    if (resultView === 'save') {
+      if (!scopeBacked) {
+        return (
+          <EmptyState
+            title="Scope save unavailable"
+            copy="This app session does not have a resolved scope. The draft is still kept locally in your browser storage."
+          />
+        );
+      }
+
+      if (!(activeCatalog || selectedDraft.scopeDetail?.script)) {
+        return (
+          <EmptyState
+            title="Not saved into the scope"
+            copy="Use Save to persist this draft and make it show up in the saved scripts list."
+          />
+        );
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[14px] font-semibold text-gray-800">Catalog state</div>
+              <div className="mt-1 text-[12px] text-gray-400">{activeCatalog?.scopeId || selectedDraft.scopeDetail?.scopeId || '-'}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { void refreshCurrentCatalog(); }}
+                className="panel-icon-button execution-logs-copy-action"
+                title="Refresh catalog history"
+                aria-label="Refresh catalog history"
+              >
+                <RefreshCw size={14} />
+              </button>
+              <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+                hasScopeChanges
+                  ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
+                  : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+              }`}>
+                {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Script</div>
+              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                <div>scriptId: {activeCatalog?.scriptId || selectedDraft.scopeDetail?.script?.scriptId || '-'}</div>
+                <div>revision: {activeCatalog?.activeRevision || selectedDraft.scopeDetail?.script?.activeRevision || '-'}</div>
+                <div>updatedAt: {formatDateTime(activeCatalog?.updatedAt || selectedDraft.scopeDetail?.script?.updatedAt)}</div>
+              </div>
+            </div>
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Actors</div>
+              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                <div>catalogActorId: {activeCatalog?.catalogActorId || selectedDraft.scopeDetail?.script?.catalogActorId || '-'}</div>
+                <div>definitionActorId: {activeCatalog?.activeDefinitionActorId || selectedDraft.scopeDetail?.script?.definitionActorId || '-'}</div>
+                <div>sourceHash: {activeCatalog?.activeSourceHash || selectedDraft.scopeDetail?.script?.activeSourceHash || '-'}</div>
+              </div>
+            </div>
+          </div>
+
+          <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
+            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+              History and stored package
+            </summary>
+            <div className="mt-3 grid gap-4 xl:grid-cols-2">
+              <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+                <div className="section-heading">Revision History</div>
+                <div className="mt-2 text-[12px] leading-6 text-gray-600">
+                  {activeCatalog?.revisionHistory?.length
+                    ? activeCatalog.revisionHistory.join(' → ')
+                    : activeCatalog?.activeRevision || '-'}
+                </div>
+                <div className="mt-3 text-[12px] leading-6 text-gray-600">
+                  latestProposal: {activeCatalog?.lastProposalId || '-'}
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+                <div className="section-heading">Stored Package</div>
+                <div className="mt-2 text-[12px] leading-6 text-gray-600">
+                  files: {storedScopePackage ? getPackageEntries(storedScopePackage).length : 0} · entry: {storedScopePackage?.entrySourcePath || '-'}
+                </div>
+                <pre className="mt-3 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                  {storedScopePackage
+                    ? (getSelectedPackageEntry(storedScopePackage, storedScopePackage.entrySourcePath)?.content || '-')
+                    : '-'}
+                </pre>
+              </div>
+            </div>
+          </details>
+        </div>
+      );
+    }
+
+    if (!activeProposal) {
+      return (
+        <EmptyState
+          title="No promotion submitted"
+          copy={activeCatalog?.lastProposalId
+            ? 'The scope catalog points at a proposal id, but no terminal decision is visible yet.'
+            : 'When the draft is stable, use Promote to send an evolution proposal and inspect the decision here.'}
+        />
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-semibold text-gray-800">Promotion proposal</div>
+            <div className="mt-1 text-[12px] text-gray-400">{activeProposal.proposalId || '-'}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { void refreshCurrentProposalDecision(); }}
+              className="panel-icon-button execution-logs-copy-action"
+              title="Refresh proposal decision"
+              aria-label="Refresh proposal decision"
+              disabled={proposalDecisionsPending}
+            >
+              <RefreshCw size={14} className={proposalDecisionsPending ? 'animate-spin' : ''} />
+            </button>
+            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+              activeProposal.accepted
+                ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+                : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
+            }`}>
+              {activeProposal.status || (activeProposal.accepted ? 'accepted' : 'rejected')}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+            <div className="section-heading">Revision</div>
+            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+              <div>base: {activeProposal.baseRevision || '-'}</div>
+              <div>candidate: {activeProposal.candidateRevision || '-'}</div>
+              <div>scriptId: {activeProposal.scriptId || '-'}</div>
+            </div>
+          </div>
+          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+            <div className="section-heading">Decision</div>
+            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+              <div>catalogActorId: {activeProposal.catalogActorId || activeCatalog?.catalogActorId || '-'}</div>
+              <div>definitionActorId: {activeProposal.definitionActorId || '-'}</div>
+              <div>failureReason: {activeProposal.failureReason || '-'}</div>
+            </div>
+          </div>
+        </div>
+
+        <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
+          <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+            Validation diagnostics
+          </summary>
+          {promotionDiagnostics.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {promotionDiagnostics.map((diagnostic, index) => (
+                <div key={`${diagnostic}-${index}`} className="rounded-[16px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3 text-[12px] leading-6 text-gray-600">
+                  {diagnostic}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 text-[12px] leading-6 text-gray-600">No validation diagnostics were returned.</div>
+          )}
+        </details>
+      </div>
+    );
+  }
 
   return (
     <>
       <header className="studio-editor-header">
         <div className="studio-editor-toolbar">
-          <div className="studio-view-switch">
-            <button
-              type="button"
-              onClick={() => setResultsCollapsed(true)}
-              className={`studio-view-switch-button ${resultsCollapsed ? 'active' : ''}`}
-            >
-              Editor
-            </button>
-            <button
-              type="button"
-              onClick={() => setResultsCollapsed(false)}
-              className={`studio-view-switch-button ${resultsCollapsed ? '' : 'active'}`}
-            >
-              Activity
-            </button>
-          </div>
-
           <div className="studio-title-bar">
             <div className="studio-title-group">
               <div className="min-w-0 flex-1">
+                <div className="panel-eyebrow">Scripts Studio</div>
                 <input
-                  className="studio-title-input"
+                  className="studio-title-input mt-1"
                   value={selectedDraft.scriptId}
                   onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, scriptId: event.target.value }))}
                   placeholder="script-id"
@@ -1638,107 +1887,73 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       <section className="relative flex-1 min-h-0 overflow-hidden bg-[#F2F1EE]">
         <div className="absolute inset-0 p-4 sm:p-5">
-          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
-            <div className="hidden xl:block xl:min-h-0">
-              <ResourceRail
-                drafts={drafts}
-                filteredDrafts={filteredDrafts}
-                filteredScopeScripts={filteredScopeScripts}
-                runtimeSnapshots={runtimeSnapshots}
-                proposalDecisions={proposalDecisions}
-                scopeCatalogsByScriptId={scopeCatalogsByScriptId}
-                selectedDraft={selectedDraft}
-                scopeSelectionId={scopeSelectionId}
-                selectedRuntimeActorId={selectedRuntimeActorId}
-                selectedProposalId={selectedProposalId}
-                search={search}
-                scopeBacked={scopeBacked}
-                scopeId={appContext.scopeId}
-                scopeScriptsPending={scopeScriptsPending}
-                runtimeSnapshotsPending={runtimeSnapshotsPending}
-                proposalDecisionsPending={proposalDecisionsPending}
-                onSearchChange={setSearch}
-                onCreateDraft={handleCreateDraft}
-                onSelectDraft={setSelectedDraftKey}
-                onOpenScopeScript={openScopeScript}
-                onRefreshScopeScripts={() => { void loadScopeScripts(); }}
-                onSelectRuntime={actorId => { void handleSelectRuntime(actorId); }}
-                onRefreshRuntimeSnapshots={() => { void loadRuntimeSnapshots(); }}
-                onSelectProposal={handleSelectProposal}
-              />
-            </div>
-
-            <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-              <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
-                <div>
-                  <div className="panel-eyebrow">Editor</div>
-                  <div className="mt-1 text-[15px] font-semibold text-gray-800">
-                    {editorView === 'source'
-                      ? (selectedPackageEntry?.path || selectedDraft.selectedFilePath || 'Behavior.cs')
-                      : 'Package manifest'}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="mr-1 flex items-center rounded-full border border-[#E5DED3] bg-white p-1">
-                    <button
-                      type="button"
-                      onClick={() => setEditorView('source')}
-                      className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
-                        editorView === 'source'
-                          ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
-                          : 'text-gray-400 hover:text-gray-600'
-                      }`}
-                    >
-                      Source
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditorView('package')}
-                      className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
-                        editorView === 'package'
-                          ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
-                          : 'text-gray-400 hover:text-gray-600'
-                      }`}
-                    >
-                      Package
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setLibraryOpen(true)}
-                    data-tooltip="Library"
-                    aria-label="Open drafts and scope library"
-                    className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] xl:hidden ${
-                      libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-                    }`}
-                  >
-                    <FolderOpen size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDetailsOpen(true)}
-                    data-tooltip="Details"
-                    aria-label="Open draft details"
-                    className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] xl:hidden ${
-                      detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-                    }`}
-                  >
-                    <SlidersHorizontal size={15} />
-                  </button>
-                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
-                    {hasScopeChanges ? (
-                      <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
-                        Unsaved scope changes
-                      </span>
-                    ) : null}
-                    <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
-                  </div>
+          <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
+              <div>
+                <div className="panel-eyebrow">Editor</div>
+                <div className="mt-1 text-[15px] font-semibold text-gray-800">
+                  {editorView === 'source'
+                    ? (selectedPackageEntry?.path || selectedDraft.selectedFilePath || 'Behavior.cs')
+                    : 'Package manifest'}
                 </div>
               </div>
-
-              <div className="min-h-0 flex-1 bg-[#FCFBF8]">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="mr-1 flex items-center rounded-full border border-[#E5DED3] bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditorView('source')}
+                    className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                      editorView === 'source'
+                        ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
+                        : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    Source
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditorView('package')}
+                    className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                      editorView === 'package'
+                        ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
+                        : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    Package
+                  </button>
+                </div>
                 {editorView === 'source' ? (
-                  <div className="flex h-full min-h-0">
+                  <button type="button" onClick={() => setFilesPaneOpen(value => !value)} className={surfaceActionClass(showFilesPane)}>
+                    {showFilesPane ? 'Hide files' : 'Files'}
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => setLibraryOpen(true)} className={surfaceActionClass(libraryOpen)}>
+                  Library
+                </button>
+                <button type="button" onClick={() => setActivityOpen(true)} className={surfaceActionClass(activityOpen)}>
+                  Activity
+                </button>
+                <button type="button" onClick={() => setDetailsOpen(true)} className={surfaceActionClass(detailsOpen)}>
+                  Details
+                </button>
+                <button type="button" onClick={() => setAskAiOpen(true)} className={surfaceActionClass(askAiOpen)}>
+                  Ask AI
+                </button>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
+                  {hasScopeChanges ? (
+                    <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
+                      Unsaved scope changes
+                    </span>
+                  ) : null}
+                  <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 bg-[#FCFBF8]">
+              {editorView === 'source' ? (
+                <div className="flex h-full min-h-0">
+                  {showFilesPane ? (
                     <div className="w-[268px] min-w-[240px] max-w-[320px]">
                       <PackageFileTree
                         entries={selectedPackageEntries}
@@ -1751,580 +1966,315 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                         onSetEntry={handleSetEntryFile}
                       />
                     </div>
-                    <div className="min-h-0 flex-1">
-                      <Editor
-                        path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                        language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
-                        theme="aevatar-script-light"
-                        value={selectedPackageEntry?.content || ''}
-                        beforeMount={handleMonacoBeforeMount}
-                        onMount={handleEditorMount}
-                        onChange={value => updateDraft(selectedDraft.key, draft => ({
-                          ...draft,
-                          package: updatePackageFileContent(
-                            draft.package,
-                            draft.selectedFilePath,
-                            value ?? '',
-                          ),
-                        }))}
-                        loading={(
-                          <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                            Loading
+                  ) : null}
+                  <div className="min-h-0 flex-1">
+                    <Editor
+                      path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                      language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
+                      theme="aevatar-script-light"
+                      value={selectedPackageEntry?.content || ''}
+                      beforeMount={handleMonacoBeforeMount}
+                      onMount={handleEditorMount}
+                      onChange={value => updateDraft(selectedDraft.key, draft => ({
+                        ...draft,
+                        package: updatePackageFileContent(
+                          draft.package,
+                          draft.selectedFilePath,
+                          value ?? '',
+                        ),
+                      }))}
+                      loading={(
+                        <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                          Loading
+                        </div>
+                      )}
+                      options={{
+                        automaticLayout: true,
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        smoothScrolling: true,
+                        fontSize: 13,
+                        lineHeight: 23,
+                        fontLigatures: true,
+                        tabSize: 4,
+                        insertSpaces: true,
+                        renderWhitespace: 'selection',
+                        renderValidationDecorations: 'on',
+                        lineNumbersMinChars: 3,
+                        quickSuggestions: false,
+                        suggestOnTriggerCharacters: false,
+                        wordWrap: 'off',
+                        stickyScroll: { enabled: false },
+                        bracketPairColorization: { enabled: true },
+                        guides: {
+                          indentation: true,
+                          bracketPairs: true,
+                        },
+                        folding: true,
+                        padding: {
+                          top: 18,
+                          bottom: 18,
+                        },
+                        scrollbar: {
+                          verticalScrollbarSize: 10,
+                          horizontalScrollbarSize: 10,
+                        },
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full overflow-y-auto bg-[#FCFBF8] p-5">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                      <div className="section-heading">Entry contract</div>
+                      <div className="mt-3 space-y-3">
+                        <div>
+                          <label className="field-label">Entry Behavior Type</label>
+                          <input
+                            className="panel-input mt-1"
+                            placeholder="DraftBehavior"
+                            value={selectedDraft.package.entryBehaviorTypeName}
+                            onChange={event => updateDraft(selectedDraft.key, draft => ({
+                              ...draft,
+                              package: updateEntryBehaviorTypeName(draft.package, event.target.value),
+                            }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="field-label">Entry Source Path</label>
+                          <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
+                            {selectedDraft.package.entrySourcePath || '-'}
                           </div>
-                        )}
-                        options={{
-                          automaticLayout: true,
-                          minimap: { enabled: false },
-                          scrollBeyondLastLine: false,
-                          smoothScrolling: true,
-                          fontSize: 13,
-                          lineHeight: 23,
-                          fontLigatures: true,
-                          tabSize: 4,
-                          insertSpaces: true,
-                          renderWhitespace: 'selection',
-                          renderValidationDecorations: 'on',
-                          lineNumbersMinChars: 3,
-                          quickSuggestions: false,
-                          suggestOnTriggerCharacters: false,
-                          wordWrap: 'off',
-                          stickyScroll: { enabled: false },
-                          bracketPairColorization: { enabled: true },
-                          guides: {
-                            indentation: true,
-                            bracketPairs: true,
-                          },
-                          folding: true,
-                          padding: {
-                            top: 18,
-                            bottom: 18,
-                          },
-                          scrollbar: {
-                            verticalScrollbarSize: 10,
-                            horizontalScrollbarSize: 10,
-                          },
-                        }}
-                      />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                      <div className="section-heading">Package summary</div>
+                      <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
+                        <div>format: {selectedDraft.package.format}</div>
+                        <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
+                        <div>proto files: {selectedDraft.package.protoFiles.length}</div>
+                        <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
+                      </div>
                     </div>
                   </div>
+
+                  <details className="mt-4 rounded-[20px] border border-[#EEEAE4] bg-white px-4 py-4">
+                    <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                      Persisted source preview
+                    </summary>
+                    <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                      {serializePersistedSource(selectedDraft.package) || '-'}
+                    </pre>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
+                  <div className="mt-1 truncate text-[13px] text-gray-700">
+                    {validationPending
+                      ? 'Checking'
+                      : visibleProblems[0]
+                        ? visibleProblems[0].message
+                        : 'Clean'}
+                  </div>
+                </div>
+                {visibleProblems.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setDiagnosticsOpen(true)}
+                    className={surfaceActionClass(diagnosticsOpen)}
+                  >
+                    Problems {visibleProblems.length}
+                  </button>
                 ) : (
-                  <div className="h-full overflow-y-auto bg-[#FCFBF8] p-5">
-                    <div className="grid gap-4 xl:grid-cols-2">
-                      <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                        <div className="section-heading">Entry contract</div>
-                        <div className="mt-3 space-y-3">
-                          <div>
-                            <label className="field-label">Entry Behavior Type</label>
-                            <input
-                              className="panel-input mt-1"
-                              placeholder="DraftBehavior"
-                              value={selectedDraft.package.entryBehaviorTypeName}
-                              onChange={event => updateDraft(selectedDraft.key, draft => ({
-                                ...draft,
-                                package: updateEntryBehaviorTypeName(draft.package, event.target.value),
-                              }))}
-                            />
-                          </div>
-                          <div>
-                            <label className="field-label">Entry Source Path</label>
-                            <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
-                              {selectedDraft.package.entrySourcePath || '-'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                        <div className="section-heading">Package summary</div>
-                        <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
-                          <div>format: {selectedDraft.package.format}</div>
-                          <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
-                          <div>proto files: {selectedDraft.package.protoFiles.length}</div>
-                          <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                      <div className="section-heading">Persisted source preview</div>
-                      <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                        {serializePersistedSource(selectedDraft.package) || '-'}
-                      </pre>
-                    </div>
+                  <div className="rounded-full border border-[#DCE8C8] bg-[#F5FBEE] px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-[#5C7A2D]">
+                    Clean
                   </div>
                 )}
               </div>
-
-              <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
-                    <div className="mt-1 truncate text-[13px] text-gray-700">
-                      {validationPending
-                        ? 'Checking'
-                        : visibleProblems[0]
-                          ? visibleProblems[0].message
-                          : 'Clean'}
-                    </div>
-                  </div>
-                  {visibleProblems.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => setProblemsOpen(value => !value)}
-                      className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
-                    >
-                      {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
-                    </button>
-                  ) : null}
-                </div>
-
-                {problemsOpen && visibleProblems.length > 0 ? (
-                  <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
-                    {visibleProblems.map((diagnostic, index) => (
-                      <button
-                        key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
-                        type="button"
-                        onClick={() => jumpToDiagnostic(diagnostic)}
-                        className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
-                          diagnostic.severity === 'error'
-                            ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
-                            : diagnostic.severity === 'warning'
-                              ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
-                              : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
-                            {diagnostic.code || diagnostic.severity}
-                          </div>
-                          <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
-                        </div>
-                        <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-
-            <div className="hidden xl:block xl:min-h-0">
-              <InspectorPanel
-                selectedDraft={selectedDraft}
-                scopeBacked={scopeBacked}
-                appContext={appContext}
-              />
             </div>
-          </div>
+          </section>
         </div>
-
-        <div className="absolute bottom-6 right-5 z-30 flex items-end gap-3">
-          {askAiOpen ? (
-            <div
-              className="ask-ai-surface w-[380px] rounded-[28px] border border-[#E8E2D9] p-4 shadow-[0_26px_64px_rgba(17,24,39,0.16)]"
-              onClick={event => event.stopPropagation()}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="panel-eyebrow">Source</div>
-                  <div className="panel-title">Ask AI</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAskAiOpen(false)}
-                  title="Collapse Ask AI."
-                  className="panel-icon-button"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-
-              <p className="mt-3 text-[12px] leading-6 text-gray-500">
-                Describe the script change you want. Ask AI now returns a full script package and previews the active file here until you apply it.
-              </p>
-
-              <textarea
-                rows={5}
-                className="panel-textarea mt-4"
-                placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
-                value={askAiPrompt}
-                onChange={event => setAskAiPrompt(event.target.value)}
-              />
-
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <div className="text-[11px] text-gray-400">
-                  {askAiPending
-                    ? 'Generating and compiling file content...'
-                    : askAiGeneratedSource
-                      ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
-                      : 'Return format: script package JSON'}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { void handleAskAiGenerate(); }}
-                  className="ghost-action !px-3"
-                  disabled={askAiPending}
-                >
-                  <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
-                </button>
-              </div>
-
-              <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
-                  <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
-                    {askAiReasoning || 'LLM reasoning will stream here.'}
-                  </pre>
-                </div>
-
-                <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Preview</div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleApplyAskAiSource}
-                        disabled={!askAiGeneratedSource.trim()}
-                        title="Apply generated source to the editor."
-                        aria-label="Apply generated source to the editor"
-                        className="panel-icon-button"
-                      >
-                        <Check size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { void handleCopyAskAiSource(); }}
-                        disabled={!askAiGeneratedSource.trim()}
-                        title="Copy generated source."
-                        aria-label="Copy generated source"
-                        className="panel-icon-button"
-                      >
-                        <Copy size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  {askAiGeneratedPackage ? (
-                    <div className="mt-2 text-[11px] leading-5 text-gray-400">
-                      {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} · {askAiGeneratedPackage.csharpSources.length} C# · {askAiGeneratedPackage.protoFiles.length} proto
-                    </div>
-                  ) : null}
-                  <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                    {askAiGeneratedSource || askAiAnswer || 'Generated file content will appear here.'}
-                  </pre>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={() => setAskAiOpen(value => !value)}
-            title="Ask AI to rewrite the current draft."
-            className="ask-ai-trigger flex h-14 w-14 items-center justify-center rounded-[20px] border border-[color:var(--accent-border)] text-[color:var(--accent-text)] transition-transform hover:-translate-y-0.5"
-          >
-            <Bot size={20} />
-          </button>
-        </div>
-      </section>
-
-      <section className={`execution-logs ${resultsCollapsed ? 'collapsed' : ''}`}>
-        <div className="execution-logs-header">
-          <div>
-            <div className="text-[11px] text-gray-400 uppercase tracking-[0.16em]">Execution</div>
-            <div className="text-[14px] font-semibold text-gray-800">Draft activity</div>
-          </div>
-          <div className="execution-logs-header-actions">
-            {resultView === 'runtime' && (activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId) ? (
-              <button
-                type="button"
-                onClick={() => { void refreshSnapshot(activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId); }}
-                className="panel-icon-button execution-logs-copy-action"
-                title="Refresh runtime result"
-                aria-label="Refresh runtime result"
-                disabled={snapshotPending}
-              >
-                <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => setResultsCollapsed(value => !value)}
-              className="execution-logs-collapse-action"
-              aria-expanded={!resultsCollapsed}
-            >
-              <span className="text-[12px] text-gray-500">{resultsCollapsed ? 'Expand activity' : 'Collapse activity'}</span>
-              <ChevronDown size={16} className={`execution-logs-collapse-icon ${resultsCollapsed ? 'collapsed' : ''}`} />
-            </button>
-          </div>
-        </div>
-
-        {!resultsCollapsed ? (
-          <div className="execution-logs-body">
-            <div className="execution-runs-list">
-              <StudioResultCard
-                active={resultView === 'runtime'}
-                title="Draft Run"
-                meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
-                summary={runtimeSummary}
-                status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
-                onClick={() => setResultView('runtime')}
-              />
-              <StudioResultCard
-                active={resultView === 'save'}
-                title="Catalog"
-                meta={activeCatalog ? formatDateTime(activeCatalog.updatedAt) : selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
-                summary={saveSummary}
-                status={scopeBacked ? (hasScopeChanges ? 'dirty' : activeCatalog || selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
-                onClick={() => setResultView('save')}
-              />
-              <StudioResultCard
-                active={resultView === 'promotion'}
-                title="Promotion"
-                meta={activeProposal?.candidateRevision || activeCatalog?.lastProposalId || 'No candidate'}
-                summary={promotionSummary}
-                status={activeProposal?.status || ''}
-                onClick={() => setResultView('promotion')}
-              />
-            </div>
-
-            <div className="execution-log-stream">
-              <div className="execution-log-list">
-                <div className="execution-action-panel">
-                  {resultView === 'runtime' ? (
-                    selectedDraft.lastRun || activeRuntimeSnapshot ? (
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[14px] font-semibold text-gray-800">Runtime output</div>
-                            <div className="mt-1 text-[12px] text-gray-400">{activeRuntimeSnapshot?.actorId || selectedDraft.lastRun?.runId || '-'}</div>
-                          </div>
-                          <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
-                            {snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : 'pending')}
-                          </div>
-                        </div>
-
-                        <div className="grid gap-4 xl:grid-cols-2">
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Input</div>
-                            <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.input || selectedDraft.input || '-'}</pre>
-                          </div>
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Output</div>
-                            <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
-                          </div>
-                        </div>
-
-                        <div className="grid gap-4 xl:grid-cols-2">
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Notes</div>
-                            <div className="mt-2 text-[12px] leading-6 text-gray-600">
-                              {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
-                            </div>
-                          </div>
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Metadata</div>
-                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>scriptId: {activeRuntimeSnapshot?.scriptId || selectedDraft.scriptId || '-'}</div>
-                              <div>runtimeActorId: {activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId || '-'}</div>
-                              <div>definitionActorId: {activeRuntimeSnapshot?.definitionActorId || selectedDraft.definitionActorId || '-'}</div>
-                              <div>stateVersion: {activeRuntimeSnapshot?.stateVersion ?? '-'}</div>
-                              <div>updatedAt: {formatDateTime(activeRuntimeSnapshot?.updatedAt)}</div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
-                          <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                            Raw Read Model
-                          </summary>
-                          <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                            {prettyPrintJson(activeRuntimeSnapshot?.readModelPayloadJson)}
-                          </pre>
-                        </details>
-                      </div>
-                    ) : (
-                      <EmptyState
-                        title="No runtime output yet"
-                        copy="Run the current draft. The materialized read model will appear here."
-                      />
-                    )
-                  ) : resultView === 'save' ? (
-                    scopeBacked ? (
-                      activeCatalog || selectedDraft.scopeDetail?.script ? (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-[14px] font-semibold text-gray-800">Catalog state</div>
-                              <div className="mt-1 text-[12px] text-gray-400">{activeCatalog?.scopeId || selectedDraft.scopeDetail?.scopeId || '-'}</div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => { void refreshCurrentCatalog(); }}
-                                className="panel-icon-button execution-logs-copy-action"
-                                title="Refresh catalog history"
-                                aria-label="Refresh catalog history"
-                              >
-                                <RefreshCw size={14} />
-                              </button>
-                              <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                                hasScopeChanges
-                                  ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
-                                  : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                              }`}>
-                                {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid gap-4 xl:grid-cols-2">
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Script</div>
-                              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>scriptId: {activeCatalog?.scriptId || selectedDraft.scopeDetail?.script?.scriptId || '-'}</div>
-                                <div>revision: {activeCatalog?.activeRevision || selectedDraft.scopeDetail?.script?.activeRevision || '-'}</div>
-                                <div>updatedAt: {formatDateTime(activeCatalog?.updatedAt || selectedDraft.scopeDetail?.script?.updatedAt)}</div>
-                              </div>
-                            </div>
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Actors</div>
-                              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>catalogActorId: {activeCatalog?.catalogActorId || selectedDraft.scopeDetail?.script?.catalogActorId || '-'}</div>
-                                <div>definitionActorId: {activeCatalog?.activeDefinitionActorId || selectedDraft.scopeDetail?.script?.definitionActorId || '-'}</div>
-                                <div>sourceHash: {activeCatalog?.activeSourceHash || selectedDraft.scopeDetail?.script?.activeSourceHash || '-'}</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {activeCatalog ? (
-                            <div className="grid gap-4 xl:grid-cols-2">
-                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                                <div className="section-heading">Revision History</div>
-                                <div className="mt-2 text-[12px] leading-6 text-gray-600">
-                                  {activeCatalog.revisionHistory.length > 0
-                                    ? activeCatalog.revisionHistory.join(' → ')
-                                    : activeCatalog.activeRevision || '-'}
-                                </div>
-                              </div>
-                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                                <div className="section-heading">Latest Proposal</div>
-                                <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                  <div>proposalId: {activeCatalog.lastProposalId || '-'}</div>
-                                  <div>previousRevision: {activeCatalog.previousRevision || '-'}</div>
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-
-                          <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
-                            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                              Stored Package
-                            </summary>
-                            <div className="mt-3 space-y-3">
-                              <div className="text-[12px] leading-6 text-gray-600">
-                                files: {storedScopePackage ? getPackageEntries(storedScopePackage).length : 0} · entry: {storedScopePackage?.entrySourcePath || '-'}
-                              </div>
-                              <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                                {storedScopePackage
-                                  ? (getSelectedPackageEntry(storedScopePackage, storedScopePackage.entrySourcePath)?.content || '-')
-                                  : '-'}
-                              </pre>
-                            </div>
-                          </details>
-                        </div>
-                      ) : (
-                        <EmptyState
-                          title="Not saved into the scope"
-                          copy="Use Save to persist this draft and make it show up in the saved scripts list."
-                        />
-                      )
-                    ) : (
-                      <EmptyState
-                        title="Scope save unavailable"
-                        copy="This app session does not have a resolved scope. The draft is still kept locally in your browser storage."
-                      />
-                    )
-                  ) : (
-                    activeProposal ? (
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[14px] font-semibold text-gray-800">Promotion proposal</div>
-                            <div className="mt-1 text-[12px] text-gray-400">{activeProposal.proposalId || '-'}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => { void refreshCurrentProposalDecision(); }}
-                              className="panel-icon-button execution-logs-copy-action"
-                              title="Refresh proposal decision"
-                              aria-label="Refresh proposal decision"
-                              disabled={proposalDecisionsPending}
-                            >
-                              <RefreshCw size={14} className={proposalDecisionsPending ? 'animate-spin' : ''} />
-                            </button>
-                            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                              activeProposal.accepted
-                                ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                                : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
-                            }`}>
-                              {activeProposal.status || (activeProposal.accepted ? 'accepted' : 'rejected')}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="grid gap-4 xl:grid-cols-2">
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Revision</div>
-                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>base: {activeProposal.baseRevision || '-'}</div>
-                              <div>candidate: {activeProposal.candidateRevision || '-'}</div>
-                              <div>scriptId: {activeProposal.scriptId || '-'}</div>
-                            </div>
-                          </div>
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Decision</div>
-                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>catalogActorId: {activeProposal.catalogActorId || activeCatalog?.catalogActorId || '-'}</div>
-                              <div>definitionActorId: {activeProposal.definitionActorId || '-'}</div>
-                              <div>failureReason: {activeProposal.failureReason || '-'}</div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                          <div className="section-heading">Validation</div>
-                          {promotionDiagnostics.length > 0 ? (
-                            <div className="mt-3 space-y-2">
-                              {promotionDiagnostics.map((diagnostic, index) => (
-                                <div key={`${diagnostic}-${index}`} className="rounded-[16px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3 text-[12px] leading-6 text-gray-600">
-                                  {diagnostic}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-2 text-[12px] leading-6 text-gray-600">No validation diagnostics were returned.</div>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <EmptyState
-                        title="No promotion submitted"
-                        copy={activeCatalog?.lastProposalId
-                          ? 'The scope catalog points at a proposal id, but no terminal decision is visible yet.'
-                          : 'When the draft is stable, use Promote to send an evolution proposal and inspect the decision here.'}
-                      />
-                    )
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </section>
 
       <ScriptsStudioModal
+        open={activityOpen}
+        eyebrow="Activity"
+        title="Draft activity"
+        onClose={() => setActivityOpen(false)}
+        width="min(1180px, 100%)"
+        actions={<button type="button" onClick={() => setActivityOpen(false)} className="ghost-action">Close</button>}
+      >
+        <div className="min-h-[620px] grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+          <div className="space-y-3">
+            <StudioResultCard
+              active={resultView === 'runtime'}
+              title="Draft Run"
+              meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
+              summary={runtimeSummary}
+              status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
+              onClick={() => setResultView('runtime')}
+            />
+            <StudioResultCard
+              active={resultView === 'save'}
+              title="Catalog"
+              meta={activeCatalog ? formatDateTime(activeCatalog.updatedAt) : selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
+              summary={saveSummary}
+              status={scopeBacked ? (hasScopeChanges ? 'dirty' : activeCatalog || selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
+              onClick={() => setResultView('save')}
+            />
+            <StudioResultCard
+              active={resultView === 'promotion'}
+              title="Promotion"
+              meta={activeProposal?.candidateRevision || activeCatalog?.lastProposalId || 'No candidate'}
+              summary={promotionSummary}
+              status={activeProposal?.status || ''}
+              onClick={() => setResultView('promotion')}
+            />
+          </div>
+
+          <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+            {renderResultDetailContent()}
+          </div>
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={diagnosticsOpen}
+        eyebrow="Compiler"
+        title="Validation diagnostics"
+        onClose={() => setDiagnosticsOpen(false)}
+        width="min(920px, 100%)"
+        actions={<button type="button" onClick={() => setDiagnosticsOpen(false)} className="ghost-action">Close</button>}
+      >
+        <div className="min-h-[420px]">
+          {visibleProblems.length > 0 ? (
+            <div className="max-h-[560px] space-y-2 overflow-auto pr-1">
+              {visibleProblems.map((diagnostic, index) => (
+                <button
+                  key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
+                  type="button"
+                  onClick={() => {
+                    jumpToDiagnostic(diagnostic);
+                    setDiagnosticsOpen(false);
+                  }}
+                  className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
+                    diagnostic.severity === 'error'
+                      ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
+                      : diagnostic.severity === 'warning'
+                        ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
+                        : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+                      {diagnostic.code || diagnostic.severity}
+                    </div>
+                    <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
+                  </div>
+                  <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="No diagnostics" copy="The current draft validated cleanly." />
+          )}
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={askAiOpen}
+        eyebrow="Source"
+        title="Ask AI"
+        onClose={() => setAskAiOpen(false)}
+        width="min(1040px, 100%)"
+        actions={
+          <>
+            <button type="button" onClick={() => setAskAiOpen(false)} className="ghost-action">Close</button>
+            <button type="button" onClick={() => { void handleAskAiGenerate(); }} className="solid-action" disabled={askAiPending}>
+              <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-[12px] leading-6 text-gray-500">
+            Describe the script change you want. Ask AI returns a full script package and keeps the generated file preview here until you apply it.
+          </p>
+
+          <textarea
+            rows={5}
+            className="panel-textarea"
+            placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
+            value={askAiPrompt}
+            onChange={event => setAskAiPrompt(event.target.value)}
+          />
+
+          <div className="text-[11px] text-gray-400">
+            {askAiPending
+              ? 'Generating and compiling file content...'
+              : askAiGeneratedSource
+                ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
+                : 'Return format: script package JSON'}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
+              <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
+                {askAiReasoning || 'LLM reasoning will stream here.'}
+              </pre>
+            </div>
+
+            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Preview</div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleApplyAskAiSource}
+                    disabled={!askAiGeneratedSource.trim()}
+                    title="Apply generated source to the editor."
+                    aria-label="Apply generated source to the editor"
+                    className="panel-icon-button"
+                  >
+                    <Check size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleCopyAskAiSource(); }}
+                    disabled={!askAiGeneratedSource.trim()}
+                    title="Copy generated source."
+                    aria-label="Copy generated source"
+                    className="panel-icon-button"
+                  >
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              {askAiGeneratedPackage ? (
+                <div className="mt-2 text-[11px] leading-5 text-gray-400">
+                  {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} · {askAiGeneratedPackage.csharpSources.length} C# · {askAiGeneratedPackage.protoFiles.length} proto
+                </div>
+              ) : null}
+              <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                {askAiGeneratedSource || askAiAnswer || 'Generated file content will appear here.'}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
         open={libraryOpen}
-        eyebrow="Scripts"
+        eyebrow="Scripts Studio"
         title="Draft library"
         onClose={() => setLibraryOpen(false)}
         width="min(980px, 100%)"
@@ -2482,7 +2432,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         <div className="space-y-4">
           <div className="rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] px-4 py-4 text-[12px] leading-6 text-gray-600">
             This input is passed into the script through <code className="rounded bg-white px-1.5 py-0.5 text-[11px]">AppScriptCommand</code>.
-            The execution result will appear in the activity panel below the editor.
+            The execution result will appear in the Activity dialog.
           </div>
           <div>
             <label className="field-label">{selectedDraft.scriptId}</label>

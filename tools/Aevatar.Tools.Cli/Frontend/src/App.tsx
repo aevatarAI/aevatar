@@ -258,6 +258,45 @@ function createEmptyAppContext(): AppContextState {
   };
 }
 
+function resolveAppContextState(context: any): AppContextState {
+  const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
+  return {
+    hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
+    scopeId: resolvedScopeId,
+    scopeResolved: Boolean(resolvedScopeId),
+    scopeSource: context?.scopeSource || '',
+    workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
+    scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
+    scriptsEnabled: Boolean(context?.features?.scripts),
+    scriptContract: {
+      inputType: context?.scriptContract?.inputType || '',
+      readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
+    },
+  };
+}
+
+function isAuthResponseInvalid(error: any) {
+  return Boolean(
+    error?.status === 401 ||
+    error?.loginUrl ||
+    (typeof error?.message === 'string' && error.message.includes('Sign-in may be required.')) ||
+    (typeof error?.rawBody === 'string' &&
+      (error.rawBody.startsWith('<!DOCTYPE') || error.rawBody.startsWith('<html'))),
+  );
+}
+
+function summarizeBootstrapFailures(labels: string[]) {
+  if (labels.length === 0) {
+    return '';
+  }
+
+  const visibleLabels = labels.slice(0, 3);
+  const suffix = labels.length > visibleLabels.length
+    ? `, +${labels.length - visibleLabels.length} more`
+    : '';
+  return `Loaded studio with defaults for ${visibleLabels.join(', ')}${suffix}.`;
+}
+
 type ExecutionLogsWindowState = {
   isPopout: boolean;
   executionId: string | null;
@@ -1289,16 +1328,16 @@ function App() {
       }
 
       const [
-        context,
-        workspace,
-        workflows,
-        connectorCatalog,
-        connectorDraftResponse,
-        roleCatalogResponse,
-        roleDraftResponse,
-        executionList,
-        settings,
-      ] = await Promise.all([
+        contextResult,
+        workspaceResult,
+        workflowsResult,
+        connectorCatalogResult,
+        connectorDraftResult,
+        roleCatalogResult,
+        roleDraftResult,
+        executionListResult,
+        settingsResult,
+      ] = await Promise.allSettled([
         api.app.getContext(),
         api.workspace.getSettings(),
         api.workspace.listWorkflows(),
@@ -1309,6 +1348,48 @@ function App() {
         api.executions.list(),
         api.settings.get(),
       ]);
+
+      const bootstrapFailures = [
+        { label: 'app context', result: contextResult },
+        { label: 'workspace settings', result: workspaceResult },
+        { label: 'workflow list', result: workflowsResult },
+        { label: 'connectors catalog', result: connectorCatalogResult },
+        { label: 'connector draft', result: connectorDraftResult },
+        { label: 'roles catalog', result: roleCatalogResult },
+        { label: 'role draft', result: roleDraftResult },
+        { label: 'execution list', result: executionListResult },
+        { label: 'studio settings', result: settingsResult },
+      ].flatMap(item =>
+        item.result.status === 'rejected'
+          ? [{ label: item.label, error: item.result.reason }]
+          : []);
+
+      const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
+      if (authFailure) {
+        setAuthSession(prev => ({
+          ...prev,
+          loading: false,
+          enabled: true,
+          authenticated: false,
+          loginUrl: authFailure.error?.loginUrl || prev.loginUrl || '/auth/login',
+          errorMessage: authFailure.error?.message || 'Sign in to continue.',
+        }));
+        return;
+      }
+
+      bootstrapFailures.forEach(item => {
+        console.warn(`[Aevatar App] Failed to load bootstrap resource: ${item.label}`, item.error);
+      });
+
+      const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
+      const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
+      const workflows = workflowsResult.status === 'fulfilled' ? workflowsResult.value : [];
+      const connectorCatalog = connectorCatalogResult.status === 'fulfilled' ? connectorCatalogResult.value : null;
+      const connectorDraftResponse = connectorDraftResult.status === 'fulfilled' ? connectorDraftResult.value : null;
+      const roleCatalogResponse = roleCatalogResult.status === 'fulfilled' ? roleCatalogResult.value : null;
+      const roleDraftResponse = roleDraftResult.status === 'fulfilled' ? roleDraftResult.value : null;
+      const executionList = executionListResult.status === 'fulfilled' ? executionListResult.value : [];
+      const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
 
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
@@ -1322,19 +1403,7 @@ function App() {
         : Array.isArray(workspace?.directories) ? workspace.directories : [];
       const nextRuntime = settings?.runtimeBaseUrl || workspace?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 
-      setAppContext({
-        hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
-        scopeId: resolvedScopeId,
-        scopeResolved: Boolean(resolvedScopeId),
-        scopeSource: context?.scopeSource || '',
-        workflowStorageMode,
-        scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
-        scriptsEnabled: Boolean(context?.features?.scripts),
-        scriptContract: {
-          inputType: context?.scriptContract?.inputType || '',
-          readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
-        },
-      });
+      setAppContext(resolveAppContextState(context));
       setWorkspaceSettings({
         runtimeBaseUrl: nextRuntime,
         directories: nextDirectories,
@@ -1356,14 +1425,12 @@ function App() {
         ...prev,
         directoryId: defaultDirectoryId,
       }));
-    } catch (error: any) {
-      const authResponseLooksInvalid =
-        error?.status === 401 ||
-        (typeof error?.message === 'string' && error.message.includes('Sign-in may be required.')) ||
-        (typeof error?.rawBody === 'string' &&
-          (error.rawBody.startsWith('<!DOCTYPE') || error.rawBody.startsWith('<html')));
 
-      if (authResponseLooksInvalid) {
+      if (bootstrapFailures.length > 0) {
+        flash(summarizeBootstrapFailures(bootstrapFailures.map(item => item.label)), 'info');
+      }
+    } catch (error: any) {
+      if (isAuthResponseInvalid(error)) {
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -3804,7 +3871,7 @@ function App() {
           {appContext.scriptsEnabled ? (
             <RailButton
               active={workspacePage === 'scripts'}
-              label="Scripts"
+              label="Scripts Studio"
               icon={<Code2 size={18} />}
               onClick={openScriptsPage}
             />

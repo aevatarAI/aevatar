@@ -38,7 +38,7 @@ export function ResourceRail(props: {
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
       <div className="border-b border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4">
-        <div className="panel-eyebrow">Scripts</div>
+        <div className="panel-eyebrow">Scripts Studio</div>
         <div className="mt-1 text-[15px] font-semibold text-gray-800">Resource rail</div>
         <div className="mt-3 search-field !min-h-[40px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
           <Search size={14} className="text-gray-400" />
