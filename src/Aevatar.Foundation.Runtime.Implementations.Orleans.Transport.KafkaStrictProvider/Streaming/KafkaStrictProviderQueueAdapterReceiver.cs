@@ -10,9 +10,8 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
 {
     private static readonly TimeSpan ConsumePollInterval = TimeSpan.FromMilliseconds(100);
 
-    private readonly QueueId _queueId;
     private readonly int _partitionId;
-    private readonly Lazy<IKafkaStrictProviderEnvelopeTransport> _transport;
+    private readonly KafkaStrictProviderProducer _producer;
     private readonly KafkaStrictProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
@@ -34,14 +33,13 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
 
     public KafkaStrictProviderQueueAdapterReceiver(
         QueueId queueId,
-        Func<IKafkaStrictProviderEnvelopeTransport> resolveTransport,
+        KafkaStrictProviderProducer producer,
         KafkaStrictProviderTransportOptions transportOptions,
-        IStrictOrleansStreamQueueMapper mapper,
+        StrictQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
-        _queueId = queueId;
         _partitionId = mapper.GetPartitionId(queueId);
-        _transport = new Lazy<IKafkaStrictProviderEnvelopeTransport>(resolveTransport);
+        _producer = producer;
         _transportOptions = transportOptions;
         _actorEventNamespace = actorEventNamespace;
         _topicPartition = new TopicPartition(_transportOptions.TopicName, new Partition(_partitionId));
@@ -63,7 +61,7 @@ internal sealed class KafkaStrictProviderQueueAdapterReceiver : IQueueAdapterRec
 
     private async Task InitializeCoreAsync()
     {
-        await _transport.Value.StartAsync();
+        await _producer.StartAsync();
 
         var consumer = new ConsumerBuilder<Ignore, byte[]>(new ConsumerConfig
         {

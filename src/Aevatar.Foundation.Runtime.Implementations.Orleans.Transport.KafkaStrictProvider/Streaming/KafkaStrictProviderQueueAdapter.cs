@@ -9,22 +9,21 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStri
 internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly Lazy<IKafkaStrictProviderEnvelopeTransport> _transport;
+    private readonly KafkaStrictProviderProducer _producer;
     private readonly KafkaStrictProviderTransportOptions _transportOptions;
-    private readonly StrictQueuePartitionMapper _mapper;
     private readonly string _actorEventNamespace;
 
     public KafkaStrictProviderQueueAdapter(
         string providerName,
-        Func<IKafkaStrictProviderEnvelopeTransport> resolveTransport,
+        KafkaStrictProviderProducer producer,
         KafkaStrictProviderTransportOptions transportOptions,
         StrictQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _providerName = providerName;
-        _transport = new Lazy<IKafkaStrictProviderEnvelopeTransport>(resolveTransport);
+        _producer = producer;
         _transportOptions = transportOptions;
-        _mapper = mapper;
+        Mapper = mapper;
         _actorEventNamespace = actorEventNamespace;
     }
 
@@ -33,6 +32,8 @@ internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
     public bool IsRewindable => false;
 
     public StreamProviderDirection Direction => StreamProviderDirection.ReadWrite;
+
+    internal StrictQueuePartitionMapper Mapper { get; }
 
     public async Task QueueMessageBatchAsync<T>(
         StreamId streamId,
@@ -62,7 +63,7 @@ internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
                 continue;
 
             var streamNamespace = streamId.GetNamespace() ?? OrleansRuntimeConstants.ActorEventStreamNamespace;
-            await _transport.Value.PublishAsync(
+            await _producer.PublishAsync(
                 streamNamespace,
                 streamId.GetKeyAsString(),
                 envelope.ToByteArray(),
@@ -73,8 +74,8 @@ internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
         new KafkaStrictProviderQueueAdapterReceiver(
             queueId,
-            () => _transport.Value,
+            _producer,
             _transportOptions,
-            _mapper,
+            Mapper,
             _actorEventNamespace);
 }

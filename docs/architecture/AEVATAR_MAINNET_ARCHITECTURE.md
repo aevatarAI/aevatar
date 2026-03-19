@@ -1135,7 +1135,7 @@ flowchart LR
 
 **3) Kafka 与流并行度（P0）**
 
-- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。需验证当前 `MassTransitKafka` 传输实现是否已将 `RunId` 用作 Kafka 分区键；若使用默认随机分区，同一 Run 的事件可能乱序到达投影端。
+- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。当前主链已收敛到 `KafkaStrictProvider`；同一 `runId` 的 Kafka 路由键必须保持稳定，并通过统一的 `StreamId -> PartitionId` 映射进入同一分区，避免同一 Run 的事件乱序到达投影端。
 - 分区数至少满足 `num_partitions >= max(silo_replicas, target_parallelism)`。
 - 消费组按环境/业务域隔离，避免不同流量池互相争抢。
 - 对于多租户隔离要求极高的场景，考虑为高流量租户/App 部署独立 Mainnet 实例并配置独立 Kafka Topic/ConsumerGroup（实例级环境变量），从传输层实现硬隔离。

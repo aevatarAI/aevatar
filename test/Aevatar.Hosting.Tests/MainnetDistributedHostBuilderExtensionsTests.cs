@@ -41,7 +41,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-strict-events");
         app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
-        app.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>().GetType().Name.Should().Be("KafkaStrictProviderEnvelopeTransport");
+        app.Services.GetRequiredService<KafkaStrictProviderProducer>().Should().NotBeNull();
     }
 
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)

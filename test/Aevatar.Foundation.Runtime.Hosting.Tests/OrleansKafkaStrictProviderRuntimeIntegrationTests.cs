@@ -55,7 +55,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
             var initialized = await grain.InitializeAgentAsync(typeof(RecordingStrictKafkaIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
 
-            var transport = host.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
+            var transport = host.Services.GetRequiredService<KafkaStrictProviderProducer>();
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -121,7 +121,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            var transport = host1.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
+            var transport = host1.Services.GetRequiredService<KafkaStrictProviderProducer>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope
@@ -195,7 +195,7 @@ public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            var transport = host1.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
+            var transport = host1.Services.GetRequiredService<KafkaStrictProviderProducer>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope

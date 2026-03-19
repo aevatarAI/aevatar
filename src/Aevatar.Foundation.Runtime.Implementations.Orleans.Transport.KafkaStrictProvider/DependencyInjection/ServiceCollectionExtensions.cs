@@ -33,13 +33,10 @@ public static class ServiceCollectionExtensions
         AddSharedRegistrations(services);
         services.RemoveAll<KafkaStrictProviderTransportOptions>();
         services.AddSingleton(options);
-        services.RemoveAll<KafkaStrictProviderEnvelopeTransport>();
-        services.RemoveAll<IKafkaStrictProviderEnvelopeTransport>();
-        services.AddSingleton<KafkaStrictProviderEnvelopeTransport>();
-        services.AddSingleton<IKafkaStrictProviderEnvelopeTransport>(
-            sp => sp.GetRequiredService<KafkaStrictProviderEnvelopeTransport>());
+        services.RemoveAll<KafkaStrictProviderProducer>();
+        services.AddSingleton<KafkaStrictProviderProducer>();
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHostedService, KafkaStrictProviderTransportHostedService>());
+            ServiceDescriptor.Singleton<IHostedService, KafkaStrictProviderProducerHostedService>());
         return services;
     }
 

@@ -2,11 +2,11 @@ using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-internal sealed class KafkaStrictProviderTransportHostedService : IHostedService
+internal sealed class KafkaStrictProviderProducerHostedService : IHostedService
 {
-    private readonly IKafkaStrictProviderEnvelopeTransport _transport;
+    private readonly KafkaStrictProviderProducer _transport;
 
-    public KafkaStrictProviderTransportHostedService(IKafkaStrictProviderEnvelopeTransport transport)
+    public KafkaStrictProviderProducerHostedService(KafkaStrictProviderProducer transport)
     {
         _transport = transport;
     }

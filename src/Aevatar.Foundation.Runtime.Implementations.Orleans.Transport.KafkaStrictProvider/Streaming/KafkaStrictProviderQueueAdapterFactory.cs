@@ -10,39 +10,37 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStri
 
 public sealed class KafkaStrictProviderQueueAdapterFactory : IQueueAdapterFactory
 {
-    private readonly string _providerName;
     private readonly IQueueAdapterCache _cache;
-    private readonly StrictQueuePartitionMapper _mapper;
     private readonly KafkaStrictProviderQueueAdapter _adapter;
     private static readonly IStreamFailureHandler NoOpFailureHandler = new NoOpStreamDeliveryFailureHandler();
 
     [ActivatorUtilitiesConstructor]
     public KafkaStrictProviderQueueAdapterFactory(
         AevatarOrleansRuntimeOptions runtimeOptions,
-        IServiceProvider serviceProvider)
+        KafkaStrictProviderProducer transport,
+        KafkaStrictProviderTransportOptions transportOptions,
+        ILoggerFactory? loggerFactory = null)
     {
-        _providerName = runtimeOptions.StreamProviderName;
-        _mapper = new StrictQueuePartitionMapper(
-            _providerName,
+        var providerName = runtimeOptions.StreamProviderName;
+        var mapper = new StrictQueuePartitionMapper(
+            providerName,
             Math.Max(1, runtimeOptions.QueueCount));
-
-        var loggerFactory = serviceProvider.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
 
         var cacheOptions = new SimpleQueueCacheOptions
         {
             CacheSize = Math.Max(128, runtimeOptions.QueueCacheSize),
         };
-        _cache = new SimpleQueueAdapterCache(cacheOptions, _providerName, loggerFactory);
+        _cache = new SimpleQueueAdapterCache(cacheOptions, providerName, loggerFactory ?? NullLoggerFactory.Instance);
 
         var actorEventNamespace = string.IsNullOrWhiteSpace(runtimeOptions.ActorEventNamespace)
             ? OrleansRuntimeConstants.ActorEventStreamNamespace
             : runtimeOptions.ActorEventNamespace;
 
         _adapter = new KafkaStrictProviderQueueAdapter(
-            _providerName,
-            () => serviceProvider.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>(),
-            serviceProvider.GetRequiredService<KafkaStrictProviderTransportOptions>(),
-            _mapper,
+            providerName,
+            transport,
+            transportOptions,
+            mapper,
             actorEventNamespace);
     }
 
@@ -53,7 +51,7 @@ public sealed class KafkaStrictProviderQueueAdapterFactory : IQueueAdapterFactor
         _cache;
 
     public IStreamQueueMapper GetStreamQueueMapper() =>
-        _mapper;
+        _adapter.Mapper;
 
     public Task<IStreamFailureHandler> GetDeliveryFailureHandler(QueueId queueId)
     {

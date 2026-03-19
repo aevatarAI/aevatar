@@ -151,7 +151,7 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         orleansOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
         provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
-        provider.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>().GetType().Name.Should().Be("KafkaStrictProviderEnvelopeTransport");
+        provider.GetRequiredService<KafkaStrictProviderProducer>().Should().NotBeNull();
     }
 
     [Fact]

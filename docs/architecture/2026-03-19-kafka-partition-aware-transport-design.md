@@ -37,7 +37,7 @@ So the two sides meet on one shared slot, instead of each side making an indepen
 flowchart TB
     A1["Producer<br/>StreamNamespace + StreamId + Payload"]
     A2["StrictQueuePartitionMapper<br/>Resolve PartitionId"]
-    A3["KafkaStrictProviderEnvelopeTransport<br/>Publish to explicit partition"]
+    A3["KafkaStrictProviderProducer<br/>Publish to explicit partition"]
     A4["Kafka Topic Partition"]
 
     B1["Orleans Queue Balancer"]
@@ -113,7 +113,7 @@ They are both talking about the same slot from opposite sides.
 
 1. application publishes an envelope with `StreamNamespace + StreamId + Payload`
 2. `StrictQueuePartitionMapper` computes the target `PartitionId`
-3. `KafkaStrictProviderEnvelopeTransport` publishes directly to that partition
+3. `KafkaStrictProviderProducer` publishes directly to that partition
 
 ### Consumer path
 
@@ -179,7 +179,7 @@ This keeps the projection chain observable without turning a local backend issue
 - resolves `QueueId -> PartitionId`
 - is the single mapping contract shared by producer path and Orleans runtime
 
-### `KafkaStrictProviderEnvelopeTransport`
+### `KafkaStrictProviderProducer`
 
 - publishes envelopes to explicit partitions
 - validates strict topic topology

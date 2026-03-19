@@ -7,7 +7,7 @@ using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IStrictOrleansStreamQueueMapper, IConsistentRingStreamQueueMapper
+public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IConsistentRingStreamQueueMapper
 {
     private readonly HashRingBasedStreamQueueMapper _sourceMapper;
     private readonly QueueId[] _queues;
@@ -35,10 +35,6 @@ public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IStrictOrle
 
     public IEnumerable<QueueId> GetQueuesForRange(IRingRange range) =>
         _sourceMapper.GetQueuesForRange(range);
-
-    public IReadOnlyList<QueueId> GetAllQueuesList() => _queues;
-
-    IReadOnlyList<QueueId> IStrictOrleansStreamQueueMapper.GetAllQueues() => _queues;
 
     public int GetPartitionId(string streamNamespace, string streamId)
     {

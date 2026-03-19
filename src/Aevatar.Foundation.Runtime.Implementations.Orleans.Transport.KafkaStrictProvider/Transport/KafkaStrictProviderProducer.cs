@@ -8,8 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-internal sealed class KafkaStrictProviderEnvelopeTransport :
-    IKafkaStrictProviderEnvelopeTransport,
+public sealed class KafkaStrictProviderProducer :
     IHostedService,
     IAsyncDisposable
 {
@@ -18,13 +17,13 @@ internal sealed class KafkaStrictProviderEnvelopeTransport :
 
     private readonly KafkaStrictProviderTransportOptions _transportOptions;
     private readonly StrictQueuePartitionMapper _mapper;
-    private readonly ILogger<KafkaStrictProviderEnvelopeTransport> _logger;
+    private readonly ILogger<KafkaStrictProviderProducer> _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
 
     private IProducer<Null, byte[]>? _producer;
     private bool _started;
 
-    public KafkaStrictProviderEnvelopeTransport(
+    public KafkaStrictProviderProducer(
         KafkaStrictProviderTransportOptions transportOptions,
         AevatarOrleansRuntimeOptions runtimeOptions,
         ILoggerFactory? loggerFactory = null)
@@ -33,7 +32,7 @@ internal sealed class KafkaStrictProviderEnvelopeTransport :
         _mapper = new StrictQueuePartitionMapper(
             runtimeOptions.StreamProviderName,
             Math.Max(1, runtimeOptions.QueueCount));
-        _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaStrictProviderEnvelopeTransport>();
+        _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaStrictProviderProducer>();
     }
 
     public async Task PublishAsync(

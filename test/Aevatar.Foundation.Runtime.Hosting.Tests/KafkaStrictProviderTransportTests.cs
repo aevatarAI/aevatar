@@ -47,7 +47,7 @@ public sealed class KafkaStrictProviderTransportTests
         await using var provider = services.BuildServiceProvider();
 
         provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
-        provider.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>().GetType().Name.Should().Be("KafkaStrictProviderEnvelopeTransport");
+        provider.GetRequiredService<KafkaStrictProviderProducer>().Should().NotBeNull();
         provider.GetRequiredService<KafkaStrictProviderTransportOptions>().TopicPartitionCount.Should().Be(4);
     }
 
