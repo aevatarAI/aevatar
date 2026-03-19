@@ -1634,14 +1634,12 @@ function App() {
     setWorkspacePage('workflows');
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
   function openStudioPage() {
     setWorkspacePage('studio');
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1649,7 +1647,6 @@ function App() {
     setWorkspacePage('scripts');
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1657,7 +1654,6 @@ function App() {
     setWorkspacePage(page);
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1669,7 +1665,6 @@ function App() {
     setSettingsSection(section);
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1698,9 +1693,6 @@ function App() {
     setExecutionDetail(null);
     setExecutionTrace(null);
     setActiveExecutionLogIndex(null);
-    setAskAiOpen(false);
-    setAskAiAnswer('');
-    setAskAiGeneratedYaml('');
     setWorkflowMeta({
       ...createEmptyWorkflowMeta(),
       directoryId: directoryId ?? workspaceSettings.directories[0]?.directoryId ?? null,
@@ -1782,9 +1774,6 @@ function App() {
     setEdges(graph.edges);
     setSelectedNodeId(graph.nodes[0]?.id || null);
     setSelectedExecutionId(null);
-    setAskAiOpen(false);
-    setAskAiAnswer('');
-    setAskAiGeneratedYaml('');
     setRunModalOpen(false);
     setWorkflowMeta({
       workflowId: payload?.workflowId || null,
@@ -2129,8 +2118,7 @@ function App() {
 
       setAskAiAnswer(nextYaml);
       setAskAiGeneratedYaml(nextYaml);
-      await applyAskAiYaml(nextYaml);
-      flash('AI workflow applied to canvas', 'success');
+      flash('AI workflow YAML is ready to apply', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to generate workflow YAML', 'error');
     } finally {
@@ -4713,7 +4701,7 @@ function App() {
                   </div>
 
                   <p className="mt-3 text-[12px] leading-6 text-gray-500">
-                    Describe the workflow. AI reasoning streams here, then valid YAML is applied to the canvas automatically.
+                    Describe the workflow. AI reasoning streams here and the validated YAML stays in this panel until you apply it.
                   </p>
 
                   <textarea
@@ -4729,10 +4717,43 @@ function App() {
                         {askAiPending
                           ? 'Generating and validating YAML...'
                           : askAiGeneratedYaml
-                            ? 'Validated YAML applied to canvas. Click the YAML card to apply it again.'
+                            ? 'Validated YAML is ready to apply.'
                             : 'Return format: workflow YAML only'}
                       </div>
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (!askAiGeneratedYaml.trim()) {
+                              return;
+                            }
+
+                            void copyTextToClipboard(askAiGeneratedYaml).then(copied => {
+                              if (copied) {
+                                flash('Workflow YAML copied', 'success');
+                              }
+                            });
+                          }}
+                          className="ghost-action !px-3"
+                          disabled={!askAiGeneratedYaml.trim()}
+                        >
+                          <Copy size={14} /> Copy
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!askAiGeneratedYaml.trim()) {
+                              return;
+                            }
+
+                            void applyAskAiYaml(askAiGeneratedYaml).then(
+                              () => flash('AI workflow applied to canvas', 'success'),
+                              (error: any) => flash(error?.message || 'Failed to apply workflow YAML', 'error'),
+                            );
+                          }}
+                          className="ghost-action !px-3"
+                          disabled={!askAiGeneratedYaml.trim()}
+                        >
+                          <Check size={14} /> Apply
+                        </button>
                         <button
                           onClick={() => { void handleAskAiGenerate(); }}
                           className="ghost-action !px-3"
@@ -4750,31 +4771,17 @@ function App() {
                     </pre>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!askAiGeneratedYaml.trim()) {
-                        return;
-                      }
-
-                      void applyAskAiYaml(askAiGeneratedYaml).then(
-                        () => flash('AI workflow applied to canvas', 'success'),
-                        (error: any) => flash(error?.message || 'Failed to apply workflow YAML', 'error'),
-                      );
-                    }}
-                    disabled={!askAiGeneratedYaml.trim()}
-                    className="mt-4 w-full rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3 text-left transition hover:border-[color:var(--accent-border)] disabled:cursor-default disabled:opacity-100"
-                  >
+                  <div className="mt-4 rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">YAML</div>
                       <div className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                        {askAiGeneratedYaml ? 'Click to apply' : 'Waiting for valid YAML'}
+                        {askAiGeneratedYaml ? 'Ready to apply' : 'Waiting for valid YAML'}
                       </div>
                     </div>
                     <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
                       {askAiAnswer || 'Validated workflow YAML will appear here.'}
                     </pre>
-                  </button>
+                  </div>
                 </div>
               ) : null}
 

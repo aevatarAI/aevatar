@@ -1,10 +1,11 @@
 import Editor, { loader, type BeforeMount, type OnMount } from '@monaco-editor/react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
   ChevronDown,
   Code2,
+  Copy,
   FolderOpen,
   Play,
   Plus,
@@ -18,138 +19,22 @@ import * as monacoEditor from 'monaco-editor/esm/vs/editor/editor.api.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
 import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution';
 import * as api from './api';
-
-type FlashType = 'success' | 'error' | 'info';
-type ScriptStorageMode = 'draft' | 'scope';
-type StudioResultView = 'runtime' | 'save' | 'promotion';
-
-type ScriptsStudioProps = {
-  appContext: {
-    hostMode: 'embedded' | 'proxy';
-    scopeId: string | null;
-    scopeResolved: boolean;
-    scriptStorageMode: ScriptStorageMode;
-    scriptsEnabled: boolean;
-    scriptContract: {
-      inputType: string;
-      readModelFields: string[];
-    };
-  };
-  onFlash: (text: string, type: FlashType) => void;
-};
-
-type DraftRunResult = {
-  accepted: boolean;
-  scopeId?: string | null;
-  scriptId: string;
-  scriptRevision: string;
-  definitionActorId: string;
-  runtimeActorId: string;
-  runId: string;
-  sourceHash: string;
-  commandTypeUrl: string;
-  readModelUrl: string;
-};
-
-type ScriptReadModelSnapshot = {
-  actorId: string;
-  scriptId: string;
-  definitionActorId: string;
-  revision: string;
-  readModelTypeUrl: string;
-  readModelPayloadJson: string;
-  stateVersion: number;
-  lastEventId: string;
-  updatedAt: string;
-};
-
-type SnapshotView = {
-  input: string;
-  output: string;
-  status: string;
-  lastCommandId: string;
-  notes: string[];
-};
-
-type ScriptValidationDiagnostic = {
-  severity: 'error' | 'warning' | 'info';
-  code: string;
-  message: string;
-  filePath: string;
-  startLine: number | null;
-  startColumn: number | null;
-  endLine: number | null;
-  endColumn: number | null;
-  origin: string;
-};
-
-type ScriptValidationResult = {
-  success: boolean;
-  scriptId: string;
-  scriptRevision: string;
-  primarySourcePath: string;
-  errorCount: number;
-  warningCount: number;
-  diagnostics: ScriptValidationDiagnostic[];
-};
-
-type ScopedScriptSummary = {
-  scopeId: string;
-  scriptId: string;
-  catalogActorId: string;
-  definitionActorId: string;
-  activeRevision: string;
-  activeSourceHash: string;
-  updatedAt: string;
-};
-
-type ScopedScriptSource = {
-  sourceText: string;
-  definitionActorId: string;
-  revision: string;
-  sourceHash: string;
-};
-
-type ScopedScriptDetail = {
-  available: boolean;
-  scopeId: string;
-  script: ScopedScriptSummary | null;
-  source: ScopedScriptSource | null;
-};
-
-type ScriptPromotionDecision = {
-  accepted: boolean;
-  proposalId: string;
-  scriptId: string;
-  baseRevision: string;
-  candidateRevision: string;
-  status: string;
-  failureReason: string;
-  definitionActorId: string;
-  catalogActorId: string;
-  validationReport?: {
-    isSuccess: boolean;
-    diagnostics: string[];
-  } | null;
-};
-
-type ScriptDraft = {
-  key: string;
-  scriptId: string;
-  revision: string;
-  baseRevision: string;
-  reason: string;
-  input: string;
-  source: string;
-  definitionActorId: string;
-  runtimeActorId: string;
-  updatedAtUtc: string;
-  lastSourceHash: string;
-  lastRun: DraftRunResult | null;
-  lastSnapshot: ScriptReadModelSnapshot | null;
-  lastPromotion: ScriptPromotionDecision | null;
-  scopeDetail: ScopedScriptDetail | null;
-};
+import { InspectorPanel } from './scripts-studio/components/InspectorPanel';
+import { ResourceRail } from './scripts-studio/components/ResourceRail';
+import { EmptyState, ScriptsStudioModal, StudioResultCard } from './scripts-studio/components/StudioChrome';
+import type {
+  DraftRunResult,
+  ScriptDraft,
+  ScriptPromotionDecision,
+  ScriptReadModelSnapshot,
+  ScriptValidationDiagnostic,
+  ScriptValidationResult,
+  ScopedScriptDetail,
+  ScriptsStudioProps,
+  SnapshotView,
+  StudioResultView,
+} from './scripts-studio/models';
+import { formatDateTime, isScopeDetailDirty } from './scripts-studio/utils';
 
 const STORAGE_KEY = 'aevatar:scripts-studio:v3';
 
@@ -237,19 +122,6 @@ function normalizeStudioId(value: string, fallbackPrefix: string) {
     .replace('Z', '')
     .slice(0, 14);
   return `${fallbackPrefix}-${timestamp}`;
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) {
-    return '-';
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
 }
 
 function createStarterSource() {
@@ -480,91 +352,8 @@ function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, 
   });
 }
 
-function isScopeDetailDirty(draft: ScriptDraft | null) {
-  if (!draft?.scopeDetail?.source) {
-    return false;
-  }
-
-  const savedSource = draft.scopeDetail.source.sourceText || '';
-  const savedRevision = draft.scopeDetail.script?.activeRevision || draft.scopeDetail.source.revision || '';
-  return savedSource !== draft.source || (savedRevision && savedRevision !== draft.revision);
-}
-
 function wait(ms: number) {
   return new Promise(resolve => window.setTimeout(resolve, ms));
-}
-
-function EmptyState(props: { title: string; copy: string; }) {
-  return (
-    <div className="flex h-full min-h-[180px] items-center justify-center rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-6 text-center">
-      <div className="max-w-[360px]">
-        <div className="text-[14px] font-semibold text-gray-800">{props.title}</div>
-        <div className="mt-2 text-[12px] leading-6 text-gray-500">{props.copy}</div>
-      </div>
-    </div>
-  );
-}
-
-function StudioResultCard(props: {
-  active: boolean;
-  title: string;
-  summary: string;
-  meta: string;
-  status?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className={`execution-run-card ${props.active ? 'active' : ''}`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-gray-800">{props.title}</div>
-          <div className="mt-1 text-[11px] text-gray-400">{props.meta}</div>
-        </div>
-        {props.status ? (
-          <span className="rounded-full border border-[#E5DED3] bg-[#F7F2E8] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-[#8E6A3D]">
-            {props.status}
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-3 text-[12px] leading-6 text-gray-600">{props.summary}</div>
-    </button>
-  );
-}
-
-function ScriptsStudioModal(props: {
-  open: boolean;
-  eyebrow: string;
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-  actions?: ReactNode;
-  width?: string;
-}) {
-  if (!props.open) {
-    return null;
-  }
-
-  return (
-    <div className="modal-overlay" onClick={props.onClose}>
-      <div className="modal-shell" style={props.width ? { width: props.width } : undefined} onClick={event => event.stopPropagation()}>
-        <div className="modal-header">
-          <div>
-            <div className="panel-eyebrow">{props.eyebrow}</div>
-            <div className="panel-title !mt-0">{props.title}</div>
-          </div>
-          <button type="button" onClick={props.onClose} title="Close dialog." className="panel-icon-button">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="modal-body">{props.children}</div>
-        <div className="modal-footer">{props.actions}</div>
-      </div>
-    </div>
-  );
 }
 
 export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProps) {
@@ -586,6 +375,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [askAiPrompt, setAskAiPrompt] = useState('');
   const [askAiReasoning, setAskAiReasoning] = useState('');
   const [askAiAnswer, setAskAiAnswer] = useState('');
+  const [askAiGeneratedSource, setAskAiGeneratedSource] = useState('');
+  const [askAiTargetDraftKey, setAskAiTargetDraftKey] = useState<string | null>(null);
   const [askAiPending, setAskAiPending] = useState(false);
   const [runModalOpen, setRunModalOpen] = useState(false);
   const [runInputDraft, setRunInputDraft] = useState('');
@@ -653,6 +444,10 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const selectedDraft = useMemo(
     () => drafts.find(draft => draft.key === selectedDraftKey) || drafts[0] || null,
     [drafts, selectedDraftKey],
+  );
+  const askAiTargetDraft = useMemo(
+    () => drafts.find(draft => draft.key === askAiTargetDraftKey) || null,
+    [drafts, askAiTargetDraftKey],
   );
   const snapshotView = parseSnapshotView(selectedDraft?.lastSnapshot || null);
   const validationSummary = summarizeValidation(validationResult, validationPending);
@@ -1043,6 +838,26 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
   }
 
+  async function copyTextToClipboard(text: string) {
+    if (!text.trim()) {
+      onFlash('Nothing to copy', 'info');
+      return false;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      onFlash('Clipboard is unavailable in this browser context', 'error');
+      return false;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error: any) {
+      onFlash(error?.message || 'Failed to copy to clipboard', 'error');
+      return false;
+    }
+  }
+
   function openRunModal() {
     if (!selectedDraft) {
       return;
@@ -1196,9 +1011,11 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     const targetKey = selectedDraft.key;
+    setAskAiTargetDraftKey(targetKey);
     setAskAiPending(true);
     setAskAiReasoning('');
     setAskAiAnswer('');
+    setAskAiGeneratedSource('');
 
     try {
       const source = await api.assistant.authorScript({
@@ -1213,15 +1030,46 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         onText: text => setAskAiAnswer(text),
       });
 
-      updateDraft(targetKey, draft => ({
-        ...draft,
-        source,
-      }));
-      onFlash('AI source applied to the editor', 'success');
+      setAskAiAnswer(source);
+      setAskAiGeneratedSource(source);
+      onFlash('AI source is ready to apply', 'success');
     } catch (error: any) {
       onFlash(error?.message || 'Failed to generate script source', 'error');
     } finally {
       setAskAiPending(false);
+    }
+  }
+
+  function handleApplyAskAiSource() {
+    const targetKey = askAiTargetDraftKey || selectedDraft?.key || '';
+    if (!targetKey) {
+      onFlash('Open a draft before applying generated source', 'error');
+      return;
+    }
+
+    if (!askAiGeneratedSource.trim()) {
+      onFlash('Generate source before applying it', 'info');
+      return;
+    }
+
+    const targetDraft = drafts.find(draft => draft.key === targetKey);
+    if (!targetDraft) {
+      onFlash('The original draft is no longer available', 'error');
+      return;
+    }
+
+    updateDraft(targetKey, draft => ({
+      ...draft,
+      source: askAiGeneratedSource,
+    }));
+    setSelectedDraftKey(targetKey);
+    onFlash('AI source applied to the editor', 'success');
+  }
+
+  async function handleCopyAskAiSource() {
+    const copied = await copyTextToClipboard(askAiGeneratedSource);
+    if (copied) {
+      onFlash('Generated source copied', 'success');
     }
   }
 
@@ -1354,152 +1202,273 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       <section className="relative flex-1 min-h-0 overflow-hidden bg-[#F2F1EE]">
         <div className="absolute inset-0 p-4 sm:p-5">
-          <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-            <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
-              <div>
-                <div className="panel-eyebrow">Editor</div>
-                <div className="mt-1 text-[15px] font-semibold text-gray-800">Behavior.cs</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setLibraryOpen(true)}
-                  data-tooltip="Library"
-                  aria-label="Open drafts and scope library"
-                  className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
-                    libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-                  }`}
-                >
-                  <FolderOpen size={15} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDetailsOpen(true)}
-                  data-tooltip="Details"
-                  aria-label="Open draft details"
-                  className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
-                    detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-                  }`}
-                >
-                  <SlidersHorizontal size={15} />
-                </button>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
-                {hasScopeChanges ? (
-                  <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
-                    Unsaved scope changes
-                  </span>
-                ) : null}
-                <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 bg-[#FCFBF8]">
-              <Editor
-                path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                language="csharp"
-                theme="aevatar-script-light"
-                value={selectedDraft.source}
-                beforeMount={handleMonacoBeforeMount}
-                onMount={handleEditorMount}
-                onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
-                loading={(
-                  <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                    Loading
-                  </div>
-                )}
-                options={{
-                  automaticLayout: true,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  smoothScrolling: true,
-                  fontSize: 13,
-                  lineHeight: 23,
-                  fontLigatures: true,
-                  tabSize: 4,
-                  insertSpaces: true,
-                  renderWhitespace: 'selection',
-                  renderValidationDecorations: 'on',
-                  lineNumbersMinChars: 3,
-                  quickSuggestions: false,
-                  suggestOnTriggerCharacters: false,
-                  wordWrap: 'off',
-                  stickyScroll: { enabled: false },
-                  bracketPairColorization: { enabled: true },
-                  guides: {
-                    indentation: true,
-                    bracketPairs: true,
-                  },
-                  folding: true,
-                  padding: {
-                    top: 18,
-                    bottom: 18,
-                  },
-                  scrollbar: {
-                    verticalScrollbarSize: 10,
-                    horizontalScrollbarSize: 10,
-                  },
-                }}
+          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+            <div className="hidden xl:block xl:min-h-0">
+              <ResourceRail
+                drafts={drafts}
+                filteredDrafts={filteredDrafts}
+                filteredScopeScripts={filteredScopeScripts}
+                selectedDraft={selectedDraft}
+                scopeSelectionId={scopeSelectionId}
+                search={search}
+                scopeBacked={scopeBacked}
+                scopeId={appContext.scopeId}
+                scopeScriptsPending={scopeScriptsPending}
+                onSearchChange={setSearch}
+                onCreateDraft={handleCreateDraft}
+                onSelectDraft={setSelectedDraftKey}
+                onOpenScopeScript={openScopeScript}
+                onRefreshScopeScripts={() => { void loadScopeScripts(); }}
               />
             </div>
 
-            <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
-                  <div className="mt-1 truncate text-[13px] text-gray-700">
-                    {validationPending
-                      ? 'Checking'
-                      : visibleProblems[0]
-                        ? visibleProblems[0].message
-                        : 'Clean'}
-                  </div>
+            <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
+                <div>
+                  <div className="panel-eyebrow">Editor</div>
+                  <div className="mt-1 text-[15px] font-semibold text-gray-800">Behavior.cs</div>
                 </div>
-                {visibleProblems.length > 0 ? (
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setProblemsOpen(value => !value)}
-                    className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
+                    onClick={() => setLibraryOpen(true)}
+                    data-tooltip="Library"
+                    aria-label="Open drafts and scope library"
+                    className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] xl:hidden ${
+                      libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+                    }`}
                   >
-                    {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
+                    <FolderOpen size={15} />
                   </button>
-                ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen(true)}
+                    data-tooltip="Details"
+                    aria-label="Open draft details"
+                    className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] xl:hidden ${
+                      detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+                    }`}
+                  >
+                    <SlidersHorizontal size={15} />
+                  </button>
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
+                    {hasScopeChanges ? (
+                      <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
+                        Unsaved scope changes
+                      </span>
+                    ) : null}
+                    <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
+                  </div>
+                </div>
               </div>
 
-              {problemsOpen && visibleProblems.length > 0 ? (
-                <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
-                  {visibleProblems.map((diagnostic, index) => (
+              <div className="min-h-0 flex-1 bg-[#FCFBF8]">
+                <Editor
+                  path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                  language="csharp"
+                  theme="aevatar-script-light"
+                  value={selectedDraft.source}
+                  beforeMount={handleMonacoBeforeMount}
+                  onMount={handleEditorMount}
+                  onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
+                  loading={(
+                    <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                      Loading
+                    </div>
+                  )}
+                  options={{
+                    automaticLayout: true,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    smoothScrolling: true,
+                    fontSize: 13,
+                    lineHeight: 23,
+                    fontLigatures: true,
+                    tabSize: 4,
+                    insertSpaces: true,
+                    renderWhitespace: 'selection',
+                    renderValidationDecorations: 'on',
+                    lineNumbersMinChars: 3,
+                    quickSuggestions: false,
+                    suggestOnTriggerCharacters: false,
+                    wordWrap: 'off',
+                    stickyScroll: { enabled: false },
+                    bracketPairColorization: { enabled: true },
+                    guides: {
+                      indentation: true,
+                      bracketPairs: true,
+                    },
+                    folding: true,
+                    padding: {
+                      top: 18,
+                      bottom: 18,
+                    },
+                    scrollbar: {
+                      verticalScrollbarSize: 10,
+                      horizontalScrollbarSize: 10,
+                    },
+                  }}
+                />
+              </div>
+
+              <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
+                    <div className="mt-1 truncate text-[13px] text-gray-700">
+                      {validationPending
+                        ? 'Checking'
+                        : visibleProblems[0]
+                          ? visibleProblems[0].message
+                          : 'Clean'}
+                    </div>
+                  </div>
+                  {visibleProblems.length > 0 ? (
                     <button
-                      key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
                       type="button"
-                      onClick={() => jumpToDiagnostic(diagnostic)}
-                      className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
-                        diagnostic.severity === 'error'
-                          ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
-                          : diagnostic.severity === 'warning'
-                            ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
-                            : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
-                      }`}
+                      onClick={() => setProblemsOpen(value => !value)}
+                      className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
-                          {diagnostic.code || diagnostic.severity}
-                        </div>
-                        <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
-                      </div>
-                      <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
+                      {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
                     </button>
-                  ))}
+                  ) : null}
                 </div>
-              ) : null}
+
+                {problemsOpen && visibleProblems.length > 0 ? (
+                  <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
+                    {visibleProblems.map((diagnostic, index) => (
+                      <button
+                        key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
+                        type="button"
+                        onClick={() => jumpToDiagnostic(diagnostic)}
+                        className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
+                          diagnostic.severity === 'error'
+                            ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
+                            : diagnostic.severity === 'warning'
+                              ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
+                              : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+                            {diagnostic.code || diagnostic.severity}
+                          </div>
+                          <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
+                        </div>
+                        <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <div className="hidden xl:block xl:min-h-0">
+              <InspectorPanel
+                selectedDraft={selectedDraft}
+                scopeBacked={scopeBacked}
+                appContext={appContext}
+              />
             </div>
-          </section>
+          </div>
         </div>
 
         <div className="absolute bottom-6 right-5 z-30 flex items-end gap-3">
+          {askAiOpen ? (
+            <div
+              className="ask-ai-surface w-[380px] rounded-[28px] border border-[#E8E2D9] p-4 shadow-[0_26px_64px_rgba(17,24,39,0.16)]"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="panel-eyebrow">Source</div>
+                  <div className="panel-title">Ask AI</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAskAiOpen(false)}
+                  title="Collapse Ask AI."
+                  className="panel-icon-button"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <p className="mt-3 text-[12px] leading-6 text-gray-500">
+                Describe the script change you want. The generated source stays here until you apply it into the editor.
+              </p>
+
+              <textarea
+                rows={5}
+                className="panel-textarea mt-4"
+                placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
+                value={askAiPrompt}
+                onChange={event => setAskAiPrompt(event.target.value)}
+              />
+
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <div className="text-[11px] text-gray-400">
+                  {askAiPending
+                    ? 'Generating and compiling source...'
+                    : askAiGeneratedSource
+                      ? `Ready to apply to ${askAiTargetDraft?.scriptId || 'the original draft'}`
+                      : 'Return format: script source only'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { void handleAskAiGenerate(); }}
+                  className="ghost-action !px-3"
+                  disabled={askAiPending}
+                >
+                  <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
+                  <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
+                    {askAiReasoning || 'LLM reasoning will stream here.'}
+                  </pre>
+                </div>
+
+                <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Source</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleApplyAskAiSource}
+                        disabled={!askAiGeneratedSource.trim()}
+                        title="Apply generated source to the editor."
+                        aria-label="Apply generated source to the editor"
+                        className="panel-icon-button"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void handleCopyAskAiSource(); }}
+                        disabled={!askAiGeneratedSource.trim()}
+                        title="Copy generated source."
+                        aria-label="Copy generated source"
+                        className="panel-icon-button"
+                      >
+                        <Copy size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                    {askAiAnswer || 'Generated script source will appear here.'}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <button
             type="button"
-            onClick={() => setAskAiOpen(true)}
+            onClick={() => setAskAiOpen(value => !value)}
             title="Ask AI to rewrite the current draft."
             className="ask-ai-trigger flex h-14 w-14 items-center justify-center rounded-[20px] border border-[color:var(--accent-border)] text-[color:var(--accent-text)] transition-transform hover:-translate-y-0.5"
           >
@@ -2079,50 +2048,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         </div>
       </ScriptsStudioModal>
 
-      <ScriptsStudioModal
-        open={askAiOpen}
-        eyebrow="Source"
-        title="Ask AI"
-        onClose={() => setAskAiOpen(false)}
-        actions={(
-          <>
-            <button type="button" onClick={() => setAskAiOpen(false)} className="ghost-action">Close</button>
-            <button type="button" onClick={() => { void handleAskAiGenerate(); }} disabled={askAiPending} className="solid-action">
-              <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
-            </button>
-          </>
-        )}
-      >
-        <div className="space-y-4">
-          <div className="text-[12px] leading-6 text-gray-500">
-            Describe the script change you want. The generated source is applied directly into the editor.
-          </div>
-
-          <textarea
-            rows={5}
-            className="panel-textarea"
-            placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
-            value={askAiPrompt}
-            onChange={event => setAskAiPrompt(event.target.value)}
-          />
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
-              <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
-                {askAiReasoning || '-'}
-              </pre>
-            </div>
-
-            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Source</div>
-              <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                {askAiAnswer || '-'}
-              </pre>
-            </div>
-          </div>
-        </div>
-      </ScriptsStudioModal>
     </>
   );
 }
