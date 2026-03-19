@@ -65,7 +65,7 @@ public sealed class RuntimeScriptCatalogCommandService
         CancellationToken ct)
     {
         var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(scopeId)
             : catalogActorId;
         _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
             resolvedCatalogActorId,
@@ -129,7 +129,7 @@ public sealed class RuntimeScriptCatalogCommandService
         CancellationToken ct)
     {
         var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(scopeId)
             : catalogActorId;
         _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
             resolvedCatalogActorId,

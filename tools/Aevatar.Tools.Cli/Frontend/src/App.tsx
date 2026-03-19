@@ -143,6 +143,7 @@ type SettingsSection = 'runtime' | 'llm' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
+type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
 const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
@@ -154,6 +155,7 @@ type AppContextState = {
   scopeResolved: boolean;
   scopeSource: string;
   workflowStorageMode: WorkflowStorageMode;
+  scriptStorageMode: ScriptStorageMode;
   scriptsEnabled: boolean;
   scriptContract: {
     inputType: string;
@@ -247,6 +249,7 @@ function createEmptyAppContext(): AppContextState {
     scopeResolved: false,
     scopeSource: '',
     workflowStorageMode: 'workspace',
+    scriptStorageMode: 'draft',
     scriptsEnabled: false,
     scriptContract: {
       inputType: '',
@@ -1325,6 +1328,7 @@ function App() {
         scopeResolved: Boolean(resolvedScopeId),
         scopeSource: context?.scopeSource || '',
         workflowStorageMode,
+        scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
         scriptsEnabled: Boolean(context?.features?.scripts),
         scriptContract: {
           inputType: context?.scriptContract?.inputType || '',
@@ -1751,6 +1755,7 @@ function App() {
       scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
       scopeSource: context?.scopeSource || '',
       workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
+      scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
       scriptsEnabled: Boolean(context?.features?.scripts),
       scriptContract: {
         inputType: context?.scriptContract?.inputType || '',
@@ -4052,6 +4057,9 @@ function App() {
           <ScriptsStudio
             appContext={{
               hostMode: appContext.hostMode,
+              scopeId: appContext.scopeId,
+              scopeResolved: appContext.scopeResolved,
+              scriptStorageMode: appContext.scriptStorageMode,
               scriptsEnabled: appContext.scriptsEnabled,
               scriptContract: appContext.scriptContract,
             }}

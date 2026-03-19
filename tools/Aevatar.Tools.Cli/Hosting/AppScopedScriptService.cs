@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Tools.Cli.Hosting;
@@ -19,18 +21,21 @@ public sealed class AppScopedScriptService
     private readonly IScopeScriptQueryPort? _scriptQueryPort;
     private readonly IScopeScriptCommandPort? _scriptCommandPort;
     private readonly IScriptDefinitionSnapshotPort? _definitionSnapshotPort;
+    private readonly IScriptEvolutionApplicationService? _scriptEvolutionService;
     private readonly IHttpClientFactory _httpClientFactory;
 
     public AppScopedScriptService(
         IHttpClientFactory httpClientFactory,
         IScopeScriptQueryPort? scriptQueryPort = null,
         IScopeScriptCommandPort? scriptCommandPort = null,
-        IScriptDefinitionSnapshotPort? definitionSnapshotPort = null)
+        IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
+        IScriptEvolutionApplicationService? scriptEvolutionService = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
         _scriptCommandPort = scriptCommandPort;
         _definitionSnapshotPort = definitionSnapshotPort;
+        _scriptEvolutionService = scriptEvolutionService;
     }
 
     public async Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
@@ -127,6 +132,44 @@ public sealed class AppScopedScriptService
         return await GetAsync(normalizedScopeId, scriptId, ct)
                ?? throw new InvalidOperationException(
                    $"Script '{scriptId}' was saved but could not be read back for scope '{normalizedScopeId}'.");
+    }
+
+    public async Task<ScriptPromotionDecision> ProposeEvolutionAsync(
+        string scopeId,
+        AppScopeScriptEvolutionRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var scriptId = NormalizeRequired(request.ScriptId ?? string.Empty, nameof(request.ScriptId));
+        if (_scriptEvolutionService != null)
+        {
+            return await _scriptEvolutionService.ProposeAsync(
+                new ProposeScriptEvolutionRequest(
+                    ScriptId: scriptId,
+                    BaseRevision: request.BaseRevision ?? string.Empty,
+                    CandidateRevision: request.CandidateRevision ?? string.Empty,
+                    CandidateSource: request.CandidateSource ?? string.Empty,
+                    CandidateSourceHash: request.CandidateSourceHash ?? string.Empty,
+                    Reason: request.Reason ?? string.Empty,
+                    ProposalId: request.ProposalId ?? string.Empty,
+                    ScopeId: normalizedScopeId),
+                ct);
+        }
+
+        return await SendAsync<ScriptPromotionDecision>(
+                   HttpMethod.Post,
+                   $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(scriptId)}/evolutions/proposals",
+                   new RemoteProposeEvolutionRequest(
+                       request.BaseRevision,
+                       request.CandidateRevision,
+                       request.CandidateSource,
+                       request.CandidateSourceHash,
+                       request.Reason,
+                       request.ProposalId),
+                   ct) ??
+               throw new InvalidOperationException("Script evolution proposal returned an empty response.");
     }
 
     private async Task<T?> SendAsync<T>(
@@ -283,6 +326,14 @@ public sealed class AppScopedScriptService
         string? RevisionId,
         string? ExpectedBaseRevision);
 
+    private sealed record RemoteProposeEvolutionRequest(
+        string? BaseRevision,
+        string? CandidateRevision,
+        string? CandidateSource,
+        string? CandidateSourceHash,
+        string? Reason,
+        string? ProposalId);
+
     private sealed record RemoteErrorResponse(string? Code, string? Message);
 }
 
@@ -291,3 +342,12 @@ public sealed record AppScopeScriptSaveRequest(
     string SourceText,
     string? RevisionId = null,
     string? ExpectedBaseRevision = null);
+
+public sealed record AppScopeScriptEvolutionRequest(
+    string? ScriptId,
+    string? BaseRevision,
+    string? CandidateRevision,
+    string? CandidateSource,
+    string? CandidateSourceHash,
+    string? Reason,
+    string? ProposalId);

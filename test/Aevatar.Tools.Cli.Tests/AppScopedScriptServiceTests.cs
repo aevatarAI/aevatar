@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using Aevatar.Tools.Cli.Hosting;
 using FluentAssertions;
@@ -44,6 +45,52 @@ public sealed class AppScopedScriptServiceTests
         exception.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
         exception.Code.Should().Be(AppApiErrors.BackendInvalidResponseCode);
         exception.Message.Should().Be("Script backend returned a non-JSON response.");
+    }
+
+    [Fact]
+    public async Task ProposeEvolutionAsync_ShouldCallScopedBackendRoute()
+    {
+        HttpRequestMessage? captured = null;
+        var service = CreateService(request =>
+        {
+            captured = request;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    accepted = true,
+                    proposalId = "scope-1:proposal-1",
+                    scriptId = "script-1",
+                    baseRevision = "rev-1",
+                    candidateRevision = "rev-2",
+                    status = "promoted",
+                    failureReason = "",
+                    definitionActorId = "definition-1",
+                    catalogActorId = "catalog-1",
+                    validationReport = new
+                    {
+                        isSuccess = true,
+                        diagnostics = Array.Empty<string>(),
+                    },
+                }),
+            };
+        });
+
+        var decision = await service.ProposeEvolutionAsync(
+            "scope-1",
+            new AppScopeScriptEvolutionRequest(
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "public sealed class DemoScriptV2 {}",
+                CandidateSourceHash: "hash-2",
+                Reason: "rollout",
+                ProposalId: "proposal-1"));
+
+        decision.Accepted.Should().BeTrue();
+        captured.Should().NotBeNull();
+        captured!.Method.Should().Be(HttpMethod.Post);
+        captured.RequestUri!.PathAndQuery.Should().Be("/api/scopes/scope-1/scripts/script-1/evolutions/proposals");
     }
 
     private static AppScopedScriptService CreateService(

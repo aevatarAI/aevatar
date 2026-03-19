@@ -35,7 +35,7 @@ public sealed class UpsertScriptDefinitionCommandTargetResolver
                 ScriptingCommandStartError.InvalidArgument("sourceText", "Source text is required."));
 
         var actorId = string.IsNullOrWhiteSpace(command.DefinitionActorId)
-            ? _addressResolver.GetDefinitionActorId(command.ScriptId)
+            ? _addressResolver.GetDefinitionActorId(command.ScriptId, command.ScopeId)
             : command.DefinitionActorId;
 
         var actor = await _actorAccessor.GetOrCreateAsync<ScriptDefinitionGAgent>(

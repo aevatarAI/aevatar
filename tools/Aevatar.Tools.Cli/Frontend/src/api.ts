@@ -376,10 +376,13 @@ export const auth = {
 export const app = {
   getContext: () => request<any>('/app/context'),
   validateDraftScript: (data: any, signal?: AbortSignal) => request<any>('/app/scripts/validate', { method: 'POST', body: JSON.stringify(data), signal }),
+  listScripts: (includeSource = false) => request<any>(`/app/scripts?includeSource=${includeSource ? 'true' : 'false'}`),
+  getScript: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}`),
+  saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
   runDraftScript: (data: any) => request<any>('/app/scripts/draft-run', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const scripts = {
   getReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
-  proposeEvolution: (data: any) => request<any>('/scripts/evolutions/proposals', { method: 'POST', body: JSON.stringify(data) }),
+  proposeEvolution: (data: any) => request<any>('/app/scripts/evolutions/proposals', { method: 'POST', body: JSON.stringify(data) }),
 };

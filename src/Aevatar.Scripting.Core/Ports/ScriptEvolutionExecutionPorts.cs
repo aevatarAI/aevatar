@@ -13,7 +13,8 @@ public sealed record ScriptRollbackRequest(
     string TargetRevision,
     string CatalogActorId,
     string Reason,
-    string ExpectedCurrentRevision);
+    string ExpectedCurrentRevision,
+    string ScopeId = "");
 
 public sealed record ScriptCatalogBaselineResolution(
     string CatalogActorId,

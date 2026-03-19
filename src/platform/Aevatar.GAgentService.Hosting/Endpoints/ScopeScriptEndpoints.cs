@@ -1,5 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -23,6 +25,9 @@ public static class ScopeScriptEndpoints
             .Produces<ScopeScriptDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/{scopeId}/scripts/{scriptId}/evolutions/proposals", HandleProposeScriptEvolutionAsync)
+            .Produces<ScriptPromotionDecision>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest);
         return app;
     }
 
@@ -115,6 +120,38 @@ public static class ScopeScriptEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleProposeScriptEvolutionAsync(
+        string scopeId,
+        string scriptId,
+        ProposeScopeScriptEvolutionHttpRequest request,
+        [FromServices] IScriptEvolutionApplicationService scriptEvolutionService,
+        CancellationToken ct)
+    {
+        try
+        {
+            var decision = await scriptEvolutionService.ProposeAsync(
+                new ProposeScriptEvolutionRequest(
+                    ScriptId: scriptId,
+                    BaseRevision: request.BaseRevision ?? string.Empty,
+                    CandidateRevision: request.CandidateRevision ?? string.Empty,
+                    CandidateSource: request.CandidateSource ?? string.Empty,
+                    CandidateSourceHash: request.CandidateSourceHash ?? string.Empty,
+                    Reason: request.Reason ?? string.Empty,
+                    ProposalId: request.ProposalId ?? string.Empty,
+                    ScopeId: scopeId),
+                ct);
+            return Results.Ok(decision);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
     private static async Task<ScopeScriptDetail> BuildScriptDetailAsync(
         string scopeId,
         ScopeScriptSummary script,
@@ -144,4 +181,12 @@ public static class ScopeScriptEndpoints
         string SourceText,
         string? RevisionId = null,
         string? ExpectedBaseRevision = null);
+
+    public sealed record ProposeScopeScriptEvolutionHttpRequest(
+        string? BaseRevision,
+        string? CandidateRevision,
+        string? CandidateSource,
+        string? CandidateSourceHash,
+        string? Reason,
+        string? ProposalId);
 }

@@ -30,6 +30,7 @@ internal static class AppBridgeEndpoints
         app.MapGet("/api/scopes/{scopeId}/scripts", HandleBackendProxyAsync);
         app.MapGet("/api/scopes/{scopeId}/scripts/{scriptId}", HandleBackendProxyAsync);
         app.MapPut("/api/scopes/{scopeId}/scripts/{scriptId}", HandleBackendProxyAsync);
+        app.MapPost("/api/scopes/{scopeId}/scripts/{scriptId}/evolutions/proposals", HandleBackendProxyAsync);
     }
 
     private static async Task HandleBackendProxyAsync(

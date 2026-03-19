@@ -643,6 +643,41 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
+    public async Task EvolutionInteractionService_ShouldPropagateScopeId_IntoStartSessionEvent()
+    {
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort();
+        StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
+        var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
+        {
+            capturedStart = start;
+            projectionPort.Publish("script-evolution-session:" + start.ProposalId, new ScriptEvolutionSessionCompletedEvent
+            {
+                ProposalId = start.ProposalId,
+                Accepted = true,
+                Status = "promoted",
+                ScopeId = start.ScopeId,
+            });
+        });
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
+
+        _ = await service.ProposeAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-scope",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source-rev-2",
+                CandidateSourceHash: "hash-rev-2",
+                Reason: "rollout",
+                ScopeId: "scope-42"),
+            CancellationToken.None);
+
+        capturedStart.Should().NotBeNull();
+        capturedStart!.ScopeId.Should().Be("scope-42");
+    }
+
+    [Fact]
     public async Task EvolutionInteractionService_ShouldUseFallbackDecision_WhenSessionTimesOut()
     {
         var projectionPort = new TestProjectionPort();

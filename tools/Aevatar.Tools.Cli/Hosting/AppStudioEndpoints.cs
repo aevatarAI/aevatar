@@ -51,6 +51,12 @@ internal static class AppStudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleSaveScopedScriptAsync(http, request, services, ct));
+        app.MapPost("/api/app/scripts/evolutions/proposals", (
+            HttpContext http,
+            Aevatar.Tools.Cli.Hosting.AppScopeScriptEvolutionRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleProposeScopedScriptEvolutionAsync(http, request, services, ct));
         app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
             string actorId,
             IServiceProvider services,
@@ -339,6 +345,50 @@ internal static class AppStudioEndpoints
         {
             var detail = await service.GetAsync(scopeContext.ScopeId, scriptId, ct);
             return detail == null ? Results.NotFound() : Results.Ok(detail);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleProposeScopedScriptEvolutionAsync(
+        HttpContext http,
+        Aevatar.Tools.Cli.Hosting.AppScopeScriptEvolutionRequest request,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script governance requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            return Results.Ok(await service.ProposeEvolutionAsync(scopeContext.ScopeId, request, ct));
         }
         catch (AppApiException ex)
         {

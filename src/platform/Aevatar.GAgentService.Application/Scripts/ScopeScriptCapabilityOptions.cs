@@ -17,7 +17,7 @@ public sealed class ScopeScriptCapabilityOptions
         $"{CatalogActorIdPrefix}:{BuildOpaqueToken(scopeId)}";
 
     public string BuildDefinitionActorId(string scopeId, string scriptId, string revisionId) =>
-        $"{DefinitionActorIdPrefix}:{BuildOpaqueToken(scopeId)}:{BuildOpaqueToken(scriptId)}:{BuildOpaqueToken(revisionId)}";
+        $"{DefinitionActorIdPrefix}:{BuildOpaqueToken(scopeId)}:{BuildOpaqueToken(scriptId)}";
 
     public static string NormalizeRequired(string value, string fieldName)
     {

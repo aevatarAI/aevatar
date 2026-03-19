@@ -51,7 +51,7 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
         CancellationToken ct)
     {
         var actorId = string.IsNullOrWhiteSpace(definitionActorId)
-            ? _addressResolver.GetDefinitionActorId(scriptId)
+            ? _addressResolver.GetDefinitionActorId(scriptId, scopeId)
             : definitionActorId;
         var snapshot = await BuildDefinitionSnapshotAsync(
             scriptId,

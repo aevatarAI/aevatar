@@ -184,6 +184,7 @@ message ScriptEvolutionSessionState {
   bool policy_allowed = 16;
   bool validation_succeeded = 17;
   string candidate_source = 18;
+  string scope_id = 19;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -375,6 +376,7 @@ message StartScriptEvolutionSessionRequestedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
+  string scope_id = 8;
 }
 
 message ProposeScriptEvolutionRequestedEvent {
@@ -416,6 +418,7 @@ message ScriptEvolutionSessionStartedEvent {
   string candidate_source_hash = 5;
   string reason = 6;
   string candidate_source = 7;
+  string scope_id = 8;
 }
 
 message ScriptEvolutionSessionCompletedEvent {
@@ -427,6 +430,7 @@ message ScriptEvolutionSessionCompletedEvent {
   string catalog_actor_id = 6;
   repeated string diagnostics = 7;
   ScriptDefinitionBindingSpec definition_snapshot = 8;
+  string scope_id = 9;
 }
 
 message ScriptEvolutionProposedEvent {

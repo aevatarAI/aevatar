@@ -123,7 +123,8 @@ internal static class AppToolHost
                 sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<IScopeScriptQueryPort>(),
                 sp.GetService<IScopeScriptCommandPort>(),
-                sp.GetService<Aevatar.Scripting.Core.Ports.IScriptDefinitionSnapshotPort>()));
+                sp.GetService<Aevatar.Scripting.Core.Ports.IScriptDefinitionSnapshotPort>(),
+                sp.GetService<Aevatar.Scripting.Application.IScriptEvolutionApplicationService>()));
             builder.Services.Configure<StudioStorageOptions>(storage =>
             {
                 storage.DefaultRuntimeBaseUrl = localUrl;

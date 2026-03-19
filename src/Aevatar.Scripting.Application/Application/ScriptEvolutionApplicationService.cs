@@ -28,10 +28,16 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
         if (string.IsNullOrWhiteSpace(request.CandidateSource))
             throw new InvalidOperationException("CandidateSource is required.");
 
+        var normalizedScopeId = request.ScopeId?.Trim() ?? string.Empty;
         var normalizedScriptId = request.ScriptId;
         var normalizedProposalId = string.IsNullOrWhiteSpace(request.ProposalId)
             ? Guid.NewGuid().ToString("N")
-            : request.ProposalId;
+            : request.ProposalId.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedScopeId) &&
+            !normalizedProposalId.StartsWith($"{normalizedScopeId}:", StringComparison.Ordinal))
+        {
+            normalizedProposalId = $"{normalizedScopeId}:{normalizedProposalId}";
+        }
         var normalizedSourceHash = string.IsNullOrWhiteSpace(request.CandidateSourceHash)
             ? ComputeSourceHash(request.CandidateSource)
             : request.CandidateSourceHash;
@@ -43,7 +49,8 @@ public sealed class ScriptEvolutionApplicationService : IScriptEvolutionApplicat
             CandidateRevision: request.CandidateRevision,
             CandidateSource: request.CandidateSource,
             CandidateSourceHash: normalizedSourceHash,
-            Reason: request.Reason ?? string.Empty);
+            Reason: request.Reason ?? string.Empty,
+            ScopeId: normalizedScopeId);
 
         return _proposalPort.ProposeAsync(proposal, ct);
     }

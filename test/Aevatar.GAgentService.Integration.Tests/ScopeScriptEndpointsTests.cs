@@ -2,6 +2,8 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Scripting.Abstractions.Definitions;
+using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Core.Ports;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -100,6 +102,42 @@ public sealed class ScopeScriptEndpointsTests
         body.Should().Contain("missing-script");
     }
 
+    [Fact]
+    public async Task HandleProposeScriptEvolutionAsync_ShouldBindScopeAndScriptId()
+    {
+        var service = new RecordingScriptEvolutionApplicationService();
+
+        var result = await ScopeScriptEndpoints.HandleProposeScriptEvolutionAsync(
+            "user-1",
+            "script-1",
+            new ScopeScriptEndpoints.ProposeScopeScriptEvolutionHttpRequest(
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "public sealed class DemoScriptV2 {}",
+                CandidateSourceHash: "hash-2",
+                Reason: "rollout",
+                ProposalId: "proposal-1"),
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"proposalId\":\"proposal-1\"");
+        service.LastRequest.Should().BeEquivalentTo(
+            new ProposeScriptEvolutionRequest(
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "public sealed class DemoScriptV2 {}",
+                CandidateSourceHash: "hash-2",
+                Reason: "rollout",
+                ProposalId: "proposal-1",
+                ScopeId: "user-1"));
+    }
+
     private static DefaultHttpContext CreateHttpContext()
     {
         var http = new DefaultHttpContext
@@ -168,5 +206,27 @@ public sealed class ScopeScriptEndpointsTests
         }
 
         public sealed record Request(string DefinitionActorId, string RequestedRevision);
+    }
+
+    private sealed class RecordingScriptEvolutionApplicationService : IScriptEvolutionApplicationService
+    {
+        public ProposeScriptEvolutionRequest? LastRequest { get; private set; }
+
+        public Task<ScriptPromotionDecision> ProposeAsync(ProposeScriptEvolutionRequest request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastRequest = request;
+            return Task.FromResult(new ScriptPromotionDecision(
+                Accepted: true,
+                ProposalId: request.ProposalId,
+                ScriptId: request.ScriptId,
+                BaseRevision: request.BaseRevision,
+                CandidateRevision: request.CandidateRevision,
+                Status: ScriptEvolutionStatuses.Promoted,
+                FailureReason: string.Empty,
+                DefinitionActorId: "definition-1",
+                CatalogActorId: "catalog-1",
+                ValidationReport: ScriptEvolutionValidationReport.Empty));
+        }
     }
 }

@@ -179,6 +179,57 @@ public sealed class AppScriptsStudioApiTests
         snapshot.RootElement.GetProperty("revision").GetString().Should().Be("rev-1");
     }
 
+    [Fact]
+    public async Task ScopedScriptEvolutionProposal_ShouldPromoteWithinResolvedScope()
+    {
+        var scopeId = $"nyx-user-{Guid.NewGuid():N}";
+        var scriptId = $"promoted-script-{Guid.NewGuid():N}";
+
+        _ = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts",
+            new
+            {
+                scriptId,
+                revisionId = "rev-1",
+                sourceText = AppTestData.ValidScriptSource,
+            },
+            scopeId);
+
+        using var decision = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts/evolutions/proposals",
+            new
+            {
+                scriptId,
+                baseRevision = "rev-1",
+                candidateRevision = "rev-2",
+                candidateSource = AppTestData.ValidScriptSource,
+                reason = "scope rollout",
+            },
+            scopeId);
+
+        decision.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
+        decision.RootElement.GetProperty("scriptId").GetString().Should().Be(scriptId);
+        decision.RootElement.GetProperty("candidateRevision").GetString().Should().Be("rev-2");
+        decision.RootElement.GetProperty("proposalId").GetString().Should().StartWith(scopeId + ":");
+
+        using var detail = await WaitForScopedJsonAsync(
+            HttpMethod.Get,
+            $"/api/app/scripts/{Uri.EscapeDataString(scriptId)}",
+            null,
+            scopeId,
+            static document =>
+                string.Equals(
+                    document.RootElement.GetProperty("script").GetProperty("activeRevision").GetString(),
+                    "rev-2",
+                    StringComparison.Ordinal),
+            TimeSpan.FromSeconds(15));
+        detail.RootElement.GetProperty("available").GetBoolean().Should().BeTrue();
+        detail.RootElement.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        detail.RootElement.GetProperty("script").GetProperty("activeRevision").GetString().Should().Be("rev-2");
+    }
+
     private async Task<JsonDocument> SendScopedJsonAsync(
         HttpMethod method,
         string path,
@@ -197,5 +248,36 @@ public sealed class AppScriptsStudioApiTests
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         content.Should().NotBeNullOrWhiteSpace();
         return JsonDocument.Parse(content);
+    }
+
+    private async Task<JsonDocument> WaitForScopedJsonAsync(
+        HttpMethod method,
+        string path,
+        object? payload,
+        string scopeId,
+        Func<JsonDocument, bool> predicate,
+        TimeSpan timeout,
+        HttpStatusCode expectedStatusCode = HttpStatusCode.OK,
+        CancellationToken cancellationToken = default)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(timeout);
+
+        while (true)
+        {
+            timeoutCts.Token.ThrowIfCancellationRequested();
+            var document = await SendScopedJsonAsync(
+                method,
+                path,
+                payload,
+                scopeId,
+                expectedStatusCode,
+                timeoutCts.Token);
+            if (predicate(document))
+                return document;
+
+            document.Dispose();
+            await Task.Yield();
+        }
     }
 }

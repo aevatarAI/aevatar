@@ -22,7 +22,7 @@ public sealed class RuntimeScriptEvolutionRollbackService : IScriptEvolutionRoll
         ArgumentNullException.ThrowIfNull(request);
 
         var catalogActorId = string.IsNullOrWhiteSpace(request.CatalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(request.ScopeId)
             : request.CatalogActorId;
 
         return _catalogCommandPort.RollbackCatalogRevisionAsync(
@@ -32,6 +32,7 @@ public sealed class RuntimeScriptEvolutionRollbackService : IScriptEvolutionRoll
             request.Reason,
             request.ProposalId,
             request.ExpectedCurrentRevision,
+            request.ScopeId,
             ct);
     }
 }

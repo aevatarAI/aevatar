@@ -45,7 +45,8 @@ public static class ScriptCapabilityEndpoints
                     CandidateSource: request.CandidateSource,
                     CandidateSourceHash: request.CandidateSourceHash ?? string.Empty,
                     Reason: request.Reason ?? string.Empty,
-                    ProposalId: request.ProposalId ?? string.Empty),
+                    ProposalId: request.ProposalId ?? string.Empty,
+                    ScopeId: request.ScopeId ?? string.Empty),
                 ct);
 
             return Results.Ok(decision);
@@ -71,4 +72,5 @@ public sealed record ProposeScriptEvolutionHttpRequest(
     string? CandidateSource,
     string? CandidateSourceHash,
     string? Reason,
-    string? ProposalId);
+    string? ProposalId,
+    string? ScopeId = null);

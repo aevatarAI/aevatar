@@ -29,6 +29,7 @@ public sealed class ScriptEvolutionEnvelopeFactory
                 CandidateSource = command.CandidateSource ?? string.Empty,
                 CandidateSourceHash = command.CandidateSourceHash ?? string.Empty,
                 Reason = command.Reason ?? string.Empty,
+                ScopeId = command.ScopeId ?? string.Empty,
             });
     }
 }

@@ -36,14 +36,15 @@ public sealed class ScriptEvolutionCommandTargetResolver
         var proposalId = string.IsNullOrWhiteSpace(command.ProposalId)
             ? Guid.NewGuid().ToString("N")
             : command.ProposalId;
-        var managerActorId = _addressResolver.GetEvolutionManagerActorId();
+        var scopeId = command.ScopeId?.Trim() ?? string.Empty;
+        var managerActorId = _addressResolver.GetEvolutionManagerActorId(scopeId);
 
         _ = await _actorAccessor.GetOrCreateAsync<ScriptEvolutionManagerGAgent>(
             managerActorId,
             "Script evolution manager actor not found",
             ct);
 
-        var sessionActorId = _addressResolver.GetEvolutionSessionActorId(proposalId);
+        var sessionActorId = _addressResolver.GetEvolutionSessionActorId(proposalId, scopeId);
         var sessionActor = await _actorAccessor.GetOrCreateAsync<ScriptEvolutionSessionGAgent>(
             sessionActorId,
             "Script evolution session actor not found",
