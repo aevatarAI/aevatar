@@ -14,14 +14,16 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>> _toolIndex;
+    private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly ILogger<ToolCallModule> _logger;
+    private IReadOnlyDictionary<string, IAgentTool>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger<ToolCallModule> logger)
     {
-        _toolIndex = new Lazy<Task<IReadOnlyDictionary<string, IAgentTool>>>(
-            () => DiscoverAllToolsAsync(toolSources, logger));
+        _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public string Name => "tool_call";
@@ -63,7 +65,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
         }, TopologyAudience.Self, ct);
 
-        var toolIndex = await _toolIndex.Value;
+        var toolIndex = await ResolveToolIndexAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
         {
             const string notFound = "tool not found or no tool sources configured";
@@ -97,9 +99,21 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> ResolveToolIndexAsync(CancellationToken ct)
+    {
+        var cached = _toolIndex;
+        if (cached != null)
+            return cached;
+
+        var discovered = await DiscoverAllToolsAsync(_toolSources, _logger, ct);
+        Interlocked.CompareExchange(ref _toolIndex, discovered, null);
+        return _toolIndex ?? discovered;
+    }
+
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
         IEnumerable<IAgentToolSource> toolSources,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken ct)
     {
         var index = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in toolSources)
@@ -107,7 +121,11 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             IReadOnlyList<IAgentTool> tools;
             try
             {
-                tools = await source.DiscoverToolsAsync();
+                tools = await source.DiscoverToolsAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
