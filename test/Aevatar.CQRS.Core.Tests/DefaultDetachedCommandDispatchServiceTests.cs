@@ -58,6 +58,73 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         target.ReleaseCalls[0].Cleanup.ObservedCompletion.Should().Be("completed");
     }
 
+    [Fact]
+    public async Task ShutdownSignal_ShouldCancelInflightDrain()
+    {
+        using var cts = new CancellationTokenSource();
+        var sink = new EventChannel<string>();
+        var pumpStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var target = new DetachedTestTarget("target-2", sink);
+        var receipt = new DetachedReceipt("target-2", "receipt-2");
+        var outputStream = new DetachedOutputStream(onPumpStarted: pumpStarted);
+
+        var service = new DefaultDetachedCommandDispatchService<string, DetachedTestTarget, DetachedReceipt, string, string, string, string>(
+            new DetachedPipeline(CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>.Success(
+                new CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-2", "cmd-2", "corr-2", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-2" },
+                    Receipt = receipt,
+                })),
+            outputStream,
+            new DetachedCompletionPolicy(),
+            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
+            shutdownSignal: new TestShutdownSignal(cts.Token));
+
+        await service.DispatchAsync("command-2", CancellationToken.None);
+        await pumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+
+        await target.ReleaseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_ShouldDrainInflightTasks()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("done:ok");
+        sink.Complete();
+
+        var target = new DetachedTestTarget("target-3", sink);
+        var receipt = new DetachedReceipt("target-3", "receipt-3");
+
+        var service = new DefaultDetachedCommandDispatchService<string, DetachedTestTarget, DetachedReceipt, string, string, string, string>(
+            new DetachedPipeline(CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>.Success(
+                new CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-3", "cmd-3", "corr-3", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-3" },
+                    Receipt = receipt,
+                })),
+            new DetachedOutputStream(),
+            new DetachedCompletionPolicy(),
+            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+
+        await service.DispatchAsync("command-3", CancellationToken.None);
+
+        await service.DisposeAsync();
+
+        target.ReleaseCalls.Should().ContainSingle();
+        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeTrue();
+    }
+
+    private sealed record TestShutdownSignal(CancellationToken ShutdownToken) : ICommandDispatchShutdownSignal;
+
     private sealed record DetachedReceipt(string TargetId, string ReceiptId);
 
     private sealed class DetachedTestTarget(string targetId, IEventSink<string> sink)
@@ -77,7 +144,6 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
             CommandInteractionCleanupContext<string> cleanup,
             CancellationToken ct = default)
         {
-            ct.ThrowIfCancellationRequested();
             ReleaseCalls.Add((receipt, cleanup));
             ReleaseObserved.TrySetResult(true);
             return Task.CompletedTask;
@@ -126,7 +192,15 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
 
     private sealed class DetachedOutputStream : IEventOutputStream<string, string>
     {
-        public TaskCompletionSource<bool> PumpStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool>? _onPumpStarted;
+
+        public DetachedOutputStream(TaskCompletionSource<bool>? onPumpStarted = null)
+        {
+            _onPumpStarted = onPumpStarted;
+            PumpStarted = onPumpStarted ?? new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public TaskCompletionSource<bool> PumpStarted { get; }
 
         public async Task PumpAsync(
             IAsyncEnumerable<string> events,
