@@ -7,9 +7,14 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
-KAFKA_CONTAINER="aevatar-kafka"
-GARNET_HOST="127.0.0.1"
-GARNET_PORT=6379
+KAFKA_CONTAINER="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_CONTAINER:-aevatar-kafka}"
+KAFKA_BOOTSTRAP_SERVERS="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
+KAFKA_HOST="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_HOST:-127.0.0.1}"
+KAFKA_PORT="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_PORT:-9092}"
+GARNET_HOST="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_HOST:-127.0.0.1}"
+GARNET_PORT="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_PORT:-6379}"
+STREAM_BACKEND="${AEVATAR_DISTRIBUTED_SMOKE_STREAM_BACKEND:-KafkaStrictProvider}"
+BOOTSTRAP_DOCKER_INFRA="${AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA:-true}"
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
 APP_DLL="${PUBLISH_DIR}/Aevatar.Mainnet.Host.Api.dll"
 WAIT_SECONDS=120
@@ -26,6 +31,7 @@ log_dir="/tmp/aevatar-distributed-smoke-${timestamp}"
 mkdir -p "${log_dir}"
 
 declare -a pids=()
+STARTED_DOCKER_INFRA=0
 
 cleanup() {
   for pid in "${pids[@]-}"; do
@@ -41,25 +47,12 @@ cleanup() {
     fi
   done
 
-  docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  if [[ "${STARTED_DOCKER_INFRA}" == "1" ]]; then
+    docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
-
-wait_garnet() {
-  for i in {1..30}; do
-    if (echo >"/dev/tcp/${GARNET_HOST}/${GARNET_PORT}") >/dev/null 2>&1; then
-      echo "Garnet is reachable on ${GARNET_HOST}:${GARNET_PORT}."
-      return 0
-    fi
-
-    echo "Waiting for Garnet on ${GARNET_HOST}:${GARNET_PORT}..."
-    sleep 1
-  done
-
-  echo "Garnet failed to become reachable."
-  return 1
-}
 
 start_node() {
   local node="$1"
@@ -73,11 +66,11 @@ start_node() {
     ASPNETCORE_ENVIRONMENT=Distributed \
     ASPNETCORE_URLS="http://127.0.0.1:${http_port}" \
     AEVATAR_ActorRuntime__Provider=Orleans \
-    AEVATAR_ActorRuntime__OrleansStreamBackend=MassTransitAdapter \
+    AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
     AEVATAR_ActorRuntime__MassTransitTransportBackend=Kafka \
-    AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers=localhost:9092 \
+    AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
     AEVATAR_ActorRuntime__MassTransitKafkaTopicName=aevatar-mainnet-agent-events \
     AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup="aevatar-mainnet-ci-node${node}-${timestamp}" \
     AEVATAR_Orleans__ClusteringMode=Development \
@@ -96,16 +89,27 @@ start_node() {
 
 echo "Starting Kafka..."
 acquire_distributed_smoke_lock "${LOCK_OWNER}"
-ensure_local_tcp_ports_free \
-  "${LOCK_OWNER}" \
-  9092 \
-  "${GARNET_PORT}" \
-  "${HTTP_PORTS[@]}" \
-  "${SILO_PORTS[@]}" \
-  "${GATEWAY_PORTS[@]}"
-docker compose up -d kafka garnet
-wait_kafka_health "${KAFKA_CONTAINER}"
-wait_garnet
+if [[ "${BOOTSTRAP_DOCKER_INFRA}" == "true" ]]; then
+  ensure_local_tcp_ports_free \
+    "${LOCK_OWNER}" \
+    "${KAFKA_PORT}" \
+    "${GARNET_PORT}" \
+    "${HTTP_PORTS[@]}" \
+    "${SILO_PORTS[@]}" \
+    "${GATEWAY_PORTS[@]}"
+  docker compose up -d kafka garnet
+  STARTED_DOCKER_INFRA=1
+  wait_kafka_health "${KAFKA_CONTAINER}"
+  wait_tcp_endpoint "${GARNET_HOST}" "${GARNET_PORT}" "Garnet"
+else
+  ensure_local_tcp_ports_free \
+    "${LOCK_OWNER}" \
+    "${HTTP_PORTS[@]}" \
+    "${SILO_PORTS[@]}" \
+    "${GATEWAY_PORTS[@]}"
+  wait_tcp_endpoint "${KAFKA_HOST}" "${KAFKA_PORT}" "Kafka"
+  wait_tcp_endpoint "${GARNET_HOST}" "${GARNET_PORT}" "Garnet"
+fi
 
 echo "Publishing host app..."
 dotnet publish src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj \

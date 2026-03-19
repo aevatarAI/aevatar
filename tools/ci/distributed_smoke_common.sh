@@ -143,3 +143,42 @@ wait_kafka_health() {
   docker logs "${container_name}" || true
   return 1
 }
+
+wait_tcp_endpoint() {
+  local host="$1"
+  local port="$2"
+  local label="$3"
+  local attempts="${4:-30}"
+  local sleep_seconds="${5:-1}"
+  local try=0
+
+  while (( try < attempts )); do
+    if python3 - "${host}" "${port}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(1.0)
+try:
+    sock.connect((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+    then
+      echo "${label} is reachable on ${host}:${port}."
+      return 0
+    fi
+
+    echo "Waiting for ${label} on ${host}:${port}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "${label} failed to become reachable on ${host}:${port}."
+  return 1
+}
