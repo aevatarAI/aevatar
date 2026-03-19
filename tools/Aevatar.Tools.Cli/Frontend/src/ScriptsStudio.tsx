@@ -398,7 +398,7 @@ function FoldCard(props: {
   actions?: ReactNode;
 }) {
   return (
-    <section className="overflow-hidden rounded-[24px] border border-[#E6E0D7] bg-[rgba(247,244,238,0.88)] shadow-[0_12px_28px_rgba(31,28,24,0.05)] backdrop-blur-sm">
+    <section className="overflow-hidden rounded-[22px] border border-[#EEEAE4] bg-[#FAF8F4]">
       <div className="flex items-center justify-between gap-3 px-4 py-4">
         <button type="button" onClick={props.onToggle} className="flex min-w-0 flex-1 items-center gap-3 text-left">
           <div className="min-w-0 flex-1">
@@ -410,7 +410,7 @@ function FoldCard(props: {
         </button>
         {props.actions ? <div className="shrink-0">{props.actions}</div> : null}
       </div>
-      {props.open ? <div className="border-t border-[#F1ECE5] px-4 py-4">{props.children}</div> : null}
+      {props.open ? <div className="border-t border-[#EEE7DF] px-4 py-4">{props.children}</div> : null}
     </section>
   );
 }
@@ -426,7 +426,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [selectedDraftKey, setSelectedDraftKey] = useState('');
   const [search, setSearch] = useState('');
 
-  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [draftsOpen, setDraftsOpen] = useState(true);
   const [contractOpen, setContractOpen] = useState(false);
   const [metaOpen, setMetaOpen] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
@@ -886,106 +886,153 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const promotionDiagnostics = Array.isArray(selectedDraft.lastPromotion?.validationReport?.diagnostics)
     ? selectedDraft.lastPromotion.validationReport.diagnostics
     : [];
+  const workspaceGridClass = draftsOpen
+    ? 'grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_248px]'
+    : 'grid-cols-1 lg:grid-cols-[92px_minmax(0,1fr)] xl:grid-cols-[92px_minmax(0,1fr)_248px]';
 
   return (
-    <section
-      className="relative flex-1 min-h-0 overflow-auto px-6 py-8"
-      style={{
-        background: 'radial-gradient(circle at top, #f8f5ef 0%, #f1eee8 42%, #ece7de 100%)',
-      }}
-    >
-      <div className="mx-auto flex min-h-full w-full max-w-[1540px] flex-col justify-center gap-6">
-        <div className="mx-auto flex w-full max-w-[1280px] flex-wrap items-end justify-between gap-4 px-1">
-          <div className="min-w-0">
+    <>
+      <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 px-6 backdrop-blur-sm">
+        <div className="flex h-full items-center justify-between gap-4">
+          <div>
             <div className="panel-eyebrow">{appContext.hostMode === 'embedded' ? 'Embedded runtime' : 'Proxy runtime'}</div>
-            <div className="panel-title !mt-1">Scripts Studio</div>
+            <div className="panel-title !mt-0">Scripts Studio</div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {showValidationBadge ? (
+              <div className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
+                validationPending
+                  ? 'border-[#E5DED3] bg-[#F7F2E8] text-[#8E6A3D]'
+                  : validationResult?.errorCount
+                    ? 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
+                    : validationResult?.warningCount
+                      ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
+                      : 'border-[#D9E5CB] bg-[#F5FBEE] text-[#5C7A2D]'
+              }`}>
+                {validationSummary}
+              </div>
+            ) : null}
+            <div className="rounded-full border border-[#E5E1DA] bg-white px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-gray-400">
+              AppScriptCommand -&gt; AppScriptReadModel
+            </div>
             <button type="button" onClick={() => { void handleRunDraft(); }} disabled={runPending} className="solid-action">
               <Play size={14} /> {runPending ? 'Running' : 'Draft Run'}
             </button>
           </div>
         </div>
+      </header>
 
-        <div className="mx-auto grid w-full max-w-[1280px] min-h-[760px] gap-4 rounded-[36px] border border-[#E6E0D7] bg-[rgba(252,251,248,0.82)] p-4 shadow-[0_30px_80px_rgba(31,28,24,0.10)] backdrop-blur-sm lg:grid-cols-[190px_minmax(0,1fr)] xl:grid-cols-[190px_minmax(0,1fr)_240px]">
-          <aside className="min-h-0 rounded-[28px] bg-[rgba(246,241,233,0.92)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-            <div className="flex items-center justify-between gap-3 px-2 py-2">
-              <div className="min-w-0">
-                <div className="text-[13px] font-semibold text-gray-800">Drafts</div>
-                <div className="mt-1 text-[11px] text-gray-400">{drafts.length} draft{drafts.length === 1 ? '' : 's'}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => setDraftsOpen(value => !value)} className="panel-icon-button" title="Toggle drafts">
-                  <ChevronDown size={14} className={`transition-transform ${draftsOpen ? 'rotate-180' : ''}`} />
-                </button>
-                <button type="button" onClick={handleCreateDraft} className="panel-icon-button" title="New draft">
-                  <Plus size={14} />
-                </button>
-              </div>
-            </div>
-
-            {draftsOpen ? (
-              <div className="mt-3 space-y-3">
-                <div className="search-field !min-h-[38px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
-                  <Search size={14} className="text-gray-400" />
-                  <input
-                    className="search-input"
-                    placeholder="Search drafts"
-                    value={search}
-                    onChange={event => setSearch(event.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  {filteredDrafts.map(draft => (
-                    <button
-                      key={draft.key}
-                      type="button"
-                      onClick={() => setSelectedDraftKey(draft.key)}
-                      className={`w-full rounded-[22px] border px-4 py-4 text-left transition-colors ${draft.key === selectedDraft.key ? 'border-[#C7D6FF] bg-[#EAF0FF]' : 'border-[#E8E1D8] bg-[rgba(255,255,255,0.75)] hover:bg-white'}`}
-                    >
-                      <div className="truncate text-[15px] font-semibold text-gray-800">{draft.scriptId}</div>
-                      <div className="mt-1 truncate text-[12px] text-gray-400">{draft.revision}</div>
-                      <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(draft.updatedAtUtc)}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </aside>
-
-          <div className="min-h-0 flex flex-col">
-            <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-[#E8E1D8] bg-white shadow-[0_10px_28px_rgba(31,28,24,0.06)]">
-              <div className="flex items-center justify-between gap-3 border-b border-[#F0ECE6] px-5 py-4">
-                <div className="min-w-0">
-                  <div className="truncate text-[16px] font-semibold text-gray-800">{selectedDraft.scriptId}</div>
-                </div>
-                <div className="flex items-center gap-3">
-                  {showValidationBadge ? (
-                    <div className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
-                      validationPending
-                        ? 'border-[#E5DED3] bg-[#F7F2E8] text-[#8E6A3D]'
-                        : validationResult?.errorCount
-                          ? 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
-                          : validationResult?.warningCount
-                            ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
-                            : 'border-[#D9E5CB] bg-[#F5FBEE] text-[#5C7A2D]'
-                    }`}>
-                      {validationSummary}
-                    </div>
-                  ) : null}
-                  <div className="rounded-full border border-[#E5DED3] bg-[#FAF8F4] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-gray-400">
-                    {'AppScriptCommand -> AppScriptReadModel'}
+      <section className="relative flex-1 min-h-0 overflow-hidden bg-[#F2F1EE]">
+        <div className={`grid h-full min-h-0 ${workspaceGridClass}`}>
+          <aside className="min-h-0 overflow-hidden border-r border-[#E6E3DE] bg-white/94">
+            <div className="flex h-full min-h-0 flex-col p-4">
+              <div className={`flex gap-3 ${draftsOpen ? 'items-start justify-between pb-4' : 'flex-col items-center pb-3'}`}>
+                {draftsOpen ? (
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold text-gray-800">Drafts</div>
+                    <div className="mt-1 text-[11px] text-gray-400">{drafts.length} draft{drafts.length === 1 ? '' : 's'}</div>
                   </div>
-                  <button type="button" onClick={() => setMetaOpen(value => !value)} className="panel-icon-button" title="Toggle metadata">
-                    <ChevronDown size={14} className={`transition-transform ${metaOpen ? 'rotate-180' : ''}`} />
+                ) : (
+                  <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                    {drafts.length}
+                  </div>
+                )}
+
+                <div className={`flex items-center gap-2 ${draftsOpen ? '' : 'flex-col'}`}>
+                  <button type="button" onClick={() => setDraftsOpen(value => !value)} className="panel-icon-button" title="Toggle drafts">
+                    <ChevronDown size={14} className={`transition-transform ${draftsOpen ? 'rotate-90' : '-rotate-90'}`} />
+                  </button>
+                  <button type="button" onClick={handleCreateDraft} className="panel-icon-button" title="New draft">
+                    <Plus size={14} />
                   </button>
                 </div>
               </div>
 
-              {metaOpen ? (
-                <div className="grid gap-3 border-b border-[#F1ECE5] px-5 py-4 lg:grid-cols-2">
+              {draftsOpen ? (
+                <>
+                  <div className="search-field !min-h-[38px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
+                    <Search size={14} className="text-gray-400" />
+                    <input
+                      className="search-input"
+                      placeholder="Search drafts"
+                      value={search}
+                      onChange={event => setSearch(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                    {filteredDrafts.map(draft => (
+                      <button
+                        key={draft.key}
+                        type="button"
+                        onClick={() => setSelectedDraftKey(draft.key)}
+                        className={`w-full rounded-[20px] border px-4 py-4 text-left transition-colors ${
+                          draft.key === selectedDraft.key
+                            ? 'border-[#C7D6FF] bg-[#EAF0FF]'
+                            : 'border-[#EEEAE4] bg-[#FAF8F4] hover:bg-white'
+                        }`}
+                      >
+                        <div className="truncate text-[14px] font-semibold text-gray-800">{draft.scriptId}</div>
+                        <div className="mt-1 truncate text-[12px] text-gray-400">{draft.revision}</div>
+                        <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(draft.updatedAtUtc)}</div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto pt-2">
+                  <div className="space-y-2">
+                    {filteredDrafts.map(draft => (
+                      <button
+                        key={draft.key}
+                        type="button"
+                        title={draft.scriptId}
+                        onClick={() => setSelectedDraftKey(draft.key)}
+                        className={`flex h-12 w-full items-center justify-center rounded-[18px] border text-[11px] font-semibold uppercase tracking-[0.12em] transition-colors ${
+                          draft.key === selectedDraft.key
+                            ? 'border-[#C7D6FF] bg-[#EAF0FF] text-[#315EDE]'
+                            : 'border-[#EEEAE4] bg-[#FAF8F4] text-gray-500 hover:bg-white'
+                        }`}
+                      >
+                        {(draft.scriptId || 'S').slice(0, 2)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <div className="min-h-0 flex flex-col">
+            <div className="border-b border-[#E6E3DE] bg-white/72 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[17px] font-semibold text-gray-800">{selectedDraft.scriptId}</div>
+                  <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.revision}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMetaOpen(value => !value)}
+                    className="ghost-action !px-3"
+                  >
+                    {metaOpen ? 'Hide Meta' : 'Meta'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContractOpen(value => !value)}
+                    className="ghost-action !px-3"
+                  >
+                    {contractOpen ? 'Hide Contract' : 'Contract'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {metaOpen ? (
+              <div className="border-b border-[#E6E3DE] bg-[#F7F5F0] px-5 py-4">
+                <div className="grid gap-3 lg:grid-cols-2">
                   <input
                     className="panel-input"
                     placeholder="script id"
@@ -1011,263 +1058,278 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                     onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, reason: event.target.value }))}
                   />
                 </div>
-              ) : null}
+              </div>
+            ) : null}
 
-              <div className="flex min-h-0 flex-1 p-4">
-                <div className="flex min-h-0 flex-1 overflow-hidden rounded-[24px] border border-[#EEE6DA] bg-[#FCFBF8]">
-                  <div className="flex min-h-0 flex-1 flex-col">
-                    <div className="min-h-0 flex-1">
-                      <Editor
-                        path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                        language="csharp"
-                        theme="aevatar-script-light"
-                        value={selectedDraft.source}
-                        beforeMount={handleMonacoBeforeMount}
-                        onMount={handleEditorMount}
-                        onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
-                        loading={(
-                          <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                            Loading
-                          </div>
-                        )}
-                        options={{
-                          automaticLayout: true,
-                          minimap: { enabled: false },
-                          scrollBeyondLastLine: false,
-                          smoothScrolling: true,
-                          fontSize: 13,
-                          lineHeight: 23,
-                          fontLigatures: true,
-                          tabSize: 4,
-                          insertSpaces: true,
-                          renderWhitespace: 'selection',
-                          renderValidationDecorations: 'on',
-                          lineNumbersMinChars: 3,
-                          quickSuggestions: false,
-                          suggestOnTriggerCharacters: false,
-                          wordWrap: 'off',
-                          stickyScroll: { enabled: false },
-                          bracketPairColorization: { enabled: true },
-                          guides: {
-                            indentation: true,
-                            bracketPairs: true,
-                          },
-                          folding: true,
-                          padding: {
-                            top: 18,
-                            bottom: 18,
-                          },
-                          scrollbar: {
-                            verticalScrollbarSize: 10,
-                            horizontalScrollbarSize: 10,
-                          },
-                        }}
-                      />
-                    </div>
-
-                    <div className="border-t border-[#EEE6DA] bg-[#FFFCF8] px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
-                          <div className="mt-1 truncate text-[13px] text-gray-700">
-                            {validationPending
-                              ? 'Checking'
-                              : visibleProblems[0]
-                                ? visibleProblems[0].message
-                                : 'Clean'}
-                          </div>
-                        </div>
-                        {visibleProblems.length > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => setProblemsOpen(value => !value)}
-                            className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
-                          >
-                            {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
-                          </button>
-                        ) : null}
+            <div className="min-h-0 flex-1 p-5">
+              <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
+                {contractOpen ? (
+                  <div className="border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div>
+                        <div className="section-heading">Input Type</div>
+                        <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.inputType}</div>
                       </div>
-
-                      {problemsOpen && visibleProblems.length > 0 ? (
-                        <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
-                          {visibleProblems.map((diagnostic, index) => (
-                            <button
-                              key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
-                              type="button"
-                              onClick={() => jumpToDiagnostic(diagnostic)}
-                              className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
-                                diagnostic.severity === 'error'
-                                  ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
-                                  : diagnostic.severity === 'warning'
-                                    ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
-                                    : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
-                                  {diagnostic.code || diagnostic.severity}
-                                </div>
-                                <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
-                              </div>
-                              <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
+                      <div>
+                        <div className="section-heading">Read Model Fields</div>
+                        <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.readModelFields.join(', ')}</div>
+                      </div>
                     </div>
                   </div>
+                ) : null}
+
+                <div className="min-h-0 flex-1 bg-[#FCFBF8]">
+                  <Editor
+                    path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                    language="csharp"
+                    theme="aevatar-script-light"
+                    value={selectedDraft.source}
+                    beforeMount={handleMonacoBeforeMount}
+                    onMount={handleEditorMount}
+                    onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
+                    loading={(
+                      <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                        Loading
+                      </div>
+                    )}
+                    options={{
+                      automaticLayout: true,
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      smoothScrolling: true,
+                      fontSize: 13,
+                      lineHeight: 23,
+                      fontLigatures: true,
+                      tabSize: 4,
+                      insertSpaces: true,
+                      renderWhitespace: 'selection',
+                      renderValidationDecorations: 'on',
+                      lineNumbersMinChars: 3,
+                      quickSuggestions: false,
+                      suggestOnTriggerCharacters: false,
+                      wordWrap: 'off',
+                      stickyScroll: { enabled: false },
+                      bracketPairColorization: { enabled: true },
+                      guides: {
+                        indentation: true,
+                        bracketPairs: true,
+                      },
+                      folding: true,
+                      padding: {
+                        top: 18,
+                        bottom: 18,
+                      },
+                      scrollbar: {
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                      },
+                    }}
+                  />
                 </div>
-              </div>
-            </section>
+
+                <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
+                      <div className="mt-1 truncate text-[13px] text-gray-700">
+                        {validationPending
+                          ? 'Checking'
+                          : visibleProblems[0]
+                            ? visibleProblems[0].message
+                            : 'Clean'}
+                      </div>
+                    </div>
+                    {visibleProblems.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setProblemsOpen(value => !value)}
+                        className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
+                      >
+                        {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {problemsOpen && visibleProblems.length > 0 ? (
+                    <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
+                      {visibleProblems.map((diagnostic, index) => (
+                        <button
+                          key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
+                          type="button"
+                          onClick={() => jumpToDiagnostic(diagnostic)}
+                          className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
+                            diagnostic.severity === 'error'
+                              ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
+                              : diagnostic.severity === 'warning'
+                                ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
+                                : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+                              {diagnostic.code || diagnostic.severity}
+                            </div>
+                            <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
+                          </div>
+                          <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            </div>
           </div>
 
-          <aside className="min-h-0 overflow-y-auto">
-            <div className="space-y-4">
-              <FoldCard
-                eyebrow="Contract"
-                title="AppScriptCommand -> AppScriptReadModel"
-                summary={appContext.scriptContract.readModelFields.join(' · ')}
-                open={contractOpen}
-                onToggle={() => setContractOpen(value => !value)}
-              >
-                <div className="space-y-3 text-[12px] text-gray-600">
-                  <div>
-                    <div className="section-heading">Input Type</div>
-                    <div className="mt-1 break-all">{appContext.scriptContract.inputType}</div>
+          <aside className="min-h-0 overflow-hidden border-t border-[#E6E3DE] bg-white/94 lg:col-span-2 xl:col-span-1 xl:border-l xl:border-t-0">
+            <div className="h-full min-h-0 overflow-y-auto p-5">
+              <div className="space-y-4">
+                <FoldCard
+                  eyebrow="Contract"
+                  title="AppScriptCommand -> AppScriptReadModel"
+                  summary={appContext.scriptContract.readModelFields.join(' · ')}
+                  open={contractOpen}
+                  onToggle={() => setContractOpen(value => !value)}
+                >
+                  <div className="space-y-3 text-[12px] text-gray-600">
+                    <div>
+                      <div className="section-heading">Input Type</div>
+                      <div className="mt-1 break-all">{appContext.scriptContract.inputType}</div>
+                    </div>
+                    <div>
+                      <div className="section-heading">Read Model Fields</div>
+                      <div className="mt-1 break-all">{appContext.scriptContract.readModelFields.join(', ')}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="section-heading">Read Model Fields</div>
-                    <div className="mt-1 break-all">{appContext.scriptContract.readModelFields.join(', ')}</div>
-                  </div>
-                </div>
-              </FoldCard>
+                </FoldCard>
 
-              <FoldCard
-                eyebrow="Runtime"
-                title="Snapshot"
-                summary={snapshotView.status ? `${snapshotView.status} -> ${snapshotView.output || '-'}` : 'input -> snapshot'}
-                open={runtimeOpen}
-                onToggle={() => setRuntimeOpen(value => !value)}
-                actions={(
-                  <button
-                    type="button"
-                    onClick={() => { void refreshSnapshot(selectedDraft); }}
-                    className="panel-icon-button"
-                    disabled={snapshotPending}
-                    title="Refresh snapshot"
-                  >
-                    <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
-                  </button>
-                )}
-              >
-                <div className="space-y-4">
-                  <textarea
-                    rows={5}
-                    className="panel-textarea"
-                    placeholder="draft input"
-                    value={selectedDraft.input}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, input: event.target.value }))}
-                  />
+                <FoldCard
+                  eyebrow="Runtime"
+                  title="Snapshot"
+                  summary={snapshotView.status ? `${snapshotView.status} -> ${snapshotView.output || '-'}` : 'input -> snapshot'}
+                  open={runtimeOpen}
+                  onToggle={() => setRuntimeOpen(value => !value)}
+                  actions={(
+                    <button
+                      type="button"
+                      onClick={() => { void refreshSnapshot(selectedDraft); }}
+                      className="panel-icon-button"
+                      disabled={snapshotPending}
+                      title="Refresh snapshot"
+                    >
+                      <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
+                    </button>
+                  )}
+                >
+                  <div className="space-y-4">
+                    <textarea
+                      rows={5}
+                      className="panel-textarea"
+                      placeholder="draft input"
+                      value={selectedDraft.input}
+                      onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, input: event.target.value }))}
+                    />
 
-                  <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                    <div className="grid gap-3">
-                      <div>
-                        <div className="section-heading">Status</div>
-                        <div className="mt-1 text-[13px] text-gray-800">{snapshotView.status || '-'}</div>
-                      </div>
-                      <div>
-                        <div className="section-heading">Output</div>
-                        <pre className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
-                      </div>
-                      <div>
-                        <div className="section-heading">Notes</div>
-                        <div className="mt-1 text-[12px] text-gray-600">
-                          {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
+                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                      <div className="grid gap-3">
+                        <div>
+                          <div className="section-heading">Status</div>
+                          <div className="mt-1 text-[13px] text-gray-800">{snapshotView.status || '-'}</div>
+                        </div>
+                        <div>
+                          <div className="section-heading">Output</div>
+                          <pre className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
+                        </div>
+                        <div>
+                          <div className="section-heading">Notes</div>
+                          <div className="mt-1 text-[12px] text-gray-600">
+                            {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
+                          </div>
                         </div>
                       </div>
                     </div>
+
+                    <details
+                      open={runtimeAdvancedOpen}
+                      onToggle={event => setRuntimeAdvancedOpen(event.currentTarget.open)}
+                      className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3"
+                    >
+                      <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                        Advanced
+                      </summary>
+                      <div className="mt-3 space-y-2 break-all text-[12px] text-gray-600">
+                        <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
+                        <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
+                        <div>runId: {selectedDraft.lastRun?.runId || '-'}</div>
+                        <div>stateVersion: {selectedDraft.lastSnapshot?.stateVersion ?? '-'}</div>
+                        <div>updatedAt: {formatDateTime(selectedDraft.lastSnapshot?.updatedAt)}</div>
+                      </div>
+                    </details>
                   </div>
+                </FoldCard>
 
-                  <details
-                    open={runtimeAdvancedOpen}
-                    onToggle={event => setRuntimeAdvancedOpen(event.currentTarget.open)}
-                    className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3"
-                  >
-                    <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                      Advanced
-                    </summary>
-                    <div className="mt-3 space-y-2 break-all text-[12px] text-gray-600">
-                      <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
-                      <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
-                      <div>runId: {selectedDraft.lastRun?.runId || '-'}</div>
-                      <div>stateVersion: {selectedDraft.lastSnapshot?.stateVersion ?? '-'}</div>
-                      <div>updatedAt: {formatDateTime(selectedDraft.lastSnapshot?.updatedAt)}</div>
-                    </div>
-                  </details>
-                </div>
-              </FoldCard>
+                <FoldCard
+                  eyebrow="Governance"
+                  title="Promote"
+                  summary={selectedDraft.lastPromotion?.candidateRevision || 'base · candidate · reason'}
+                  open={promotionOpen}
+                  onToggle={() => setPromotionOpen(value => !value)}
+                  actions={(
+                    <button type="button" onClick={() => { void handlePromote(); }} disabled={promotionPending} className="panel-icon-button" title="Promote">
+                      <Check size={14} />
+                    </button>
+                  )}
+                >
+                  <div className="space-y-4">
+                    <input
+                      className="panel-input"
+                      placeholder="base revision"
+                      value={selectedDraft.baseRevision}
+                      onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
+                    />
+                    <input
+                      className="panel-input"
+                      placeholder="candidate revision"
+                      value={selectedDraft.revision}
+                      onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
+                    />
+                    <textarea
+                      rows={4}
+                      className="panel-textarea"
+                      placeholder="reason"
+                      value={selectedDraft.reason}
+                      onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, reason: event.target.value }))}
+                    />
 
-              <FoldCard
-                eyebrow="Governance"
-                title="Promote"
-                summary={selectedDraft.lastPromotion?.candidateRevision || 'base · candidate · reason'}
-                open={promotionOpen}
-                onToggle={() => setPromotionOpen(value => !value)}
-                actions={(
-                  <button type="button" onClick={() => { void handlePromote(); }} disabled={promotionPending} className="panel-icon-button" title="Promote">
-                    <Check size={14} />
-                  </button>
-                )}
-              >
-                <div className="space-y-4">
-                  <input
-                    className="panel-input"
-                    placeholder="base revision"
-                    value={selectedDraft.baseRevision}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
-                  />
-                  <input
-                    className="panel-input"
-                    placeholder="candidate revision"
-                    value={selectedDraft.revision}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
-                  />
-                  <textarea
-                    rows={4}
-                    className="panel-textarea"
-                    placeholder="reason"
-                    value={selectedDraft.reason}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, reason: event.target.value }))}
-                  />
-
-                  <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                    <div className="section-heading">Decision</div>
-                    <div className="mt-2 text-[13px] text-gray-800">
-                      {selectedDraft.lastPromotion
-                        ? `${selectedDraft.lastPromotion.status || '-'}${selectedDraft.lastPromotion.failureReason ? ` · ${selectedDraft.lastPromotion.failureReason}` : ''}`
-                        : '-'}
-                    </div>
-                  </div>
-
-                  <details
-                    open={promotionAdvancedOpen}
-                    onToggle={event => setPromotionAdvancedOpen(event.currentTarget.open)}
-                    className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3"
-                  >
-                    <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                      Advanced
-                    </summary>
-                    <div className="mt-3 space-y-2 text-[12px] text-gray-600">
-                      <div>proposalId: {selectedDraft.lastPromotion?.proposalId || '-'}</div>
-                      <div>catalogActorId: {selectedDraft.lastPromotion?.catalogActorId || '-'}</div>
-                      <div>definitionActorId: {selectedDraft.lastPromotion?.definitionActorId || '-'}</div>
-                      <div>
-                        diagnostics: {promotionDiagnostics.length > 0 ? promotionDiagnostics.join(' | ') : '-'}
+                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                      <div className="section-heading">Decision</div>
+                      <div className="mt-2 text-[13px] text-gray-800">
+                        {selectedDraft.lastPromotion
+                          ? `${selectedDraft.lastPromotion.status || '-'}${selectedDraft.lastPromotion.failureReason ? ` · ${selectedDraft.lastPromotion.failureReason}` : ''}`
+                          : '-'}
                       </div>
                     </div>
-                  </details>
-                </div>
-              </FoldCard>
+
+                    <details
+                      open={promotionAdvancedOpen}
+                      onToggle={event => setPromotionAdvancedOpen(event.currentTarget.open)}
+                      className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3"
+                    >
+                      <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                        Advanced
+                      </summary>
+                      <div className="mt-3 space-y-2 text-[12px] text-gray-600">
+                        <div>proposalId: {selectedDraft.lastPromotion?.proposalId || '-'}</div>
+                        <div>catalogActorId: {selectedDraft.lastPromotion?.catalogActorId || '-'}</div>
+                        <div>definitionActorId: {selectedDraft.lastPromotion?.definitionActorId || '-'}</div>
+                        <div>
+                          diagnostics: {promotionDiagnostics.length > 0 ? promotionDiagnostics.join(' | ') : '-'}
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                </FoldCard>
+              </div>
             </div>
           </aside>
         </div>
@@ -1327,7 +1389,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
             <Bot size={20} />
           </button>
         </div>
-      </div>
-    </section>
+      </section>
+    </>
   );
 }

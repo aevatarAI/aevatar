@@ -8,4 +8,18 @@ public interface IScriptRuntimeProvisioningPort
         string? runtimeActorId,
         ScriptDefinitionSnapshot definitionSnapshot,
         CancellationToken ct);
+
+    Task<string> EnsureRuntimeAsync(
+        string definitionActorId,
+        string scriptRevision,
+        string? runtimeActorId,
+        ScriptDefinitionSnapshot definitionSnapshot,
+        string? scopeId,
+        CancellationToken ct) =>
+        EnsureRuntimeAsync(
+            definitionActorId,
+            scriptRevision,
+            runtimeActorId,
+            definitionSnapshot,
+            ct);
 }

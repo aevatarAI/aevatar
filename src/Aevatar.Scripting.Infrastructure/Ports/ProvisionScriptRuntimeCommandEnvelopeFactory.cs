@@ -34,6 +34,7 @@ public sealed class ProvisionScriptRuntimeCommandEnvelopeFactory
                 StateDescriptorFullName = command.DefinitionSnapshot.StateDescriptorFullName,
                 ReadModelDescriptorFullName = command.DefinitionSnapshot.ReadModelDescriptorFullName,
                 RuntimeSemantics = command.DefinitionSnapshot.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+                ScopeId = command.ScopeId ?? command.DefinitionSnapshot.ScopeId ?? string.Empty,
             });
     }
 }

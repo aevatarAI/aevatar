@@ -62,7 +62,8 @@ public sealed record UpsertScriptDefinitionCommand(
     string ScriptRevision,
     string SourceText,
     string SourceHash,
-    string? DefinitionActorId) : ICommandContextSeed
+    string? DefinitionActorId,
+    string? ScopeId) : ICommandContextSeed
 {
     public string? CommandId =>
         ScriptingCommandIds.Build("script-definition", DefinitionActorId ?? ScriptId, ScriptRevision);
@@ -78,7 +79,8 @@ public sealed record RunScriptRuntimeCommand(
     Any? InputPayload,
     string ScriptRevision,
     string DefinitionActorId,
-    string RequestedEventType) : ICommandContextSeed
+    string RequestedEventType,
+    string? ScopeId) : ICommandContextSeed
 {
     public string? CommandId => ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId);
 
@@ -91,7 +93,8 @@ public sealed record ProvisionScriptRuntimeCommand(
     string DefinitionActorId,
     string ScriptRevision,
     string? RuntimeActorId,
-    ScriptDefinitionSnapshot DefinitionSnapshot) : ICommandContextSeed
+    ScriptDefinitionSnapshot DefinitionSnapshot,
+    string? ScopeId) : ICommandContextSeed
 {
     private string RevisionScope =>
         string.IsNullOrWhiteSpace(ScriptRevision)
@@ -115,7 +118,8 @@ public sealed record PromoteScriptCatalogRevisionCommand(
     string Revision,
     string DefinitionActorId,
     string SourceHash,
-    string ProposalId) : ICommandContextSeed
+    string ProposalId,
+    string? ScopeId) : ICommandContextSeed
 {
     public string? CommandId => ScriptingCommandIds.Build("script-catalog-promote", ScriptId, Revision);
 
@@ -130,7 +134,8 @@ public sealed record RollbackScriptCatalogRevisionCommand(
     string TargetRevision,
     string Reason,
     string ProposalId,
-    string ExpectedCurrentRevision) : ICommandContextSeed
+    string ExpectedCurrentRevision,
+    string? ScopeId) : ICommandContextSeed
 {
     public string? CommandId => ScriptingCommandIds.Build("script-catalog-rollback", ScriptId, TargetRevision);
 

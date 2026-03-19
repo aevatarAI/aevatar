@@ -10,6 +10,7 @@ public sealed partial record ScriptBehaviorDispatchRequest(
     string DefinitionActorId,
     string ScriptId,
     string Revision,
+    string ScopeId,
     string SourceText,
     string SourceHash,
     ScriptPackageSpec ScriptPackage,
@@ -33,6 +34,7 @@ public sealed partial record ScriptBehaviorDispatchRequest
         string Revision,
         string SourceText,
         string SourceHash,
+        ScriptPackageSpec ScriptPackage,
         string StateTypeUrl,
         string ReadModelTypeUrl,
         Any? CurrentStateRoot,
@@ -44,6 +46,69 @@ public sealed partial record ScriptBehaviorDispatchRequest
             DefinitionActorId,
             ScriptId,
             Revision,
+            ScopeId: string.Empty,
+            SourceText,
+            SourceHash,
+            ScriptPackage,
+            StateTypeUrl,
+            ReadModelTypeUrl,
+            CurrentStateRoot,
+            CurrentStateVersion,
+            Envelope,
+            Capabilities)
+    {
+    }
+
+    public ScriptBehaviorDispatchRequest(
+        string ActorId,
+        string DefinitionActorId,
+        string ScriptId,
+        string Revision,
+        string SourceText,
+        string SourceHash,
+        string StateTypeUrl,
+        string ReadModelTypeUrl,
+        Any? CurrentStateRoot,
+        long CurrentStateVersion,
+        EventEnvelope Envelope,
+        IScriptBehaviorRuntimeCapabilities Capabilities)
+        : this(
+            ActorId,
+            DefinitionActorId,
+            ScriptId,
+            Revision,
+            ScopeId: string.Empty,
+            SourceText,
+            SourceHash,
+            StateTypeUrl,
+            ReadModelTypeUrl,
+            CurrentStateRoot,
+            CurrentStateVersion,
+            Envelope,
+            Capabilities)
+    {
+    }
+
+    public ScriptBehaviorDispatchRequest(
+        string ActorId,
+        string DefinitionActorId,
+        string ScriptId,
+        string Revision,
+        string ScopeId,
+        string SourceText,
+        string SourceHash,
+        string StateTypeUrl,
+        string ReadModelTypeUrl,
+        Any? CurrentStateRoot,
+        long CurrentStateVersion,
+        EventEnvelope Envelope,
+        IScriptBehaviorRuntimeCapabilities Capabilities)
+        : this(
+            ActorId,
+            DefinitionActorId,
+            ScriptId,
+            Revision,
+            ScopeId,
             SourceText,
             SourceHash,
             ScriptPackageSpecExtensions.CreateSingleSource(SourceText),

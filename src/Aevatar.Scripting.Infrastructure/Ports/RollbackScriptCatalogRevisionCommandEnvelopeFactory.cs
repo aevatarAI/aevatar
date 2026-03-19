@@ -26,6 +26,7 @@ public sealed class RollbackScriptCatalogRevisionCommandEnvelopeFactory
                 Reason = command.Reason ?? string.Empty,
                 ProposalId = command.ProposalId ?? string.Empty,
                 ExpectedCurrentRevision = command.ExpectedCurrentRevision ?? string.Empty,
+                ScopeId = command.ScopeId ?? string.Empty,
             });
     }
 }

@@ -18,7 +18,9 @@ public sealed partial class ScriptDefinitionSnapshot
         ByteString? ProtocolDescriptorSet = null,
         string StateDescriptorFullName = "",
         string ReadModelDescriptorFullName = "",
-        ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
+        ScriptRuntimeSemanticsSpec? RuntimeSemantics = null,
+        string DefinitionActorId = "",
+        string ScopeId = "")
     {
         this.ScriptId = ScriptId ?? string.Empty;
         this.Revision = Revision ?? string.Empty;
@@ -33,6 +35,8 @@ public sealed partial class ScriptDefinitionSnapshot
         this.StateDescriptorFullName = StateDescriptorFullName ?? string.Empty;
         this.ReadModelDescriptorFullName = ReadModelDescriptorFullName ?? string.Empty;
         this.RuntimeSemantics = RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
+        this.DefinitionActorId = DefinitionActorId ?? string.Empty;
+        this.ScopeId = ScopeId ?? string.Empty;
     }
 
     public ScriptDefinitionSnapshot(
@@ -47,7 +51,9 @@ public sealed partial class ScriptDefinitionSnapshot
         ByteString? ProtocolDescriptorSet = null,
         string StateDescriptorFullName = "",
         string ReadModelDescriptorFullName = "",
-        ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
+        ScriptRuntimeSemanticsSpec? RuntimeSemantics = null,
+        string DefinitionActorId = "",
+        string ScopeId = "")
         : this(
             ScriptId,
             Revision,
@@ -61,7 +67,9 @@ public sealed partial class ScriptDefinitionSnapshot
             ProtocolDescriptorSet,
             StateDescriptorFullName,
             ReadModelDescriptorFullName,
-            RuntimeSemantics)
+            RuntimeSemantics,
+            DefinitionActorId,
+            ScopeId)
     {
     }
 }
@@ -75,7 +83,10 @@ public sealed partial class ScriptCatalogEntrySnapshot
         string ActiveSourceHash,
         string PreviousRevision,
         IEnumerable<string>? RevisionHistory,
-        string LastProposalId)
+        string LastProposalId,
+        string CatalogActorId = "",
+        string ScopeId = "",
+        long UpdatedAtUnixTimeMs = 0)
     {
         this.ScriptId = ScriptId ?? string.Empty;
         this.ActiveRevision = ActiveRevision ?? string.Empty;
@@ -85,5 +96,8 @@ public sealed partial class ScriptCatalogEntrySnapshot
         if (RevisionHistory != null)
             this.RevisionHistory.Add(RevisionHistory);
         this.LastProposalId = LastProposalId ?? string.Empty;
+        this.CatalogActorId = CatalogActorId ?? string.Empty;
+        this.ScopeId = ScopeId ?? string.Empty;
+        this.UpdatedAtUnixTimeMs = UpdatedAtUnixTimeMs;
     }
 }

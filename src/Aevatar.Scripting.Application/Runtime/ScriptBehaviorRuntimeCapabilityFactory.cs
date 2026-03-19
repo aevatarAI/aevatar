@@ -54,6 +54,7 @@ public sealed class ScriptBehaviorRuntimeCapabilityFactory : IScriptBehaviorRunt
         _ = context;
 
         return new ScriptBehaviorRuntimeCapabilities(
+            context.ScopeId,
             context.RunId,
             context.CorrelationId,
             publishAsync,

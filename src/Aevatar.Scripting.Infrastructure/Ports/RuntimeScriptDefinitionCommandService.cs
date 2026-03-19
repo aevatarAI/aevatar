@@ -31,6 +31,23 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
         string sourceText,
         string sourceHash,
         string? definitionActorId,
+        CancellationToken ct) =>
+        await UpsertDefinitionWithSnapshotAsync(
+            scriptId,
+            scriptRevision,
+            sourceText,
+            sourceHash,
+            definitionActorId,
+            scopeId: null,
+            ct);
+
+    public async Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
+        string scriptId,
+        string scriptRevision,
+        string sourceText,
+        string sourceHash,
+        string? definitionActorId,
+        string? scopeId,
         CancellationToken ct)
     {
         var actorId = string.IsNullOrWhiteSpace(definitionActorId)
@@ -49,11 +66,14 @@ public sealed class RuntimeScriptDefinitionCommandService : IScriptDefinitionCom
                 scriptRevision,
                 sourceText,
                 sourceHash,
-                actorId),
+                actorId,
+                scopeId),
             ct);
         if (!result.Succeeded || result.Receipt == null)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script definition dispatch failed.");
 
+        snapshot.DefinitionActorId = result.Receipt.ActorId;
+        snapshot.ScopeId = scopeId?.Trim() ?? string.Empty;
         return new ScriptDefinitionUpsertResult(result.Receipt.ActorId, snapshot);
     }
 

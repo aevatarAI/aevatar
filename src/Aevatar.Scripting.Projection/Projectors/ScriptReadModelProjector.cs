@@ -49,6 +49,7 @@ public sealed class ScriptReadModelProjector
             StateVersion = fact.StateVersion,
             LastEventId = sourceEventId,
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
+            ScopeId = fact.ScopeId ?? string.Empty,
         };
 
         await _writeDispatcher.UpsertAsync(document, ct);

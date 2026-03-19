@@ -18,6 +18,21 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
         string scriptRevision,
         string? runtimeActorId,
         ScriptDefinitionSnapshot definitionSnapshot,
+        CancellationToken ct) =>
+        await EnsureRuntimeAsync(
+            definitionActorId,
+            scriptRevision,
+            runtimeActorId,
+            definitionSnapshot,
+            scopeId: null,
+            ct);
+
+    public async Task<string> EnsureRuntimeAsync(
+        string definitionActorId,
+        string scriptRevision,
+        string? runtimeActorId,
+        ScriptDefinitionSnapshot definitionSnapshot,
+        string? scopeId,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -39,7 +54,8 @@ public sealed class RuntimeScriptProvisioningService : IScriptRuntimeProvisionin
                 definitionActorId,
                 resolvedRevision,
                 runtimeActorId,
-                definitionSnapshot),
+                definitionSnapshot,
+                scopeId),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime provisioning dispatch failed.");

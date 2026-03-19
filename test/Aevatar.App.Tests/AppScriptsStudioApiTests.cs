@@ -92,4 +92,110 @@ public sealed class AppScriptsStudioApiTests
             .Select(static item => item.GetString())
             .Should().Equal("trimmed", "uppercased");
     }
+
+    [Fact]
+    public async Task ScopedScriptManagementAndDraftRun_ShouldPersistByScope_AndPropagateScopeId()
+    {
+        var scopeId = $"nyx-user-{Guid.NewGuid():N}";
+        var scriptId = $"scoped-script-{Guid.NewGuid():N}";
+
+        using var context = await SendScopedJsonAsync(HttpMethod.Get, "/api/app/context", null, scopeId);
+        context.RootElement.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        context.RootElement.GetProperty("scopeResolved").GetBoolean().Should().BeTrue();
+        context.RootElement.GetProperty("scriptStorageMode").GetString().Should().Be("scope");
+        context.RootElement.GetProperty("workflowStorageMode").GetString().Should().Be("scope");
+
+        using var saved = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts",
+            new
+            {
+                scriptId,
+                revisionId = "rev-1",
+                sourceText = AppTestData.ValidScriptSource,
+            },
+            scopeId);
+
+        saved.RootElement.GetProperty("available").GetBoolean().Should().BeTrue();
+        saved.RootElement.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        saved.RootElement.GetProperty("script").GetProperty("scriptId").GetString().Should().Be(scriptId);
+        saved.RootElement.GetProperty("script").GetProperty("activeRevision").GetString().Should().Be("rev-1");
+        saved.RootElement.GetProperty("source").GetProperty("sourceText").GetString().Should().Be(AppTestData.ValidScriptSource);
+
+        using var list = await SendScopedJsonAsync(
+            HttpMethod.Get,
+            "/api/app/scripts?includeSource=true",
+            null,
+            scopeId);
+        var listedScript = list.RootElement.EnumerateArray().Single(item =>
+            string.Equals(item.GetProperty("script").GetProperty("scriptId").GetString(), scriptId, StringComparison.Ordinal));
+        listedScript.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        listedScript.GetProperty("source").GetProperty("sourceText").GetString().Should().Be(AppTestData.ValidScriptSource);
+
+        using var detail = await SendScopedJsonAsync(
+            HttpMethod.Get,
+            $"/api/app/scripts/{Uri.EscapeDataString(scriptId)}",
+            null,
+            scopeId);
+        detail.RootElement.GetProperty("available").GetBoolean().Should().BeTrue();
+        detail.RootElement.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        detail.RootElement.GetProperty("script").GetProperty("definitionActorId").GetString().Should().NotBeNullOrWhiteSpace();
+
+        using var draftRun = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts/draft-run",
+            new
+            {
+                scriptId,
+                scriptRevision = "rev-1",
+                source = AppTestData.ValidScriptSource,
+                input = "  hello scope  ",
+            },
+            scopeId);
+
+        draftRun.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
+        draftRun.RootElement.GetProperty("scopeId").GetString().Should().Be(scopeId);
+        var runtimeActorId = draftRun.RootElement.GetProperty("runtimeActorId").GetString();
+        var readModelUrl = draftRun.RootElement.GetProperty("readModelUrl").GetString();
+        runtimeActorId.Should().NotBeNullOrWhiteSpace();
+        readModelUrl.Should().NotBeNullOrWhiteSpace();
+
+        using var snapshot = await _fixture.WaitForJsonAsync(
+            readModelUrl!,
+            static document =>
+            {
+                var payloadJson = document.RootElement.GetProperty("readModelPayloadJson").GetString();
+                if (string.IsNullOrWhiteSpace(payloadJson))
+                    return false;
+
+                using var payload = JsonDocument.Parse(payloadJson);
+                return string.Equals(payload.RootElement.GetProperty("status").GetString(), "ok", StringComparison.Ordinal) &&
+                       string.Equals(payload.RootElement.GetProperty("output").GetString(), "HELLO SCOPE", StringComparison.Ordinal);
+            },
+            TimeSpan.FromSeconds(30));
+
+        snapshot.RootElement.GetProperty("actorId").GetString().Should().Be(runtimeActorId);
+        snapshot.RootElement.GetProperty("scriptId").GetString().Should().Be(scriptId);
+        snapshot.RootElement.GetProperty("revision").GetString().Should().Be("rev-1");
+    }
+
+    private async Task<JsonDocument> SendScopedJsonAsync(
+        HttpMethod method,
+        string path,
+        object? payload,
+        string scopeId,
+        HttpStatusCode expectedStatusCode = HttpStatusCode.OK,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(method, path);
+        request.Headers.Add("X-Aevatar-Scope-Id", scopeId);
+        if (payload != null)
+            request.Content = JsonContent.Create(payload);
+
+        using var response = await _fixture.Client.SendAsync(request, cancellationToken);
+        response.StatusCode.Should().Be(expectedStatusCode);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        content.Should().NotBeNullOrWhiteSpace();
+        return JsonDocument.Parse(content);
+    }
 }

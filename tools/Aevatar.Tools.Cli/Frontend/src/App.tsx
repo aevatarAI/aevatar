@@ -145,6 +145,9 @@ type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
+
 type AppContextState = {
   hostMode: AppHostMode;
   scopeId: string | null;
@@ -234,6 +237,8 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 
 const DEFAULT_RUNTIME_BASE_URL =
   typeof window === 'undefined' ? 'http://127.0.0.1:5100' : window.location.origin;
+const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
+const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
 
 function createEmptyAppContext(): AppContextState {
   return {
@@ -276,6 +281,79 @@ function buildExecutionLogsWindowUrl(executionId: string) {
   url.searchParams.set('executionLogs', 'popout');
   url.searchParams.set('executionId', executionId);
   return url.toString();
+}
+
+function isWorkspacePage(value: string | null): value is WorkspacePage {
+  return Boolean(value && WORKSPACE_PAGE_VALUES.includes(value as WorkspacePage));
+}
+
+function isNonSettingsWorkspacePage(value: string | null): value is NonSettingsWorkspacePage {
+  return Boolean(value && NON_SETTINGS_WORKSPACE_PAGE_VALUES.includes(value as NonSettingsWorkspacePage));
+}
+
+function readStoredWorkspacePage(): WorkspacePage {
+  if (typeof window === 'undefined') {
+    return 'studio';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_PAGE_STORAGE_KEY);
+    return isWorkspacePage(raw) ? raw : 'studio';
+  } catch {
+    return 'studio';
+  }
+}
+
+function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
+  if (typeof window === 'undefined') {
+    return 'studio';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY);
+    return isNonSettingsWorkspacePage(raw) ? raw : 'studio';
+  } catch {
+    return 'studio';
+  }
+}
+
+function AevatarBrandMark(props: {
+  size?: number;
+  className?: string;
+}) {
+  const size = props.size ?? 44;
+  return (
+    <svg
+      viewBox="0 0 400 400"
+      width={size}
+      height={size}
+      className={props.className}
+      aria-hidden="true"
+      shapeRendering="crispEdges"
+    >
+      <rect width="400" height="400" rx="28" fill="#18181B" />
+
+      <rect x="12" y="20" width="134" height="46" fill="#FAFAFA" />
+      <rect x="102" y="20" width="44" height="142" fill="#FAFAFA" />
+      <rect x="0" y="66" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="254" y="20" width="134" height="46" fill="#FAFAFA" />
+      <rect x="254" y="20" width="44" height="142" fill="#FAFAFA" />
+      <rect x="330" y="66" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="0" y="181" width="170" height="32" fill="#FAFAFA" />
+      <rect x="230" y="181" width="170" height="32" fill="#FAFAFA" />
+      <rect x="180" y="181" width="40" height="40" fill="#FAFAFA" />
+
+      <rect x="12" y="304" width="134" height="46" fill="#FAFAFA" />
+      <rect x="102" y="242" width="44" height="109" fill="#FAFAFA" />
+      <rect x="0" y="274" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="254" y="304" width="134" height="46" fill="#FAFAFA" />
+      <rect x="254" y="242" width="44" height="109" fill="#FAFAFA" />
+      <rect x="330" y="274" width="70" height="30" fill="#FAFAFA" />
+    </svg>
+  );
 }
 
 function toExecutionSummary(detail: any) {
@@ -664,8 +742,8 @@ function App() {
 
   const [appContext, setAppContext] = useState<AppContextState>(createEmptyAppContext());
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
-  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('studio');
-  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>('studio');
+  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>(() => readStoredWorkspacePage());
+  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
@@ -907,6 +985,43 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(WORKSPACE_PAGE_STORAGE_KEY, workspacePage);
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [workspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY, previousWorkspacePage);
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [previousWorkspacePage]);
+
+  useEffect(() => {
+    const workspaceReady = !authSession.loading && (!authSession.enabled || authSession.authenticated);
+    if (workspaceReady && workspacePage === 'scripts' && !appContext.scriptsEnabled) {
+      setWorkspacePage('studio');
+    }
+  }, [
+    authSession.authenticated,
+    authSession.enabled,
+    authSession.loading,
+    appContext.scriptsEnabled,
+    workspacePage,
+  ]);
 
   useEffect(() => {
     const normalizeControlHint = (raw: string, detailed = false) => {
@@ -3678,8 +3793,8 @@ function App() {
 
       <aside className="studio-rail">
         <div className="flex flex-col items-center gap-3">
-          <div className="studio-brand-mark w-11 h-11 rounded-[16px] flex items-center justify-center">
-            <WorkflowIcon size={18} color="white" />
+          <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[14px] border border-black/10 bg-[#18181B]">
+            <AevatarBrandMark size={44} />
           </div>
           <RailButton
             active={workspacePage === 'studio'}
@@ -5530,9 +5645,7 @@ function AppLoadingScreen() {
         <div className="w-full max-w-[460px] rounded-[32px] border border-[#E6E3DE] bg-white/96 p-8 shadow-[0_28px_70px_rgba(15,23,42,0.08)]">
           <div className="panel-eyebrow">Aevatar App</div>
           <div className="mt-3 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-[18px] bg-[#ECE8E2] text-gray-500">
-              <WorkflowIcon size={20} />
-            </div>
+            <AevatarBrandMark size={48} className="shrink-0 rounded-[18px]" />
             <div>
               <div className="text-[24px] font-semibold text-gray-900">Preparing studio</div>
               <div className="text-[13px] text-gray-500">Loading workspace context, catalogs, and runtime settings.</div>

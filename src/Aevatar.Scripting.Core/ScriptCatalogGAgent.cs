@@ -26,6 +26,13 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             throw new InvalidOperationException("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(revision))
             throw new InvalidOperationException("Revision is required.");
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(evt.ScopeId) &&
+            !string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script catalog actor `{Id}` is already bound to scope `{State.ScopeId}` and cannot switch to `{evt.ScopeId}`.");
+        }
 
         if (!string.IsNullOrWhiteSpace(expectedBaseRevision))
         {
@@ -44,6 +51,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             DefinitionActorId = evt.DefinitionActorId ?? string.Empty,
             SourceHash = evt.SourceHash ?? string.Empty,
             ProposalId = evt.ProposalId ?? string.Empty,
+            ScopeId = evt.ScopeId ?? string.Empty,
         });
     }
 
@@ -58,6 +66,13 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             throw new InvalidOperationException("ScriptId is required.");
         if (string.IsNullOrWhiteSpace(targetRevision))
             throw new InvalidOperationException("TargetRevision is required.");
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(evt.ScopeId) &&
+            !string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script catalog actor `{Id}` is already bound to scope `{State.ScopeId}` and cannot switch to `{evt.ScopeId}`.");
+        }
 
         if (!State.Entries.TryGetValue(scriptId, out var entry))
             throw new InvalidOperationException($"Script `{scriptId}` does not exist in catalog.");
@@ -83,6 +98,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             TargetRevision = targetRevision,
             Reason = evt.Reason ?? string.Empty,
             ProposalId = evt.ProposalId ?? string.Empty,
+            ScopeId = evt.ScopeId ?? string.Empty,
         });
 
         await PersistDomainEventAsync(new ScriptCatalogRolledBackEvent
@@ -91,6 +107,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
             TargetRevision = targetRevision,
             PreviousRevision = previousRevision,
             ProposalId = evt.ProposalId ?? string.Empty,
+            ScopeId = evt.ScopeId ?? string.Empty,
         });
     }
 
@@ -111,6 +128,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         var entry = GetOrCreateEntry(next, scriptId);
 
         entry.ScriptId = scriptId;
+        entry.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         entry.PreviousRevision = entry.ActiveRevision ?? string.Empty;
         entry.ActiveRevision = evt.Revision ?? string.Empty;
         entry.ActiveDefinitionActorId = evt.DefinitionActorId ?? string.Empty;
@@ -120,6 +138,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         if (!entry.RevisionHistory.Any(x => string.Equals(x, entry.ActiveRevision, StringComparison.Ordinal)))
             entry.RevisionHistory.Add(entry.ActiveRevision);
 
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(scriptId, ":", entry.ActiveRevision, ":promoted");
         return next;
@@ -130,6 +149,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         ScriptCatalogRollbackRequestedEvent evt)
     {
         var next = state.Clone();
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(
             evt.ScriptId ?? string.Empty,
@@ -152,6 +172,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         var previouslyActiveSourceHash = entry.ActiveSourceHash ?? string.Empty;
 
         entry.ScriptId = scriptId;
+        entry.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         entry.PreviousRevision = evt.PreviousRevision ?? previouslyActiveRevision;
         entry.ActiveRevision = targetRevision;
         if (string.Equals(targetRevision, previouslyActiveRevision, StringComparison.Ordinal))
@@ -170,6 +191,7 @@ public sealed class ScriptCatalogGAgent : GAgentBase<ScriptCatalogState>
         if (!entry.RevisionHistory.Any(x => string.Equals(x, targetRevision, StringComparison.Ordinal)))
             entry.RevisionHistory.Add(targetRevision);
 
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(scriptId, ":", targetRevision, ":rolled-back");
         return next;

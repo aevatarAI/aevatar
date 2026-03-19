@@ -119,6 +119,11 @@ internal static class AppToolHost
                 sp.GetService<IScopeWorkflowQueryPort>(),
                 sp.GetService<IScopeWorkflowCommandPort>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>()));
+            builder.Services.AddSingleton(sp => new AppScopedScriptService(
+                sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetService<IScopeScriptQueryPort>(),
+                sp.GetService<IScopeScriptCommandPort>(),
+                sp.GetService<Aevatar.Scripting.Core.Ports.IScriptDefinitionSnapshotPort>()));
             builder.Services.Configure<StudioStorageOptions>(storage =>
             {
                 storage.DefaultRuntimeBaseUrl = localUrl;

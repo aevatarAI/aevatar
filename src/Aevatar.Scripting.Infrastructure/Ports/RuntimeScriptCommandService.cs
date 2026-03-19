@@ -24,6 +24,25 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string scriptRevision,
         string definitionActorId,
         string requestedEventType,
+        CancellationToken ct) =>
+        await RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            scopeId: null,
+            ct);
+
+    public async Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        string? scopeId,
         CancellationToken ct)
     {
         _ = await _readModelActivationPort.ActivateAsync(runtimeActorId, ct);
@@ -35,7 +54,8 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
                 inputPayload?.Clone(),
                 scriptRevision ?? string.Empty,
                 definitionActorId ?? string.Empty,
-                requestedEventType ?? string.Empty),
+                requestedEventType ?? string.Empty,
+                scopeId),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");

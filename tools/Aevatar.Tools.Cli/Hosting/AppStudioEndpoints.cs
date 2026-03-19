@@ -3,6 +3,7 @@ using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
 using Google.Protobuf;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
@@ -32,6 +33,24 @@ internal static class AppStudioEndpoints
             AppScriptValidateRequest request,
             IServiceProvider services) =>
             HandleValidateScript(request, services));
+        app.MapGet("/api/app/scripts", (
+            HttpContext http,
+            IServiceProvider services,
+            bool includeSource,
+            CancellationToken ct) =>
+            HandleListScopedScriptsAsync(http, services, includeSource, ct));
+        app.MapGet("/api/app/scripts/{scriptId}", (
+            HttpContext http,
+            string scriptId,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGetScopedScriptAsync(http, scriptId, services, ct));
+        app.MapPost("/api/app/scripts", (
+            HttpContext http,
+            AppScopeScriptSaveRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleSaveScopedScriptAsync(http, request, services, ct));
         app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
             string actorId,
             IServiceProvider services,
@@ -39,10 +58,11 @@ internal static class AppStudioEndpoints
             HandleGetAppScriptReadModelAsync(actorId, services, ct));
 
         app.MapPost("/api/app/scripts/draft-run", (
+            HttpContext http,
             AppScriptDraftRunRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleRunDraftScriptAsync(request, services, embeddedWorkflowMode, ct));
+            HandleRunDraftScriptAsync(http, request, services, embeddedWorkflowMode, ct));
     }
 
     internal static string NormalizeStudioDocumentId(string? rawValue, string fallbackPrefix)
@@ -86,10 +106,11 @@ internal static class AppStudioEndpoints
     private static IResult HandleGetContext(HttpContext http, IServiceProvider services, bool embeddedWorkflowMode)
     {
         var publishedWorkflows = !embeddedWorkflowMode || services.GetService<IScopeWorkflowQueryPort>() != null;
-        var scripts = embeddedWorkflowMode &&
-                      services.GetService<IScriptDefinitionCommandPort>() != null &&
-                      services.GetService<IScriptRuntimeProvisioningPort>() != null &&
-                      services.GetService<IScriptRuntimeCommandPort>() != null;
+        var scripts = services.GetService<AppScopedScriptService>() != null ||
+                      (embeddedWorkflowMode &&
+                       services.GetService<IScriptDefinitionCommandPort>() != null &&
+                       services.GetService<IScriptRuntimeProvisioningPort>() != null &&
+                       services.GetService<IScriptRuntimeCommandPort>() != null);
         var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
 
         return Results.Json(new
@@ -99,6 +120,7 @@ internal static class AppStudioEndpoints
             scopeResolved = scopeContext != null,
             scopeSource = scopeContext?.Source,
             workflowStorageMode = scopeContext == null ? "workspace" : "scope",
+            scriptStorageMode = scopeContext == null ? "draft" : "scope",
             features = new
             {
                 publishedWorkflows,
@@ -120,6 +142,7 @@ internal static class AppStudioEndpoints
     }
 
     private static async Task<IResult> HandleRunDraftScriptAsync(
+        HttpContext http,
         AppScriptDraftRunRequest request,
         IServiceProvider services,
         bool embeddedWorkflowMode,
@@ -160,11 +183,15 @@ internal static class AppStudioEndpoints
 
         var scriptId = NormalizeStudioDocumentId(request.ScriptId, "script");
         var revision = NormalizeStudioDocumentId(request.ScriptRevision, "draft");
+        var scopeId = services.GetService<IAppScopeResolver>()?.Resolve(http)?.ScopeId;
+        var scopeToken = string.IsNullOrWhiteSpace(scopeId)
+            ? "local"
+            : NormalizeStudioDocumentId(scopeId, "scope");
         var definitionActorId = string.IsNullOrWhiteSpace(request.DefinitionActorId)
-            ? $"app-script-definition:{scriptId}:{revision}"
+            ? $"app-script-definition:{scopeToken}:{scriptId}:{revision}"
             : request.DefinitionActorId.Trim();
         var runtimeActorId = string.IsNullOrWhiteSpace(request.RuntimeActorId)
-            ? $"app-script-runtime:{scriptId}:{revision}"
+            ? $"app-script-runtime:{scopeToken}:{scriptId}:{revision}"
             : request.RuntimeActorId.Trim();
         var sourceHash = ComputeSha256(source);
 
@@ -176,6 +203,7 @@ internal static class AppStudioEndpoints
                 source,
                 sourceHash,
                 definitionActorId,
+                scopeId,
                 ct);
 
             var resolvedRuntimeActorId = await runtimeProvisioningPort.EnsureRuntimeAsync(
@@ -183,6 +211,7 @@ internal static class AppStudioEndpoints
                 revision,
                 runtimeActorId,
                 upsert.Snapshot,
+                scopeId,
                 ct);
 
             var runId = Guid.NewGuid().ToString("N");
@@ -197,11 +226,13 @@ internal static class AppStudioEndpoints
                 revision,
                 upsert.ActorId,
                 payload.TypeUrl,
+                scopeId,
                 ct);
 
             return Results.Ok(new
             {
                 accepted = true,
+                scopeId,
                 scriptId,
                 scriptRevision = revision,
                 definitionActorId = upsert.ActorId,
@@ -217,6 +248,151 @@ internal static class AppStudioEndpoints
             return Results.BadRequest(new
             {
                 code = "SCRIPT_DRAFT_RUN_FAILED",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleListScopedScriptsAsync(
+        HttpContext http,
+        IServiceProvider services,
+        bool includeSource,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script management requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            if (!includeSource)
+                return Results.Ok(await service.ListAsync(scopeContext.ScopeId, ct));
+
+            var summaries = await service.ListAsync(scopeContext.ScopeId, ct);
+            var details = new List<ScopeScriptDetail>(summaries.Count);
+            foreach (var summary in summaries)
+            {
+                var detail = await service.GetAsync(scopeContext.ScopeId, summary.ScriptId, ct);
+                if (detail != null)
+                    details.Add(detail);
+            }
+
+            return Results.Ok(details);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleGetScopedScriptAsync(
+        HttpContext http,
+        string scriptId,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script management requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            var detail = await service.GetAsync(scopeContext.ScopeId, scriptId, ct);
+            return detail == null ? Results.NotFound() : Results.Ok(detail);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleSaveScopedScriptAsync(
+        HttpContext http,
+        AppScopeScriptSaveRequest request,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script management requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            return Results.Ok(await service.SaveAsync(scopeContext.ScopeId, request, ct));
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
                 message = ex.Message,
             });
         }
