@@ -1296,6 +1296,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                 <div className="mt-0.5 flex items-center gap-2 overflow-hidden text-[11px] text-gray-400">
                   <span className="truncate">{selectedDraft.revision || 'draft revision'}</span>
                   <span aria-hidden="true">·</span>
+                  <span className="truncate">{appContext.hostMode === 'embedded' ? 'Embedded host' : 'Proxy host'}</span>
+                  <span aria-hidden="true">·</span>
                   <span className="truncate">{scopeBacked ? `Scope ${appContext.scopeId || '-'}` : 'Local draft'}</span>
                 </div>
               </div>
@@ -1351,76 +1353,44 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       </header>
 
       <section className="relative flex-1 min-h-0 overflow-hidden bg-[#F2F1EE]">
-        <div className="canvas-overlay-stack">
-          <div className="canvas-meta-card">
-            <div className="canvas-meta-label">Runtime</div>
-            <div className="canvas-meta-value">{appContext.hostMode === 'embedded' ? 'Embedded host' : 'Proxy host'}</div>
-            <div className="mt-1 text-[11px] text-gray-400">
-              {scopeBacked ? `Scope ${appContext.scopeId || '-'}` : 'Local browser draft'}
-            </div>
-          </div>
-
-          <div className="canvas-meta-card canvas-meta-card-wide">
-            <div className="canvas-meta-label">Compiler</div>
-            <div className="canvas-meta-value">{validationSummary}</div>
-            <div className="mt-1 text-[11px] leading-5 text-gray-400">
-              {validationPending
-                ? 'Validating current source.'
-                : visibleProblems[0]?.message || (hasScopeChanges ? 'Scope save is behind the editor.' : 'No diagnostics on the active source.')}
-            </div>
-          </div>
-        </div>
-
-        <div className="canvas-overlay-tools">
-          <button
-            type="button"
-            onClick={() => setLibraryOpen(true)}
-            data-tooltip="Library"
-            aria-label="Open drafts and scope library"
-            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
-              libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-            }`}
-          >
-            <FolderOpen size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setDetailsOpen(true)}
-            data-tooltip="Details"
-            aria-label="Open draft details"
-            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
-              detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-            }`}
-          >
-            <SlidersHorizontal size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setPromotionModalOpen(true)}
-            data-tooltip="Promotion"
-            aria-label="Open promotion dialog"
-            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
-              promotionModalOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
-            }`}
-          >
-            <Check size={16} />
-          </button>
-        </div>
-
-        <div className="absolute inset-0 px-4 pb-4 pt-[84px] sm:px-5 sm:pb-5 sm:pt-[88px]">
+        <div className="absolute inset-0 p-4 sm:p-5">
           <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
             <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
               <div>
                 <div className="panel-eyebrow">Editor</div>
                 <div className="mt-1 text-[15px] font-semibold text-gray-800">Behavior.cs</div>
               </div>
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLibraryOpen(true)}
+                  data-tooltip="Library"
+                  aria-label="Open drafts and scope library"
+                  className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
+                    libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+                  }`}
+                >
+                  <FolderOpen size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen(true)}
+                  data-tooltip="Details"
+                  aria-label="Open draft details"
+                  className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
+                    detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+                  }`}
+                >
+                  <SlidersHorizontal size={15} />
+                </button>
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
                 {hasScopeChanges ? (
                   <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
                     Unsaved scope changes
                   </span>
                 ) : null}
                 <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
+                </div>
               </div>
             </div>
 
