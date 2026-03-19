@@ -1,49 +1,32 @@
 using System.Text;
 using Aevatar.AI.Core;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.Configurations;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Tools.Cli.Hosting;
 
 internal sealed class WorkflowGenerateActorService
 {
+    private const string SessionName = nameof(WorkflowGenerateGAgent);
     internal const string ActorId = "app-workflow-generator:default";
 
-    private readonly IActorRuntime _runtime;
+    private readonly AppAuthoringChatSessionFactory _chatSessionFactory;
     private readonly WorkflowGenerateOrchestrator _orchestrator;
-    private readonly ILogger<WorkflowGenerateActorService> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public WorkflowGenerateActorService(
-        IActorRuntime runtime,
-        WorkflowGenerateOrchestrator orchestrator,
-        ILogger<WorkflowGenerateActorService> logger)
+        AppAuthoringChatSessionFactory chatSessionFactory,
+        WorkflowGenerateOrchestrator orchestrator)
     {
-        _runtime = runtime;
-        _orchestrator = orchestrator;
-        _logger = logger;
+        _chatSessionFactory = chatSessionFactory ?? throw new ArgumentNullException(nameof(chatSessionFactory));
+        _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
     }
 
-    public async Task EnsureInitializedAsync(CancellationToken ct)
+    public Task EnsureInitializedAsync(CancellationToken ct)
     {
-        if (await _runtime.ExistsAsync(ActorId))
-            return;
-
-        try
-        {
-            _ = await _runtime.CreateAsync<WorkflowGenerateGAgent>(ActorId, ct);
-            _logger.LogInformation("WorkflowGenerateGAgent actor initialized. actorId={ActorId}", ActorId);
-        }
-        catch (InvalidOperationException)
-        {
-            if (!await _runtime.ExistsAsync(ActorId))
-                throw;
-
-            // Concurrent bootstrap already created the actor.
-        }
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 
     public async Task<WorkflowGenerateResult> GenerateAsync(
@@ -76,18 +59,10 @@ internal sealed class WorkflowGenerateActorService
         await _gate.WaitAsync(ct);
         try
         {
-            var actor = await _runtime.GetAsync(ActorId)
-                ?? throw new InvalidOperationException("Workflow generator actor is unavailable.");
-            if (actor.Agent is not WorkflowGenerateGAgent agent)
-            {
-                throw new InvalidOperationException(
-                    "Workflow generator requires the in-memory actor runtime. The current runtime returned a proxy actor.");
-            }
-
-            agent.ResetConversation();
+            var session = await _chatSessionFactory.CreateAsync(typeof(WorkflowGenerateGAgent), SessionName, ct);
             return await _orchestrator.GenerateAsync(
                 request,
-                (prompt, metadata, token) => agent.GenerateWithReasoningAsync(
+                (prompt, metadata, token) => session.GenerateWithReasoningAsync(
                     prompt,
                     BuildRequestId(),
                     metadata,

@@ -21,7 +21,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         };
         AppendMetadata(chatRequest.Metadata, context.Headers);
         AppendMetadata(chatRequest.Metadata, command.Metadata);
-        MirrorScopeMetadata(chatRequest.Metadata);
         chatRequest.Metadata[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
@@ -54,22 +53,6 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 continue;
 
             destination[normalizedKey] = normalizedValue;
-        }
-    }
-
-    private static void MirrorScopeMetadata(Google.Protobuf.Collections.MapField<string, string> metadata)
-    {
-        if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
-            !string.IsNullOrWhiteSpace(workflowScopeId))
-        {
-            metadata["scope_id"] = workflowScopeId.Trim();
-            return;
-        }
-
-        if (metadata.TryGetValue("scope_id", out var scopeId) &&
-            !string.IsNullOrWhiteSpace(scopeId))
-        {
-            metadata[WorkflowRunCommandMetadataKeys.ScopeId] = scopeId.Trim();
         }
     }
 }

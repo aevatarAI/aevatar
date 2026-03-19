@@ -502,7 +502,6 @@ public static class ScopeWorkflowEndpoints
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        scopedHeaders["scope_id"] = normalizedScopeId;
         scopedHeaders[WorkflowRunCommandMetadataKeys.ScopeId] = normalizedScopeId;
         return scopedHeaders;
     }

@@ -93,6 +93,57 @@ public sealed class AppScopedScriptServiceTests
         captured.RequestUri!.PathAndQuery.Should().Be("/api/scopes/scope-1/scripts/script-1/evolutions/proposals");
     }
 
+    [Fact]
+    public async Task SaveAsync_ShouldReturnCommandDetailWithoutImmediateReadBack()
+    {
+        var requests = new List<string>();
+        var service = CreateService(request =>
+        {
+            requests.Add($"{request.Method} {request.RequestUri!.PathAndQuery}");
+            request.Method.Should().Be(HttpMethod.Put);
+            request.RequestUri!.PathAndQuery.Should().Be("/api/scopes/scope-1/scripts/script-1");
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    script = new
+                    {
+                        scopeId = "scope-1",
+                        scriptId = "script-1",
+                        catalogActorId = "catalog-1",
+                        definitionActorId = "definition-1",
+                        activeRevision = "rev-1",
+                        activeSourceHash = "hash-1",
+                        updatedAt = DateTimeOffset.UtcNow,
+                    },
+                    revisionId = "rev-1",
+                    catalogActorId = "catalog-1",
+                    definitionActorId = "definition-1",
+                }),
+            };
+        });
+
+        var detail = await service.SaveAsync(
+            "scope-1",
+            new AppScopeScriptSaveRequest(
+                ScriptId: "script-1",
+                SourceText: "public sealed class DemoScript {}",
+                RevisionId: "rev-1"));
+
+        detail.Available.Should().BeTrue();
+        detail.ScopeId.Should().Be("scope-1");
+        detail.Script.Should().NotBeNull();
+        detail.Script!.ScriptId.Should().Be("script-1");
+        detail.Script.ActiveRevision.Should().Be("rev-1");
+        detail.Source.Should().NotBeNull();
+        detail.Source!.SourceText.Should().Be("public sealed class DemoScript {}");
+        detail.Source.DefinitionActorId.Should().Be("definition-1");
+        detail.Source.Revision.Should().Be("rev-1");
+        detail.Source.SourceHash.Should().Be("hash-1");
+        requests.Should().ContainSingle().Which.Should().Be("PUT /api/scopes/scope-1/scripts/script-1");
+    }
+
     private static AppScopedScriptService CreateService(
         Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
     {

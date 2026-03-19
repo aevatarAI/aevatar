@@ -5,11 +5,13 @@ import {
   Check,
   ChevronDown,
   Code2,
+  FolderOpen,
   Play,
   Plus,
   RefreshCw,
   Save,
   Search,
+  SlidersHorizontal,
   X,
 } from 'lucide-react';
 import * as monacoEditor from 'monaco-editor/esm/vs/editor/editor.api.js';
@@ -503,26 +505,6 @@ function EmptyState(props: { title: string; copy: string; }) {
   );
 }
 
-function StudioSummaryCard(props: {
-  eyebrow: string;
-  title: string;
-  children: ReactNode;
-  actions?: ReactNode;
-}) {
-  return (
-    <section className="rounded-[24px] border border-[#E6E3DE] bg-white/96 p-4 shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="panel-eyebrow">{props.eyebrow}</div>
-          <div className="mt-1 text-[14px] font-semibold text-gray-800">{props.title}</div>
-        </div>
-        {props.actions ? <div className="shrink-0">{props.actions}</div> : null}
-      </div>
-      <div className="mt-4">{props.children}</div>
-    </section>
-  );
-}
-
 function StudioResultCard(props: {
   active: boolean;
   title: string;
@@ -535,11 +517,7 @@ function StudioResultCard(props: {
     <button
       type="button"
       onClick={props.onClick}
-      className={`w-full rounded-[20px] border px-4 py-4 text-left transition-colors ${
-        props.active
-          ? 'border-[#C7D6FF] bg-[#EAF0FF]'
-          : 'border-[#EEEAE4] bg-white hover:bg-[#FAF8F4]'
-      }`}
+      className={`execution-run-card ${props.active ? 'active' : ''}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -564,6 +542,7 @@ function ScriptsStudioModal(props: {
   onClose: () => void;
   children: ReactNode;
   actions?: ReactNode;
+  width?: string;
 }) {
   if (!props.open) {
     return null;
@@ -571,7 +550,7 @@ function ScriptsStudioModal(props: {
 
   return (
     <div className="modal-overlay" onClick={props.onClose}>
-      <div className="modal-shell" onClick={event => event.stopPropagation()}>
+      <div className="modal-shell" style={props.width ? { width: props.width } : undefined} onClick={event => event.stopPropagation()}>
         <div className="modal-header">
           <div>
             <div className="panel-eyebrow">{props.eyebrow}</div>
@@ -600,6 +579,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [savePending, setSavePending] = useState(false);
   const [promotionPending, setPromotionPending] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [promotionModalOpen, setPromotionModalOpen] = useState(false);
   const [askAiOpen, setAskAiOpen] = useState(false);
   const [askAiPrompt, setAskAiPrompt] = useState('');
   const [askAiReasoning, setAskAiReasoning] = useState('');
@@ -610,7 +592,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [validationPending, setValidationPending] = useState(false);
   const [validationResult, setValidationResult] = useState<ScriptValidationResult | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
-  const [resultsCollapsed, setResultsCollapsed] = useState(false);
+  const [resultsCollapsed, setResultsCollapsed] = useState(true);
   const [resultView, setResultView] = useState<StudioResultView>('runtime');
 
   const scopeBacked = appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
@@ -897,7 +879,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     const nextDraft = createDraft(drafts.length + 1);
     setDrafts(prev => [nextDraft, ...prev]);
     setSelectedDraftKey(nextDraft.key);
-    setResultsCollapsed(false);
+    setLibraryOpen(false);
+    setResultsCollapsed(true);
   }
 
   async function loadScopeScripts(silent = false) {
@@ -943,7 +926,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     setResultView('save');
-    setResultsCollapsed(false);
+    setLibraryOpen(false);
+    setResultsCollapsed(true);
     onFlash('Saved script loaded into the editor', 'success');
   }
 
@@ -1187,6 +1171,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         lastPromotion: decision,
       }));
 
+      setPromotionModalOpen(false);
       setResultView('promotion');
       setResultsCollapsed(false);
       onFlash(
@@ -1279,615 +1264,818 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
   return (
     <>
-      <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 px-6 backdrop-blur-sm">
-        <div className="flex h-full items-center justify-between gap-4">
-          <div>
-            <div className="panel-eyebrow">{appContext.hostMode === 'embedded' ? 'Embedded runtime' : 'Proxy runtime'}</div>
-            <div className="panel-title !mt-0">Scripts Studio</div>
+      <header className="studio-editor-header">
+        <div className="studio-editor-toolbar">
+          <div className="studio-view-switch">
+            <button
+              type="button"
+              onClick={() => setResultsCollapsed(true)}
+              className={`studio-view-switch-button ${resultsCollapsed ? 'active' : ''}`}
+            >
+              Editor
+            </button>
+            <button
+              type="button"
+              onClick={() => setResultsCollapsed(false)}
+              className={`studio-view-switch-button ${resultsCollapsed ? '' : 'active'}`}
+            >
+              Activity
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {showValidationBadge ? (
-              <div className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
-                validationPending
-                  ? 'border-[#E5DED3] bg-[#F7F2E8] text-[#8E6A3D]'
-                  : validationResult?.errorCount
-                    ? 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
-                    : validationResult?.warningCount
-                      ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
-                      : 'border-[#D9E5CB] bg-[#F5FBEE] text-[#5C7A2D]'
-              }`}>
-                {validationSummary}
+          <div className="studio-title-bar">
+            <div className="studio-title-group">
+              <div className="min-w-0 flex-1">
+                <input
+                  className="studio-title-input"
+                  value={selectedDraft.scriptId}
+                  onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, scriptId: event.target.value }))}
+                  placeholder="script-id"
+                  aria-label="Script ID"
+                />
+                <div className="mt-0.5 flex items-center gap-2 overflow-hidden text-[11px] text-gray-400">
+                  <span className="truncate">{selectedDraft.revision || 'draft revision'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">{scopeBacked ? `Scope ${appContext.scopeId || '-'}` : 'Local draft'}</span>
+                </div>
               </div>
-            ) : null}
-            <div className="rounded-full border border-[#E5E1DA] bg-white px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-gray-400">
-              {scopeBacked ? `Scope · ${appContext.scopeId || '-'}` : 'Local draft'}
+
+              {showValidationBadge ? (
+                <div className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${
+                  validationPending
+                    ? 'border-[#E5DED3] bg-[#F7F2E8] text-[#8E6A3D]'
+                    : validationResult?.errorCount
+                      ? 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
+                      : validationResult?.warningCount
+                        ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
+                        : 'border-[#D9E5CB] bg-[#F5FBEE] text-[#5C7A2D]'
+                }`}>
+                  {validationSummary}
+                </div>
+              ) : null}
             </div>
-            {hasScopeChanges ? (
-              <div className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-[#9B6A1C]">
-                Unsaved scope changes
-              </div>
-            ) : null}
-            <button type="button" onClick={() => setAskAiOpen(true)} className="ghost-action">
-              <Bot size={14} /> Ask AI
-            </button>
-            <button type="button" onClick={() => { void handleSaveScript(); }} disabled={savePending} className="ghost-action">
-              <Save size={14} /> {savePending ? 'Saving' : scopeBacked ? 'Save' : 'Save local'}
-            </button>
-            <button type="button" onClick={() => { void handlePromote(); }} disabled={promotionPending} className="ghost-action">
-              <Check size={14} /> {promotionPending ? 'Promoting' : 'Promote'}
-            </button>
-            <button type="button" onClick={openRunModal} disabled={runPending} className="solid-action">
-              <Play size={14} /> {runPending ? 'Running' : 'Run'}
-            </button>
+
+            <div className="studio-header-actions">
+              <button
+                type="button"
+                onClick={() => setPromotionModalOpen(true)}
+                data-tooltip="Promote"
+                aria-label="Promote"
+                className="panel-icon-button header-toolbar-action header-export-action"
+              >
+                <Check size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={() => { void handleSaveScript(); }}
+                data-tooltip={scopeBacked ? 'Save' : 'Save local'}
+                aria-label={scopeBacked ? 'Save script' : 'Save local draft'}
+                disabled={savePending}
+                className="panel-icon-button header-toolbar-action header-save-action"
+              >
+                <Save size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={openRunModal}
+                data-tooltip="Run"
+                aria-label="Run script"
+                disabled={runPending}
+                className="panel-icon-button header-toolbar-action header-run-action"
+              >
+                <Play size={15} />
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       <section className="relative flex-1 min-h-0 overflow-hidden bg-[#F2F1EE]">
-        <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="min-h-0 overflow-hidden border-r border-[#E6E3DE] bg-white/94">
-            <div className="flex h-full min-h-0 flex-col p-4">
-              <div className="flex items-start justify-between gap-3 pb-4">
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold text-gray-800">Drafts</div>
-                  <div className="mt-1 text-[11px] text-gray-400">{drafts.length} draft{drafts.length === 1 ? '' : 's'}</div>
-                </div>
+        <div className="canvas-overlay-stack">
+          <div className="canvas-meta-card">
+            <div className="canvas-meta-label">Runtime</div>
+            <div className="canvas-meta-value">{appContext.hostMode === 'embedded' ? 'Embedded host' : 'Proxy host'}</div>
+            <div className="mt-1 text-[11px] text-gray-400">
+              {scopeBacked ? `Scope ${appContext.scopeId || '-'}` : 'Local browser draft'}
+            </div>
+          </div>
 
-                <button type="button" onClick={handleCreateDraft} className="panel-icon-button" title="New draft">
-                  <Plus size={14} />
-                </button>
+          <div className="canvas-meta-card canvas-meta-card-wide">
+            <div className="canvas-meta-label">Compiler</div>
+            <div className="canvas-meta-value">{validationSummary}</div>
+            <div className="mt-1 text-[11px] leading-5 text-gray-400">
+              {validationPending
+                ? 'Validating current source.'
+                : visibleProblems[0]?.message || (hasScopeChanges ? 'Scope save is behind the editor.' : 'No diagnostics on the active source.')}
+            </div>
+          </div>
+        </div>
+
+        <div className="canvas-overlay-tools">
+          <button
+            type="button"
+            onClick={() => setLibraryOpen(true)}
+            data-tooltip="Library"
+            aria-label="Open drafts and scope library"
+            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
+              libraryOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+            }`}
+          >
+            <FolderOpen size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setDetailsOpen(true)}
+            data-tooltip="Details"
+            aria-label="Open draft details"
+            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
+              detailsOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+            }`}
+          >
+            <SlidersHorizontal size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setPromotionModalOpen(true)}
+            data-tooltip="Promotion"
+            aria-label="Open promotion dialog"
+            className={`panel-icon-button border border-[#E8E4DD] bg-white text-gray-600 transition hover:bg-[#FFF7F3] ${
+              promotionModalOpen ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]' : ''
+            }`}
+          >
+            <Check size={16} />
+          </button>
+        </div>
+
+        <div className="absolute inset-0 px-4 pb-4 pt-[84px] sm:px-5 sm:pb-5 sm:pt-[88px]">
+          <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
+            <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
+              <div>
+                <div className="panel-eyebrow">Editor</div>
+                <div className="mt-1 text-[15px] font-semibold text-gray-800">Behavior.cs</div>
               </div>
-
-              <div className="search-field !min-h-[38px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
-                <Search size={14} className="text-gray-400" />
-                <input
-                  className="search-input"
-                  placeholder="Search drafts or saved scripts"
-                  value={search}
-                  onChange={event => setSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-                <div className="space-y-2">
-                  {filteredDrafts.map(draft => {
-                    const dirty = isScopeDetailDirty(draft);
-                    return (
-                      <button
-                        key={draft.key}
-                        type="button"
-                        onClick={() => setSelectedDraftKey(draft.key)}
-                        className={`w-full rounded-[20px] border px-4 py-4 text-left transition-colors ${
-                          draft.key === selectedDraft.key
-                            ? 'border-[#C7D6FF] bg-[#EAF0FF]'
-                            : 'border-[#EEEAE4] bg-[#FAF8F4] hover:bg-white'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-[14px] font-semibold text-gray-800">{draft.scriptId}</div>
-                            <div className="mt-1 truncate text-[12px] text-gray-400">{draft.revision}</div>
-                          </div>
-                          <div className="flex shrink-0 flex-col items-end gap-1">
-                            {draft.scopeDetail?.script ? (
-                              <span className="rounded-full border border-[#DCE8C8] bg-[#F5FBEE] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#5C7A2D]">
-                                scope
-                              </span>
-                            ) : null}
-                            {dirty ? (
-                              <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#9B6A1C]">
-                                dirty
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(draft.updatedAtUtc)}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {scopeBacked ? (
-                  <div className="mt-6 border-t border-[#EEEAE4] pt-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-[13px] font-semibold text-gray-800">Saved in Scope</div>
-                        <div className="mt-1 text-[11px] text-gray-400">{appContext.scopeId}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => { void loadScopeScripts(); }}
-                        className="panel-icon-button"
-                        title="Refresh saved scripts"
-                        disabled={scopeScriptsPending}
-                      >
-                        <RefreshCw size={14} className={scopeScriptsPending ? 'animate-spin' : ''} />
-                      </button>
-                    </div>
-
-                    {filteredScopeScripts.length === 0 ? (
-                      <div className="rounded-[18px] border border-dashed border-[#E5E1DA] bg-[#FAF8F4] px-4 py-4 text-[12px] leading-6 text-gray-500">
-                        {scopeScriptsPending ? 'Loading saved scripts...' : 'No saved scripts matched this filter.'}
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {filteredScopeScripts.map(detail => {
-                          const script = detail.script;
-                          if (!script) {
-                            return null;
-                          }
-
-                          return (
-                            <button
-                              key={`${detail.scopeId}:${script.scriptId}`}
-                              type="button"
-                              onClick={() => openScopeScript(detail)}
-                              className={`w-full rounded-[18px] border px-4 py-3 text-left transition-colors ${
-                                scopeSelectionId === script.scriptId
-                                  ? 'border-[#C7D6FF] bg-[#EAF0FF]'
-                                  : 'border-[#EEEAE4] bg-white hover:bg-[#FAF8F4]'
-                              }`}
-                            >
-                              <div className="truncate text-[13px] font-semibold text-gray-800">{script.scriptId}</div>
-                              <div className="mt-1 truncate text-[11px] text-gray-400">{script.activeRevision}</div>
-                              <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(script.updatedAt)}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
+                {hasScopeChanges ? (
+                  <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
+                    Unsaved scope changes
+                  </span>
                 ) : null}
+                <span>{formatDateTime(selectedDraft.updatedAtUtc)}</span>
               </div>
             </div>
-          </aside>
 
-          <div className="min-h-0 flex flex-col">
-            <div className="min-h-0 flex-1 flex flex-col gap-4 p-5">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                <StudioSummaryCard eyebrow="Draft" title="Identity">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="md:col-span-2">
-                      <label className="field-label">Script ID</label>
-                      <input
-                        className="panel-input mt-1"
-                        placeholder="script id"
-                        value={selectedDraft.scriptId}
-                        onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, scriptId: event.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="field-label">Draft Revision</label>
-                      <input
-                        className="panel-input mt-1"
-                        placeholder="revision"
-                        value={selectedDraft.revision}
-                        onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="field-label">Base Revision</label>
-                      <input
-                        className="panel-input mt-1"
-                        placeholder="base revision"
-                        value={selectedDraft.baseRevision}
-                        onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
-                      />
-                    </div>
+            <div className="min-h-0 flex-1 bg-[#FCFBF8]">
+              <Editor
+                path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                language="csharp"
+                theme="aevatar-script-light"
+                value={selectedDraft.source}
+                beforeMount={handleMonacoBeforeMount}
+                onMount={handleEditorMount}
+                onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
+                loading={(
+                  <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                    Loading
                   </div>
-                </StudioSummaryCard>
-
-                <StudioSummaryCard eyebrow="Governance" title="Promotion">
-                  <div className="space-y-3">
-                    <div>
-                      <label className="field-label">Reason</label>
-                      <textarea
-                        rows={4}
-                        className="panel-textarea mt-1 !min-h-[120px]"
-                        placeholder="Describe why this revision should be promoted"
-                        value={selectedDraft.reason}
-                        onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, reason: event.target.value }))}
-                      />
-                    </div>
-                    <div className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3">
-                      <div className="section-heading">Latest Decision</div>
-                      <div className="mt-2 text-[13px] text-gray-700">
-                        {selectedDraft.lastPromotion
-                          ? `${selectedDraft.lastPromotion.status || '-'}${selectedDraft.lastPromotion.failureReason ? ` · ${selectedDraft.lastPromotion.failureReason}` : ''}`
-                          : 'No promotion has been submitted for this draft.'}
-                      </div>
-                    </div>
-                  </div>
-                </StudioSummaryCard>
-
-                <StudioSummaryCard
-                  eyebrow="Contract"
-                  title="App Runtime"
-                  actions={scopeBacked ? (
-                    <button
-                      type="button"
-                      onClick={() => { void loadScopeScripts(); }}
-                      className="panel-icon-button"
-                      title="Refresh scope data"
-                      disabled={scopeScriptsPending}
-                    >
-                      <RefreshCw size={14} className={scopeScriptsPending ? 'animate-spin' : ''} />
-                    </button>
-                  ) : null}
-                >
-                  <div className="space-y-3 text-[12px] leading-6 text-gray-600">
-                    <div>
-                      <div className="section-heading">Storage</div>
-                      <div className="mt-1 break-all text-[13px] text-gray-700">
-                        {scopeBacked ? `Scope-backed · ${appContext.scopeId}` : 'Local-only draft'}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="section-heading">Input Type</div>
-                      <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.inputType}</div>
-                    </div>
-                    <div>
-                      <div className="section-heading">Read Model Fields</div>
-                      <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.readModelFields.join(', ')}</div>
-                    </div>
-                  </div>
-                </StudioSummaryCard>
-              </div>
-
-              <section className="min-h-0 flex-1 overflow-hidden rounded-[28px] border border-[#E6E3DE] bg-white shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-                <div className="flex items-center justify-between gap-3 border-b border-[#EEEAE4] bg-[#FAF8F4] px-5 py-4">
-                  <div>
-                    <div className="panel-eyebrow">Editor</div>
-                    <div className="mt-1 text-[15px] font-semibold text-gray-800">{selectedDraft.scriptId}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Saved</div>
-                    <div className="mt-1 text-[12px] text-gray-600">{formatDateTime(selectedDraft.updatedAtUtc)}</div>
-                  </div>
-                </div>
-
-                <div className="min-h-0 flex-1 bg-[#FCFBF8]">
-                  <Editor
-                    path={`file:///scripts/${selectedDraft.key}/${validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                    language="csharp"
-                    theme="aevatar-script-light"
-                    value={selectedDraft.source}
-                    beforeMount={handleMonacoBeforeMount}
-                    onMount={handleEditorMount}
-                    onChange={value => updateDraft(selectedDraft.key, draft => ({ ...draft, source: value ?? '' }))}
-                    loading={(
-                      <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                        Loading
-                      </div>
-                    )}
-                    options={{
-                      automaticLayout: true,
-                      minimap: { enabled: false },
-                      scrollBeyondLastLine: false,
-                      smoothScrolling: true,
-                      fontSize: 13,
-                      lineHeight: 23,
-                      fontLigatures: true,
-                      tabSize: 4,
-                      insertSpaces: true,
-                      renderWhitespace: 'selection',
-                      renderValidationDecorations: 'on',
-                      lineNumbersMinChars: 3,
-                      quickSuggestions: false,
-                      suggestOnTriggerCharacters: false,
-                      wordWrap: 'off',
-                      stickyScroll: { enabled: false },
-                      bracketPairColorization: { enabled: true },
-                      guides: {
-                        indentation: true,
-                        bracketPairs: true,
-                      },
-                      folding: true,
-                      padding: {
-                        top: 18,
-                        bottom: 18,
-                      },
-                      scrollbar: {
-                        verticalScrollbarSize: 10,
-                        horizontalScrollbarSize: 10,
-                      },
-                    }}
-                  />
-                </div>
-
-                <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
-                      <div className="mt-1 truncate text-[13px] text-gray-700">
-                        {validationPending
-                          ? 'Checking'
-                          : visibleProblems[0]
-                            ? visibleProblems[0].message
-                            : 'Clean'}
-                      </div>
-                    </div>
-                    {visibleProblems.length > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => setProblemsOpen(value => !value)}
-                        className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
-                      >
-                        {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {problemsOpen && visibleProblems.length > 0 ? (
-                    <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
-                      {visibleProblems.map((diagnostic, index) => (
-                        <button
-                          key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
-                          type="button"
-                          onClick={() => jumpToDiagnostic(diagnostic)}
-                          className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
-                            diagnostic.severity === 'error'
-                              ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
-                              : diagnostic.severity === 'warning'
-                                ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
-                                : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
-                              {diagnostic.code || diagnostic.severity}
-                            </div>
-                            <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
-                          </div>
-                          <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </section>
+                )}
+                options={{
+                  automaticLayout: true,
+                  minimap: { enabled: false },
+                  scrollBeyondLastLine: false,
+                  smoothScrolling: true,
+                  fontSize: 13,
+                  lineHeight: 23,
+                  fontLigatures: true,
+                  tabSize: 4,
+                  insertSpaces: true,
+                  renderWhitespace: 'selection',
+                  renderValidationDecorations: 'on',
+                  lineNumbersMinChars: 3,
+                  quickSuggestions: false,
+                  suggestOnTriggerCharacters: false,
+                  wordWrap: 'off',
+                  stickyScroll: { enabled: false },
+                  bracketPairColorization: { enabled: true },
+                  guides: {
+                    indentation: true,
+                    bracketPairs: true,
+                  },
+                  folding: true,
+                  padding: {
+                    top: 18,
+                    bottom: 18,
+                  },
+                  scrollbar: {
+                    verticalScrollbarSize: 10,
+                    horizontalScrollbarSize: 10,
+                  },
+                }}
+              />
             </div>
 
-            <section className="flex-shrink-0 border-t border-[#E6E3DE] bg-white/94">
-              <div className="flex items-center justify-between gap-3 px-5 py-4">
-                <div>
-                  <div className="panel-eyebrow">Execution</div>
-                  <div className="mt-1 text-[15px] font-semibold text-gray-800">Draft activity</div>
+            <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Compiler</div>
+                  <div className="mt-1 truncate text-[13px] text-gray-700">
+                    {validationPending
+                      ? 'Checking'
+                      : visibleProblems[0]
+                        ? visibleProblems[0].message
+                        : 'Clean'}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {resultView === 'runtime' && selectedDraft.runtimeActorId ? (
-                    <button
-                      type="button"
-                      onClick={() => { void refreshSnapshot(selectedDraft); }}
-                      className="panel-icon-button"
-                      title="Refresh runtime result"
-                      disabled={snapshotPending}
-                    >
-                      <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
-                    </button>
-                  ) : null}
+                {visibleProblems.length > 0 ? (
                   <button
                     type="button"
-                    onClick={() => setResultsCollapsed(value => !value)}
-                    className="ghost-action !px-3"
+                    onClick={() => setProblemsOpen(value => !value)}
+                    className="rounded-full border border-[#E5DED3] bg-white px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-gray-500 transition-colors hover:bg-[#F9F6F0]"
                   >
-                    {resultsCollapsed ? 'Show Results' : 'Hide Results'}
-                    <ChevronDown size={14} className={`transition-transform ${resultsCollapsed ? '-rotate-90' : ''}`} />
+                    {problemsOpen ? 'Hide Problems' : `Problems ${visibleProblems.length}`}
                   </button>
-                </div>
+                ) : null}
               </div>
 
-              {!resultsCollapsed ? (
-                <div className="grid gap-4 border-t border-[#EEEAE4] px-5 py-5 xl:grid-cols-[260px_minmax(0,1fr)]">
-                  <div className="space-y-3">
-                    <StudioResultCard
-                      active={resultView === 'runtime'}
-                      title="Draft Run"
-                      meta={selectedDraft.lastSnapshot ? formatDateTime(selectedDraft.lastSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
-                      summary={runtimeSummary}
-                      status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
-                      onClick={() => setResultView('runtime')}
-                    />
-                    <StudioResultCard
-                      active={resultView === 'save'}
-                      title="Scope Save"
-                      meta={selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
-                      summary={saveSummary}
-                      status={scopeBacked ? (hasScopeChanges ? 'dirty' : selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
-                      onClick={() => setResultView('save')}
-                    />
-                    <StudioResultCard
-                      active={resultView === 'promotion'}
-                      title="Promotion"
-                      meta={selectedDraft.lastPromotion?.candidateRevision || 'No candidate'}
-                      summary={promotionSummary}
-                      status={selectedDraft.lastPromotion?.status || ''}
-                      onClick={() => setResultView('promotion')}
-                    />
-                  </div>
+              {problemsOpen && visibleProblems.length > 0 ? (
+                <div className="mt-3 max-h-[180px] space-y-2 overflow-auto pr-1">
+                  {visibleProblems.map((diagnostic, index) => (
+                    <button
+                      key={`${diagnostic.code}-${diagnostic.filePath}-${diagnostic.startLine}-${diagnostic.startColumn}-${index}`}
+                      type="button"
+                      onClick={() => jumpToDiagnostic(diagnostic)}
+                      className={`w-full rounded-[18px] border px-3 py-3 text-left transition-colors ${
+                        diagnostic.severity === 'error'
+                          ? 'border-[#F3D3CD] bg-[#FFF5F2] hover:bg-[#FFF0EB]'
+                          : diagnostic.severity === 'warning'
+                            ? 'border-[#EADBB8] bg-[#FFF8EB] hover:bg-[#FFF4DE]'
+                            : 'border-[#E6E0D7] bg-white hover:bg-[#FBFAF7]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="truncate text-[12px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+                          {diagnostic.code || diagnostic.severity}
+                        </div>
+                        <div className="truncate text-[11px] text-gray-400">{formatProblemLocation(diagnostic)}</div>
+                      </div>
+                      <div className="mt-2 text-[13px] leading-6 text-gray-700">{diagnostic.message}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
 
-                  <div className="min-h-[260px] rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4] p-5">
-                    {resultView === 'runtime' ? (
-                      selectedDraft.lastRun || selectedDraft.lastSnapshot ? (
+        <div className="absolute bottom-6 right-5 z-30 flex items-end gap-3">
+          <button
+            type="button"
+            onClick={() => setAskAiOpen(true)}
+            title="Ask AI to rewrite the current draft."
+            className="ask-ai-trigger flex h-14 w-14 items-center justify-center rounded-[20px] border border-[color:var(--accent-border)] text-[color:var(--accent-text)] transition-transform hover:-translate-y-0.5"
+          >
+            <Bot size={20} />
+          </button>
+        </div>
+      </section>
+
+      <section className={`execution-logs ${resultsCollapsed ? 'collapsed' : ''}`}>
+        <div className="execution-logs-header">
+          <div>
+            <div className="text-[11px] text-gray-400 uppercase tracking-[0.16em]">Execution</div>
+            <div className="text-[14px] font-semibold text-gray-800">Draft activity</div>
+          </div>
+          <div className="execution-logs-header-actions">
+            {resultView === 'runtime' && selectedDraft.runtimeActorId ? (
+              <button
+                type="button"
+                onClick={() => { void refreshSnapshot(selectedDraft); }}
+                className="panel-icon-button execution-logs-copy-action"
+                title="Refresh runtime result"
+                aria-label="Refresh runtime result"
+                disabled={snapshotPending}
+              >
+                <RefreshCw size={14} className={snapshotPending ? 'animate-spin' : ''} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setResultsCollapsed(value => !value)}
+              className="execution-logs-collapse-action"
+              aria-expanded={!resultsCollapsed}
+            >
+              <span className="text-[12px] text-gray-500">{resultsCollapsed ? 'Expand activity' : 'Collapse activity'}</span>
+              <ChevronDown size={16} className={`execution-logs-collapse-icon ${resultsCollapsed ? 'collapsed' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {!resultsCollapsed ? (
+          <div className="execution-logs-body">
+            <div className="execution-runs-list">
+              <StudioResultCard
+                active={resultView === 'runtime'}
+                title="Draft Run"
+                meta={selectedDraft.lastSnapshot ? formatDateTime(selectedDraft.lastSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
+                summary={runtimeSummary}
+                status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
+                onClick={() => setResultView('runtime')}
+              />
+              <StudioResultCard
+                active={resultView === 'save'}
+                title="Scope Save"
+                meta={selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
+                summary={saveSummary}
+                status={scopeBacked ? (hasScopeChanges ? 'dirty' : selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
+                onClick={() => setResultView('save')}
+              />
+              <StudioResultCard
+                active={resultView === 'promotion'}
+                title="Promotion"
+                meta={selectedDraft.lastPromotion?.candidateRevision || 'No candidate'}
+                summary={promotionSummary}
+                status={selectedDraft.lastPromotion?.status || ''}
+                onClick={() => setResultView('promotion')}
+              />
+            </div>
+
+            <div className="execution-log-stream">
+              <div className="execution-log-list">
+                <div className="execution-action-panel">
+                  {resultView === 'runtime' ? (
+                    selectedDraft.lastRun || selectedDraft.lastSnapshot ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[14px] font-semibold text-gray-800">Runtime output</div>
+                            <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastRun?.runId || selectedDraft.lastSnapshot?.actorId || '-'}</div>
+                          </div>
+                          <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
+                            {snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : 'pending')}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 xl:grid-cols-2">
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Input</div>
+                            <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.input || selectedDraft.input || '-'}</pre>
+                          </div>
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Output</div>
+                            <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 xl:grid-cols-2">
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Notes</div>
+                            <div className="mt-2 text-[12px] leading-6 text-gray-600">
+                              {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
+                            </div>
+                          </div>
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Metadata</div>
+                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                              <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
+                              <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
+                              <div>stateVersion: {selectedDraft.lastSnapshot?.stateVersion ?? '-'}</div>
+                              <div>updatedAt: {formatDateTime(selectedDraft.lastSnapshot?.updatedAt)}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
+                          <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+                            Raw Read Model
+                          </summary>
+                          <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                            {prettyPrintJson(selectedDraft.lastSnapshot?.readModelPayloadJson)}
+                          </pre>
+                        </details>
+                      </div>
+                    ) : (
+                      <EmptyState
+                        title="No runtime output yet"
+                        copy="Run the current draft. The materialized read model will appear here."
+                      />
+                    )
+                  ) : resultView === 'save' ? (
+                    scopeBacked ? (
+                      selectedDraft.scopeDetail?.script ? (
                         <div className="space-y-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-[14px] font-semibold text-gray-800">Runtime output</div>
-                              <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastRun?.runId || selectedDraft.lastSnapshot?.actorId || '-'}</div>
+                              <div className="text-[14px] font-semibold text-gray-800">Scope save</div>
+                              <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.scopeDetail.scopeId}</div>
                             </div>
-                            <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
-                              {snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : 'pending')}
-                            </div>
-                          </div>
-
-                          <div className="grid gap-4 xl:grid-cols-2">
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Input</div>
-                              <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.input || selectedDraft.input || '-'}</pre>
-                            </div>
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Output</div>
-                              <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{snapshotView.output || '-'}</pre>
+                            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+                              hasScopeChanges
+                                ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
+                                : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+                            }`}>
+                              {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
                             </div>
                           </div>
 
                           <div className="grid gap-4 xl:grid-cols-2">
                             <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Notes</div>
-                              <div className="mt-2 text-[12px] leading-6 text-gray-600">
-                                {snapshotView.notes.length > 0 ? snapshotView.notes.join(', ') : '-'}
+                              <div className="section-heading">Script</div>
+                              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                                <div>scriptId: {selectedDraft.scopeDetail.script.scriptId}</div>
+                                <div>revision: {selectedDraft.scopeDetail.script.activeRevision}</div>
+                                <div>updatedAt: {formatDateTime(selectedDraft.scopeDetail.script.updatedAt)}</div>
                               </div>
                             </div>
                             <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Metadata</div>
+                              <div className="section-heading">Actors</div>
                               <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
-                                <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
-                                <div>stateVersion: {selectedDraft.lastSnapshot?.stateVersion ?? '-'}</div>
-                                <div>updatedAt: {formatDateTime(selectedDraft.lastSnapshot?.updatedAt)}</div>
+                                <div>catalogActorId: {selectedDraft.scopeDetail.script.catalogActorId || '-'}</div>
+                                <div>definitionActorId: {selectedDraft.scopeDetail.script.definitionActorId || '-'}</div>
+                                <div>sourceHash: {selectedDraft.scopeDetail.script.activeSourceHash || '-'}</div>
                               </div>
                             </div>
                           </div>
 
                           <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
                             <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                              Raw Read Model
+                              Stored Source
                             </summary>
                             <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                              {prettyPrintJson(selectedDraft.lastSnapshot?.readModelPayloadJson)}
+                              {selectedDraft.scopeDetail.source?.sourceText || '-'}
                             </pre>
                           </details>
                         </div>
                       ) : (
                         <EmptyState
-                          title="No runtime output yet"
-                          copy="Run the current draft. The materialized read model will appear here."
-                        />
-                      )
-                    ) : resultView === 'save' ? (
-                      scopeBacked ? (
-                        selectedDraft.scopeDetail?.script ? (
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-[14px] font-semibold text-gray-800">Scope save</div>
-                                <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.scopeDetail.scopeId}</div>
-                              </div>
-                              <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                                hasScopeChanges
-                                  ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
-                                  : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                              }`}>
-                                {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
-                              </div>
-                            </div>
-
-                            <div className="grid gap-4 xl:grid-cols-2">
-                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                                <div className="section-heading">Script</div>
-                                <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                  <div>scriptId: {selectedDraft.scopeDetail.script.scriptId}</div>
-                                  <div>revision: {selectedDraft.scopeDetail.script.activeRevision}</div>
-                                  <div>updatedAt: {formatDateTime(selectedDraft.scopeDetail.script.updatedAt)}</div>
-                                </div>
-                              </div>
-                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                                <div className="section-heading">Actors</div>
-                                <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                  <div>catalogActorId: {selectedDraft.scopeDetail.script.catalogActorId || '-'}</div>
-                                  <div>definitionActorId: {selectedDraft.scopeDetail.script.definitionActorId || '-'}</div>
-                                  <div>sourceHash: {selectedDraft.scopeDetail.script.activeSourceHash || '-'}</div>
-                                </div>
-                              </div>
-                            </div>
-
-                            <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
-                              <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                                Stored Source
-                              </summary>
-                              <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                                {selectedDraft.scopeDetail.source?.sourceText || '-'}
-                              </pre>
-                            </details>
-                          </div>
-                        ) : (
-                          <EmptyState
-                            title="Not saved into the scope"
-                            copy="Use Save to persist this draft and make it show up in the saved scripts list."
-                          />
-                        )
-                      ) : (
-                        <EmptyState
-                          title="Scope save unavailable"
-                          copy="This app session does not have a resolved scope. The draft is still kept locally in your browser storage."
+                          title="Not saved into the scope"
+                          copy="Use Save to persist this draft and make it show up in the saved scripts list."
                         />
                       )
                     ) : (
-                      selectedDraft.lastPromotion ? (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-[14px] font-semibold text-gray-800">Promotion proposal</div>
-                              <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastPromotion.proposalId || '-'}</div>
-                            </div>
-                            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                              selectedDraft.lastPromotion.accepted
-                                ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                                : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
-                            }`}>
-                              {selectedDraft.lastPromotion.status || (selectedDraft.lastPromotion.accepted ? 'accepted' : 'rejected')}
-                            </div>
+                      <EmptyState
+                        title="Scope save unavailable"
+                        copy="This app session does not have a resolved scope. The draft is still kept locally in your browser storage."
+                      />
+                    )
+                  ) : (
+                    selectedDraft.lastPromotion ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[14px] font-semibold text-gray-800">Promotion proposal</div>
+                            <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastPromotion.proposalId || '-'}</div>
                           </div>
-
-                          <div className="grid gap-4 xl:grid-cols-2">
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Revision</div>
-                              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>base: {selectedDraft.lastPromotion.baseRevision || '-'}</div>
-                                <div>candidate: {selectedDraft.lastPromotion.candidateRevision || '-'}</div>
-                                <div>scriptId: {selectedDraft.lastPromotion.scriptId || '-'}</div>
-                              </div>
-                            </div>
-                            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                              <div className="section-heading">Decision</div>
-                              <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>catalogActorId: {selectedDraft.lastPromotion.catalogActorId || '-'}</div>
-                                <div>definitionActorId: {selectedDraft.lastPromotion.definitionActorId || '-'}</div>
-                                <div>failureReason: {selectedDraft.lastPromotion.failureReason || '-'}</div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                            <div className="section-heading">Validation</div>
-                            {promotionDiagnostics.length > 0 ? (
-                              <div className="mt-3 space-y-2">
-                                {promotionDiagnostics.map((diagnostic, index) => (
-                                  <div key={`${diagnostic}-${index}`} className="rounded-[16px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3 text-[12px] leading-6 text-gray-600">
-                                    {diagnostic}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="mt-2 text-[12px] leading-6 text-gray-600">No validation diagnostics were returned.</div>
-                            )}
+                          <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+                            selectedDraft.lastPromotion.accepted
+                              ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+                              : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
+                          }`}>
+                            {selectedDraft.lastPromotion.status || (selectedDraft.lastPromotion.accepted ? 'accepted' : 'rejected')}
                           </div>
                         </div>
-                      ) : (
-                        <EmptyState
-                          title="No promotion submitted"
-                          copy="When the draft is stable, use Promote to send an evolution proposal and inspect the decision here."
-                        />
-                      )
-                    )}
-                  </div>
+
+                        <div className="grid gap-4 xl:grid-cols-2">
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Revision</div>
+                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                              <div>base: {selectedDraft.lastPromotion.baseRevision || '-'}</div>
+                              <div>candidate: {selectedDraft.lastPromotion.candidateRevision || '-'}</div>
+                              <div>scriptId: {selectedDraft.lastPromotion.scriptId || '-'}</div>
+                            </div>
+                          </div>
+                          <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                            <div className="section-heading">Decision</div>
+                            <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                              <div>catalogActorId: {selectedDraft.lastPromotion.catalogActorId || '-'}</div>
+                              <div>definitionActorId: {selectedDraft.lastPromotion.definitionActorId || '-'}</div>
+                              <div>failureReason: {selectedDraft.lastPromotion.failureReason || '-'}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                          <div className="section-heading">Validation</div>
+                          {promotionDiagnostics.length > 0 ? (
+                            <div className="mt-3 space-y-2">
+                              {promotionDiagnostics.map((diagnostic, index) => (
+                                <div key={`${diagnostic}-${index}`} className="rounded-[16px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3 text-[12px] leading-6 text-gray-600">
+                                  {diagnostic}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-[12px] leading-6 text-gray-600">No validation diagnostics were returned.</div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <EmptyState
+                        title="No promotion submitted"
+                        copy="When the draft is stable, use Promote to send an evolution proposal and inspect the decision here."
+                      />
+                    )
+                  )}
                 </div>
-              ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      <ScriptsStudioModal
+        open={libraryOpen}
+        eyebrow="Scripts"
+        title="Draft library"
+        onClose={() => setLibraryOpen(false)}
+        width="min(980px, 100%)"
+        actions={(
+          <>
+            <button type="button" onClick={() => setLibraryOpen(false)} className="ghost-action">Close</button>
+            <button type="button" onClick={handleCreateDraft} className="solid-action">
+              <Plus size={14} /> New draft
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-5">
+          <div className="search-field !min-h-[40px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
+            <Search size={14} className="text-gray-400" />
+            <input
+              className="search-input"
+              placeholder="Search drafts or saved scripts"
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="panel-eyebrow">Drafts</div>
+                  <div className="mt-1 text-[14px] font-semibold text-gray-800">{drafts.length} local draft{drafts.length === 1 ? '' : 's'}</div>
+                </div>
+                <button type="button" onClick={handleCreateDraft} className="panel-icon-button" title="New draft">
+                  <Plus size={14} />
+                </button>
+              </div>
+
+              <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {filteredDrafts.length === 0 ? (
+                  <EmptyState title="No drafts matched" copy="Try a different search, or create a new draft." />
+                ) : filteredDrafts.map(draft => {
+                  const dirty = isScopeDetailDirty(draft);
+                  return (
+                    <button
+                      key={draft.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDraftKey(draft.key);
+                        setLibraryOpen(false);
+                      }}
+                      className={`execution-run-card ${draft.key === selectedDraft.key ? 'active' : ''}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-[13px] font-semibold text-gray-800">{draft.scriptId}</div>
+                          <div className="mt-1 truncate text-[11px] text-gray-400">{draft.revision}</div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          {draft.scopeDetail?.script ? (
+                            <span className="rounded-full border border-[#DCE8C8] bg-[#F5FBEE] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#5C7A2D]">
+                              scope
+                            </span>
+                          ) : null}
+                          {dirty ? (
+                            <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#9B6A1C]">
+                              dirty
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(draft.updatedAtUtc)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="panel-eyebrow">Saved in Scope</div>
+                  <div className="mt-1 text-[14px] font-semibold text-gray-800">{scopeBacked ? (appContext.scopeId || '-') : 'Unavailable'}</div>
+                </div>
+                {scopeBacked ? (
+                  <button
+                    type="button"
+                    onClick={() => { void loadScopeScripts(); }}
+                    className="panel-icon-button"
+                    title="Refresh saved scripts"
+                    disabled={scopeScriptsPending}
+                  >
+                    <RefreshCw size={14} className={scopeScriptsPending ? 'animate-spin' : ''} />
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {!scopeBacked ? (
+                  <EmptyState
+                    title="Scope save unavailable"
+                    copy="This session is not bound to a resolved scope, so only local drafts are available."
+                  />
+                ) : filteredScopeScripts.length === 0 ? (
+                  <EmptyState
+                    title={scopeScriptsPending ? 'Loading scope scripts' : 'No saved scripts matched'}
+                    copy={scopeScriptsPending ? 'Pulling the scope catalog now.' : 'Try a different search or save the active draft.'}
+                  />
+                ) : filteredScopeScripts.map(detail => {
+                  const script = detail.script;
+                  if (!script) {
+                    return null;
+                  }
+
+                  return (
+                    <button
+                      key={`${detail.scopeId}:${script.scriptId}`}
+                      type="button"
+                      onClick={() => openScopeScript(detail)}
+                      className={`execution-run-card ${scopeSelectionId === script.scriptId ? 'active' : ''}`}
+                    >
+                      <div className="truncate text-[13px] font-semibold text-gray-800">{script.scriptId}</div>
+                      <div className="mt-1 truncate text-[11px] text-gray-400">{script.activeRevision}</div>
+                      <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(script.updatedAt)}</div>
+                    </button>
+                  );
+                })}
+              </div>
             </section>
           </div>
         </div>
-      </section>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={detailsOpen}
+        eyebrow="Script"
+        title="Draft details"
+        onClose={() => setDetailsOpen(false)}
+        width="min(880px, 100%)"
+        actions={<button type="button" onClick={() => setDetailsOpen(false)} className="ghost-action">Close</button>}
+      >
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <div className="space-y-4">
+            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+              <div className="panel-eyebrow">Identity</div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="field-label">Script ID</label>
+                  <input
+                    className="panel-input mt-1"
+                    placeholder="script id"
+                    value={selectedDraft.scriptId}
+                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, scriptId: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Draft Revision</label>
+                  <input
+                    className="panel-input mt-1"
+                    placeholder="revision"
+                    value={selectedDraft.revision}
+                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Base Revision</label>
+                  <input
+                    className="panel-input mt-1"
+                    placeholder="base revision"
+                    value={selectedDraft.baseRevision}
+                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+              <div className="panel-eyebrow">Actors</div>
+              <div className="mt-3 space-y-2 break-all text-[12px] leading-6 text-gray-600">
+                <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
+                <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
+                <div>lastSourceHash: {selectedDraft.lastSourceHash || '-'}</div>
+                <div>updatedAt: {formatDateTime(selectedDraft.updatedAtUtc)}</div>
+              </div>
+            </section>
+          </div>
+
+          <div className="space-y-4">
+            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+              <div className="panel-eyebrow">Contract</div>
+              <div className="mt-3 space-y-3 text-[12px] leading-6 text-gray-600">
+                <div>
+                  <div className="section-heading">Storage</div>
+                  <div className="mt-1 break-all text-[13px] text-gray-700">
+                    {scopeBacked ? `Scope-backed · ${appContext.scopeId}` : 'Local-only draft'}
+                  </div>
+                </div>
+                <div>
+                  <div className="section-heading">Input Type</div>
+                  <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.inputType}</div>
+                </div>
+                <div>
+                  <div className="section-heading">Read Model Fields</div>
+                  <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.readModelFields.join(', ')}</div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+              <div className="panel-eyebrow">Scope Snapshot</div>
+              {selectedDraft.scopeDetail?.script ? (
+                <div className="mt-3 space-y-2 break-all text-[12px] leading-6 text-gray-600">
+                  <div>scriptId: {selectedDraft.scopeDetail.script.scriptId}</div>
+                  <div>revision: {selectedDraft.scopeDetail.script.activeRevision}</div>
+                  <div>catalogActorId: {selectedDraft.scopeDetail.script.catalogActorId || '-'}</div>
+                  <div>updatedAt: {formatDateTime(selectedDraft.scopeDetail.script.updatedAt)}</div>
+                </div>
+              ) : (
+                <div className="mt-3 text-[12px] leading-6 text-gray-500">
+                  This draft has not been saved into the current scope yet.
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={promotionModalOpen}
+        eyebrow="Governance"
+        title="Promote draft"
+        onClose={() => setPromotionModalOpen(false)}
+        width="min(760px, 100%)"
+        actions={(
+          <>
+            <button type="button" onClick={() => setPromotionModalOpen(false)} className="ghost-action">Cancel</button>
+            <button type="button" onClick={() => { void handlePromote(); }} disabled={promotionPending} className="solid-action">
+              <Check size={14} /> {promotionPending ? 'Promoting' : 'Promote'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="field-label">Base Revision</label>
+              <input
+                className="panel-input mt-1"
+                placeholder="base revision"
+                value={selectedDraft.baseRevision}
+                onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="field-label">Candidate Revision</label>
+              <input
+                className="panel-input mt-1"
+                placeholder="candidate revision"
+                value={selectedDraft.revision}
+                onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="field-label">Reason</label>
+            <textarea
+              rows={5}
+              className="panel-textarea mt-1"
+              placeholder="Describe why this revision should be promoted"
+              value={selectedDraft.reason}
+              onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, reason: event.target.value }))}
+            />
+          </div>
+
+          <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+            <div className="section-heading">Latest Decision</div>
+            <div className="mt-2 text-[13px] leading-6 text-gray-700">
+              {selectedDraft.lastPromotion
+                ? `${selectedDraft.lastPromotion.status || '-'}${selectedDraft.lastPromotion.failureReason ? ` · ${selectedDraft.lastPromotion.failureReason}` : ''}`
+                : 'No promotion has been submitted for this draft.'}
+            </div>
+
+            {promotionDiagnostics.length > 0 ? (
+              <div className="mt-4 space-y-2">
+                {promotionDiagnostics.map((diagnostic, index) => (
+                  <div key={`${diagnostic}-${index}`} className="rounded-[16px] border border-[#EEEAE4] bg-white px-3 py-3 text-[12px] leading-6 text-gray-600">
+                    {diagnostic}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </ScriptsStudioModal>
 
       <ScriptsStudioModal
         open={runModalOpen}

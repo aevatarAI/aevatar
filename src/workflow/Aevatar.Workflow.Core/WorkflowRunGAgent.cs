@@ -889,19 +889,11 @@ public sealed class WorkflowRunGAgent
         Google.Protobuf.Collections.MapField<string, string>? metadata,
         string? fallbackScopeId)
     {
-        if (metadata != null)
+        if (metadata != null &&
+            metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
+            !string.IsNullOrWhiteSpace(workflowScopeId))
         {
-            if (metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
-                !string.IsNullOrWhiteSpace(workflowScopeId))
-            {
-                return workflowScopeId.Trim();
-            }
-
-            if (metadata.TryGetValue("scope_id", out var scopeId) &&
-                !string.IsNullOrWhiteSpace(scopeId))
-            {
-                return scopeId.Trim();
-            }
+            return workflowScopeId.Trim();
         }
 
         return fallbackScopeId?.Trim() ?? string.Empty;

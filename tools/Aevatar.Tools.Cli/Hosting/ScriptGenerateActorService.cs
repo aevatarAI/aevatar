@@ -1,6 +1,4 @@
 using System.Text;
-using Aevatar.Configuration;
-using Aevatar.Foundation.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -8,38 +6,25 @@ namespace Aevatar.Tools.Cli.Hosting;
 
 internal sealed class ScriptGenerateActorService
 {
+    private const string SessionName = nameof(ScriptGenerateGAgent);
     internal const string ActorId = "app-script-generator:default";
 
-    private readonly IActorRuntime _runtime;
+    private readonly AppAuthoringChatSessionFactory _chatSessionFactory;
     private readonly ScriptGenerateOrchestrator _orchestrator;
-    private readonly ILogger<ScriptGenerateActorService> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public ScriptGenerateActorService(
-        IActorRuntime runtime,
-        ScriptGenerateOrchestrator orchestrator,
-        ILogger<ScriptGenerateActorService> logger)
+        AppAuthoringChatSessionFactory chatSessionFactory,
+        ScriptGenerateOrchestrator orchestrator)
     {
-        _runtime = runtime;
-        _orchestrator = orchestrator;
-        _logger = logger;
+        _chatSessionFactory = chatSessionFactory ?? throw new ArgumentNullException(nameof(chatSessionFactory));
+        _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
     }
 
-    public async Task EnsureInitializedAsync(CancellationToken ct)
+    public Task EnsureInitializedAsync(CancellationToken ct)
     {
-        if (await _runtime.ExistsAsync(ActorId))
-            return;
-
-        try
-        {
-            _ = await _runtime.CreateAsync<ScriptGenerateGAgent>(ActorId, ct);
-            _logger.LogInformation("ScriptGenerateGAgent actor initialized. actorId={ActorId}", ActorId);
-        }
-        catch (InvalidOperationException)
-        {
-            if (!await _runtime.ExistsAsync(ActorId))
-                throw;
-        }
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 
     public async Task<ScriptGenerateResult> GenerateAsync(
@@ -72,18 +57,10 @@ internal sealed class ScriptGenerateActorService
         await _gate.WaitAsync(ct);
         try
         {
-            var actor = await _runtime.GetAsync(ActorId)
-                ?? throw new InvalidOperationException("Script generator actor is unavailable.");
-            if (actor.Agent is not ScriptGenerateGAgent agent)
-            {
-                throw new InvalidOperationException(
-                    "Script generator requires the in-memory actor runtime. The current runtime returned a proxy actor.");
-            }
-
-            agent.ResetConversation();
+            var session = await _chatSessionFactory.CreateAsync(typeof(ScriptGenerateGAgent), SessionName, ct);
             return await _orchestrator.GenerateAsync(
                 request,
-                (prompt, metadata, token) => agent.GenerateWithReasoningAsync(
+                (prompt, metadata, token) => session.GenerateWithReasoningAsync(
                     prompt,
                     BuildRequestId(),
                     metadata,

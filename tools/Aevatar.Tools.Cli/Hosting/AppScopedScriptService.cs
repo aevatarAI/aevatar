@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -106,9 +108,10 @@ public sealed class AppScopedScriptService
             ? AppStudioEndpoints.NormalizeStudioDocumentId(request.ScriptId, "script")
             : NormalizeRequired(request.ScriptId, nameof(request.ScriptId));
 
+        ScopeScriptUpsertResult upsertResult;
         if (_scriptCommandPort != null)
         {
-            await _scriptCommandPort.UpsertAsync(
+            upsertResult = await _scriptCommandPort.UpsertAsync(
                 new ScopeScriptUpsertRequest(
                     normalizedScopeId,
                     scriptId,
@@ -119,7 +122,7 @@ public sealed class AppScopedScriptService
         }
         else
         {
-            _ = await SendAsync<ScopeScriptUpsertResult>(
+            upsertResult = await SendAsync<ScopeScriptUpsertResult>(
                 HttpMethod.Put,
                 $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(scriptId)}",
                 new RemoteUpsertRequest(
@@ -129,9 +132,7 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        return await GetAsync(normalizedScopeId, scriptId, ct)
-               ?? throw new InvalidOperationException(
-                   $"Script '{scriptId}' was saved but could not be read back for scope '{normalizedScopeId}'.");
+        return BuildSavedDetail(normalizedScopeId, sourceText, upsertResult);
     }
 
     public async Task<ScriptPromotionDecision> ProposeEvolutionAsync(
@@ -320,6 +321,40 @@ public sealed class AppScopedScriptService
         !string.IsNullOrWhiteSpace(mediaType) &&
         (mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
          mediaType.Contains("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
+
+    private static ScopeScriptDetail BuildSavedDetail(
+        string scopeId,
+        string sourceText,
+        ScopeScriptUpsertResult upsertResult)
+    {
+        ArgumentNullException.ThrowIfNull(upsertResult);
+
+        var summary = upsertResult.Script;
+        var normalizedSourceText = sourceText ?? string.Empty;
+        var sourceHash = string.IsNullOrWhiteSpace(summary.ActiveSourceHash)
+            ? ComputeSha256(normalizedSourceText)
+            : summary.ActiveSourceHash;
+
+        return new ScopeScriptDetail(
+            Available: true,
+            ScopeId: scopeId,
+            Script: summary,
+            Source: new ScopeScriptSource(
+                normalizedSourceText,
+                string.IsNullOrWhiteSpace(upsertResult.DefinitionActorId)
+                    ? summary.DefinitionActorId
+                    : upsertResult.DefinitionActorId,
+                string.IsNullOrWhiteSpace(upsertResult.RevisionId)
+                    ? summary.ActiveRevision
+                    : upsertResult.RevisionId,
+                sourceHash));
+    }
+
+    private static string ComputeSha256(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
 
     private sealed record RemoteUpsertRequest(
         string SourceText,

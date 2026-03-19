@@ -128,7 +128,16 @@ internal static class ChatRunRequestNormalizer
         if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
             return;
 
-        metadata[normalizedKey] = normalizedValue;
+        if (string.Equals(normalizedKey, "scope_id", StringComparison.Ordinal) &&
+            metadata.ContainsKey(WorkflowRunCommandMetadataKeys.ScopeId))
+        {
+            return;
+        }
+
+        var canonicalKey = string.Equals(normalizedKey, "scope_id", StringComparison.Ordinal)
+            ? WorkflowRunCommandMetadataKeys.ScopeId
+            : normalizedKey;
+        metadata[canonicalKey] = normalizedValue;
     }
 
     private static string? NormalizeAgentId(string? agentId) =>

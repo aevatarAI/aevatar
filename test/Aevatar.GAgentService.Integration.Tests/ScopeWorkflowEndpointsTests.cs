@@ -241,8 +241,8 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.SessionId.Should().Be("session-1");
         interactionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
-        interactionService.LastRequest.Metadata.Should().ContainKey("scope_id").WhoseValue.Should().Be("user-1");
         interactionService.LastRequest.Metadata.Should().ContainKey(WorkflowRunCommandMetadataKeys.ScopeId).WhoseValue.Should().Be("user-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -332,8 +332,8 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"humanInputRequest\": { \"stepId\": \"approve\"");
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
-        interactionService.LastRequest.Metadata.Should().ContainKey("scope_id").WhoseValue.Should().Be("user-1");
         interactionService.LastRequest.Metadata.Should().ContainKey(WorkflowRunCommandMetadataKeys.ScopeId).WhoseValue.Should().Be("user-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -393,8 +393,8 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"runId\": \"run-1\"");
         body.Should().NotContain("EXECUTION_FAILED");
         interactionService.LastRequest.Should().NotBeNull();
-        interactionService.LastRequest!.Metadata.Should().ContainKey("scope_id").WhoseValue.Should().Be("user-1");
-        interactionService.LastRequest.Metadata.Should().ContainKey(WorkflowRunCommandMetadataKeys.ScopeId).WhoseValue.Should().Be("user-1");
+        interactionService.LastRequest!.Metadata.Should().ContainKey(WorkflowRunCommandMetadataKeys.ScopeId).WhoseValue.Should().Be("user-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]

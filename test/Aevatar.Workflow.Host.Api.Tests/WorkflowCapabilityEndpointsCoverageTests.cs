@@ -107,6 +107,25 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldCanonicalizeLegacyScopeIdMetadata()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Metadata = new Dictionary<string, string>
+            {
+                ["scope_id"] = "user-1",
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Metadata.Should().ContainKey(WorkflowRunCommandMetadataKeys.ScopeId).WhoseValue.Should().Be("user-1");
+        result.Request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
     public void CapabilityTraceContext_CreateAcceptedPayload_ShouldUseReceiptValues()
     {
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");

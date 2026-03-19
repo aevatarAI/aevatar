@@ -45,7 +45,7 @@ public sealed class WorkflowRunActorResolverTests
                 null,
                 Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["scope_id"] = "scope-user-1",
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "scope-user-1",
                 }),
             CancellationToken.None);
 

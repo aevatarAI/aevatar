@@ -133,6 +133,7 @@ internal static class AppToolHost
 
             if (embeddedWorkflowMode)
             {
+                builder.Services.AddSingleton<AppAuthoringChatSessionFactory>();
                 builder.Services.AddSingleton<WorkflowGeneratePromptCatalog>();
                 builder.Services.AddSingleton<WorkflowGenerateOrchestrator>();
                 builder.Services.AddSingleton<WorkflowGenerateActorService>();

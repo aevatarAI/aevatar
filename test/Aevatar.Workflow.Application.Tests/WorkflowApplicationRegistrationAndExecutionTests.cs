@@ -255,8 +255,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.SessionId.Should().Be("session-42");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
         request.Metadata[WorkflowRunCommandMetadataKeys.ScopeId].Should().Be("u-1001");
-        request.Metadata["scope_id"].Should().Be("u-1001");
         request.Metadata["source"].Should().Be("headers");
+        request.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]

@@ -293,14 +293,9 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         if (metadata == null || metadata.Count == 0)
             return string.Empty;
 
-        if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
-            !string.IsNullOrWhiteSpace(workflowScopeId))
-        {
-            return workflowScopeId.Trim();
-        }
-
-        return metadata.TryGetValue("scope_id", out var scopeId) && !string.IsNullOrWhiteSpace(scopeId)
-            ? scopeId.Trim()
+        return metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
+               !string.IsNullOrWhiteSpace(workflowScopeId)
+            ? workflowScopeId.Trim()
             : string.Empty;
     }
 
