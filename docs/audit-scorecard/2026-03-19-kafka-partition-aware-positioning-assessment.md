@@ -1,10 +1,16 @@
-# KafkaPartitionAware Positioning Assessment
+# KafkaStrictProvider Positioning Assessment
+
+## Status
+
+This assessment records the pre-provider-native cleanup judgment.
+
+It should be read as a historical positioning note for the earlier strict implementation, not as the description of the current backend shape.
 
 ## Conclusion
 
-The current `KafkaPartitionAware` implementation is technically valid, but it is no longer a natural extension of the `MassTransitAdapter` path.
+The recorded `KafkaStrictProvider` implementation was technically valid, but it was no longer a natural extension of the `MassTransitAdapter` path.
 
-At this point, it should be understood as:
+At that point, it should be understood as:
 
 - a dedicated Kafka transport backend
 - plus Orleans stream runtime integration
@@ -18,7 +24,7 @@ It should **not** be described as "MassTransit shared-group enhancement".
 
 No, not on the strict path.
 
-The strict path now owns these responsibilities directly:
+The strict path at that stage owned these responsibilities directly:
 
 - Kafka publish
 - Kafka consume
@@ -82,10 +88,10 @@ Originally, the expectation was closer to:
 - fix routing around it
 - preserve one main transport model
 
-The current implementation has moved to:
+The recorded implementation had moved to:
 
 - keep `MassTransit` for general-purpose transport
-- introduce `KafkaPartitionAware` as a separate strict backend
+- introduce `KafkaStrictProvider` as a separate strict backend
 - let strict shared-group correctness be handled outside the `MassTransitAdapter` abstraction
 
 That is a legitimate architecture choice, but it must be named honestly.
@@ -106,10 +112,10 @@ That is a legitimate architecture choice, but it must be named honestly.
 
 ## Recommended Positioning
 
-The cleanest positioning is:
+The cleanest positioning was:
 
 - `MassTransitAdapter` remains the general-purpose transport/backend
-- `KafkaPartitionAware` is a specialized strict backend
+- `KafkaStrictProvider` is a specialized strict backend
 - it is used only where strict shared-group correctness is worth the extra complexity
 
 In other words:
@@ -132,7 +138,7 @@ The broader we make it, the more "second transport platform" cost we take on.
 To reduce confusion, the system should describe the two paths explicitly:
 
 - `MassTransitAdapter`: general transport path
-- `KafkaPartitionAware`: strict Kafka ownership path
+- `KafkaStrictProvider`: strict Kafka ownership path
 
 Avoid wording such as:
 
@@ -147,7 +153,7 @@ Keep the implementation, but narrow its role.
 
 Recommended decision:
 
-1. keep `KafkaPartitionAware` as a dedicated strict backend
+1. keep `KafkaStrictProvider` as a dedicated strict backend
 2. keep `MassTransitAdapter` as the main general-purpose backend
 3. document clearly that the strict path is a specialized Kafka transport path, not a thin wrapper over `MassTransit`
 4. avoid expanding the strict path into unrelated transport scenarios unless the team explicitly decides to adopt two transport stacks long term
@@ -160,4 +166,4 @@ Recommended decision:
 
 Overall assessment:
 
-`KafkaPartitionAware` is a strong technical answer to strict shared-group correctness, but it should be treated as a specialized backend rather than as the natural continuation of the MassTransit transport design.
+`KafkaStrictProvider` was a strong technical answer to strict shared-group correctness, but it should be treated as a specialized backend rather than as the natural continuation of the MassTransit transport design.

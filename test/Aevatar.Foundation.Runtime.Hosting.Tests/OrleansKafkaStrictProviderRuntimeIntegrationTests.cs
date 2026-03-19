@@ -8,8 +8,8 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -20,10 +20,10 @@ using Orleans;
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 [Collection(nameof(EnvironmentVariableDependentCollection))]
-public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
+public sealed class OrleansKafkaStrictProviderRuntimeIntegrationTests
 {
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaPartitionAwareTransport_ShouldDeliverEnvelopeToRuntimeActorGrain()
+    public async Task KafkaStrictProviderTransport_ShouldDeliverEnvelopeToRuntimeActorGrain()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
@@ -55,7 +55,7 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
             var initialized = await grain.InitializeAgentAsync(typeof(RecordingStrictKafkaIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
 
-            var transport = host.Services.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>();
+            var transport = host.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -75,7 +75,7 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
     }
 
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaPartitionAwareTransport_ShouldDeliverMessagesAcrossMultipleQueues_InMultiSiloSharedGroup()
+    public async Task KafkaStrictProviderTransport_ShouldDeliverMessagesAcrossMultipleQueues_InMultiSiloSharedGroup()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
@@ -116,16 +116,12 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
 
         try
         {
-            await WaitForAssignedPartitionsAsync([host1, host2], 4, TimeSpan.FromSeconds(20));
-
             var mapper = new StrictQueuePartitionMapper(streamProviderName, 4);
             var actorIds = FindActorIdsForAllPartitions(mapper, actorEventNamespace, 4);
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            await WaitForLocalHandoffAlignmentAsync([host1, host2], TimeSpan.FromSeconds(20));
-
-            var transport = host1.Services.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>();
+            var transport = host1.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope
@@ -153,7 +149,7 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
     }
 
     [KafkaGarnetIntegrationFact]
-    public async Task KafkaPartitionAwareTransport_ShouldDeliverMessagesWithoutWaitingForLocalHandoffAlignment()
+    public async Task KafkaStrictProviderTransport_ShouldDeliverMessagesWithoutWaitingForLocalHandoffAlignment()
     {
         var bootstrapServers = RequireKafkaBootstrapServers();
         var garnetConnectionString = RequireGarnetConnectionString();
@@ -194,14 +190,12 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
 
         try
         {
-            await WaitForAssignedPartitionsAsync([host1, host2], 4, TimeSpan.FromSeconds(20));
-
             var mapper = new StrictQueuePartitionMapper(streamProviderName, 4);
             var actorIds = FindActorIdsForAllPartitions(mapper, actorEventNamespace, 4);
             var grainFactory = host1.Services.GetRequiredService<IGrainFactory>();
             await InitializeRuntimeActorsAsync(grainFactory, actorIds);
 
-            var transport = host1.Services.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>();
+            var transport = host1.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>();
             foreach (var actorId in actorIds)
             {
                 var envelope = new EventEnvelope
@@ -252,7 +246,7 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
                     clusterId: clusterId ?? $"aevatar-orleans-strict-cluster-{Guid.NewGuid():N}");
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
-                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaPartitionAware;
+                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider;
                     options.PersistenceBackend = string.IsNullOrWhiteSpace(garnetConnectionString)
                         ? AevatarOrleansRuntimeOptions.PersistenceBackendInMemory
                         : AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
@@ -261,11 +255,11 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
                     options.ActorEventNamespace = actorEventNamespace;
                     options.QueueCount = queueCount;
                 });
-                siloBuilder.AddAevatarFoundationRuntimeOrleansKafkaPartitionAwareTransport();
+                siloBuilder.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport();
             })
             .ConfigureServices(services =>
             {
-                services.AddAevatarFoundationRuntimeOrleansKafkaPartitionAwareTransport(options =>
+                services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(options =>
                 {
                     options.BootstrapServers = bootstrapServers;
                     options.TopicName = topicName;
@@ -289,70 +283,6 @@ public sealed class OrleansKafkaPartitionAwareRuntimeIntegrationTests
             var initialized = await grain.InitializeAgentAsync(typeof(RecordingStrictKafkaIntegrationAgent).AssemblyQualifiedName!);
             initialized.Should().BeTrue();
         }
-    }
-
-    private static async Task WaitForAssignedPartitionsAsync(
-        IReadOnlyList<IHost> hosts,
-        int expectedDistinctPartitionCount,
-        TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            var ownedPartitions = hosts
-                .SelectMany(host => host.Services.GetRequiredService<IPartitionAssignmentManager>().GetOwnedPartitions())
-                .Distinct()
-                .Count();
-            if (ownedPartitions >= expectedDistinctPartitionCount)
-                return;
-
-            await Task.Delay(200);
-        }
-
-        throw new TimeoutException(
-            $"Timed out after {timeout} waiting for {expectedDistinctPartitionCount} assigned strict Kafka partitions.");
-    }
-
-    private static async Task WaitForLocalHandoffAlignmentAsync(
-        IReadOnlyList<IHost> hosts,
-        TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            var aligned = true;
-            foreach (var host in hosts)
-            {
-                var ownedPartitions = host.Services
-                    .GetRequiredService<IPartitionAssignmentManager>()
-                    .GetOwnedPartitions()
-                    .ToHashSet();
-                var localDeliveryPort = host.Services.GetRequiredService<ILocalDeliveryAckPort>();
-                var handlersField = localDeliveryPort.GetType().GetField("_handlers", BindingFlags.Instance | BindingFlags.NonPublic);
-                var localHandlerPartitions = new HashSet<int>();
-                if (handlersField?.GetValue(localDeliveryPort) is System.Collections.IDictionary handlers)
-                {
-                    foreach (System.Collections.DictionaryEntry entry in handlers)
-                    {
-                        if (entry.Key is int partitionId)
-                            localHandlerPartitions.Add(partitionId);
-                    }
-                }
-
-                if (!ownedPartitions.IsSubsetOf(localHandlerPartitions))
-                {
-                    aligned = false;
-                    break;
-                }
-            }
-
-            if (aligned)
-                return;
-
-            await Task.Delay(200);
-        }
-
-        throw new TimeoutException($"Timed out after {timeout} waiting for strict local handoff alignment.");
     }
 
     private static string RequireKafkaBootstrapServers() =>

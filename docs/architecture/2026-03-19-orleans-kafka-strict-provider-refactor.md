@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the refactor target for the current `KafkaPartitionAware` backend.
+This document defines the refactor target for the current `KafkaStrictProvider` backend.
 
 Goal:
 
@@ -30,6 +30,13 @@ It should no longer depend on a separate lifecycle control plane such as:
 - lifecycle bridge hosted service
 - owned partition receiver registry
 - local partition handoff router
+
+Current progress:
+
+- provider-native receiver consumption has already replaced the old read-path control plane
+- old lifecycle control-plane types have been removed from the active backend
+- broad hosting and integration tests are green on the provider-native shape
+- the remaining work is mainly documentation and naming cleanup around the provider-native shape
 
 ## Core Design
 
@@ -95,9 +102,9 @@ The difference is where the ownership logic lives.
 
 ## Ownership Model
 
-### Current implementation
+### Stable baseline implementation
 
-Current `KafkaPartitionAware` uses Kafka lifecycle as an explicit control plane:
+The stable baseline that was recorded before this refactor used Kafka lifecycle as an explicit control plane:
 
 - Kafka assignment
 - lifecycle bridge
@@ -106,7 +113,7 @@ Current `KafkaPartitionAware` uses Kafka lifecycle as an explicit control plane:
 - local handoff router
 - queue receiver
 
-### Target implementation
+### Refactor target
 
 Refactored provider uses Orleans queue ownership directly:
 
@@ -304,10 +311,10 @@ The strict provider must still fail fast when these invariants are broken:
 ### Keep
 
 - `StrictQueuePartitionMapper`
-- `KafkaPartitionAwareQueueAdapter`
-- `KafkaPartitionAwareQueueAdapterFactory`
-- `KafkaPartitionAwareQueueAdapterReceiver`
-- `KafkaPartitionAwareBatchContainer`
+- `KafkaStrictProviderQueueAdapter`
+- `KafkaStrictProviderQueueAdapterFactory`
+- `KafkaStrictProviderQueueAdapterReceiver`
+- `KafkaStrictProviderBatchContainer`
 - Kafka topology validation logic
 
 ### Remove
@@ -320,7 +327,7 @@ The strict provider must still fail fast when these invariants are broken:
 
 ### Reshape
 
-`KafkaPartitionAwareEnvelopeTransport` should be reduced to transport helpers only:
+`KafkaStrictProviderEnvelopeTransport` should be reduced to transport helpers only:
 
 - Kafka producer
 - optional shared serialization helpers
@@ -333,7 +340,7 @@ It should no longer orchestrate:
 - local handoff control
 - owned receiver lifecycle
 
-`KafkaPartitionAwareQueueAdapterReceiver` becomes the main strict consumer component:
+`KafkaStrictProviderQueueAdapterReceiver` becomes the main strict consumer component:
 
 - binds `QueueId -> PartitionId`
 - owns Kafka consumer assignment for that partition
@@ -347,6 +354,11 @@ Queue balancing should be handled in one of these two ways:
 - fallback: keep a much thinner provider-native strict queue balancer whose only job is to materialize the Orleans queue lease explicitly
 
 The refactor must not keep the current Kafka-driven assignment control plane.
+
+Current progress:
+
+- these control-plane types have already been detached from the active path
+- the remaining cleanup is mainly around test coverage and provider-native receiver hardening
 
 ## Why This Is Better
 
@@ -378,7 +390,7 @@ This refactor does not aim to:
 
 ### Phase 2
 
-- move strict consumer logic into `KafkaPartitionAwareQueueAdapterReceiver`
+- move strict consumer logic into `KafkaStrictProviderQueueAdapterReceiver`
 - let receiver directly bind Kafka partition from `QueueId`
 
 ### Phase 3
@@ -389,6 +401,12 @@ This refactor does not aim to:
 
 - update unit and integration tests to the provider-native structure
 - keep the same strict behavior expectations as current tests
+
+### Current status
+
+- Phase 2 is complete
+- Phase 3 is complete
+- Phase 4 test migration is functionally complete for the active strict path
 
 ## Success Criteria
 

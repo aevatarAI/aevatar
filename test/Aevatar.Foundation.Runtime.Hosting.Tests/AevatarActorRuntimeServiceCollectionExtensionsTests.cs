@@ -5,14 +5,14 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -184,13 +184,13 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaPartitionAwareBackend_ShouldRegisterStrictBackendTransport()
+    public async Task AddAevatarActorRuntime_WhenOrleansWithKafkaStrictProviderBackend_ShouldRegisterStrictBackendTransport()
     {
         var services = new ServiceCollection();
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansQueueCount"] = "6",
@@ -204,21 +204,20 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         services.AddAevatarActorRuntime(configuration);
 
         services.Should().Contain(x => x.ServiceType == typeof(IQueueAdapterFactory) &&
-                                       x.ImplementationType == typeof(KafkaPartitionAwareQueueAdapterFactory));
+                                       x.ImplementationType == typeof(KafkaStrictProviderQueueAdapterFactory));
 
         await using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<AevatarActorRuntimeOptions>();
         var orleansOptions = provider.GetRequiredService<AevatarOrleansRuntimeOptions>();
-        var transportOptions = provider.GetRequiredService<KafkaPartitionAwareTransportOptions>();
-        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware);
+        var transportOptions = provider.GetRequiredService<KafkaStrictProviderTransportOptions>();
+        options.OrleansStreamBackend.Should().Be(AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider);
         options.OrleansQueueCount.Should().Be(6);
         options.OrleansQueueCacheSize.Should().Be(512);
         orleansOptions.QueueCount.Should().Be(6);
         orleansOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
-        provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaPartitionAwareQueueAdapterFactory>();
-        provider.GetRequiredService<IPartitionAssignmentManager>().Should().BeOfType<KafkaPartitionAssignmentManager>();
-        provider.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>().GetType().Name.Should().Be("KafkaPartitionAwareEnvelopeTransport");
+        provider.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
+        provider.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>().GetType().Name.Should().Be("KafkaStrictProviderEnvelopeTransport");
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -19,7 +19,7 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "Orleans",
-            ["ActorRuntime:OrleansStreamBackend"] = "KafkaPartitionAware",
+            ["ActorRuntime:OrleansStreamBackend"] = "KafkaStrictProvider",
             ["ActorRuntime:OrleansPersistenceBackend"] = "Garnet",
             ["ActorRuntime:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
             ["ActorRuntime:MassTransitKafkaBootstrapServers"] = "localhost:19092",
@@ -35,15 +35,14 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
 
         using var app = builder.Build();
         var runtimeOptions = app.Services.GetRequiredService<AevatarOrleansRuntimeOptions>();
-        var transportOptions = app.Services.GetRequiredService<KafkaPartitionAwareTransportOptions>();
+        var transportOptions = app.Services.GetRequiredService<KafkaStrictProviderTransportOptions>();
 
         runtimeOptions.QueueCount.Should().Be(6);
         runtimeOptions.QueueCacheSize.Should().Be(512);
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-strict-events");
-        app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaPartitionAwareQueueAdapterFactory>();
-        app.Services.GetRequiredService<IPartitionAssignmentManager>().Should().BeOfType<KafkaPartitionAssignmentManager>();
-        app.Services.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>().GetType().Name.Should().Be("KafkaPartitionAwareEnvelopeTransport");
+        app.Services.GetRequiredService<IQueueAdapterFactory>().Should().BeOfType<KafkaStrictProviderQueueAdapterFactory>();
+        app.Services.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>().GetType().Name.Should().Be("KafkaStrictProviderEnvelopeTransport");
     }
 
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)

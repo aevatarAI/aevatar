@@ -9,7 +9,7 @@ public sealed class AevatarActorRuntimeOptions
     public const string MassTransitTransportBackendKafka = "Kafka";
     public const string OrleansStreamBackendInMemory = "InMemory";
     public const string OrleansStreamBackendMassTransitAdapter = "MassTransitAdapter";
-    public const string OrleansStreamBackendKafkaPartitionAware = "KafkaPartitionAware";
+    public const string OrleansStreamBackendKafkaStrictProvider = "KafkaStrictProvider";
     public const string OrleansPersistenceBackendInMemory = "InMemory";
     public const string OrleansPersistenceBackendGarnet = "Garnet";
     public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";

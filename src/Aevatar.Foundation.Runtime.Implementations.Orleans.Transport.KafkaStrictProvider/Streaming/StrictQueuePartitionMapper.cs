@@ -5,7 +5,7 @@ using Orleans.Configuration;
 using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
 public sealed class StrictQueuePartitionMapper : IStreamQueueMapper, IStrictOrleansStreamQueueMapper, IConsistentRingStreamQueueMapper
 {

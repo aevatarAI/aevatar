@@ -3,7 +3,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
 using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 using Microsoft.Extensions.Configuration;
@@ -153,9 +153,9 @@ public static class ServiceCollectionExtensions
             return services;
         }
 
-        if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaPartitionAware, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider, StringComparison.OrdinalIgnoreCase))
         {
-            services.AddAevatarFoundationRuntimeOrleansKafkaPartitionAwareTransport(transportOptions =>
+            services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(transportOptions =>
             {
                 transportOptions.BootstrapServers = options.MassTransitKafkaBootstrapServers;
                 transportOptions.TopicName = options.MassTransitKafkaTopicName;

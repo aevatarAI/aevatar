@@ -4,26 +4,26 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-internal sealed class KafkaPartitionAwareQueueAdapter : IQueueAdapter
+internal sealed class KafkaStrictProviderQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly Lazy<IKafkaPartitionAwareEnvelopeTransport> _transport;
-    private readonly Func<LocalPartitionRecordRouter> _resolveLocalRouter;
+    private readonly Lazy<IKafkaStrictProviderEnvelopeTransport> _transport;
+    private readonly KafkaStrictProviderTransportOptions _transportOptions;
     private readonly StrictQueuePartitionMapper _mapper;
     private readonly string _actorEventNamespace;
 
-    public KafkaPartitionAwareQueueAdapter(
+    public KafkaStrictProviderQueueAdapter(
         string providerName,
-        Func<IKafkaPartitionAwareEnvelopeTransport> resolveTransport,
-        Func<LocalPartitionRecordRouter> resolveLocalRouter,
+        Func<IKafkaStrictProviderEnvelopeTransport> resolveTransport,
+        KafkaStrictProviderTransportOptions transportOptions,
         StrictQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _providerName = providerName;
-        _transport = new Lazy<IKafkaPartitionAwareEnvelopeTransport>(resolveTransport);
-        _resolveLocalRouter = resolveLocalRouter;
+        _transport = new Lazy<IKafkaStrictProviderEnvelopeTransport>(resolveTransport);
+        _transportOptions = transportOptions;
         _mapper = mapper;
         _actorEventNamespace = actorEventNamespace;
     }
@@ -71,9 +71,10 @@ internal sealed class KafkaPartitionAwareQueueAdapter : IQueueAdapter
     }
 
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
-        new KafkaPartitionAwareQueueAdapterReceiver(
+        new KafkaStrictProviderQueueAdapterReceiver(
             queueId,
-            _resolveLocalRouter,
+            () => _transport.Value,
+            _transportOptions,
             _mapper,
             _actorEventNamespace);
 }

@@ -6,18 +6,18 @@ using Orleans.Configuration;
 using Orleans.Providers.Streams.Common;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-public sealed class KafkaPartitionAwareQueueAdapterFactory : IQueueAdapterFactory
+public sealed class KafkaStrictProviderQueueAdapterFactory : IQueueAdapterFactory
 {
     private readonly string _providerName;
     private readonly IQueueAdapterCache _cache;
     private readonly StrictQueuePartitionMapper _mapper;
-    private readonly KafkaPartitionAwareQueueAdapter _adapter;
+    private readonly KafkaStrictProviderQueueAdapter _adapter;
     private static readonly IStreamFailureHandler NoOpFailureHandler = new NoOpStreamDeliveryFailureHandler();
 
     [ActivatorUtilitiesConstructor]
-    public KafkaPartitionAwareQueueAdapterFactory(
+    public KafkaStrictProviderQueueAdapterFactory(
         AevatarOrleansRuntimeOptions runtimeOptions,
         IServiceProvider serviceProvider)
     {
@@ -38,10 +38,10 @@ public sealed class KafkaPartitionAwareQueueAdapterFactory : IQueueAdapterFactor
             ? OrleansRuntimeConstants.ActorEventStreamNamespace
             : runtimeOptions.ActorEventNamespace;
 
-        _adapter = new KafkaPartitionAwareQueueAdapter(
+        _adapter = new KafkaStrictProviderQueueAdapter(
             _providerName,
-            () => serviceProvider.GetRequiredService<IKafkaPartitionAwareEnvelopeTransport>(),
-            () => serviceProvider.GetRequiredService<LocalPartitionRecordRouter>(),
+            () => serviceProvider.GetRequiredService<IKafkaStrictProviderEnvelopeTransport>(),
+            serviceProvider.GetRequiredService<KafkaStrictProviderTransportOptions>(),
             _mapper,
             actorEventNamespace);
     }

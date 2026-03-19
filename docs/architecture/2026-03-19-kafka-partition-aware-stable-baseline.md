@@ -1,19 +1,19 @@
-# KafkaPartitionAware Stable Baseline
+# Historical KafkaStrictProvider Stable Baseline
 
 ## Purpose
 
-This document records the current `KafkaPartitionAware` implementation as a stable baseline before the next structural refactor.
+This document records the pre-refactor `KafkaStrictProvider` implementation as a stable baseline before the provider-native cleanup.
 
 It exists for two reasons:
 
 - the current implementation has reached a usable and test-verified strict correctness milestone
 - the next step is expected to be a structural simplification, so the current stable behavior must be recorded explicitly
 
-This document is a milestone snapshot, not the long-term target architecture.
+This document is a historical milestone snapshot, not the current architecture and not the long-term target architecture.
 
 ## What This Version Achieves
 
-The current `KafkaPartitionAware` backend provides a strict Kafka shared-group path with these properties:
+The recorded `KafkaStrictProvider` backend provided a strict Kafka shared-group path with these properties:
 
 - producer-side `StreamNamespace + StreamId -> PartitionId` deterministic routing
 - `QueueCount == TopicPartitionCount == actual topic partitions` fail-fast validation
@@ -32,7 +32,7 @@ This version is intentionally stricter than the old `MassTransitAdapter` path.
 flowchart TB
     A1["Producer<br/>StreamNamespace + StreamId + Payload"]
     A2["StrictQueuePartitionMapper<br/>Stream -> PartitionId"]
-    A3["KafkaPartitionAwareEnvelopeTransport<br/>Publish explicit partition"]
+    A3["KafkaStrictProviderEnvelopeTransport<br/>Publish explicit partition"]
     A4["Kafka Topic Partition"]
 
     B1["Kafka assignment / revoke"]
@@ -43,7 +43,7 @@ flowchart TB
 
     C1["KafkaPartitionOwnedReceiver"]
     C2["LocalPartitionRecordRouter"]
-    C3["KafkaPartitionAwareQueueAdapterReceiver"]
+    C3["KafkaStrictProviderQueueAdapterReceiver"]
     C4["Orleans Persistent Streams"]
 
     A1 --> A2 --> A3 --> A4
@@ -88,7 +88,7 @@ This is the main correctness milestone of the current version.
 
 ## Why This Version Is Stable
 
-This version is worth recording because several correctness gaps were closed:
+This version was worth recording because several correctness gaps were closed:
 
 - false commit before Orleans delivery boundary was removed
 - revoke/shutdown races no longer silently turn canceled handoff into success
@@ -100,7 +100,7 @@ So even though the structure is still heavy, the behavior is no longer "best eff
 
 ## Why This Is Not The Final Shape
 
-The current implementation is stable, but it is not the preferred long-term structure.
+The recorded implementation was stable, but it was not the preferred long-term structure.
 
 Main reason:
 
@@ -128,9 +128,9 @@ It is still useful for:
 - non-strict routing scenarios
 - paths that do not require strict Kafka partition ownership semantics
 
-### `KafkaPartitionAware`
+### `KafkaStrictProvider`
 
-The current stable `KafkaPartitionAware` path should be understood as:
+The recorded stable `KafkaStrictProvider` path should be understood as:
 
 - a specialized strict Kafka backend
 - not a thin extension of `MassTransit`
@@ -161,7 +161,7 @@ That future step is described separately in:
 
 ## Recommended Use Of This Document
 
-Use this document as the baseline when:
+Use this document as the historical baseline when:
 
 - reviewing the current stable implementation
 - writing the PR description for the current milestone

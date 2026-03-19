@@ -1,15 +1,15 @@
-# Kafka Partition-Aware Transport Architecture
+# Orleans Kafka Strict Provider Backend Architecture
 
 ## Status
 
-This document describes the strict Kafka shared-group path that is now implemented in the repository.
+This document describes the current Orleans-native strict Kafka backend in the repository after the provider-native cleanup.
 
 It is used when:
 
 - `Provider = Orleans`
-- `OrleansStreamBackend = KafkaPartitionAware`
+- `OrleansStreamBackend = KafkaStrictProvider`
 
-Its purpose is to make Kafka partition ownership and Orleans queue ownership converge to one runtime fact, so multi-pod shared-group consumption remains correct during rebalance and rolling update.
+Its purpose is to make Kafka partition binding and Orleans queue ownership converge to one runtime slot, so multi-pod shared-group consumption remains correct during rebalance and rolling update.
 
 ## Core Design
 
@@ -24,9 +24,9 @@ It does not add `TargetQueueId` or any second routing fact to the envelope.
 Instead, producer and consumer both rely on the same strict mapping contract:
 
 1. producer resolves `PartitionId` from `StreamNamespace + StreamId`
-2. Kafka assigns that `PartitionId` to a pod
-3. the assigned pod maps that same `PartitionId` back to the matching Orleans `QueueId`
-4. only that queue receiver is activated locally
+2. Orleans queue ownership activates exactly one local `QueueId`
+3. that `QueueId` maps back to the same `PartitionId`
+4. only that queue receiver binds and consumes that partition locally
 
 So the two sides meet on one shared slot, instead of each side making an independent routing decision.
 
@@ -37,24 +37,24 @@ So the two sides meet on one shared slot, instead of each side making an indepen
 flowchart TB
     A1["Producer<br/>StreamNamespace + StreamId + Payload"]
     A2["StrictQueuePartitionMapper<br/>Resolve PartitionId"]
-    A3["KafkaPartitionAwareEnvelopeTransport<br/>Publish to explicit partition"]
+    A3["KafkaStrictProviderEnvelopeTransport<br/>Publish to explicit partition"]
     A4["Kafka Topic Partition"]
 
-    B1["Kafka assignment / revoke"]
-    B2["KafkaPartitionLifecycleBridgeHostedService"]
-    B3["KafkaPartitionAssignmentManager<br/>Local ownership mirror"]
-    B4["KafkaAssignedPartitionQueueBalancer"]
-    B5["StrictQueuePartitionMapper<br/>PartitionId -> QueueId"]
-
-    C1["KafkaPartitionOwnedReceiver<br/>Consume owned partition only"]
-    C2["LocalPartitionRecordRouter"]
-    C3["KafkaPartitionAwareQueueAdapterReceiver<br/>Bound Orleans queue receiver"]
-    C4["Orleans stream runtime"]
+    B1["Orleans Queue Balancer"]
+    B2["StrictQueuePartitionMapper<br/>PartitionId <-> QueueId"]
+    B3["KafkaStrictProviderQueueAdapterReceiver(queueId)"]
+    B4["Kafka Consumer<br/>Assign(partitionId)"]
+    B5["Inflight batches / commit watermark"]
+    B6["MessagesDeliveredAsync(...)"]
+    B7["Commit offset"]
+    B8["Orleans stream runtime"]
 
     A1 --> A2 --> A3 --> A4
-    A4 --> B1 --> B2 --> B3
-    B3 --> B4 --> B5 --> C3 --> C4
-    A4 --> C1 --> C2 --> C3
+    B1 --> B3
+    B2 --> B3
+    B3 --> B4 --> A4
+    B4 --> B5 --> B6 --> B7
+    B3 --> B8
 ```
 
 ## One Mapping Contract For Both Sides
@@ -66,7 +66,7 @@ The key design point is that producer-side identity and consumer-side ownership 
 The strict path uses `PartitionId` as the canonical ownership slot.
 
 - producer side: `StreamNamespace + StreamId -> PartitionId`
-- consumer side: `PartitionId -> QueueId`
+- consumer side: `QueueId <-> PartitionId`
 
 `QueueId` is not an independently computed ownership fact anymore.
 It is the Orleans-side projection of the same strict partition slot.
@@ -84,8 +84,8 @@ Reverse(QueueId) = index of QueueId in queues[]
 This means:
 
 - the producer does not guess a pod
-- Kafka owns cluster-level partition assignment
-- Orleans queue ownership is derived from the assigned partition, not from a second unrelated routing decision
+- Orleans queue ownership decides which receiver becomes active
+- that active receiver binds the matching Kafka partition directly
 
 ### Why the IDs now align
 
@@ -100,9 +100,9 @@ There are three IDs in the path:
 The alignment rule is:
 
 1. `StreamNamespace + StreamId` deterministically selects one `PartitionId`
-2. Kafka assignment decides which pod currently owns that `PartitionId`
-3. that pod deterministically resolves the same slot to exactly one `QueueId`
-4. only the receiver for that `QueueId` is activated locally
+2. Orleans queue balancing decides which pod currently owns the corresponding `QueueId`
+3. that pod deterministically resolves the same slot to exactly one `PartitionId`
+4. only the receiver for that `QueueId` binds and consumes that partition locally
 
 So producer and consumer are no longer solving two different routing problems.
 They are both talking about the same slot from opposite sides.
@@ -113,30 +113,29 @@ They are both talking about the same slot from opposite sides.
 
 1. application publishes an envelope with `StreamNamespace + StreamId + Payload`
 2. `StrictQueuePartitionMapper` computes the target `PartitionId`
-3. `KafkaPartitionAwareEnvelopeTransport` publishes directly to that partition
+3. `KafkaStrictProviderEnvelopeTransport` publishes directly to that partition
 
 ### Consumer path
 
-1. Kafka rebalancing assigns partitions to pods
-2. `KafkaPartitionLifecycleBridgeHostedService` converts Kafka lifecycle into runtime lifecycle notifications
-3. `KafkaPartitionAssignmentManager` maintains the local owned partition set
-4. `KafkaAssignedPartitionQueueBalancer` exposes the matching Orleans queues
-5. `KafkaPartitionOwnedReceiver` consumes only records from the partitions currently owned by this pod
-6. `LocalPartitionRecordRouter` hands the record to the local queue receiver bound to that partition
-7. `KafkaPartitionAwareQueueAdapterReceiver` turns the record into Orleans stream batches
+1. Orleans queue balancing activates `QueueAdapterReceiver(queueId)`
+2. `StrictQueuePartitionMapper` resolves `queueId -> partitionId`
+3. `KafkaStrictProviderQueueAdapterReceiver` directly binds that partition with Kafka `Assign(partitionId)`
+4. receiver polls records from that partition
+5. receiver converts records into Orleans `IBatchContainer`
+6. Orleans stream runtime pulls the batches
+7. receiver advances the contiguous commit watermark only after `MessagesDeliveredAsync(...)`
 
 ### Revoke / rolling update path
 
-1. Kafka revokes partition ownership from the old pod
-2. local owned receivers stop accepting new records for that partition
-3. in-flight local handoff is canceled or drained honestly
-4. uncommitted records remain replayable
-5. Kafka assigns the partition to the new pod
-6. the new pod activates the matching Orleans queue receiver for the same slot
+1. Orleans queue ownership moves from old pod to new pod
+2. old receiver stops polling and does not commit beyond the last contiguous acknowledged watermark
+3. unacknowledged offsets remain replayable
+4. new pod activates the same strict queue
+5. new receiver binds the same partition and resumes from Kafka committed offsets
 
 ## Commit Boundary
 
-The strict path commits Kafka offsets only after local handoff is acknowledged by the bound Orleans queue receiver.
+The strict backend commits Kafka offsets only after Orleans delivery acknowledgement reaches the bound queue receiver.
 
 This means:
 
@@ -155,7 +154,7 @@ The strict path depends on these invariants:
 - `QueueCount == TopicPartitionCount`
 - actual Kafka topic partition count must equal the configured strict partition count
 - producer and consumer must use the same `StrictQueuePartitionMapper`
-- `KafkaPartitionAware` multi-silo mode requires shared persistent runtime state instead of `InMemory` pubsub
+- `KafkaStrictProvider` multi-silo mode requires shared persistent runtime state instead of `InMemory` pubsub
 
 If those invariants are broken, startup must fail instead of silently degrading.
 
@@ -165,11 +164,11 @@ The strict path does not silently swallow lifecycle failures.
 
 Current policy:
 
-- lifecycle failures are logged visibly
-- retry is bounded and local to the failing lifecycle action
-- the whole transport is not taken down just because one lifecycle callback fails
+- receiver and startup failures are logged visibly
+- retry is bounded and local to the failing action
+- the whole backend is not taken down just because one local action fails
 
-This keeps the projection chain observable without turning a local control-plane issue into a full service outage.
+This keeps the projection chain observable without turning a local backend issue into a full service outage.
 
 ## Main Components
 
@@ -180,48 +179,25 @@ This keeps the projection chain observable without turning a local control-plane
 - resolves `QueueId -> PartitionId`
 - is the single mapping contract shared by producer path and Orleans runtime
 
-### `KafkaPartitionAwareEnvelopeTransport`
+### `KafkaStrictProviderEnvelopeTransport`
 
 - publishes envelopes to explicit partitions
-- consumes records from Kafka
-- manages lifecycle callbacks for assignment and revoke
-- commits offsets only after strict local handoff acknowledgement
+- validates strict topic topology
+- owns producer lifecycle only
 
-### `KafkaPartitionLifecycleBridgeHostedService`
-
-- bridges Kafka partition lifecycle into runtime lifecycle notifications
-
-### `KafkaPartitionAssignmentManager`
-
-- maintains the local owned partition set
-- acts as the local ownership mirror for the current pod
-
-### `KafkaAssignedPartitionQueueBalancer`
-
-- exposes the Orleans queue set corresponding to currently owned partitions
-
-### `KafkaPartitionOwnedReceiver`
-
-- consumes records only for partitions owned by the current pod
-- handles revoke and shutdown honestly for in-flight records
-
-### `LocalPartitionRecordRouter`
-
-- routes a partition-owned record to the matching local queue receiver
-- does not invent ownership, only delivers within the local strict slot
-
-### `KafkaPartitionAwareQueueAdapterReceiver`
+### `KafkaStrictProviderQueueAdapterReceiver`
 
 - is the Orleans queue receiver bound to one strict queue
-- converts local handoff records into Orleans stream batches
-- completes strict local handoff acknowledgement at the receiver boundary
+- directly owns Kafka partition consumption for that queue
+- tracks inflight offsets and commit watermark
+- completes strict acknowledgement at the Orleans delivery boundary
 
 ## What This Design Guarantees
 
 - no second routing fact is added to the message contract
 - producer-side routing and consumer-side queue ownership come from the same strict mapper
-- multi-pod shared-group consumption is driven by Kafka partition ownership
-- rolling update correctness depends on assignment transfer, not on local best-effort drop/retry
+- multi-pod shared-group consumption is driven by strict `QueueId <-> PartitionId` ownership
+- rolling update correctness depends on receiver handoff and Kafka committed offsets, not on local best-effort drop/retry
 - local handoff and offset commit boundaries are explicit and honest
 
 ## Non-Goals

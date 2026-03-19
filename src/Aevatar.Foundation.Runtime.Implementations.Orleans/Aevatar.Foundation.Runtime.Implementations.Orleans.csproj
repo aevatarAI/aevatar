@@ -12,7 +12,7 @@
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet\Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming\Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
-    <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider\Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Client" />

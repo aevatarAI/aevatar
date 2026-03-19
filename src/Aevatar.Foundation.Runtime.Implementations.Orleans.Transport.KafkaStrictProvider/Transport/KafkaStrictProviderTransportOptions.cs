@@ -1,6 +1,6 @@
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 
-public sealed class KafkaPartitionAwareTransportOptions
+public sealed class KafkaStrictProviderTransportOptions
 {
     public string BootstrapServers { get; set; } = "localhost:9092";
 

@@ -6,6 +6,7 @@
 - `Aevatar.Foundation.Runtime.Implementations.Orleans`：Orleans 基础设施实现（Grain + Runtime 适配）。
 - `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming`：Orleans Stream 适配与拓扑注册能力。
 - `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit`：Orleans MassTransit QueueAdapter（仅 Orleans 流后端适配）。
+- `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider`：Orleans Kafka strict backend（provider-native QueueAdapter/Receiver 形态）。
 - `Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit`：MassTransit `IStream` 实现。
 - `Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka`：MassTransit 的 Kafka 传输实现。
 - `Aevatar.Foundation.Runtime.Hosting`：通过 provider 进行装配选择。
@@ -74,3 +75,31 @@ siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
 ```
 
 这样 Orleans 核心不直接耦合 Kafka 适配实现，消息交换与转发由 Stream/Kafka 层完成。
+
+## KafkaStrictProvider 启用方式
+
+当需要 Orleans Stream 走严格的 Kafka queue/partition 一一映射语义时，启用 `KafkaStrictProvider`：
+
+```csharp
+services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(options =>
+{
+    options.BootstrapServers = "localhost:9092";
+    options.TopicName = "aevatar-orleans-strict";
+    options.ConsumerGroup = "aevatar-orleans-strict";
+    options.TopicPartitionCount = 8;
+});
+
+siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
+{
+    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider;
+    options.QueueCount = 8;
+    options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
+});
+```
+
+这条路径现在应理解为：
+
+- Orleans Persistent Streams 风格的 Kafka strict backend
+- 不依赖 `MassTransit`
+- `QueueId <-> PartitionId` 一一映射
+- `MessagesDeliveredAsync(...)` 之后才推进 Kafka offset commit

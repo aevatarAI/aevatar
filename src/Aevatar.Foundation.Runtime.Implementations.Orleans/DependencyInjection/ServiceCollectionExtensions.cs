@@ -6,7 +6,7 @@ using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyIn
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaPartitionAware;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -86,23 +86,13 @@ public static class ServiceCollectionExtensions
         ConfigureReminderService(builder, options);
         EnsurePersistentStreamPubSubStorage(builder, options);
 
-        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter))
+        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter) ||
+            IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider))
         {
             builder.AddPersistentStreams(
                 options.StreamProviderName,
                 (sp, _) => ResolveQueueAdapterFactory(sp),
                 _ => { });
-        }
-        else if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaPartitionAware))
-        {
-            builder.AddPersistentStreams(
-                options.StreamProviderName,
-                (sp, _) => ResolveQueueAdapterFactory(sp),
-                configurator =>
-                {
-                    configurator.ConfigurePartitionBalancing(
-                        (sp, _) => sp.GetRequiredService<KafkaAssignedPartitionQueueBalancer>());
-                });
         }
         else if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory))
         {
@@ -130,8 +120,8 @@ public static class ServiceCollectionExtensions
     {
         var isInMemoryStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory);
         var isMassTransitAdapterStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter);
-        var isKafkaPartitionAwareStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaPartitionAware);
-        if (!isInMemoryStream && !isMassTransitAdapterStream && !isKafkaPartitionAwareStream)
+        var isKafkaStrictProviderStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider);
+        if (!isInMemoryStream && !isMassTransitAdapterStream && !isKafkaStrictProviderStream)
             throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
 
         var isInMemoryPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendInMemory);
@@ -139,8 +129,8 @@ public static class ServiceCollectionExtensions
         if (!isInMemoryPersistence && !isGarnetPersistence)
             throw new InvalidOperationException($"Unsupported Orleans persistence backend '{options.PersistenceBackend}'.");
 
-        if (isKafkaPartitionAwareStream && !isGarnetPersistence)
-            throw new InvalidOperationException("Kafka partition-aware Orleans stream backend requires Garnet persistence for distributed stream pub/sub correctness.");
+        if (isKafkaStrictProviderStream && !isGarnetPersistence)
+            throw new InvalidOperationException("Kafka strict provider Orleans stream backend requires Garnet persistence for distributed stream pub/sub correctness.");
 
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
