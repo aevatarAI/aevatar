@@ -1,6 +1,6 @@
 # Aevatar Stream Forward 架构说明（2026-02-22）
 
-> Historical note: this document predates the 2026-03-19 removal of `MassTransitAdapter`. Any `MassTransit` mode mentioned below is legacy background only; current active paths are `InMemory` and Orleans with `KafkaStrictProvider`.
+> Historical note: this document predates the 2026-03-19 removal of `MassTransitAdapter`. Any `MassTransit` mode mentioned below is legacy background only; current active paths are `InMemory` and Orleans with `KafkaStrictProvider`. Some source-file anchors below reference implementation files that have since been deleted with the old runtime path.
 
 ## 1. 目标与范围
 

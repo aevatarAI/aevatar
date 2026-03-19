@@ -6,6 +6,8 @@ This assessment records the pre-provider-native cleanup judgment.
 
 It should be read as a historical positioning note for the earlier strict implementation, not as the description of the current backend shape.
 
+The repository has since converged on `KafkaStrictProvider` as the only Kafka-Orleans runtime path. Recommendations below that mention keeping `MassTransitAdapter` are preserved as historical context rather than as current guidance.
+
 ## Conclusion
 
 The recorded `KafkaStrictProvider` implementation was technically valid, but it was no longer a natural extension of the `MassTransitAdapter` path.
@@ -151,7 +153,7 @@ because those phrases imply a continuity that the current implementation no long
 
 Keep the implementation, but narrow its role.
 
-Recommended decision:
+Recommended decision at that time:
 
 1. keep `KafkaStrictProvider` as a dedicated strict backend
 2. keep `MassTransitAdapter` as the main general-purpose backend

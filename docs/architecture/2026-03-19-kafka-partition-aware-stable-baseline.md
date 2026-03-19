@@ -11,6 +11,8 @@ It exists for two reasons:
 
 This document is a historical milestone snapshot, not the current architecture and not the long-term target architecture.
 
+The repository has since removed `MassTransitAdapter` entirely. Any comparison to that path in this document should be read as milestone-era context, not as a description of a still-supported runtime option.
+
 ## What This Version Achieves
 
 The recorded `KafkaStrictProvider` backend provided a strict Kafka shared-group path with these properties:
@@ -120,13 +122,9 @@ So the next phase is expected to keep the same strict behavior while simplifying
 
 ### `MassTransitAdapter`
 
-`MassTransitAdapter` remains the simpler and more general transport-backed Orleans stream path.
+At the time of this baseline, `MassTransitAdapter` was still present in the repository as the simpler transport-backed Orleans stream path.
 
-It is still useful for:
-
-- general transport integration
-- non-strict routing scenarios
-- paths that do not require strict Kafka partition ownership semantics
+That comparison is retained only to explain why this baseline existed as a separate milestone.
 
 ### `KafkaStrictProvider`
 
