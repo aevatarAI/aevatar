@@ -230,6 +230,104 @@ public sealed class AppScriptsStudioApiTests
         detail.RootElement.GetProperty("script").GetProperty("activeRevision").GetString().Should().Be("rev-2");
     }
 
+    [Fact]
+    public async Task AppRuntimeListEndpoint_ShouldExposeRecentSnapshots()
+    {
+        var scriptId = $"runtime-list-{Guid.NewGuid():N}";
+
+        using var draftRun = await _fixture.PostJsonAsync("/api/app/scripts/draft-run", new
+        {
+            scriptId,
+            scriptRevision = "draft-1",
+            source = AppTestData.ValidScriptSource,
+            input = "runtime list",
+        });
+
+        var runtimeActorId = draftRun.RootElement.GetProperty("runtimeActorId").GetString();
+        runtimeActorId.Should().NotBeNullOrWhiteSpace();
+
+        _ = await _fixture.WaitForJsonAsync(
+            $"/api/app/scripts/runtimes/{Uri.EscapeDataString(runtimeActorId!)}/readmodel",
+            static document => document.RootElement.GetProperty("stateVersion").GetInt64() > 0,
+            TimeSpan.FromSeconds(30));
+
+        using var runtimes = await _fixture.GetJsonAsync("/api/app/scripts/runtimes?take=10");
+        var runtime = runtimes.RootElement.EnumerateArray().FirstOrDefault(item =>
+            string.Equals(item.GetProperty("actorId").GetString(), runtimeActorId, StringComparison.Ordinal));
+
+        runtime.ValueKind.Should().NotBe(JsonValueKind.Undefined);
+        runtime.GetProperty("scriptId").GetString().Should().Be(scriptId);
+        runtime.GetProperty("stateVersion").GetInt64().Should().BeGreaterThan(0);
+        runtime.GetProperty("readModelPayloadJson").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task AppCatalogAndEvolutionDecisionEndpoints_ShouldExposeScopeHistory()
+    {
+        var scopeId = $"nyx-user-{Guid.NewGuid():N}";
+        var scriptId = $"history-script-{Guid.NewGuid():N}";
+
+        _ = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts",
+            new
+            {
+                scriptId,
+                revisionId = "rev-1",
+                sourceText = AppTestData.ValidScriptSource,
+            },
+            scopeId);
+
+        using var proposal = await SendScopedJsonAsync(
+            HttpMethod.Post,
+            "/api/app/scripts/evolutions/proposals",
+            new
+            {
+                scriptId,
+                baseRevision = "rev-1",
+                candidateRevision = "rev-2",
+                candidateSource = AppTestData.ValidScriptSource,
+                reason = "catalog history",
+            },
+            scopeId);
+
+        var proposalId = proposal.RootElement.GetProperty("proposalId").GetString();
+        proposalId.Should().NotBeNullOrWhiteSpace();
+
+        using var catalog = await WaitForScopedJsonAsync(
+            HttpMethod.Get,
+            $"/api/app/scripts/{Uri.EscapeDataString(scriptId)}/catalog",
+            null,
+            scopeId,
+            static document =>
+                string.Equals(
+                    document.RootElement.GetProperty("activeRevision").GetString(),
+                    "rev-2",
+                    StringComparison.Ordinal),
+            TimeSpan.FromSeconds(15));
+
+        catalog.RootElement.GetProperty("scriptId").GetString().Should().Be(scriptId);
+        catalog.RootElement.GetProperty("activeRevision").GetString().Should().Be("rev-2");
+        catalog.RootElement.GetProperty("previousRevision").GetString().Should().Be("rev-1");
+        catalog.RootElement.GetProperty("revisionHistory").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Contain(new[] { "rev-1", "rev-2" });
+        catalog.RootElement.GetProperty("lastProposalId").GetString().Should().Be(proposalId);
+
+        using var decision = await _fixture.WaitForJsonAsync(
+            $"/api/app/scripts/evolutions/{Uri.EscapeDataString(proposalId!)}",
+            static document =>
+                string.Equals(
+                    document.RootElement.GetProperty("candidateRevision").GetString(),
+                    "rev-2",
+                    StringComparison.Ordinal),
+            TimeSpan.FromSeconds(15));
+
+        decision.RootElement.GetProperty("proposalId").GetString().Should().Be(proposalId);
+        decision.RootElement.GetProperty("scriptId").GetString().Should().Be(scriptId);
+        decision.RootElement.GetProperty("accepted").GetBoolean().Should().BeTrue();
+    }
+
     private async Task<JsonDocument> SendScopedJsonAsync(
         HttpMethod method,
         string path,

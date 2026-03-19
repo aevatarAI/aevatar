@@ -1,8 +1,6 @@
-using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
 using System.Text;
-using Google.Protobuf;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
@@ -45,18 +43,34 @@ internal static class AppStudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetScopedScriptAsync(http, scriptId, services, ct));
+        app.MapGet("/api/app/scripts/{scriptId}/catalog", (
+            HttpContext http,
+            string scriptId,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGetScopedScriptCatalogAsync(http, scriptId, services, ct));
         app.MapPost("/api/app/scripts", (
             HttpContext http,
             AppScopeScriptSaveRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
             HandleSaveScopedScriptAsync(http, request, services, ct));
+        app.MapGet("/api/app/scripts/runtimes", (
+            int take,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleListAppScriptRuntimesAsync(take, services, ct));
         app.MapPost("/api/app/scripts/evolutions/proposals", (
             HttpContext http,
             Aevatar.Tools.Cli.Hosting.AppScopeScriptEvolutionRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
             HandleProposeScopedScriptEvolutionAsync(http, request, services, ct));
+        app.MapGet("/api/app/scripts/evolutions/{proposalId}", (
+            string proposalId,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGetAppScriptEvolutionDecisionAsync(proposalId, services, ct));
         app.MapGet("/api/app/scripts/runtimes/{actorId}/readmodel", (
             string actorId,
             IServiceProvider services,
@@ -360,6 +374,51 @@ internal static class AppStudioEndpoints
         }
     }
 
+    private static async Task<IResult> HandleGetScopedScriptCatalogAsync(
+        HttpContext http,
+        string scriptId,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script catalog browsing requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            var catalog = await service.GetCatalogAsync(scopeContext.ScopeId, scriptId, ct);
+            return catalog == null ? Results.NotFound() : Results.Ok(catalog);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
     private static async Task<IResult> HandleProposeScopedScriptEvolutionAsync(
         HttpContext http,
         Aevatar.Tools.Cli.Hosting.AppScopeScriptEvolutionRequest request,
@@ -448,6 +507,31 @@ internal static class AppStudioEndpoints
         }
     }
 
+    private static async Task<IResult> HandleListAppScriptRuntimesAsync(
+        int take,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_READMODEL_UNAVAILABLE",
+                message = "Script read model queries are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            return Results.Ok(await service.ListRuntimeSnapshotsAsync(take, ct));
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+    }
+
     private static IResult HandleValidateScript(
         AppScriptValidateRequest request,
         IServiceProvider services)
@@ -476,8 +560,8 @@ internal static class AppStudioEndpoints
         IServiceProvider services,
         CancellationToken ct)
     {
-        var queryService = services.GetService<IScriptReadModelQueryApplicationService>();
-        if (queryService == null)
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
         {
             return Results.BadRequest(new
             {
@@ -486,57 +570,46 @@ internal static class AppStudioEndpoints
             });
         }
 
-        var snapshot = await queryService.GetSnapshotAsync(actorId, ct);
+        ScriptReadModelSnapshotHttpResponse? snapshot;
+        try
+        {
+            snapshot = await service.GetRuntimeSnapshotAsync(actorId, ct);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+
         if (snapshot == null)
             return Results.NotFound();
 
-        return Results.Ok(new ScriptReadModelSnapshotHttpResponse(
-            snapshot.ActorId,
-            snapshot.ScriptId,
-            snapshot.DefinitionActorId,
-            snapshot.Revision,
-            snapshot.ReadModelTypeUrl,
-            FormatAppReadModelJson(snapshot.ReadModelPayload),
-            snapshot.StateVersion,
-            snapshot.LastEventId,
-            snapshot.UpdatedAt));
+        return Results.Ok(snapshot);
     }
 
-    private static string FormatAppReadModelJson(Any? payload)
+    private static async Task<IResult> HandleGetAppScriptEvolutionDecisionAsync(
+        string proposalId,
+        IServiceProvider services,
+        CancellationToken ct)
     {
-        if (payload == null)
-            return "{}";
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
 
-        if (payload.Is(AppScriptReadModel.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<AppScriptReadModel>());
-        if (payload.Is(Struct.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Struct>());
-        if (payload.Is(Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Value>());
-        if (payload.Is(ListValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<ListValue>());
-        if (payload.Is(StringValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<StringValue>());
-        if (payload.Is(BoolValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BoolValue>());
-        if (payload.Is(Int32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int32Value>());
-        if (payload.Is(Int64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Int64Value>());
-        if (payload.Is(UInt32Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt32Value>());
-        if (payload.Is(UInt64Value.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<UInt64Value>());
-        if (payload.Is(FloatValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<FloatValue>());
-        if (payload.Is(DoubleValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<DoubleValue>());
-        if (payload.Is(BytesValue.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<BytesValue>());
-        if (payload.Is(Empty.Descriptor))
-            return JsonFormatter.Default.Format(payload.Unpack<Empty>());
-
-        return "{}";
+        try
+        {
+            var decision = await service.GetEvolutionDecisionAsync(proposalId, ct);
+            return decision == null ? Results.NotFound() : Results.Ok(decision);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
     }
 
     private static async Task HandleGenerateWorkflowAsync(

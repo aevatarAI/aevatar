@@ -25,6 +25,10 @@ public static class ScopeScriptEndpoints
             .Produces<ScopeScriptDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapGet("/{scopeId}/scripts/{scriptId}/catalog", HandleGetScriptCatalogAsync)
+            .Produces<ScopeScriptCatalogHttpResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
         group.MapPost("/{scopeId}/scripts/{scriptId}/evolutions/proposals", HandleProposeScriptEvolutionAsync)
             .Produces<ScriptPromotionDecision>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
@@ -152,6 +156,50 @@ public static class ScopeScriptEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleGetScriptCatalogAsync(
+        string scopeId,
+        string scriptId,
+        [FromServices] IScriptCatalogQueryPort catalogQueryPort,
+        [FromServices] IScriptingActorAddressResolver scriptingActorAddressResolver,
+        CancellationToken ct)
+    {
+        try
+        {
+            var normalizedScopeId = string.IsNullOrWhiteSpace(scopeId)
+                ? throw new InvalidOperationException($"{nameof(scopeId)} is required.")
+                : scopeId.Trim();
+            var normalizedScriptId = string.IsNullOrWhiteSpace(scriptId)
+                ? throw new InvalidOperationException($"{nameof(scriptId)} is required.")
+                : scriptId.Trim();
+            var catalogActorId = scriptingActorAddressResolver.GetCatalogActorId(normalizedScopeId);
+            var snapshot = await catalogQueryPort.GetCatalogEntryAsync(catalogActorId, normalizedScriptId, ct);
+            if (snapshot == null)
+                return Results.NotFound();
+
+            return Results.Ok(new ScopeScriptCatalogHttpResponse(
+                snapshot.ScriptId,
+                snapshot.ActiveRevision,
+                snapshot.ActiveDefinitionActorId,
+                snapshot.ActiveSourceHash,
+                snapshot.PreviousRevision,
+                snapshot.RevisionHistory.ToArray(),
+                snapshot.LastProposalId,
+                snapshot.CatalogActorId,
+                snapshot.ScopeId,
+                snapshot.UpdatedAtUnixTimeMs <= 0
+                    ? DateTimeOffset.UnixEpoch
+                    : DateTimeOffset.FromUnixTimeMilliseconds(snapshot.UpdatedAtUnixTimeMs)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
     private static async Task<ScopeScriptDetail> BuildScriptDetailAsync(
         string scopeId,
         ScopeScriptSummary script,
@@ -189,4 +237,16 @@ public static class ScopeScriptEndpoints
         string? CandidateSourceHash,
         string? Reason,
         string? ProposalId);
+
+    public sealed record ScopeScriptCatalogHttpResponse(
+        string ScriptId,
+        string ActiveRevision,
+        string ActiveDefinitionActorId,
+        string ActiveSourceHash,
+        string PreviousRevision,
+        IReadOnlyList<string> RevisionHistory,
+        string LastProposalId,
+        string CatalogActorId,
+        string ScopeId,
+        DateTimeOffset UpdatedAt);
 }

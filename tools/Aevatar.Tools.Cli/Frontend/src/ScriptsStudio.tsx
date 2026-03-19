@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Search,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
@@ -23,6 +22,7 @@ import { InspectorPanel } from './scripts-studio/components/InspectorPanel';
 import { ResourceRail } from './scripts-studio/components/ResourceRail';
 import { EmptyState, ScriptsStudioModal, StudioResultCard } from './scripts-studio/components/StudioChrome';
 import type {
+  ScriptCatalogSnapshot,
   DraftRunResult,
   ScriptDraft,
   ScriptPromotionDecision,
@@ -363,7 +363,12 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [selectedDraftKey, setSelectedDraftKey] = useState('');
   const [search, setSearch] = useState('');
   const [scopeScripts, setScopeScripts] = useState<ScopedScriptDetail[]>([]);
+  const [scopeCatalogsByScriptId, setScopeCatalogsByScriptId] = useState<Record<string, ScriptCatalogSnapshot>>({});
+  const [runtimeSnapshots, setRuntimeSnapshots] = useState<ScriptReadModelSnapshot[]>([]);
+  const [proposalDecisionsById, setProposalDecisionsById] = useState<Record<string, ScriptPromotionDecision>>({});
   const [scopeScriptsPending, setScopeScriptsPending] = useState(false);
+  const [runtimeSnapshotsPending, setRuntimeSnapshotsPending] = useState(false);
+  const [proposalDecisionsPending, setProposalDecisionsPending] = useState(false);
   const [runPending, setRunPending] = useState(false);
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [savePending, setSavePending] = useState(false);
@@ -385,6 +390,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [problemsOpen, setProblemsOpen] = useState(false);
   const [resultsCollapsed, setResultsCollapsed] = useState(true);
   const [resultView, setResultView] = useState<StudioResultView>('runtime');
+  const [selectedRuntimeActorId, setSelectedRuntimeActorId] = useState('');
+  const [selectedProposalId, setSelectedProposalId] = useState('');
 
   const scopeBacked = appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
 
@@ -449,7 +456,58 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     () => drafts.find(draft => draft.key === askAiTargetDraftKey) || null,
     [drafts, askAiTargetDraftKey],
   );
-  const snapshotView = parseSnapshotView(selectedDraft?.lastSnapshot || null);
+  const activeCatalog = useMemo(() => {
+    const scopeScriptId = selectedDraft?.scopeDetail?.script?.scriptId || '';
+    if (scopeScriptId && scopeCatalogsByScriptId[scopeScriptId]) {
+      return scopeCatalogsByScriptId[scopeScriptId];
+    }
+
+    const draftScriptId = selectedDraft?.scriptId || '';
+    return draftScriptId ? scopeCatalogsByScriptId[draftScriptId] || null : null;
+  }, [scopeCatalogsByScriptId, selectedDraft?.scopeDetail?.script?.scriptId, selectedDraft?.scriptId]);
+  const proposalDecisions = useMemo(
+    () => Object.values(proposalDecisionsById).sort((left, right) => {
+      const leftActive = activeCatalog?.lastProposalId === left.proposalId ? 1 : 0;
+      const rightActive = activeCatalog?.lastProposalId === right.proposalId ? 1 : 0;
+      if (leftActive !== rightActive) {
+        return rightActive - leftActive;
+      }
+
+      return right.candidateRevision.localeCompare(left.candidateRevision);
+    }),
+    [activeCatalog?.lastProposalId, proposalDecisionsById],
+  );
+  const activeRuntimeSnapshot = useMemo(() => {
+    if (selectedRuntimeActorId) {
+      return runtimeSnapshots.find(snapshot => snapshot.actorId === selectedRuntimeActorId) ||
+        (selectedDraft?.lastSnapshot?.actorId === selectedRuntimeActorId ? selectedDraft.lastSnapshot : null);
+    }
+
+    if (selectedDraft?.lastSnapshot) {
+      return selectedDraft.lastSnapshot;
+    }
+
+    if (selectedDraft?.runtimeActorId) {
+      return runtimeSnapshots.find(snapshot => snapshot.actorId === selectedDraft.runtimeActorId) || null;
+    }
+
+    return null;
+  }, [runtimeSnapshots, selectedDraft?.lastSnapshot, selectedDraft?.runtimeActorId, selectedRuntimeActorId]);
+  const activeProposal = useMemo(() => {
+    if (selectedProposalId) {
+      return proposalDecisionsById[selectedProposalId] ||
+        (selectedDraft?.lastPromotion?.proposalId === selectedProposalId ? selectedDraft.lastPromotion : null);
+    }
+
+    if (selectedDraft?.lastPromotion) {
+      return selectedDraft.lastPromotion;
+    }
+
+    return activeCatalog?.lastProposalId
+      ? proposalDecisionsById[activeCatalog.lastProposalId] || null
+      : null;
+  }, [activeCatalog?.lastProposalId, proposalDecisionsById, selectedDraft?.lastPromotion, selectedProposalId]);
+  const snapshotView = parseSnapshotView(activeRuntimeSnapshot);
   const validationSummary = summarizeValidation(validationResult, validationPending);
   const validationMarkers = useMemo(
     () => buildEditorMarkers(validationResult),
@@ -541,11 +599,22 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   useEffect(() => {
     if (!scopeBacked) {
       setScopeScripts([]);
+      setScopeCatalogsByScriptId({});
+      setProposalDecisionsById({});
       return;
     }
 
     void loadScopeScripts(true);
   }, [scopeBacked, appContext.scopeId]);
+
+  useEffect(() => {
+    if (!appContext.scriptsEnabled) {
+      setRuntimeSnapshots([]);
+      return;
+    }
+
+    void loadRuntimeSnapshots(true);
+  }, [appContext.scriptsEnabled]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -565,6 +634,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     if (!selectedDraft) {
       return;
     }
+
+    setSelectedRuntimeActorId(selectedDraft.lastSnapshot?.actorId || selectedDraft.runtimeActorId || '');
+    setSelectedProposalId(selectedDraft.lastPromotion?.proposalId || '');
 
     if (resultView === 'runtime' && (selectedDraft.lastRun || selectedDraft.lastSnapshot)) {
       return;
@@ -694,6 +766,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         })
         : [];
       setScopeScripts(sorted);
+      await primeScopeHistory(sorted);
       if (!silent) {
         onFlash('Scope scripts refreshed', 'success');
       }
@@ -704,6 +777,110 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     } finally {
       setScopeScriptsPending(false);
     }
+  }
+
+  async function primeScopeHistory(details: ScopedScriptDetail[]) {
+    const scriptIds = Array.from(new Set(
+      details
+        .map(detail => detail.script?.scriptId || '')
+        .filter(Boolean),
+    ));
+
+    if (scriptIds.length === 0) {
+      setScopeCatalogsByScriptId({});
+      setProposalDecisionsById({});
+      return;
+    }
+
+    setProposalDecisionsPending(true);
+    try {
+      const catalogResults = await Promise.all(scriptIds.map(async scriptId => {
+        try {
+          const catalog = await api.app.getScriptCatalog(scriptId) as ScriptCatalogSnapshot;
+          return [scriptId, catalog] as const;
+        } catch {
+          return null;
+        }
+      }));
+
+      const nextCatalogs: Record<string, ScriptCatalogSnapshot> = {};
+      const proposalIds = new Set<string>();
+      for (const item of catalogResults) {
+        if (!item?.[1]) {
+          continue;
+        }
+
+        nextCatalogs[item[0]] = item[1];
+        if (item[1].lastProposalId) {
+          proposalIds.add(item[1].lastProposalId);
+        }
+      }
+
+      setScopeCatalogsByScriptId(nextCatalogs);
+
+      if (proposalIds.size === 0) {
+        setProposalDecisionsById({});
+        return;
+      }
+
+      const decisions = await Promise.all(Array.from(proposalIds).map(async proposalId => {
+        try {
+          const decision = await api.app.getEvolutionDecision(proposalId) as ScriptPromotionDecision;
+          return [proposalId, decision] as const;
+        } catch {
+          return null;
+        }
+      }));
+
+      const nextDecisions: Record<string, ScriptPromotionDecision> = {};
+      for (const item of decisions) {
+        if (!item?.[1]) {
+          continue;
+        }
+
+        nextDecisions[item[0]] = item[1];
+      }
+
+      setProposalDecisionsById(nextDecisions);
+    } finally {
+      setProposalDecisionsPending(false);
+    }
+  }
+
+  async function loadRuntimeSnapshots(silent = false) {
+    setRuntimeSnapshotsPending(true);
+    try {
+      const response = await api.app.listScriptRuntimes(24) as ScriptReadModelSnapshot[];
+      const sorted = Array.isArray(response)
+        ? [...response].sort((left, right) => {
+          const rightStamp = Date.parse(right.updatedAt || '');
+          const leftStamp = Date.parse(left.updatedAt || '');
+          return (Number.isNaN(rightStamp) ? 0 : rightStamp) - (Number.isNaN(leftStamp) ? 0 : leftStamp);
+        })
+        : [];
+      setRuntimeSnapshots(sorted);
+      if (!silent) {
+        onFlash('Runtime snapshots refreshed', 'success');
+      }
+    } catch (error: any) {
+      if (!silent) {
+        onFlash(error?.message || 'Failed to load runtime snapshots', 'error');
+      }
+    } finally {
+      setRuntimeSnapshotsPending(false);
+    }
+  }
+
+  function upsertRuntimeSnapshot(snapshot: ScriptReadModelSnapshot) {
+    setRuntimeSnapshots(prev => {
+      const next = prev.filter(item => item.actorId !== snapshot.actorId);
+      next.unshift(snapshot);
+      return next.sort((left, right) => {
+        const rightStamp = Date.parse(right.updatedAt || '');
+        const leftStamp = Date.parse(left.updatedAt || '');
+        return (Number.isNaN(rightStamp) ? 0 : rightStamp) - (Number.isNaN(leftStamp) ? 0 : leftStamp);
+      });
+    });
   }
 
   function openScopeScript(detail: ScopedScriptDetail) {
@@ -721,14 +898,15 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     setResultView('save');
+    setSelectedProposalId(scopeCatalogsByScriptId[scriptId]?.lastProposalId || '');
     setLibraryOpen(false);
     setResultsCollapsed(true);
     onFlash('Saved script loaded into the editor', 'success');
   }
 
-  async function refreshSnapshot(targetDraft: ScriptDraft, silent = false) {
-    const actorId = targetDraft.runtimeActorId.trim();
-    if (!actorId) {
+  async function refreshSnapshot(actorId: string, silent = false) {
+    const normalizedActorId = actorId.trim();
+    if (!normalizedActorId) {
       if (!silent) {
         onFlash('Run the draft first', 'info');
       }
@@ -737,13 +915,20 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     setSnapshotPending(true);
     try {
-      const snapshot = await api.scripts.getReadModel(actorId) as ScriptReadModelSnapshot;
-      updateDraft(targetDraft.key, draft => ({
-        ...draft,
-        lastSnapshot: snapshot,
-        runtimeActorId: snapshot.actorId || draft.runtimeActorId,
-        definitionActorId: snapshot.definitionActorId || draft.definitionActorId,
-      }));
+      const snapshot = await api.app.getRuntimeReadModel(normalizedActorId) as ScriptReadModelSnapshot;
+      setDrafts(prev => prev.map(draft => (
+        draft.runtimeActorId === snapshot.actorId
+          ? {
+              ...draft,
+              lastSnapshot: snapshot,
+              runtimeActorId: snapshot.actorId || draft.runtimeActorId,
+              definitionActorId: snapshot.definitionActorId || draft.definitionActorId,
+              updatedAtUtc: new Date().toISOString(),
+            }
+          : draft
+      )));
+      upsertRuntimeSnapshot(snapshot);
+      setSelectedRuntimeActorId(snapshot.actorId || normalizedActorId);
       setResultView('runtime');
       setResultsCollapsed(false);
 
@@ -763,22 +948,14 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
   }
 
-  async function waitForSnapshot(targetDraft: ScriptDraft) {
-    const actorId = targetDraft.runtimeActorId.trim();
-    if (!actorId) {
+  async function waitForSnapshot(actorId: string) {
+    const normalizedActorId = actorId.trim();
+    if (!normalizedActorId) {
       return null;
     }
 
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const snapshot = await refreshSnapshot(
-        attempt === 0
-          ? targetDraft
-          : {
-              ...targetDraft,
-              runtimeActorId: actorId,
-            },
-        true,
-      );
+      const snapshot = await refreshSnapshot(normalizedActorId, true);
       if (snapshot) {
         return snapshot;
       }
@@ -787,6 +964,75 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     return null;
+  }
+
+  async function handleSelectRuntime(actorId: string) {
+    setSelectedRuntimeActorId(actorId);
+    setResultView('runtime');
+    setResultsCollapsed(false);
+
+    const knownSnapshot = runtimeSnapshots.find(snapshot => snapshot.actorId === actorId);
+    if (!knownSnapshot) {
+      await refreshSnapshot(actorId, true);
+    }
+  }
+
+  function handleSelectProposal(proposalId: string) {
+    setSelectedProposalId(proposalId);
+    setResultView('promotion');
+    setResultsCollapsed(false);
+  }
+
+  async function refreshCurrentCatalog() {
+    const scriptId = selectedDraft?.scopeDetail?.script?.scriptId || selectedDraft?.scriptId || '';
+    if (!scopeBacked || !scriptId) {
+      return;
+    }
+
+    try {
+      const catalog = await api.app.getScriptCatalog(scriptId) as ScriptCatalogSnapshot;
+      setScopeCatalogsByScriptId(prev => ({
+        ...prev,
+        [scriptId]: catalog,
+      }));
+      if (catalog.lastProposalId) {
+        try {
+          const decision = await api.app.getEvolutionDecision(catalog.lastProposalId) as ScriptPromotionDecision;
+          setProposalDecisionsById(prev => ({
+            ...prev,
+            [catalog.lastProposalId]: decision,
+          }));
+        } catch {
+          // Ignore secondary proposal refresh failures.
+        }
+      }
+
+      onFlash('Catalog history refreshed', 'success');
+    } catch (error: any) {
+      onFlash(error?.message || 'Failed to load catalog history', 'error');
+    }
+  }
+
+  async function refreshCurrentProposalDecision() {
+    const proposalId = activeProposal?.proposalId || activeCatalog?.lastProposalId || selectedDraft?.lastPromotion?.proposalId || '';
+    if (!proposalId) {
+      return;
+    }
+
+    setProposalDecisionsPending(true);
+    try {
+      const decision = await api.app.getEvolutionDecision(proposalId) as ScriptPromotionDecision;
+      setProposalDecisionsById(prev => ({
+        ...prev,
+        [proposalId]: decision,
+      }));
+      setSelectedProposalId(proposalId);
+      onFlash('Proposal decision refreshed', 'success');
+    } catch (error: any) {
+      onFlash(error?.message || 'Failed to load proposal decision', 'error');
+    } finally {
+      setProposalDecisionsPending(false);
+    }
   }
 
   async function handleSaveScript() {
@@ -829,6 +1075,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       }));
       setResultView('save');
       setResultsCollapsed(false);
+      setSelectedProposalId('');
       await loadScopeScripts(true);
       onFlash('Script saved to the current scope', 'success');
     } catch (error: any) {
@@ -919,15 +1166,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         runtimeActorId: normalizedSource.migrated ? '' : selectedDraft.runtimeActorId,
       }) as DraftRunResult;
 
-      const nextDraft = {
-        ...selectedDraft,
-        input: inputText,
-        scriptId: response.scriptId || scriptId,
-        revision: response.scriptRevision || revision,
-        definitionActorId: response.definitionActorId || selectedDraft.definitionActorId,
-        runtimeActorId: response.runtimeActorId || selectedDraft.runtimeActorId,
-      };
-
       updateDraft(selectedDraft.key, draft => ({
         ...draft,
         input: inputText,
@@ -942,7 +1180,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       setRunModalOpen(false);
       setResultView('runtime');
       setResultsCollapsed(false);
-      const snapshot = await waitForSnapshot(nextDraft);
+      setSelectedRuntimeActorId(response.runtimeActorId || '');
+      const snapshot = await waitForSnapshot(response.runtimeActorId || '');
+      await loadRuntimeSnapshots(true);
       onFlash(snapshot ? 'Draft run completed' : 'Draft accepted. Runtime snapshot is catching up.', snapshot ? 'success' : 'info');
     } catch (error: any) {
       onFlash(error?.message || 'Draft run failed', 'error');
@@ -985,10 +1225,18 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         baseRevision: decision?.accepted ? candidateRevision : draft.baseRevision,
         lastPromotion: decision,
       }));
+      setProposalDecisionsById(prev => ({
+        ...prev,
+        [decision.proposalId]: decision,
+      }));
+      setSelectedProposalId(decision.proposalId || '');
 
       setPromotionModalOpen(false);
       setResultView('promotion');
       setResultsCollapsed(false);
+      if (scopeBacked) {
+        await loadScopeScripts(true);
+      }
       onFlash(
         decision?.accepted ? 'Promotion accepted' : (decision?.failureReason || 'Promotion rejected'),
         decision?.accepted ? 'success' : 'error',
@@ -1092,22 +1340,26 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     );
   }
 
-  const promotionDiagnostics = Array.isArray(selectedDraft.lastPromotion?.validationReport?.diagnostics)
-    ? selectedDraft.lastPromotion?.validationReport?.diagnostics || []
+  const promotionDiagnostics = Array.isArray(activeProposal?.validationReport?.diagnostics)
+    ? activeProposal?.validationReport?.diagnostics || []
     : [];
-  const runtimeSummary = selectedDraft.lastSnapshot
+  const runtimeSummary = activeRuntimeSnapshot
     ? `${snapshotView.status || 'updated'} · ${snapshotView.output || 'output pending'}`
     : selectedDraft.lastRun
       ? `Accepted · ${selectedDraft.lastRun.runId}`
       : 'Run the draft to materialize output.';
   const saveSummary = scopeBacked
-    ? selectedDraft.scopeDetail?.script
-      ? `${selectedDraft.scopeDetail.script.scriptId} · ${selectedDraft.scopeDetail.script.activeRevision}`
-      : 'Save this draft into the current scope.'
+    ? activeCatalog
+      ? `${activeCatalog.scriptId} · ${activeCatalog.activeRevision}`
+      : selectedDraft.scopeDetail?.script
+        ? `${selectedDraft.scopeDetail.script.scriptId} · ${selectedDraft.scopeDetail.script.activeRevision}`
+        : 'Save this draft into the current scope.'
     : 'Local draft only. Sign in to save it into a scope.';
-  const promotionSummary = selectedDraft.lastPromotion
-    ? `${selectedDraft.lastPromotion.status || 'unknown'}${selectedDraft.lastPromotion.failureReason ? ` · ${selectedDraft.lastPromotion.failureReason}` : ''}`
-    : 'Submit a promotion proposal when this draft is ready.';
+  const promotionSummary = activeProposal
+    ? `${activeProposal.status || 'unknown'}${activeProposal.failureReason ? ` · ${activeProposal.failureReason}` : ''}`
+    : activeCatalog?.lastProposalId
+      ? `Latest proposal · ${activeCatalog.lastProposalId}`
+      : 'Submit a promotion proposal when this draft is ready.';
   const scopeSelectionId = selectedDraft.scopeDetail?.script?.scriptId || '';
 
   return (
@@ -1208,17 +1460,27 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                 drafts={drafts}
                 filteredDrafts={filteredDrafts}
                 filteredScopeScripts={filteredScopeScripts}
+                runtimeSnapshots={runtimeSnapshots}
+                proposalDecisions={proposalDecisions}
+                scopeCatalogsByScriptId={scopeCatalogsByScriptId}
                 selectedDraft={selectedDraft}
                 scopeSelectionId={scopeSelectionId}
+                selectedRuntimeActorId={selectedRuntimeActorId}
+                selectedProposalId={selectedProposalId}
                 search={search}
                 scopeBacked={scopeBacked}
                 scopeId={appContext.scopeId}
                 scopeScriptsPending={scopeScriptsPending}
+                runtimeSnapshotsPending={runtimeSnapshotsPending}
+                proposalDecisionsPending={proposalDecisionsPending}
                 onSearchChange={setSearch}
                 onCreateDraft={handleCreateDraft}
                 onSelectDraft={setSelectedDraftKey}
                 onOpenScopeScript={openScopeScript}
                 onRefreshScopeScripts={() => { void loadScopeScripts(); }}
+                onSelectRuntime={actorId => { void handleSelectRuntime(actorId); }}
+                onRefreshRuntimeSnapshots={() => { void loadRuntimeSnapshots(); }}
+                onSelectProposal={handleSelectProposal}
               />
             </div>
 
@@ -1484,10 +1746,10 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
             <div className="text-[14px] font-semibold text-gray-800">Draft activity</div>
           </div>
           <div className="execution-logs-header-actions">
-            {resultView === 'runtime' && selectedDraft.runtimeActorId ? (
+            {resultView === 'runtime' && (activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId) ? (
               <button
                 type="button"
-                onClick={() => { void refreshSnapshot(selectedDraft); }}
+                onClick={() => { void refreshSnapshot(activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId); }}
                 className="panel-icon-button execution-logs-copy-action"
                 title="Refresh runtime result"
                 aria-label="Refresh runtime result"
@@ -1514,25 +1776,25 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               <StudioResultCard
                 active={resultView === 'runtime'}
                 title="Draft Run"
-                meta={selectedDraft.lastSnapshot ? formatDateTime(selectedDraft.lastSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
+                meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
                 summary={runtimeSummary}
                 status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
                 onClick={() => setResultView('runtime')}
               />
               <StudioResultCard
                 active={resultView === 'save'}
-                title="Scope Save"
-                meta={selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
+                title="Catalog"
+                meta={activeCatalog ? formatDateTime(activeCatalog.updatedAt) : selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
                 summary={saveSummary}
-                status={scopeBacked ? (hasScopeChanges ? 'dirty' : selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
+                status={scopeBacked ? (hasScopeChanges ? 'dirty' : activeCatalog || selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
                 onClick={() => setResultView('save')}
               />
               <StudioResultCard
                 active={resultView === 'promotion'}
                 title="Promotion"
-                meta={selectedDraft.lastPromotion?.candidateRevision || 'No candidate'}
+                meta={activeProposal?.candidateRevision || activeCatalog?.lastProposalId || 'No candidate'}
                 summary={promotionSummary}
-                status={selectedDraft.lastPromotion?.status || ''}
+                status={activeProposal?.status || ''}
                 onClick={() => setResultView('promotion')}
               />
             </div>
@@ -1541,12 +1803,12 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               <div className="execution-log-list">
                 <div className="execution-action-panel">
                   {resultView === 'runtime' ? (
-                    selectedDraft.lastRun || selectedDraft.lastSnapshot ? (
+                    selectedDraft.lastRun || activeRuntimeSnapshot ? (
                       <div className="space-y-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-[14px] font-semibold text-gray-800">Runtime output</div>
-                            <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastRun?.runId || selectedDraft.lastSnapshot?.actorId || '-'}</div>
+                            <div className="mt-1 text-[12px] text-gray-400">{activeRuntimeSnapshot?.actorId || selectedDraft.lastRun?.runId || '-'}</div>
                           </div>
                           <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
                             {snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : 'pending')}
@@ -1574,10 +1836,11 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                           <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
                             <div className="section-heading">Metadata</div>
                             <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
-                              <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
-                              <div>stateVersion: {selectedDraft.lastSnapshot?.stateVersion ?? '-'}</div>
-                              <div>updatedAt: {formatDateTime(selectedDraft.lastSnapshot?.updatedAt)}</div>
+                              <div>scriptId: {activeRuntimeSnapshot?.scriptId || selectedDraft.scriptId || '-'}</div>
+                              <div>runtimeActorId: {activeRuntimeSnapshot?.actorId || selectedDraft.runtimeActorId || '-'}</div>
+                              <div>definitionActorId: {activeRuntimeSnapshot?.definitionActorId || selectedDraft.definitionActorId || '-'}</div>
+                              <div>stateVersion: {activeRuntimeSnapshot?.stateVersion ?? '-'}</div>
+                              <div>updatedAt: {formatDateTime(activeRuntimeSnapshot?.updatedAt)}</div>
                             </div>
                           </div>
                         </div>
@@ -1587,7 +1850,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                             Raw Read Model
                           </summary>
                           <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                            {prettyPrintJson(selectedDraft.lastSnapshot?.readModelPayloadJson)}
+                            {prettyPrintJson(activeRuntimeSnapshot?.readModelPayloadJson)}
                           </pre>
                         </details>
                       </div>
@@ -1599,19 +1862,30 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                     )
                   ) : resultView === 'save' ? (
                     scopeBacked ? (
-                      selectedDraft.scopeDetail?.script ? (
+                      activeCatalog || selectedDraft.scopeDetail?.script ? (
                         <div className="space-y-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-[14px] font-semibold text-gray-800">Scope save</div>
-                              <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.scopeDetail.scopeId}</div>
+                              <div className="text-[14px] font-semibold text-gray-800">Catalog state</div>
+                              <div className="mt-1 text-[12px] text-gray-400">{activeCatalog?.scopeId || selectedDraft.scopeDetail?.scopeId || '-'}</div>
                             </div>
-                            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                              hasScopeChanges
-                                ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
-                                : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                            }`}>
-                              {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => { void refreshCurrentCatalog(); }}
+                                className="panel-icon-button execution-logs-copy-action"
+                                title="Refresh catalog history"
+                                aria-label="Refresh catalog history"
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                              <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+                                hasScopeChanges
+                                  ? 'border-[#E9D6AE] bg-[#FFF7E6] text-[#9B6A1C]'
+                                  : 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+                              }`}>
+                                {hasScopeChanges ? 'Unsaved changes' : 'Saved'}
+                              </div>
                             </div>
                           </div>
 
@@ -1619,27 +1893,47 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                             <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
                               <div className="section-heading">Script</div>
                               <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>scriptId: {selectedDraft.scopeDetail.script.scriptId}</div>
-                                <div>revision: {selectedDraft.scopeDetail.script.activeRevision}</div>
-                                <div>updatedAt: {formatDateTime(selectedDraft.scopeDetail.script.updatedAt)}</div>
+                                <div>scriptId: {activeCatalog?.scriptId || selectedDraft.scopeDetail?.script?.scriptId || '-'}</div>
+                                <div>revision: {activeCatalog?.activeRevision || selectedDraft.scopeDetail?.script?.activeRevision || '-'}</div>
+                                <div>updatedAt: {formatDateTime(activeCatalog?.updatedAt || selectedDraft.scopeDetail?.script?.updatedAt)}</div>
                               </div>
                             </div>
                             <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
                               <div className="section-heading">Actors</div>
                               <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                                <div>catalogActorId: {selectedDraft.scopeDetail.script.catalogActorId || '-'}</div>
-                                <div>definitionActorId: {selectedDraft.scopeDetail.script.definitionActorId || '-'}</div>
-                                <div>sourceHash: {selectedDraft.scopeDetail.script.activeSourceHash || '-'}</div>
+                                <div>catalogActorId: {activeCatalog?.catalogActorId || selectedDraft.scopeDetail?.script?.catalogActorId || '-'}</div>
+                                <div>definitionActorId: {activeCatalog?.activeDefinitionActorId || selectedDraft.scopeDetail?.script?.definitionActorId || '-'}</div>
+                                <div>sourceHash: {activeCatalog?.activeSourceHash || selectedDraft.scopeDetail?.script?.activeSourceHash || '-'}</div>
                               </div>
                             </div>
                           </div>
+
+                          {activeCatalog ? (
+                            <div className="grid gap-4 xl:grid-cols-2">
+                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                                <div className="section-heading">Revision History</div>
+                                <div className="mt-2 text-[12px] leading-6 text-gray-600">
+                                  {activeCatalog.revisionHistory.length > 0
+                                    ? activeCatalog.revisionHistory.join(' → ')
+                                    : activeCatalog.activeRevision || '-'}
+                                </div>
+                              </div>
+                              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                                <div className="section-heading">Latest Proposal</div>
+                                <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
+                                  <div>proposalId: {activeCatalog.lastProposalId || '-'}</div>
+                                  <div>previousRevision: {activeCatalog.previousRevision || '-'}</div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
 
                           <details className="rounded-[18px] border border-[#EEEAE4] bg-white px-4 py-3">
                             <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
                               Stored Source
                             </summary>
                             <pre className="mt-3 max-h-[320px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                              {selectedDraft.scopeDetail.source?.sourceText || '-'}
+                              {selectedDraft.scopeDetail?.source?.sourceText || '-'}
                             </pre>
                           </details>
                         </div>
@@ -1656,19 +1950,31 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                       />
                     )
                   ) : (
-                    selectedDraft.lastPromotion ? (
+                    activeProposal ? (
                       <div className="space-y-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-[14px] font-semibold text-gray-800">Promotion proposal</div>
-                            <div className="mt-1 text-[12px] text-gray-400">{selectedDraft.lastPromotion.proposalId || '-'}</div>
+                            <div className="mt-1 text-[12px] text-gray-400">{activeProposal.proposalId || '-'}</div>
                           </div>
-                          <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
-                            selectedDraft.lastPromotion.accepted
-                              ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
-                              : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
-                          }`}>
-                            {selectedDraft.lastPromotion.status || (selectedDraft.lastPromotion.accepted ? 'accepted' : 'rejected')}
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { void refreshCurrentProposalDecision(); }}
+                              className="panel-icon-button execution-logs-copy-action"
+                              title="Refresh proposal decision"
+                              aria-label="Refresh proposal decision"
+                              disabled={proposalDecisionsPending}
+                            >
+                              <RefreshCw size={14} className={proposalDecisionsPending ? 'animate-spin' : ''} />
+                            </button>
+                            <div className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.14em] ${
+                              activeProposal.accepted
+                                ? 'border-[#DCE8C8] bg-[#F5FBEE] text-[#5C7A2D]'
+                                : 'border-[#F2CCC4] bg-[#FFF4F1] text-[#B15647]'
+                            }`}>
+                              {activeProposal.status || (activeProposal.accepted ? 'accepted' : 'rejected')}
+                            </div>
                           </div>
                         </div>
 
@@ -1676,17 +1982,17 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                           <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
                             <div className="section-heading">Revision</div>
                             <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>base: {selectedDraft.lastPromotion.baseRevision || '-'}</div>
-                              <div>candidate: {selectedDraft.lastPromotion.candidateRevision || '-'}</div>
-                              <div>scriptId: {selectedDraft.lastPromotion.scriptId || '-'}</div>
+                              <div>base: {activeProposal.baseRevision || '-'}</div>
+                              <div>candidate: {activeProposal.candidateRevision || '-'}</div>
+                              <div>scriptId: {activeProposal.scriptId || '-'}</div>
                             </div>
                           </div>
                           <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
                             <div className="section-heading">Decision</div>
                             <div className="mt-2 space-y-1 break-all text-[12px] leading-6 text-gray-600">
-                              <div>catalogActorId: {selectedDraft.lastPromotion.catalogActorId || '-'}</div>
-                              <div>definitionActorId: {selectedDraft.lastPromotion.definitionActorId || '-'}</div>
-                              <div>failureReason: {selectedDraft.lastPromotion.failureReason || '-'}</div>
+                              <div>catalogActorId: {activeProposal.catalogActorId || activeCatalog?.catalogActorId || '-'}</div>
+                              <div>definitionActorId: {activeProposal.definitionActorId || '-'}</div>
+                              <div>failureReason: {activeProposal.failureReason || '-'}</div>
                             </div>
                           </div>
                         </div>
@@ -1709,7 +2015,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                     ) : (
                       <EmptyState
                         title="No promotion submitted"
-                        copy="When the draft is stable, use Promote to send an evolution proposal and inspect the decision here."
+                        copy={activeCatalog?.lastProposalId
+                          ? 'The scope catalog points at a proposal id, but no terminal decision is visible yet.'
+                          : 'When the draft is stable, use Promote to send an evolution proposal and inspect the decision here.'}
                       />
                     )
                   )}
@@ -1735,121 +2043,45 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
           </>
         )}
       >
-        <div className="space-y-5">
-          <div className="search-field !min-h-[40px] !rounded-[18px] !border-[#E8E1D8] !bg-white">
-            <Search size={14} className="text-gray-400" />
-            <input
-              className="search-input"
-              placeholder="Search drafts or saved scripts"
-              value={search}
-              onChange={event => setSearch(event.target.value)}
-            />
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <section className="rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="panel-eyebrow">Drafts</div>
-                  <div className="mt-1 text-[14px] font-semibold text-gray-800">{drafts.length} local draft{drafts.length === 1 ? '' : 's'}</div>
-                </div>
-                <button type="button" onClick={handleCreateDraft} className="panel-icon-button" title="New draft">
-                  <Plus size={14} />
-                </button>
-              </div>
-
-              <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                {filteredDrafts.length === 0 ? (
-                  <EmptyState title="No drafts matched" copy="Try a different search, or create a new draft." />
-                ) : filteredDrafts.map(draft => {
-                  const dirty = isScopeDetailDirty(draft);
-                  return (
-                    <button
-                      key={draft.key}
-                      type="button"
-                      onClick={() => {
-                        setSelectedDraftKey(draft.key);
-                        setLibraryOpen(false);
-                      }}
-                      className={`execution-run-card ${draft.key === selectedDraft.key ? 'active' : ''}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-[13px] font-semibold text-gray-800">{draft.scriptId}</div>
-                          <div className="mt-1 truncate text-[11px] text-gray-400">{draft.revision}</div>
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          {draft.scopeDetail?.script ? (
-                            <span className="rounded-full border border-[#DCE8C8] bg-[#F5FBEE] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#5C7A2D]">
-                              scope
-                            </span>
-                          ) : null}
-                          {dirty ? (
-                            <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-[#9B6A1C]">
-                              dirty
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(draft.updatedAtUtc)}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section className="rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4] p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="panel-eyebrow">Saved in Scope</div>
-                  <div className="mt-1 text-[14px] font-semibold text-gray-800">{scopeBacked ? (appContext.scopeId || '-') : 'Unavailable'}</div>
-                </div>
-                {scopeBacked ? (
-                  <button
-                    type="button"
-                    onClick={() => { void loadScopeScripts(); }}
-                    className="panel-icon-button"
-                    title="Refresh saved scripts"
-                    disabled={scopeScriptsPending}
-                  >
-                    <RefreshCw size={14} className={scopeScriptsPending ? 'animate-spin' : ''} />
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                {!scopeBacked ? (
-                  <EmptyState
-                    title="Scope save unavailable"
-                    copy="This session is not bound to a resolved scope, so only local drafts are available."
-                  />
-                ) : filteredScopeScripts.length === 0 ? (
-                  <EmptyState
-                    title={scopeScriptsPending ? 'Loading scope scripts' : 'No saved scripts matched'}
-                    copy={scopeScriptsPending ? 'Pulling the scope catalog now.' : 'Try a different search or save the active draft.'}
-                  />
-                ) : filteredScopeScripts.map(detail => {
-                  const script = detail.script;
-                  if (!script) {
-                    return null;
-                  }
-
-                  return (
-                    <button
-                      key={`${detail.scopeId}:${script.scriptId}`}
-                      type="button"
-                      onClick={() => openScopeScript(detail)}
-                      className={`execution-run-card ${scopeSelectionId === script.scriptId ? 'active' : ''}`}
-                    >
-                      <div className="truncate text-[13px] font-semibold text-gray-800">{script.scriptId}</div>
-                      <div className="mt-1 truncate text-[11px] text-gray-400">{script.activeRevision}</div>
-                      <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(script.updatedAt)}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          </div>
+        <div className="min-h-[560px]">
+          <ResourceRail
+            drafts={drafts}
+            filteredDrafts={filteredDrafts}
+            filteredScopeScripts={filteredScopeScripts}
+            runtimeSnapshots={runtimeSnapshots}
+            proposalDecisions={proposalDecisions}
+            scopeCatalogsByScriptId={scopeCatalogsByScriptId}
+            selectedDraft={selectedDraft}
+            scopeSelectionId={scopeSelectionId}
+            selectedRuntimeActorId={selectedRuntimeActorId}
+            selectedProposalId={selectedProposalId}
+            search={search}
+            scopeBacked={scopeBacked}
+            scopeId={appContext.scopeId}
+            scopeScriptsPending={scopeScriptsPending}
+            runtimeSnapshotsPending={runtimeSnapshotsPending}
+            proposalDecisionsPending={proposalDecisionsPending}
+            onSearchChange={setSearch}
+            onCreateDraft={handleCreateDraft}
+            onSelectDraft={draftKey => {
+              setSelectedDraftKey(draftKey);
+              setLibraryOpen(false);
+            }}
+            onOpenScopeScript={detail => {
+              openScopeScript(detail);
+              setLibraryOpen(false);
+            }}
+            onRefreshScopeScripts={() => { void loadScopeScripts(); }}
+            onSelectRuntime={actorId => {
+              void handleSelectRuntime(actorId);
+              setLibraryOpen(false);
+            }}
+            onRefreshRuntimeSnapshots={() => { void loadRuntimeSnapshots(); }}
+            onSelectProposal={proposalId => {
+              handleSelectProposal(proposalId);
+              setLibraryOpen(false);
+            }}
+          />
         </div>
       </ScriptsStudioModal>
 
@@ -1861,89 +2093,12 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         width="min(880px, 100%)"
         actions={<button type="button" onClick={() => setDetailsOpen(false)} className="ghost-action">Close</button>}
       >
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-          <div className="space-y-4">
-            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-              <div className="panel-eyebrow">Identity</div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="md:col-span-2">
-                  <label className="field-label">Script ID</label>
-                  <input
-                    className="panel-input mt-1"
-                    placeholder="script id"
-                    value={selectedDraft.scriptId}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, scriptId: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">Draft Revision</label>
-                  <input
-                    className="panel-input mt-1"
-                    placeholder="revision"
-                    value={selectedDraft.revision}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, revision: event.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">Base Revision</label>
-                  <input
-                    className="panel-input mt-1"
-                    placeholder="base revision"
-                    value={selectedDraft.baseRevision}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({ ...draft, baseRevision: event.target.value }))}
-                  />
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-              <div className="panel-eyebrow">Actors</div>
-              <div className="mt-3 space-y-2 break-all text-[12px] leading-6 text-gray-600">
-                <div>definitionActorId: {selectedDraft.definitionActorId || '-'}</div>
-                <div>runtimeActorId: {selectedDraft.runtimeActorId || '-'}</div>
-                <div>lastSourceHash: {selectedDraft.lastSourceHash || '-'}</div>
-                <div>updatedAt: {formatDateTime(selectedDraft.updatedAtUtc)}</div>
-              </div>
-            </section>
-          </div>
-
-          <div className="space-y-4">
-            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-              <div className="panel-eyebrow">Contract</div>
-              <div className="mt-3 space-y-3 text-[12px] leading-6 text-gray-600">
-                <div>
-                  <div className="section-heading">Storage</div>
-                  <div className="mt-1 break-all text-[13px] text-gray-700">
-                    {scopeBacked ? `Scope-backed · ${appContext.scopeId}` : 'Local-only draft'}
-                  </div>
-                </div>
-                <div>
-                  <div className="section-heading">Input Type</div>
-                  <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.inputType}</div>
-                </div>
-                <div>
-                  <div className="section-heading">Read Model Fields</div>
-                  <div className="mt-1 break-all text-[13px] text-gray-700">{appContext.scriptContract.readModelFields.join(', ')}</div>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-              <div className="panel-eyebrow">Scope Snapshot</div>
-              {selectedDraft.scopeDetail?.script ? (
-                <div className="mt-3 space-y-2 break-all text-[12px] leading-6 text-gray-600">
-                  <div>scriptId: {selectedDraft.scopeDetail.script.scriptId}</div>
-                  <div>revision: {selectedDraft.scopeDetail.script.activeRevision}</div>
-                  <div>catalogActorId: {selectedDraft.scopeDetail.script.catalogActorId || '-'}</div>
-                  <div>updatedAt: {formatDateTime(selectedDraft.scopeDetail.script.updatedAt)}</div>
-                </div>
-              ) : (
-                <div className="mt-3 text-[12px] leading-6 text-gray-500">
-                  This draft has not been saved into the current scope yet.
-                </div>
-              )}
-            </section>
-          </div>
+        <div className="min-h-[520px]">
+          <InspectorPanel
+            selectedDraft={selectedDraft}
+            scopeBacked={scopeBacked}
+            appContext={appContext}
+          />
         </div>
       </ScriptsStudioModal>
 

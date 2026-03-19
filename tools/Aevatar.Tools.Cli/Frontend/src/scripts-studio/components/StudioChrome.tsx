@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { ChevronDown, X } from 'lucide-react';
 
 export function EmptyState(props: { title: string; copy: string; }) {
   return (
@@ -39,6 +39,48 @@ export function StudioResultCard(props: {
       </div>
       <div className="mt-3 text-[12px] leading-6 text-gray-600">{props.summary}</div>
     </button>
+  );
+}
+
+export function CollapsibleSection(props: {
+  eyebrow?: string;
+  title: string;
+  children: ReactNode;
+  actions?: ReactNode;
+  defaultOpen?: boolean;
+  bodyClassName?: string;
+}) {
+  const [open, setOpen] = useState(props.defaultOpen ?? true);
+
+  return (
+    <section className="rounded-[24px] border border-[#E6E3DE] bg-[#FAF8F4]">
+      <div className="flex items-start justify-between gap-3 px-4 py-4">
+        <div className="min-w-0">
+          {props.eyebrow ? (
+            <div className="panel-eyebrow">{props.eyebrow}</div>
+          ) : null}
+          <div className={`text-[14px] font-semibold text-gray-800 ${props.eyebrow ? 'mt-1' : ''}`}>{props.title}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          {props.actions}
+          <button
+            type="button"
+            onClick={() => setOpen(value => !value)}
+            className="panel-icon-button shrink-0"
+            aria-expanded={open}
+            title={open ? 'Collapse section' : 'Expand section'}
+          >
+            <ChevronDown size={14} className={`transition-transform ${open ? '' : '-rotate-90'}`} />
+          </button>
+        </div>
+      </div>
+
+      {open ? (
+        <div className={props.bodyClassName || 'border-t border-[#EEEAE4] px-4 pb-4'}>
+          {props.children}
+        </div>
+      ) : null}
+    </section>
   );
 }
 

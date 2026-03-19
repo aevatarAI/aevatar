@@ -1,5 +1,6 @@
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Core.Ports;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -16,6 +17,9 @@ public static class ScriptCapabilityEndpoints
             .Produces<ScriptPromotionDecision>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status500InternalServerError);
+        group.MapGet("/evolutions/{proposalId}", HandleGetEvolutionDecision)
+            .Produces<ScriptPromotionDecision>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
 
         app.MapScriptQueryEndpoints();
         return app;
@@ -63,6 +67,18 @@ public static class ScriptCapabilityEndpoints
             code,
             message,
         });
+
+    internal static async Task<IResult> HandleGetEvolutionDecision(
+        string proposalId,
+        IScriptEvolutionDecisionReadPort decisionReadPort,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(proposalId))
+            return ValidationError("PROPOSAL_ID_REQUIRED", "ProposalId is required.");
+
+        var decision = await decisionReadPort.TryGetAsync(proposalId, ct);
+        return decision == null ? Results.NotFound() : Results.Ok(decision);
+    }
 }
 
 public sealed record ProposeScriptEvolutionHttpRequest(

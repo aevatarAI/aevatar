@@ -292,16 +292,45 @@ internal sealed class ChronoStorageCatalogBlobClient
             throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
         }
 
-        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
-        using var downloadResponse = await _httpClientFactory.CreateClient().SendAsync(downloadRequest, cancellationToken);
+        var downloadUri = ResolveDownloadUri(context, downloadUrl);
+        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUri);
+        using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
         if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
         {
-            return null;
+            throw new InvalidOperationException(
+                $"Chrono-storage download URL returned 404 for object '{objectKey}'. The catalog object exists but could not be downloaded.");
         }
 
         downloadResponse.EnsureSuccessStatusCode();
         return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
     }
+
+    private HttpClient GetDownloadClient(RemoteScopeContext context, Uri downloadUri) =>
+        IsSameAuthority(downloadUri, context.BaseUri)
+            ? GetCatalogApiClient(context)
+            : _httpClientFactory.CreateClient();
+
+    private static Uri ResolveDownloadUri(RemoteScopeContext context, string downloadUrl)
+    {
+        var trimmed = downloadUrl.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        if (Uri.TryCreate(context.BaseUri, trimmed, out var relativeUri))
+        {
+            return relativeUri;
+        }
+
+        throw new InvalidOperationException(
+            $"Chrono-storage presigned URL response returned an invalid download URL '{downloadUrl}'.");
+    }
+
+    private static bool IsSameAuthority(Uri left, Uri right) =>
+        string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Host, right.Host, StringComparison.OrdinalIgnoreCase) &&
+        left.Port == right.Port;
 
     private static Uri CreateChronoStorageUri(RemoteScopeContext context, string relativePath, string? query = null)
     {

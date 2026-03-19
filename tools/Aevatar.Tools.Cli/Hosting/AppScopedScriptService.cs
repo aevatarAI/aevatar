@@ -7,7 +7,11 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Application;
+using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Hosting.CapabilityApi;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Tools.Cli.Hosting;
 
@@ -24,6 +28,10 @@ public sealed class AppScopedScriptService
     private readonly IScopeScriptCommandPort? _scriptCommandPort;
     private readonly IScriptDefinitionSnapshotPort? _definitionSnapshotPort;
     private readonly IScriptEvolutionApplicationService? _scriptEvolutionService;
+    private readonly IScriptCatalogQueryPort? _scriptCatalogQueryPort;
+    private readonly IScriptEvolutionDecisionReadPort? _scriptEvolutionDecisionReadPort;
+    private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
+    private readonly IScriptReadModelQueryApplicationService? _readModelQueryService;
     private readonly IHttpClientFactory _httpClientFactory;
 
     public AppScopedScriptService(
@@ -31,13 +39,21 @@ public sealed class AppScopedScriptService
         IScopeScriptQueryPort? scriptQueryPort = null,
         IScopeScriptCommandPort? scriptCommandPort = null,
         IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
-        IScriptEvolutionApplicationService? scriptEvolutionService = null)
+        IScriptEvolutionApplicationService? scriptEvolutionService = null,
+        IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
+        IScriptEvolutionDecisionReadPort? scriptEvolutionDecisionReadPort = null,
+        IScriptingActorAddressResolver? scriptingActorAddressResolver = null,
+        IScriptReadModelQueryApplicationService? readModelQueryService = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
         _scriptCommandPort = scriptCommandPort;
         _definitionSnapshotPort = definitionSnapshotPort;
         _scriptEvolutionService = scriptEvolutionService;
+        _scriptCatalogQueryPort = scriptCatalogQueryPort;
+        _scriptEvolutionDecisionReadPort = scriptEvolutionDecisionReadPort;
+        _scriptingActorAddressResolver = scriptingActorAddressResolver;
+        _readModelQueryService = readModelQueryService;
     }
 
     public async Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
@@ -90,6 +106,106 @@ public sealed class AppScopedScriptService
         return await SendAsync<ScopeScriptDetail>(
             HttpMethod.Get,
             $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}",
+            body: null,
+            ct,
+            allowNotFound: true);
+    }
+
+    public async Task<IReadOnlyList<ScriptReadModelSnapshotHttpResponse>> ListRuntimeSnapshotsAsync(
+        int take,
+        CancellationToken ct = default)
+    {
+        var boundedTake = Math.Clamp(take <= 0 ? 24 : take, 1, 200);
+        if (_readModelQueryService != null)
+        {
+            var snapshots = await _readModelQueryService.ListSnapshotsAsync(boundedTake, ct);
+            return snapshots
+                .Select(static snapshot => new ScriptReadModelSnapshotHttpResponse(
+                    snapshot.ActorId,
+                    snapshot.ScriptId,
+                    snapshot.DefinitionActorId,
+                    snapshot.Revision,
+                    snapshot.ReadModelTypeUrl,
+                    FormatReadModelJson(snapshot.ReadModelPayload),
+                    snapshot.StateVersion,
+                    snapshot.LastEventId,
+                    snapshot.UpdatedAt))
+                .ToArray();
+        }
+
+        return await SendAsync<List<ScriptReadModelSnapshotHttpResponse>>(
+                   HttpMethod.Get,
+                   $"/api/scripts/runtimes?take={boundedTake}",
+                   body: null,
+                   ct) ??
+               [];
+    }
+
+    public async Task<ScriptReadModelSnapshotHttpResponse?> GetRuntimeSnapshotAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        var normalizedActorId = NormalizeRequired(actorId, nameof(actorId));
+        if (_readModelQueryService != null)
+        {
+            var snapshot = await _readModelQueryService.GetSnapshotAsync(normalizedActorId, ct);
+            return snapshot == null
+                ? null
+                : new ScriptReadModelSnapshotHttpResponse(
+                    snapshot.ActorId,
+                    snapshot.ScriptId,
+                    snapshot.DefinitionActorId,
+                    snapshot.Revision,
+                    snapshot.ReadModelTypeUrl,
+                    FormatReadModelJson(snapshot.ReadModelPayload),
+                    snapshot.StateVersion,
+                    snapshot.LastEventId,
+                    snapshot.UpdatedAt);
+        }
+
+        return await SendAsync<ScriptReadModelSnapshotHttpResponse>(
+            HttpMethod.Get,
+            $"/api/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/readmodel",
+            body: null,
+            ct,
+            allowNotFound: true);
+    }
+
+    public async Task<AppScriptCatalogSnapshot?> GetCatalogAsync(
+        string scopeId,
+        string scriptId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedScriptId = NormalizeRequired(scriptId, nameof(scriptId));
+        if (_scriptCatalogQueryPort != null && _scriptingActorAddressResolver != null)
+        {
+            var catalogActorId = _scriptingActorAddressResolver.GetCatalogActorId(normalizedScopeId);
+            var snapshot = await _scriptCatalogQueryPort.GetCatalogEntryAsync(catalogActorId, normalizedScriptId, ct);
+            return snapshot == null
+                ? null
+                : ToCatalogSnapshot(snapshot);
+        }
+
+        return await SendAsync<AppScriptCatalogSnapshot>(
+            HttpMethod.Get,
+            $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}/catalog",
+            body: null,
+            ct,
+            allowNotFound: true);
+    }
+
+    public async Task<ScriptPromotionDecision?> GetEvolutionDecisionAsync(
+        string proposalId,
+        CancellationToken ct = default)
+    {
+        var normalizedProposalId = NormalizeRequired(proposalId, nameof(proposalId));
+        if (_scriptEvolutionDecisionReadPort != null)
+            return await _scriptEvolutionDecisionReadPort.TryGetAsync(normalizedProposalId, ct);
+
+        return await SendAsync<ScriptPromotionDecision>(
+            HttpMethod.Get,
+            $"/api/scripts/evolutions/{Uri.EscapeDataString(normalizedProposalId)}",
             body: null,
             ct,
             allowNotFound: true);
@@ -356,6 +472,63 @@ public sealed class AppScopedScriptService
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
+    private static string FormatReadModelJson(Any? payload)
+    {
+        if (payload == null)
+            return "{}";
+
+        if (payload.Is(AppScriptReadModel.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<AppScriptReadModel>());
+        if (payload.Is(Struct.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Struct>());
+        if (payload.Is(Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Value>());
+        if (payload.Is(ListValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<ListValue>());
+        if (payload.Is(StringValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<StringValue>());
+        if (payload.Is(BoolValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<BoolValue>());
+        if (payload.Is(Int32Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Int32Value>());
+        if (payload.Is(Int64Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Int64Value>());
+        if (payload.Is(UInt32Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<UInt32Value>());
+        if (payload.Is(UInt64Value.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<UInt64Value>());
+        if (payload.Is(FloatValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<FloatValue>());
+        if (payload.Is(DoubleValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<DoubleValue>());
+        if (payload.Is(BytesValue.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<BytesValue>());
+        if (payload.Is(Empty.Descriptor))
+            return JsonFormatter.Default.Format(payload.Unpack<Empty>());
+
+        return "{}";
+    }
+
+    private static AppScriptCatalogSnapshot ToCatalogSnapshot(
+        ScriptCatalogEntrySnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        return new AppScriptCatalogSnapshot(
+            snapshot.ScriptId,
+            snapshot.ActiveRevision,
+            snapshot.ActiveDefinitionActorId,
+            snapshot.ActiveSourceHash,
+            snapshot.PreviousRevision,
+            snapshot.RevisionHistory.ToArray(),
+            snapshot.LastProposalId,
+            snapshot.CatalogActorId,
+            snapshot.ScopeId,
+            snapshot.UpdatedAtUnixTimeMs <= 0
+                ? DateTimeOffset.UnixEpoch
+                : DateTimeOffset.FromUnixTimeMilliseconds(snapshot.UpdatedAtUnixTimeMs));
+    }
+
     private sealed record RemoteUpsertRequest(
         string SourceText,
         string? RevisionId,
@@ -386,3 +559,15 @@ public sealed record AppScopeScriptEvolutionRequest(
     string? CandidateSourceHash,
     string? Reason,
     string? ProposalId);
+
+public sealed record AppScriptCatalogSnapshot(
+    string ScriptId,
+    string ActiveRevision,
+    string ActiveDefinitionActorId,
+    string ActiveSourceHash,
+    string PreviousRevision,
+    IReadOnlyList<string> RevisionHistory,
+    string LastProposalId,
+    string CatalogActorId,
+    string ScopeId,
+    DateTimeOffset UpdatedAt);

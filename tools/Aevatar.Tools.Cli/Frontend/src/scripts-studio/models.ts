@@ -42,6 +42,19 @@ export type ScriptReadModelSnapshot = {
   updatedAt: string;
 };
 
+export type ScriptCatalogSnapshot = {
+  scriptId: string;
+  activeRevision: string;
+  activeDefinitionActorId: string;
+  activeSourceHash: string;
+  previousRevision: string;
+  revisionHistory: string[];
+  lastProposalId: string;
+  catalogActorId: string;
+  scopeId: string;
+  updatedAt: string;
+};
+
 export type SnapshotView = {
   input: string;
   output: string;
