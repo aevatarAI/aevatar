@@ -1,11 +1,13 @@
 # Aevatar Stream Forward 架构说明（2026-02-22）
 
+> Historical note: this document predates the 2026-03-19 removal of `MassTransitAdapter`. Any `MassTransit` mode mentioned below is legacy background only; current active paths are `InMemory` and Orleans with `KafkaStrictProvider`.
+
 ## 1. 目标与范围
 
 本文档定义 `Stream Forward` 能力的架构边界与状态存储语义，覆盖以下内容：
 
 1. `Forward` 状态模型与职责分层。
-2. InMemory / MassTransit / Orleans 三种运行模式下的状态落点。
+2. InMemory / legacy MassTransit / Orleans 三种运行模式下的状态落点。
 3. Forward 的写入、读取、转发与清理链路。
 4. 与架构门禁的一致性约束。
 

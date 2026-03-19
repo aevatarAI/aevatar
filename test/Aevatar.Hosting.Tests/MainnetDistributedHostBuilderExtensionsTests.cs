@@ -22,10 +22,9 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             ["ActorRuntime:OrleansStreamBackend"] = "KafkaStrictProvider",
             ["ActorRuntime:OrleansPersistenceBackend"] = "Garnet",
             ["ActorRuntime:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
-            ["ActorRuntime:MassTransitKafkaBootstrapServers"] = "localhost:19092",
-            ["ActorRuntime:MassTransitKafkaTopicName"] = "mainnet-strict-events",
-            ["ActorRuntime:MassTransitKafkaConsumerGroup"] = "mainnet-strict-group",
-            ["ActorRuntime:MassTransitKafkaTopicPartitionCount"] = "99",
+            ["ActorRuntime:KafkaBootstrapServers"] = "localhost:19092",
+            ["ActorRuntime:KafkaTopicName"] = "mainnet-strict-events",
+            ["ActorRuntime:KafkaConsumerGroup"] = "mainnet-strict-group",
             ["Orleans:QueueCount"] = "6",
             ["Orleans:QueueCacheSize"] = "512",
         });

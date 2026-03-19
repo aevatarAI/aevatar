@@ -1,11 +1,7 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
-using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -31,11 +27,6 @@ public static class ServiceCollectionExtensions
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
         {
             return AddInMemoryRuntime(services, options);
-        }
-
-        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderMassTransit, StringComparison.OrdinalIgnoreCase))
-        {
-            return AddMassTransitRuntime(services, options);
         }
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
@@ -116,14 +107,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static IServiceCollection AddMassTransitRuntime(IServiceCollection services, AevatarActorRuntimeOptions options)
-    {
-        AddAevatarRuntimeWithEventSourcingOptions(services, options);
-        ConfigureMassTransitTransport(services, options);
-        services.AddAevatarMassTransitStreamProvider();
-        return services;
-    }
-
     private static IServiceCollection AddOrleansRuntime(IServiceCollection services, AevatarActorRuntimeOptions options)
     {
         AddAevatarRuntimeWithEventSourcingOptions(services, options);
@@ -141,36 +124,20 @@ public static class ServiceCollectionExtensions
         if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
             return services;
 
-        if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
-        {
-            ConfigureMassTransitTransport(services, options);
-            services.AddAevatarMassTransitStreamProvider(streamOptions =>
-            {
-                streamOptions.StreamNamespace = options.OrleansActorEventNamespace;
-            });
-            services.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
-
-            return services;
-        }
-
         if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider, StringComparison.OrdinalIgnoreCase))
         {
             services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(transportOptions =>
             {
-                transportOptions.BootstrapServers = options.MassTransitKafkaBootstrapServers;
-                transportOptions.TopicName = options.MassTransitKafkaTopicName;
-                transportOptions.ConsumerGroup = options.MassTransitKafkaConsumerGroup;
+                transportOptions.BootstrapServers = options.KafkaBootstrapServers;
+                transportOptions.TopicName = options.KafkaTopicName;
+                transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
                 transportOptions.TopicPartitionCount = options.OrleansQueueCount;
             });
             return services;
         }
 
-        if (!string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"Unsupported Orleans stream backend '{options.OrleansStreamBackend}'.");
-        }
-        return services;
+        throw new InvalidOperationException(
+            $"Unsupported Orleans stream backend '{options.OrleansStreamBackend}'.");
     }
 
     private static void AddAevatarRuntimeWithEventSourcingOptions(
@@ -183,28 +150,6 @@ public static class ServiceCollectionExtensions
             eventSourcingOptions.SnapshotInterval = options.EventSourcingSnapshotInterval;
             eventSourcingOptions.EnableEventCompaction = options.EventSourcingEnableEventCompaction;
             eventSourcingOptions.RetainedEventsAfterSnapshot = options.EventSourcingRetainedEventsAfterSnapshot;
-        });
-    }
-
-    private static void ConfigureMassTransitTransport(
-        IServiceCollection services,
-        AevatarActorRuntimeOptions options)
-    {
-        if (!string.Equals(
-                options.MassTransitTransportBackend,
-                AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"Unsupported MassTransit transport backend '{options.MassTransitTransportBackend}'.");
-        }
-
-        services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(transportOptions =>
-        {
-            transportOptions.BootstrapServers = options.MassTransitKafkaBootstrapServers;
-            transportOptions.TopicName = options.MassTransitKafkaTopicName;
-            transportOptions.ConsumerGroup = options.MassTransitKafkaConsumerGroup;
-            transportOptions.TopicPartitionCount = options.MassTransitKafkaTopicPartitionCount;
         });
     }
 }

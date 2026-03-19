@@ -112,10 +112,9 @@ start_node() {
     AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
-    AEVATAR_ActorRuntime__MassTransitTransportBackend=Kafka \
-    AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
-    AEVATAR_ActorRuntime__MassTransitKafkaTopicName=aevatar-mainnet-agent-events \
-    AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup="aevatar-mainnet-mixed-ci-group" \
+    AEVATAR_ActorRuntime__KafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
+    AEVATAR_ActorRuntime__KafkaTopicName=aevatar-mainnet-agent-events \
+    AEVATAR_ActorRuntime__KafkaConsumerGroup="aevatar-mainnet-mixed-ci-group" \
     AEVATAR_Orleans__ClusteringMode=Development \
     AEVATAR_Orleans__ClusterId="${cluster_id}" \
     AEVATAR_Orleans__ServiceId="${service_id}" \

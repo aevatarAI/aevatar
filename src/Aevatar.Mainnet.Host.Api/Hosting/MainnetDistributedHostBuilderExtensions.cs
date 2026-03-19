@@ -1,8 +1,6 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -37,27 +35,15 @@ public static class MainnetDistributedHostBuilderExtensions
                 orleansOptions.QueueCacheSize = hostOptions.QueueCacheSize;
             });
 
-            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
-            {
-                siloBuilder.ConfigureServices(services =>
-                {
-                    services.AddAevatarMassTransitStreamProvider(streamOptions =>
-                    {
-                        streamOptions.StreamNamespace = runtimeOptions.OrleansActorEventNamespace;
-                    });
-                });
-                siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
-            }
-
             if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaStrictProvider, StringComparison.OrdinalIgnoreCase))
             {
                 siloBuilder.ConfigureServices(services =>
                 {
                     services.AddAevatarFoundationRuntimeOrleansKafkaStrictProviderTransport(options =>
                     {
-                        options.BootstrapServers = runtimeOptions.MassTransitKafkaBootstrapServers;
-                        options.TopicName = runtimeOptions.MassTransitKafkaTopicName;
-                        options.ConsumerGroup = runtimeOptions.MassTransitKafkaConsumerGroup;
+                        options.BootstrapServers = runtimeOptions.KafkaBootstrapServers;
+                        options.TopicName = runtimeOptions.KafkaTopicName;
+                        options.ConsumerGroup = runtimeOptions.KafkaConsumerGroup;
                         options.TopicPartitionCount = hostOptions.QueueCount;
                     });
                 });
@@ -131,15 +117,15 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
         if (!string.IsNullOrWhiteSpace(configuredGarnetConnectionString))
             options.OrleansGarnetConnectionString = configuredGarnetConnectionString;
-        var configuredKafkaBootstrapServers = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"];
+        var configuredKafkaBootstrapServers = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrapServers))
-            options.MassTransitKafkaBootstrapServers = configuredKafkaBootstrapServers;
-        var configuredKafkaTopicName = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"];
+            options.KafkaBootstrapServers = configuredKafkaBootstrapServers;
+        var configuredKafkaTopicName = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaTopicName))
-            options.MassTransitKafkaTopicName = configuredKafkaTopicName;
-        var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"];
+            options.KafkaTopicName = configuredKafkaTopicName;
+        var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"];
         if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
-            options.MassTransitKafkaConsumerGroup = configuredKafkaConsumerGroup;
+            options.KafkaConsumerGroup = configuredKafkaConsumerGroup;
 
         return options;
     }

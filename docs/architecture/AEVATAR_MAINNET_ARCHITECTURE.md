@@ -204,7 +204,7 @@ block-beta
 | `Aevatar.Foundation.Runtime` | 本地单进程运行时（InMemory Actor / Stream / Store） |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans` | Orleans 分布式 Actor 运行时 |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming` | Orleans 流适配 + Stream Forward 拓扑 |
-| `Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka` | Kafka 传输层（via MassTransit） |
+| `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaStrictProvider` | Orleans Kafka strict provider backend |
 
 ---
 
@@ -676,13 +676,12 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 | 配置项 | 说明 | Distributed 模板值 |
 |---|---|---|
 | `ActorRuntime:Provider` | 运行时提供者 | `Orleans` |
-| `ActorRuntime:OrleansStreamBackend` | 流后端 | `MassTransitAdapter` |
+| `ActorRuntime:OrleansStreamBackend` | 流后端 | `KafkaStrictProvider` |
 | `ActorRuntime:OrleansPersistenceBackend` | 持久化后端 | `InMemory` / `Garnet` |
 | `ActorRuntime:OrleansGarnetConnectionString` | Garnet 连接串 | `localhost:6379` |
-| `ActorRuntime:MassTransitTransportBackend` | MassTransit 传输后端 | `Kafka` |
-| `ActorRuntime:MassTransitKafkaBootstrapServers` | Kafka 地址 | `localhost:9092` |
-| `ActorRuntime:MassTransitKafkaTopicName` | Kafka 主题 | `aevatar-mainnet-agent-events` |
-| `ActorRuntime:MassTransitKafkaConsumerGroup` | Kafka 消费组（建议按环境隔离） | `aevatar-mainnet-cg` |
+| `ActorRuntime:KafkaBootstrapServers` | Kafka 地址 | `localhost:9092` |
+| `ActorRuntime:KafkaTopicName` | Kafka 主题 | `aevatar-mainnet-agent-events` |
+| `ActorRuntime:KafkaConsumerGroup` | Kafka 消费组（建议按环境隔离） | `aevatar-mainnet-cg` |
 | `Orleans:ClusteringMode` | 集群模式 | `Localhost` / `Development` |
 | `Orleans:ClusterId` | 集群 ID | `aevatar-mainnet-cluster` |
 | `Orleans:ServiceId` | 服务 ID（与 ClusterId 组合隔离） | `aevatar-mainnet-service` |
@@ -895,8 +894,7 @@ var mainnet = builder.AddProject<Projects.Aevatar_Mainnet_Host_Api>("mainnet")
     .WithReference(kafka)
     .WithReference(garnet)
     .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Distributed")
-    .WithEnvironment("AEVATAR_ActorRuntime__Provider", "Orleans")
-    .WithEnvironment("AEVATAR_ActorRuntime__MassTransitTransportBackend", "Kafka");
+    .WithEnvironment("AEVATAR_ActorRuntime__Provider", "Orleans");
 
 builder.Build().Run();
 ```
@@ -1604,13 +1602,12 @@ flowchart LR
 |---|---|
 | `ASPNETCORE_ENVIRONMENT` | 运行环境（`Distributed` 启用分布式模式） |
 | `AEVATAR_ActorRuntime__Provider` | `Orleans` / `InMemory` |
-| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `MassTransitAdapter` / `InMemory` |
+| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `KafkaStrictProvider` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansPersistenceBackend` | `Garnet` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansGarnetConnectionString` | Garnet 连接串 |
-| `AEVATAR_ActorRuntime__MassTransitTransportBackend` | MassTransit 传输后端（Kafka） |
-| `AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers` | Kafka 地址 |
-| `AEVATAR_ActorRuntime__MassTransitKafkaTopicName` | Kafka Topic 名称 |
-| `AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup` | Kafka 消费组 |
+| `AEVATAR_ActorRuntime__KafkaBootstrapServers` | Kafka 地址 |
+| `AEVATAR_ActorRuntime__KafkaTopicName` | Kafka Topic 名称 |
+| `AEVATAR_ActorRuntime__KafkaConsumerGroup` | Kafka 消费组 |
 | `AEVATAR_Orleans__ClusteringMode` | `Localhost` / `Development` |
 | `AEVATAR_Orleans__ClusterId` | Orleans 集群 ID |
 | `AEVATAR_Orleans__ServiceId` | Orleans 服务 ID |

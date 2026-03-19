@@ -86,8 +86,7 @@ public static class ServiceCollectionExtensions
         ConfigureReminderService(builder, options);
         EnsurePersistentStreamPubSubStorage(builder, options);
 
-        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter) ||
-            IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider))
+        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider))
         {
             builder.AddPersistentStreams(
                 options.StreamProviderName,
@@ -119,9 +118,8 @@ public static class ServiceCollectionExtensions
     private static void ValidateOptions(AevatarOrleansRuntimeOptions options)
     {
         var isInMemoryStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory);
-        var isMassTransitAdapterStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter);
         var isKafkaStrictProviderStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaStrictProvider);
-        if (!isInMemoryStream && !isMassTransitAdapterStream && !isKafkaStrictProviderStream)
+        if (!isInMemoryStream && !isKafkaStrictProviderStream)
             throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
 
         var isInMemoryPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendInMemory);
