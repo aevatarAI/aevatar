@@ -144,7 +144,8 @@ internal sealed class ScriptGeneratePromptCatalog
             builder.AppendLine("When current source is provided, treat the task as an edit and preserve unrelated sections.");
             builder.AppendLine("If compilation diagnostics are provided, fix every listed issue before returning.");
             builder.AppendLine("Prefer a single public sealed class that derives from ScriptBehavior<AppScriptReadModel, AppScriptReadModel>.");
-            builder.AppendLine("Use AppScriptCommand as the command input unless the user explicitly asks for a richer contract.");
+            builder.AppendLine("Use AppScriptCommand as the only inbound command contract.");
+            builder.AppendLine("Do not introduce alternate command message types. If structured input is needed, parse it from AppScriptCommand.Input.");
             builder.AppendLine($"Write AppScriptReadModel fields named: {AppScriptProtocol.InputField}, {AppScriptProtocol.OutputField}, {AppScriptProtocol.StatusField}, {AppScriptProtocol.LastCommandIdField}, {AppScriptProtocol.NotesField}.");
             builder.AppendLine("Do not use query handlers. Keep behavior command/event/project-state focused.");
             builder.AppendLine();

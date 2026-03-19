@@ -37,6 +37,11 @@ internal sealed class ScriptGenerateOrchestrator
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly IScriptBehaviorCompiler _compiler;
+    private const string FixedCommandContractInstruction =
+        "The studio draft-run UI always sends AppScriptCommand. " +
+        "Keep AppScriptCommand as the only inbound command contract. " +
+        "Do not introduce or replace it with richer command message types. " +
+        "If structured input is needed, parse it from AppScriptCommand.Input.";
 
     public ScriptGenerateOrchestrator(IScriptBehaviorCompiler compiler)
     {
@@ -103,33 +108,41 @@ internal sealed class ScriptGenerateOrchestrator
                 ScriptId: "app-script-preview",
                 Revision: $"draft-{attempt}",
                 Source: lastCandidate));
-            if (!compilation.IsSuccess)
+            try
             {
-                lastDiagnostics = compilation.Diagnostics;
-                if (onProgress != null && attempt < MaxAttempts)
+                if (!compilation.IsSuccess)
+                {
+                    lastDiagnostics = compilation.Diagnostics;
+                    if (onProgress != null && attempt < MaxAttempts)
+                    {
+                        await onProgress(
+                            new ScriptGenerateProgress(
+                                ScriptGenerateProgressStage.RepairingDraft,
+                                attempt,
+                                BuildRepairStatusMessage(lastDiagnostics, attempt)),
+                            ct);
+                    }
+
+                    continue;
+                }
+
+                if (onProgress != null)
                 {
                     await onProgress(
                         new ScriptGenerateProgress(
-                            ScriptGenerateProgressStage.RepairingDraft,
+                            ScriptGenerateProgressStage.Completed,
                             attempt,
-                            BuildRepairStatusMessage(lastDiagnostics, attempt)),
+                            "Script source compiled and is ready."),
                         ct);
                 }
 
-                continue;
+                return new ScriptGenerateResult(lastCandidate, attempt, compilation.Diagnostics);
             }
-
-            if (onProgress != null)
+            finally
             {
-                await onProgress(
-                    new ScriptGenerateProgress(
-                        ScriptGenerateProgressStage.Completed,
-                        attempt,
-                        "Script source compiled and is ready."),
-                    ct);
+                if (compilation.Artifact != null)
+                    await compilation.Artifact.DisposeAsync();
             }
-
-            return new ScriptGenerateResult(lastCandidate, attempt, compilation.Diagnostics);
         }
 
         throw new InvalidOperationException(BuildFailureMessage(lastDiagnostics));
@@ -165,6 +178,7 @@ internal sealed class ScriptGenerateOrchestrator
         var parts = new List<string>
         {
             "Author an Aevatar ScriptBehavior C# source file that satisfies the user request.",
+            FixedCommandContractInstruction,
         };
 
         if (!string.IsNullOrWhiteSpace(currentSource))
@@ -197,6 +211,8 @@ internal sealed class ScriptGenerateOrchestrator
         builder.AppendLine();
         builder.AppendLine("Original user request:");
         builder.AppendLine(request);
+        builder.AppendLine();
+        builder.AppendLine(FixedCommandContractInstruction);
 
         if (!string.IsNullOrWhiteSpace(currentSource))
         {
