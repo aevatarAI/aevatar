@@ -33,9 +33,6 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private IConsumer<Ignore, byte[]>? _consumer;
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
-    private readonly SemaphoreSlim _initGate = new(1, 1);
-    private bool _initialized;
-
     public KafkaProviderQueueAdapterReceiver(
         QueueId queueId,
         KafkaProviderProducer producer,
@@ -54,24 +51,16 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
 
     public Task Initialize(TimeSpan timeout)
     {
-        return InitializeAsync(timeout);
+        _ = timeout;
+        return InitializeAsync();
     }
 
-    private async Task InitializeAsync(TimeSpan timeout)
+    private Task InitializeAsync()
     {
-        await _initGate.WaitAsync(timeout);
-        try
-        {
-            if (_initialized)
-                return;
+        if (_consumer != null)
+            return Task.CompletedTask;
 
-            await InitializeCoreAsync();
-            _initialized = true;
-        }
-        finally
-        {
-            _initGate.Release();
-        }
+        return InitializeCoreAsync();
     }
 
     private async Task InitializeCoreAsync()
@@ -289,29 +278,6 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 _inflightOffsets.Remove(nextOffset);
                 _lastCommittedOffset = nextOffset;
                 committedInclusive = nextOffset;
-            }
-
-            // Bound inflight/acked sets: if the gap between the earliest inflight
-            // and lastCommitted is too large, drop stale entries to prevent unbounded growth.
-            if (_inflightOffsets.Count > 0)
-            {
-                var minInflight = long.MaxValue;
-                foreach (var o in _inflightOffsets)
-                {
-                    if (o < minInflight) minInflight = o;
-                }
-
-                const int maxInflightGap = 100_000;
-                if (_inflightOffsets.Count > maxInflightGap)
-                {
-                    // Evict offsets that are far behind the watermark — they'll never be acked.
-                    var evictionThreshold = minInflight + maxInflightGap;
-                    _inflightOffsets.RemoveWhere(o => o > evictionThreshold && !_ackedOffsets.Contains(o));
-                    _ackedOffsets.RemoveWhere(o => !_inflightOffsets.Contains(o));
-                    _logger.LogWarning(
-                        "Evicted stale inflight offsets on partition {Partition}. InflightCount={InflightCount}, AckedCount={AckedCount}.",
-                        _partitionId, _inflightOffsets.Count, _ackedOffsets.Count);
-                }
             }
 
             _commitDirty = _ackedOffsets.Count > 0;
