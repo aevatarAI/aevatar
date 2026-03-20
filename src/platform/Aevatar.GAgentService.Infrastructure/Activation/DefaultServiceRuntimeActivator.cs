@@ -118,7 +118,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             plan.WorkflowYaml,
             plan.WorkflowName,
             plan.InlineWorkflowYamls,
-            ct);
+            ct: ct);
 
         return new ServiceRuntimeActivationResult(deploymentId, actor.Id, "active");
     }

@@ -6,4 +6,9 @@ public interface IScriptCatalogQueryPort
         string? catalogActorId,
         string scriptId,
         CancellationToken ct);
+
+    Task<IReadOnlyList<ScriptCatalogEntrySnapshot>> ListCatalogEntriesAsync(
+        string? catalogActorId,
+        int take,
+        CancellationToken ct);
 }

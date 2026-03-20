@@ -19,4 +19,5 @@ message WorkflowActorBindingDocument {
   string workflow_name = 10;
   string workflow_yaml = 11;
   map<string, string> inline_workflow_yaml_entries = 12;
+  string scope_id = 13;
 }

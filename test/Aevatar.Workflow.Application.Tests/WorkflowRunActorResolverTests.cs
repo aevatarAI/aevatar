@@ -30,6 +30,28 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
+    public async Task ResolveOrCreateAsync_ShouldForwardScopeIdFromTypedRequest()
+    {
+        var bindingReader = new StaticWorkflowActorBindingReader(null);
+        var actorPort = new RecordingWorkflowRunActorPort();
+        var registry = new InMemoryWorkflowDefinitionRegistry();
+        registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
+        var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
+
+        var result = await resolver.ResolveOrCreateAsync(
+            new WorkflowChatRunRequest(
+                "hello",
+                "direct",
+                null,
+                ScopeId: "scope-user-1"),
+            CancellationToken.None);
+
+        result.Error.Should().Be(WorkflowChatRunStartError.None);
+        actorPort.CreateRunBindings.Should().ContainSingle();
+        actorPort.CreateRunBindings[0].ScopeId.Should().Be("scope-user-1");
+    }
+
+    [Fact]
     public async Task ResolveOrCreateAsync_ShouldUseAutoWorkflow_WhenConfiguredAsDefault()
     {
         var bindingReader = new StaticWorkflowActorBindingReader(null);
@@ -600,6 +622,7 @@ public sealed class WorkflowRunActorResolverTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 

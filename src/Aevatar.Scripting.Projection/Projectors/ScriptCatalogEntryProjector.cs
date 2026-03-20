@@ -60,6 +60,9 @@ public sealed class ScriptCatalogEntryProjector
                 ActiveSourceHash = entryValue.ActiveSourceHash ?? string.Empty,
                 PreviousRevision = entryValue.PreviousRevision ?? string.Empty,
                 LastProposalId = entryValue.LastProposalId ?? string.Empty,
+                ScopeId = string.IsNullOrWhiteSpace(entryValue.ScopeId)
+                    ? state.ScopeId ?? string.Empty
+                    : entryValue.ScopeId,
                 StateVersion = stateEvent.Version,
                 LastEventId = stateEvent.EventId ?? string.Empty,
                 CreatedAt = updatedAt,

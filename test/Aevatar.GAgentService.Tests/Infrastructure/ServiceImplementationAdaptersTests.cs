@@ -657,6 +657,7 @@ public sealed class ServiceImplementationAdaptersTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

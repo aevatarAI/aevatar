@@ -303,7 +303,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             return Task.CompletedTask;
         }
 
-        public Task BindWorkflowDefinitionAsync(IActor actor, string workflowYaml, string workflowName, IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null, CancellationToken ct = default) =>
+        public Task BindWorkflowDefinitionAsync(IActor actor, string workflowYaml, string workflowName, IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null, string? scopeId = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task MarkStoppedAsync(

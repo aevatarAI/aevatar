@@ -104,6 +104,26 @@ public class ScriptEvolutionExecutionServicesTests
     }
 
     [Fact]
+    public async Task CatalogBaselineReader_ShouldResolveScopedCatalogActorId_WhenScopeProvided()
+    {
+        var service = new RuntimeScriptCatalogBaselineReader(new StaticAddressResolver());
+
+        var result = await service.ReadAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-1",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source",
+                CandidateSourceHash: "hash",
+                Reason: string.Empty,
+                ScopeId: "scope-7"),
+            CancellationToken.None);
+
+        result.CatalogActorId.Should().Be("script-catalog:scope-7");
+    }
+
+    [Fact]
     public async Task CompensationService_ShouldRollbackToPreviousRevision_WhenBaselineExists()
     {
         var port = new RecordingCatalogCommandPort();
@@ -133,6 +153,38 @@ public class ScriptEvolutionExecutionServicesTests
         port.RollbackCalls.Should().ContainSingle();
         port.RollbackCalls[0].TargetRevision.Should().Be("rev-1");
         port.RollbackCalls[0].ExpectedCurrentRevision.Should().Be("rev-2");
+        port.RollbackCalls[0].ScopeId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CompensationService_ShouldForwardScopeId_WhenBaselineExists()
+    {
+        var port = new RecordingCatalogCommandPort();
+        var service = new RuntimeScriptPromotionCompensationService(port);
+
+        _ = await service.TryCompensateAsync(
+            "script-catalog:scope-9",
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-1",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source",
+                CandidateSourceHash: "hash",
+                Reason: string.Empty,
+                ScopeId: "scope-9"),
+            new ScriptCatalogEntrySnapshot(
+                ScriptId: "script-1",
+                ActiveRevision: "rev-1",
+                ActiveDefinitionActorId: "definition-1",
+                ActiveSourceHash: "hash-1",
+                PreviousRevision: string.Empty,
+                RevisionHistory: ["rev-1"],
+                LastProposalId: "proposal-prev"),
+            CancellationToken.None);
+
+        port.RollbackCalls.Should().ContainSingle();
+        port.RollbackCalls[0].ScopeId.Should().Be("scope-9");
     }
 
     [Fact]
@@ -153,6 +205,28 @@ public class ScriptEvolutionExecutionServicesTests
 
         port.RollbackCalls.Should().ContainSingle();
         port.RollbackCalls[0].CatalogActorId.Should().Be("script-catalog");
+    }
+
+    [Fact]
+    public async Task RollbackService_ShouldUseScopedCatalogActorId_WhenScopeProvided()
+    {
+        var port = new RecordingCatalogCommandPort();
+        var service = new RuntimeScriptEvolutionRollbackService(port, new StaticAddressResolver());
+
+        await service.RollbackAsync(
+            new ScriptRollbackRequest(
+                ProposalId: "proposal-1",
+                ScriptId: "script-1",
+                TargetRevision: "rev-1",
+                CatalogActorId: string.Empty,
+                Reason: "rollback",
+                ExpectedCurrentRevision: "rev-2",
+                ScopeId: "scope-9"),
+            CancellationToken.None);
+
+        port.RollbackCalls.Should().ContainSingle();
+        port.RollbackCalls[0].CatalogActorId.Should().Be("script-catalog:scope-9");
+        port.RollbackCalls[0].ScopeId.Should().Be("scope-9");
     }
 
     private sealed class DisposableTrackingCompiler(
@@ -255,6 +329,26 @@ public class ScriptEvolutionExecutionServicesTests
             return Task.CompletedTask;
         }
 
+        public Task PromoteCatalogRevisionAsync(
+            string? catalogActorId,
+            string scriptId,
+            string expectedBaseRevision,
+            string revision,
+            string definitionActorId,
+            string sourceHash,
+            string proposalId,
+            string? scopeId,
+            CancellationToken ct) =>
+            PromoteCatalogRevisionAsync(
+                catalogActorId,
+                scriptId,
+                expectedBaseRevision,
+                revision,
+                definitionActorId,
+                sourceHash,
+                proposalId,
+                ct);
+
         public Task RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
@@ -264,6 +358,26 @@ public class ScriptEvolutionExecutionServicesTests
             string expectedCurrentRevision,
             CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
+            RollbackCalls.Add(new RollbackCall(
+                catalogActorId ?? string.Empty,
+                scriptId,
+                targetRevision,
+                expectedCurrentRevision,
+                string.Empty));
+            return Task.CompletedTask;
+        }
+
+        public Task RollbackCatalogRevisionAsync(
+            string? catalogActorId,
+            string scriptId,
+            string targetRevision,
+            string reason,
+            string proposalId,
+            string expectedCurrentRevision,
+            string? scopeId,
+            CancellationToken ct)
+        {
             _ = reason;
             _ = proposalId;
             ct.ThrowIfCancellationRequested();
@@ -271,7 +385,8 @@ public class ScriptEvolutionExecutionServicesTests
                 catalogActorId ?? string.Empty,
                 scriptId,
                 targetRevision,
-                expectedCurrentRevision));
+                expectedCurrentRevision,
+                scopeId ?? string.Empty));
             return Task.CompletedTask;
         }
     }
@@ -280,13 +395,18 @@ public class ScriptEvolutionExecutionServicesTests
         string CatalogActorId,
         string ScriptId,
         string TargetRevision,
-        string ExpectedCurrentRevision);
+        string ExpectedCurrentRevision,
+        string ScopeId);
 
     private sealed class StaticAddressResolver : IScriptingActorAddressResolver
     {
         public string GetEvolutionManagerActorId() => "script-evolution-manager";
         public string GetEvolutionSessionActorId(string proposalId) => $"script-evolution-session:{proposalId}";
         public string GetCatalogActorId() => "script-catalog";
+        public string GetCatalogActorId(string? scopeId) =>
+            string.IsNullOrWhiteSpace(scopeId) ? GetCatalogActorId() : $"script-catalog:{scopeId}";
         public string GetDefinitionActorId(string scriptId) => $"script-definition:{scriptId}";
+        public string GetDefinitionActorId(string scriptId, string? scopeId) =>
+            string.IsNullOrWhiteSpace(scopeId) ? GetDefinitionActorId(scriptId) : $"script-definition:{scopeId}:{scriptId}";
     }
 }

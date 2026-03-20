@@ -80,6 +80,7 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                 CorrelationId: resolvedCorrelationId,
                 CausationId: resolvedCausationId,
                 DefinitionActorId: request.DefinitionActorId,
+                ScopeId: request.ScopeId,
                 CurrentState: currentState,
                 RuntimeCapabilities: request.Capabilities);
             var domainEvents = NormalizeDomainEvents(await behavior.DispatchAsync(typedInbound, context, ct));
@@ -110,6 +111,7 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     DefinitionActorId = request.DefinitionActorId,
                     ScriptId = request.ScriptId,
                     Revision = request.Revision,
+                    ScopeId = request.ScopeId,
                     RunId = ResolveRunId(request.Envelope),
                     CommandId = ResolveSemanticIdentity(domainEvent, eventSemantics.CommandIdField) ?? context.CommandId,
                     CorrelationId = ResolveSemanticIdentity(domainEvent, eventSemantics.CorrelationIdField) ?? context.CorrelationId,

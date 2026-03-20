@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.Scripts;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
@@ -66,6 +67,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
+        services.AddOptions<ScopeScriptCapabilityOptions>()
+            .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
+        services.TryAddSingleton<ScopeScriptQueryApplicationService>();
+        services.TryAddSingleton<IScopeScriptQueryPort>(sp => sp.GetRequiredService<ScopeScriptQueryApplicationService>());
+        services.TryAddSingleton<IScopeScriptCommandPort, ScopeScriptCommandApplicationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
     }

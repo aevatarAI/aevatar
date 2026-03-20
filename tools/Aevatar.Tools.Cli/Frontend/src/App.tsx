@@ -57,6 +57,7 @@ import {
   X,
 } from 'lucide-react';
 import * as api from './api';
+import ScriptsStudio from './ScriptsStudio';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -136,13 +137,17 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'llm' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
+type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
+
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -150,6 +155,12 @@ type AppContextState = {
   scopeResolved: boolean;
   scopeSource: string;
   workflowStorageMode: WorkflowStorageMode;
+  scriptStorageMode: ScriptStorageMode;
+  scriptsEnabled: boolean;
+  scriptContract: {
+    inputType: string;
+    readModelFields: string[];
+  };
 };
 
 type AuthSessionState = {
@@ -228,6 +239,8 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 
 const DEFAULT_RUNTIME_BASE_URL =
   typeof window === 'undefined' ? 'http://127.0.0.1:5100' : window.location.origin;
+const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
+const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
 
 function createEmptyAppContext(): AppContextState {
   return {
@@ -236,7 +249,52 @@ function createEmptyAppContext(): AppContextState {
     scopeResolved: false,
     scopeSource: '',
     workflowStorageMode: 'workspace',
+    scriptStorageMode: 'draft',
+    scriptsEnabled: false,
+    scriptContract: {
+      inputType: '',
+      readModelFields: [],
+    },
   };
+}
+
+function resolveAppContextState(context: any): AppContextState {
+  const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
+  return {
+    hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
+    scopeId: resolvedScopeId,
+    scopeResolved: Boolean(resolvedScopeId),
+    scopeSource: context?.scopeSource || '',
+    workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
+    scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
+    scriptsEnabled: Boolean(context?.features?.scripts),
+    scriptContract: {
+      inputType: context?.scriptContract?.inputType || '',
+      readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
+    },
+  };
+}
+
+function isAuthResponseInvalid(error: any) {
+  return Boolean(
+    error?.status === 401 ||
+    error?.loginUrl ||
+    (typeof error?.message === 'string' && error.message.includes('Sign-in may be required.')) ||
+    (typeof error?.rawBody === 'string' &&
+      (error.rawBody.startsWith('<!DOCTYPE') || error.rawBody.startsWith('<html'))),
+  );
+}
+
+function summarizeBootstrapFailures(labels: string[]) {
+  if (labels.length === 0) {
+    return '';
+  }
+
+  const visibleLabels = labels.slice(0, 3);
+  const suffix = labels.length > visibleLabels.length
+    ? `, +${labels.length - visibleLabels.length} more`
+    : '';
+  return `Loaded studio with defaults for ${visibleLabels.join(', ')}${suffix}.`;
 }
 
 type ExecutionLogsWindowState = {
@@ -265,6 +323,79 @@ function buildExecutionLogsWindowUrl(executionId: string) {
   url.searchParams.set('executionLogs', 'popout');
   url.searchParams.set('executionId', executionId);
   return url.toString();
+}
+
+function isWorkspacePage(value: string | null): value is WorkspacePage {
+  return Boolean(value && WORKSPACE_PAGE_VALUES.includes(value as WorkspacePage));
+}
+
+function isNonSettingsWorkspacePage(value: string | null): value is NonSettingsWorkspacePage {
+  return Boolean(value && NON_SETTINGS_WORKSPACE_PAGE_VALUES.includes(value as NonSettingsWorkspacePage));
+}
+
+function readStoredWorkspacePage(): WorkspacePage {
+  if (typeof window === 'undefined') {
+    return 'studio';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_PAGE_STORAGE_KEY);
+    return isWorkspacePage(raw) ? raw : 'studio';
+  } catch {
+    return 'studio';
+  }
+}
+
+function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
+  if (typeof window === 'undefined') {
+    return 'studio';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY);
+    return isNonSettingsWorkspacePage(raw) ? raw : 'studio';
+  } catch {
+    return 'studio';
+  }
+}
+
+function AevatarBrandMark(props: {
+  size?: number;
+  className?: string;
+}) {
+  const size = props.size ?? 44;
+  return (
+    <svg
+      viewBox="0 0 400 400"
+      width={size}
+      height={size}
+      className={props.className}
+      aria-hidden="true"
+      shapeRendering="crispEdges"
+    >
+      <rect width="400" height="400" rx="28" fill="#18181B" />
+
+      <rect x="12" y="20" width="134" height="46" fill="#FAFAFA" />
+      <rect x="102" y="20" width="44" height="142" fill="#FAFAFA" />
+      <rect x="0" y="66" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="254" y="20" width="134" height="46" fill="#FAFAFA" />
+      <rect x="254" y="20" width="44" height="142" fill="#FAFAFA" />
+      <rect x="330" y="66" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="0" y="181" width="170" height="32" fill="#FAFAFA" />
+      <rect x="230" y="181" width="170" height="32" fill="#FAFAFA" />
+      <rect x="180" y="181" width="40" height="40" fill="#FAFAFA" />
+
+      <rect x="12" y="304" width="134" height="46" fill="#FAFAFA" />
+      <rect x="102" y="242" width="44" height="109" fill="#FAFAFA" />
+      <rect x="0" y="274" width="70" height="30" fill="#FAFAFA" />
+
+      <rect x="254" y="304" width="134" height="46" fill="#FAFAFA" />
+      <rect x="254" y="242" width="44" height="109" fill="#FAFAFA" />
+      <rect x="330" y="274" width="70" height="30" fill="#FAFAFA" />
+    </svg>
+  );
 }
 
 function toExecutionSummary(detail: any) {
@@ -653,8 +784,8 @@ function App() {
 
   const [appContext, setAppContext] = useState<AppContextState>(createEmptyAppContext());
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
-  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('studio');
-  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>('studio');
+  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>(() => readStoredWorkspacePage());
+  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
@@ -896,6 +1027,43 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(WORKSPACE_PAGE_STORAGE_KEY, workspacePage);
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [workspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY, previousWorkspacePage);
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [previousWorkspacePage]);
+
+  useEffect(() => {
+    const workspaceReady = !authSession.loading && (!authSession.enabled || authSession.authenticated);
+    if (workspaceReady && workspacePage === 'scripts' && !appContext.scriptsEnabled) {
+      setWorkspacePage('studio');
+    }
+  }, [
+    authSession.authenticated,
+    authSession.enabled,
+    authSession.loading,
+    appContext.scriptsEnabled,
+    workspacePage,
+  ]);
 
   useEffect(() => {
     const normalizeControlHint = (raw: string, detailed = false) => {
@@ -1160,16 +1328,16 @@ function App() {
       }
 
       const [
-        context,
-        workspace,
-        workflows,
-        connectorCatalog,
-        connectorDraftResponse,
-        roleCatalogResponse,
-        roleDraftResponse,
-        executionList,
-        settings,
-      ] = await Promise.all([
+        contextResult,
+        workspaceResult,
+        workflowsResult,
+        connectorCatalogResult,
+        connectorDraftResult,
+        roleCatalogResult,
+        roleDraftResult,
+        executionListResult,
+        settingsResult,
+      ] = await Promise.allSettled([
         api.app.getContext(),
         api.workspace.getSettings(),
         api.workspace.listWorkflows(),
@@ -1180,6 +1348,48 @@ function App() {
         api.executions.list(),
         api.settings.get(),
       ]);
+
+      const bootstrapFailures = [
+        { label: 'app context', result: contextResult },
+        { label: 'workspace settings', result: workspaceResult },
+        { label: 'workflow list', result: workflowsResult },
+        { label: 'connectors catalog', result: connectorCatalogResult },
+        { label: 'connector draft', result: connectorDraftResult },
+        { label: 'roles catalog', result: roleCatalogResult },
+        { label: 'role draft', result: roleDraftResult },
+        { label: 'execution list', result: executionListResult },
+        { label: 'studio settings', result: settingsResult },
+      ].flatMap(item =>
+        item.result.status === 'rejected'
+          ? [{ label: item.label, error: item.result.reason }]
+          : []);
+
+      const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
+      if (authFailure) {
+        setAuthSession(prev => ({
+          ...prev,
+          loading: false,
+          enabled: true,
+          authenticated: false,
+          loginUrl: authFailure.error?.loginUrl || prev.loginUrl || '/auth/login',
+          errorMessage: authFailure.error?.message || 'Sign in to continue.',
+        }));
+        return;
+      }
+
+      bootstrapFailures.forEach(item => {
+        console.warn(`[Aevatar App] Failed to load bootstrap resource: ${item.label}`, item.error);
+      });
+
+      const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
+      const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
+      const workflows = workflowsResult.status === 'fulfilled' ? workflowsResult.value : [];
+      const connectorCatalog = connectorCatalogResult.status === 'fulfilled' ? connectorCatalogResult.value : null;
+      const connectorDraftResponse = connectorDraftResult.status === 'fulfilled' ? connectorDraftResult.value : null;
+      const roleCatalogResponse = roleCatalogResult.status === 'fulfilled' ? roleCatalogResult.value : null;
+      const roleDraftResponse = roleDraftResult.status === 'fulfilled' ? roleDraftResult.value : null;
+      const executionList = executionListResult.status === 'fulfilled' ? executionListResult.value : [];
+      const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
 
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
@@ -1193,13 +1403,7 @@ function App() {
         : Array.isArray(workspace?.directories) ? workspace.directories : [];
       const nextRuntime = settings?.runtimeBaseUrl || workspace?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 
-      setAppContext({
-        hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
-        scopeId: resolvedScopeId,
-        scopeResolved: Boolean(resolvedScopeId),
-        scopeSource: context?.scopeSource || '',
-        workflowStorageMode,
-      });
+      setAppContext(resolveAppContextState(context));
       setWorkspaceSettings({
         runtimeBaseUrl: nextRuntime,
         directories: nextDirectories,
@@ -1221,14 +1425,12 @@ function App() {
         ...prev,
         directoryId: defaultDirectoryId,
       }));
-    } catch (error: any) {
-      const authResponseLooksInvalid =
-        error?.status === 401 ||
-        (typeof error?.message === 'string' && error.message.includes('Sign-in may be required.')) ||
-        (typeof error?.rawBody === 'string' &&
-          (error.rawBody.startsWith('<!DOCTYPE') || error.rawBody.startsWith('<html')));
 
-      if (authResponseLooksInvalid) {
+      if (bootstrapFailures.length > 0) {
+        flash(summarizeBootstrapFailures(bootstrapFailures.map(item => item.label)), 'info');
+      }
+    } catch (error: any) {
+      if (isAuthResponseInvalid(error)) {
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1499,14 +1701,19 @@ function App() {
     setWorkspacePage('workflows');
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
   function openStudioPage() {
     setWorkspacePage('studio');
     setPaletteOpen(false);
-    setAskAiOpen(false);
+    setCanvasMenu({ open: false, x: 0, y: 0 });
+  }
+
+  function openScriptsPage() {
+    setWorkspacePage('scripts');
+    setRightPanelOpen(false);
+    setPaletteOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1514,7 +1721,6 @@ function App() {
     setWorkspacePage(page);
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1526,7 +1732,6 @@ function App() {
     setSettingsSection(section);
     setRightPanelOpen(false);
     setPaletteOpen(false);
-    setAskAiOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
   }
 
@@ -1555,9 +1760,6 @@ function App() {
     setExecutionDetail(null);
     setExecutionTrace(null);
     setActiveExecutionLogIndex(null);
-    setAskAiOpen(false);
-    setAskAiAnswer('');
-    setAskAiGeneratedYaml('');
     setWorkflowMeta({
       ...createEmptyWorkflowMeta(),
       directoryId: directoryId ?? workspaceSettings.directories[0]?.directoryId ?? null,
@@ -1612,6 +1814,12 @@ function App() {
       scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
       scopeSource: context?.scopeSource || '',
       workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
+      scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
+      scriptsEnabled: Boolean(context?.features?.scripts),
+      scriptContract: {
+        inputType: context?.scriptContract?.inputType || '',
+        readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
+      },
     });
     const nextSettings = {
       runtimeBaseUrl: workspaceSettings.runtimeBaseUrl,
@@ -1633,9 +1841,6 @@ function App() {
     setEdges(graph.edges);
     setSelectedNodeId(graph.nodes[0]?.id || null);
     setSelectedExecutionId(null);
-    setAskAiOpen(false);
-    setAskAiAnswer('');
-    setAskAiGeneratedYaml('');
     setRunModalOpen(false);
     setWorkflowMeta({
       workflowId: payload?.workflowId || null,
@@ -1980,8 +2185,7 @@ function App() {
 
       setAskAiAnswer(nextYaml);
       setAskAiGeneratedYaml(nextYaml);
-      await applyAskAiYaml(nextYaml);
-      flash('AI workflow applied to canvas', 'success');
+      flash('AI workflow YAML is ready to apply', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to generate workflow YAML', 'error');
     } finally {
@@ -3649,8 +3853,8 @@ function App() {
 
       <aside className="studio-rail">
         <div className="flex flex-col items-center gap-3">
-          <div className="studio-brand-mark w-11 h-11 rounded-[16px] flex items-center justify-center">
-            <WorkflowIcon size={18} color="white" />
+          <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[14px] border border-black/10 bg-[#18181B]">
+            <AevatarBrandMark size={44} />
           </div>
           <RailButton
             active={workspacePage === 'studio'}
@@ -3664,6 +3868,14 @@ function App() {
             icon={<FileText size={18} />}
             onClick={openWorkflowsPage}
           />
+          {appContext.scriptsEnabled ? (
+            <RailButton
+              active={workspacePage === 'scripts'}
+              label="Scripts Studio"
+              icon={<Code2 size={18} />}
+              onClick={openScriptsPage}
+            />
+          ) : null}
           <RailButton
             active={workspacePage === 'roles'}
             label="Roles"
@@ -3896,6 +4108,18 @@ function App() {
           renderRolesPage()
         ) : workspacePage === 'connectors' ? (
           renderConnectorsPage()
+        ) : workspacePage === 'scripts' ? (
+          <ScriptsStudio
+            appContext={{
+              hostMode: appContext.hostMode,
+              scopeId: appContext.scopeId,
+              scopeResolved: appContext.scopeResolved,
+              scriptStorageMode: appContext.scriptStorageMode,
+              scriptsEnabled: appContext.scriptsEnabled,
+              scriptContract: appContext.scriptContract,
+            }}
+            onFlash={flash}
+          />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4544,7 +4768,7 @@ function App() {
                   </div>
 
                   <p className="mt-3 text-[12px] leading-6 text-gray-500">
-                    Describe the workflow. AI reasoning streams here, then valid YAML is applied to the canvas automatically.
+                    Describe the workflow. AI reasoning streams here and the validated YAML stays in this panel until you apply it.
                   </p>
 
                   <textarea
@@ -4560,10 +4784,43 @@ function App() {
                         {askAiPending
                           ? 'Generating and validating YAML...'
                           : askAiGeneratedYaml
-                            ? 'Validated YAML applied to canvas. Click the YAML card to apply it again.'
+                            ? 'Validated YAML is ready to apply.'
                             : 'Return format: workflow YAML only'}
                       </div>
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (!askAiGeneratedYaml.trim()) {
+                              return;
+                            }
+
+                            void copyTextToClipboard(askAiGeneratedYaml).then(copied => {
+                              if (copied) {
+                                flash('Workflow YAML copied', 'success');
+                              }
+                            });
+                          }}
+                          className="ghost-action !px-3"
+                          disabled={!askAiGeneratedYaml.trim()}
+                        >
+                          <Copy size={14} /> Copy
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!askAiGeneratedYaml.trim()) {
+                              return;
+                            }
+
+                            void applyAskAiYaml(askAiGeneratedYaml).then(
+                              () => flash('AI workflow applied to canvas', 'success'),
+                              (error: any) => flash(error?.message || 'Failed to apply workflow YAML', 'error'),
+                            );
+                          }}
+                          className="ghost-action !px-3"
+                          disabled={!askAiGeneratedYaml.trim()}
+                        >
+                          <Check size={14} /> Apply
+                        </button>
                         <button
                           onClick={() => { void handleAskAiGenerate(); }}
                           className="ghost-action !px-3"
@@ -4581,31 +4838,17 @@ function App() {
                     </pre>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!askAiGeneratedYaml.trim()) {
-                        return;
-                      }
-
-                      void applyAskAiYaml(askAiGeneratedYaml).then(
-                        () => flash('AI workflow applied to canvas', 'success'),
-                        (error: any) => flash(error?.message || 'Failed to apply workflow YAML', 'error'),
-                      );
-                    }}
-                    disabled={!askAiGeneratedYaml.trim()}
-                    className="mt-4 w-full rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3 text-left transition hover:border-[color:var(--accent-border)] disabled:cursor-default disabled:opacity-100"
-                  >
+                  <div className="mt-4 rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">YAML</div>
                       <div className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
-                        {askAiGeneratedYaml ? 'Click to apply' : 'Waiting for valid YAML'}
+                        {askAiGeneratedYaml ? 'Ready to apply' : 'Waiting for valid YAML'}
                       </div>
                     </div>
                     <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
                       {askAiAnswer || 'Validated workflow YAML will appear here.'}
                     </pre>
-                  </button>
+                  </div>
                 </div>
               ) : null}
 
@@ -5484,9 +5727,7 @@ function AppLoadingScreen() {
         <div className="w-full max-w-[460px] rounded-[32px] border border-[#E6E3DE] bg-white/96 p-8 shadow-[0_28px_70px_rgba(15,23,42,0.08)]">
           <div className="panel-eyebrow">Aevatar App</div>
           <div className="mt-3 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-[18px] bg-[#ECE8E2] text-gray-500">
-              <WorkflowIcon size={20} />
-            </div>
+            <AevatarBrandMark size={48} className="shrink-0 rounded-[18px]" />
             <div>
               <div className="text-[24px] font-semibold text-gray-900">Preparing studio</div>
               <div className="text-[13px] text-gray-500">Loading workspace context, catalogs, and runtime settings.</div>

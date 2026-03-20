@@ -27,6 +27,7 @@ public sealed class PromoteScriptCatalogRevisionCommandEnvelopeFactory
                 SourceHash = command.SourceHash ?? string.Empty,
                 ProposalId = command.ProposalId ?? string.Empty,
                 ExpectedBaseRevision = command.ExpectedBaseRevision ?? string.Empty,
+                ScopeId = command.ScopeId ?? string.Empty,
             });
     }
 }

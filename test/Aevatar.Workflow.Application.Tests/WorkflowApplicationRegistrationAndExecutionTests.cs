@@ -241,8 +241,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
-                [WorkflowRunCommandMetadataKeys.ScopeId] = "u-1001",
-            });
+            },
+            ScopeId: "u-1001");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -253,9 +253,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.ScopeId.Should().Be("u-1001");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
-        request.Metadata[WorkflowRunCommandMetadataKeys.ScopeId].Should().Be("u-1001");
         request.Metadata["source"].Should().Be("headers");
+        request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        request.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]

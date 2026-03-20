@@ -36,13 +36,13 @@ internal sealed class ChronoStorageRoleCatalogStore : IRoleCatalogStore
             return await _localWorkspaceStore.GetRoleCatalogAsync(cancellationToken);
         }
 
-        var encryptedPayload = await _blobClient.TryDownloadEncryptedAsync(remoteContext, cancellationToken);
-        if (encryptedPayload is null)
+        var downloadedPayload = await _blobClient.TryDownloadEncryptedAsync(remoteContext, cancellationToken);
+        if (downloadedPayload is null)
         {
             return CreateRemoteCatalog(remoteContext, fileExists: false, []);
         }
 
-        var plaintext = _blobClient.DecryptPayload(remoteContext, encryptedPayload);
+        var plaintext = _blobClient.DecryptPayload(remoteContext, downloadedPayload.Payload, downloadedPayload.ObjectKey);
         await using var stream = new MemoryStream(plaintext, writable: false);
         var roles = await RoleCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
         return CreateRemoteCatalog(remoteContext, fileExists: true, roles);

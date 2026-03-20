@@ -20,7 +20,7 @@ public sealed class RuntimeScriptCatalogBaselineReader : IScriptCatalogBaselineR
         ArgumentNullException.ThrowIfNull(proposal);
 
         var scriptId = proposal.ScriptId ?? string.Empty;
-        var catalogActorId = _addressResolver.GetCatalogActorId();
+        var catalogActorId = _addressResolver.GetCatalogActorId(proposal.ScopeId);
         ct.ThrowIfCancellationRequested();
 
         var catalogBefore = string.IsNullOrWhiteSpace(proposal.BaseRevision)

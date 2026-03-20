@@ -13,7 +13,7 @@ services:
   neo4j:
     image: neo4j:5.26
     environment:
-      NEO4J_AUTH: "neo4j/password"
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD}"
       NEO4J_server_default__listen__address: "0.0.0.0"
       NEO4J_server_memory_heap_initial__size: "256m"
       NEO4J_server_memory_heap_max__size: "256m"

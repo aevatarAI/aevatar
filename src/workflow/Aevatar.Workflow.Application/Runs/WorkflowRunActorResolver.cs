@@ -36,6 +36,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             : hasRequestedWorkflowName
                 ? requestedWorkflowName
                 : ResolveDefaultWorkflowName();
+        var scopeIdForRun = ResolveScopeId(request.ScopeId);
         var workflowYamlForRun = string.Empty;
         WorkflowDefinitionRegistration? registryDefinitionForRun = null;
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun =
@@ -71,6 +72,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowNameForRun,
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
+                scopeIdForRun,
                 ct);
         }
 
@@ -88,7 +90,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 registryDefinitionForRun?.DefinitionActorId ?? string.Empty,
                 workflowNameForRun,
                 workflowYamlForRun,
-                inlineWorkflowYamlMapForRun),
+                inlineWorkflowYamlMapForRun,
+                scopeIdForRun),
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
@@ -107,6 +110,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         string workflowNameForRun,
         string workflowYamlForRun,
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun,
+        string scopeIdHint,
         CancellationToken ct)
     {
         var sourceBinding = await _bindingReader.GetAsync(actorId, ct);
@@ -134,7 +138,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     string.Empty,
                     workflowNameForRun,
                     workflowYamlForRun,
-                    inlineWorkflowYamlMapForRun),
+                    inlineWorkflowYamlMapForRun,
+                    ResolveScopeId(sourceBinding.ScopeId, scopeIdHint)),
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(
@@ -176,7 +181,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 ResolveDefinitionActorIdForExecution(sourceBinding, registryDefinition),
                 boundWorkflowName,
                 workflowYamlFromSource,
-                sourceBinding.InlineWorkflowYamls),
+                sourceBinding.InlineWorkflowYamls,
+                ResolveScopeId(sourceBinding.ScopeId, scopeIdHint)),
             wrapAsFallbackTrigger: true,
             ct);
 
@@ -281,6 +287,14 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 
         return registryDefinition?.DefinitionActorId ?? string.Empty;
     }
+
+    private static string ResolveScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? string.Empty : scopeId.Trim();
+
+    private static string ResolveScopeId(string? sourceScopeId, string? scopeIdHint) =>
+        !string.IsNullOrWhiteSpace(sourceScopeId)
+            ? sourceScopeId.Trim()
+            : scopeIdHint?.Trim() ?? string.Empty;
 
     private readonly record struct InlineWorkflowBundle(
         bool Succeeded,

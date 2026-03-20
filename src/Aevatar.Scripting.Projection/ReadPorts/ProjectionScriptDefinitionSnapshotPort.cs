@@ -59,7 +59,9 @@ public sealed class ProjectionScriptDefinitionSnapshotPort : IScriptDefinitionSn
             protocolDescriptorSet,
             document.StateDescriptorFullName,
             document.ReadModelDescriptorFullName,
-            document.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec());
+            document.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+            document.DefinitionActorId,
+            document.ScopeId);
     }
 
     public async Task<ScriptDefinitionSnapshot> GetRequiredAsync(

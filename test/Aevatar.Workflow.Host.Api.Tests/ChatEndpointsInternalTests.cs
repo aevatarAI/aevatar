@@ -95,7 +95,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleCommand_ShouldAllowEmptyPrompt()
+    public async Task HandleCommand_ShouldRejectEmptyPrompt()
     {
         var service = new FakeCommandDispatchService();
         var result = await WorkflowCapabilityEndpoints.HandleCommand(
@@ -106,10 +106,11 @@ public sealed class ChatEndpointsInternalTests
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.LastCommand.Should().NotBeNull();
-        service.LastCommand!.Prompt.Should().BeEmpty();
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("PROMPT_REQUIRED");
+        service.LastCommand.Should().BeNull();
     }
 
     [Fact]
@@ -155,19 +156,14 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldAllowEmptyPrompt()
+    public async Task HandleChat_ShouldRejectEmptyPrompt()
     {
         var http = CreateHttpContext();
-        WorkflowChatRunRequest? lastRequest = null;
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (request, _, _, _) =>
-            {
-                lastRequest = request;
-                return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                        .Failure(WorkflowChatRunStartError.AgentNotFound));
-            },
+            ResultFactory = (_, _, _, _) => Task.FromResult(
+                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Failure(WorkflowChatRunStartError.AgentNotFound)),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -176,9 +172,9 @@ public sealed class ChatEndpointsInternalTests
             interactionService,
             CancellationToken.None);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        lastRequest.Should().NotBeNull();
-        lastRequest!.Prompt.Should().BeEmpty();
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("PROMPT_REQUIRED");
     }
 
     [Fact]

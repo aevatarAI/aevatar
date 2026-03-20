@@ -57,10 +57,18 @@ internal sealed class ChronoStorageCatalogBlobClient
         }
 
         var normalizedPrefix = NormalizePrefix(prefix);
-        var ownerKey = CreateOwnerKey(scope.ScopeId, masterKey);
+        var ownerKey = CreateOwnerKey(scope.ScopeId);
         var objectKey = string.IsNullOrWhiteSpace(normalizedPrefix)
             ? $"{ownerKey}/{fileName}"
             : $"{normalizedPrefix}/{ownerKey}/{fileName}";
+        var legacyOwnerKey = CreateLegacyOwnerKey(scope.ScopeId, masterKey);
+        IReadOnlyList<string> legacyObjectKeys = string.Equals(legacyOwnerKey, ownerKey, StringComparison.Ordinal)
+            ? Array.Empty<string>()
+            : [
+                string.IsNullOrWhiteSpace(normalizedPrefix)
+                    ? $"{legacyOwnerKey}/{fileName}"
+                    : $"{normalizedPrefix}/{legacyOwnerKey}/{fileName}",
+            ];
 
         return new RemoteScopeContext(
             Scope: scope,
@@ -71,48 +79,40 @@ internal sealed class ChronoStorageCatalogBlobClient
             MasterKey: masterKey,
             OwnerKey: ownerKey,
             ObjectKey: objectKey,
+            LegacyObjectKeys: legacyObjectKeys,
             PresignedUrlExpiresInSeconds: Math.Clamp(_options.PresignedUrlExpiresInSeconds <= 0 ? 300 : _options.PresignedUrlExpiresInSeconds, 30, 3600),
             CreateBucketIfMissing: _options.CreateBucketIfMissing,
             UseNyxProxy: endpoint.UseNyxProxy,
             StaticBearerToken: _options.StaticBearerToken?.Trim());
     }
 
-    public async Task<byte[]?> TryDownloadEncryptedAsync(
+    public async Task<DownloadedCatalogPayload?> TryDownloadEncryptedAsync(
         RemoteScopeContext context,
         CancellationToken cancellationToken)
     {
-        using var request = CreateChronoStorageRequest(
-            HttpMethod.Get,
-            CreateChronoStorageUri(
-                context,
-                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
-                $"key={Uri.EscapeDataString(context.ObjectKey)}&expiresIn={context.PresignedUrlExpiresInSeconds}"),
-            context.StaticBearerToken);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        CatalogDownloadUnavailableException? downloadUnavailable = null;
+        foreach (var objectKey in EnumerateCandidateObjectKeys(context))
         {
-            return null;
+            try
+            {
+                var payload = await TryDownloadEncryptedCoreAsync(context, objectKey, cancellationToken);
+                if (payload != null)
+                {
+                    return new DownloadedCatalogPayload(payload, objectKey);
+                }
+            }
+            catch (CatalogDownloadUnavailableException exception)
+            {
+                downloadUnavailable ??= exception;
+            }
         }
 
-        response.EnsureSuccessStatusCode();
-        var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
-        var downloadUrl = string.IsNullOrWhiteSpace(envelope?.Data?.PresignedUrl)
-            ? envelope?.Data?.Url?.Trim()
-            : envelope.Data.PresignedUrl.Trim();
-        if (string.IsNullOrWhiteSpace(downloadUrl))
+        if (downloadUnavailable != null)
         {
-            throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
+            throw downloadUnavailable;
         }
 
-        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
-        using var downloadResponse = await _httpClientFactory.CreateClient().SendAsync(downloadRequest, cancellationToken);
-        if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        downloadResponse.EnsureSuccessStatusCode();
-        return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+        return null;
     }
 
     public async Task UploadEncryptedAsync(
@@ -140,13 +140,13 @@ internal sealed class ChronoStorageCatalogBlobClient
         response.EnsureSuccessStatusCode();
     }
 
-    public byte[] EncryptPayload(RemoteScopeContext context, byte[] plaintext)
+    public byte[] EncryptPayload(RemoteScopeContext context, byte[] plaintext, string? objectKey = null)
     {
         var encryptionKey = DeriveKeyMaterial(context.MasterKey, "catalog-encryption");
         var nonce = RandomNumberGenerator.GetBytes(12);
         var ciphertext = new byte[plaintext.Length];
         var tag = new byte[16];
-        var associatedData = Encoding.UTF8.GetBytes(GetAssociatedData(context));
+        var associatedData = Encoding.UTF8.GetBytes(GetAssociatedData(context, objectKey ?? context.ObjectKey));
         using var aesGcm = new AesGcm(encryptionKey, tagSizeInBytes: tag.Length);
         aesGcm.Encrypt(nonce, plaintext, ciphertext, tag, associatedData);
 
@@ -159,7 +159,7 @@ internal sealed class ChronoStorageCatalogBlobClient
         });
     }
 
-    public byte[] DecryptPayload(RemoteScopeContext context, byte[] payload)
+    public byte[] DecryptPayload(RemoteScopeContext context, byte[] payload, string? objectKey = null)
     {
         var envelope = JsonSerializer.Deserialize<EncryptedCatalogEnvelope>(payload)
                        ?? throw new InvalidOperationException("Catalog payload is empty.");
@@ -173,7 +173,7 @@ internal sealed class ChronoStorageCatalogBlobClient
         var tag = Convert.FromBase64String(envelope.Tag);
         var plaintext = new byte[ciphertext.Length];
         var encryptionKey = DeriveKeyMaterial(context.MasterKey, "catalog-encryption");
-        var associatedData = Encoding.UTF8.GetBytes(GetAssociatedData(context));
+        var associatedData = Encoding.UTF8.GetBytes(GetAssociatedData(context, objectKey ?? context.ObjectKey));
         using var aesGcm = new AesGcm(encryptionKey, tagSizeInBytes: tag.Length);
         aesGcm.Decrypt(nonce, ciphertext, tag, plaintext, associatedData);
         return plaintext;
@@ -277,6 +277,74 @@ internal sealed class ChronoStorageCatalogBlobClient
             ? _httpClientFactory.CreateClient(NyxProxyHttpClientName)
             : _httpClientFactory.CreateClient();
 
+    private async Task<byte[]?> TryDownloadEncryptedCoreAsync(
+        RemoteScopeContext context,
+        string objectKey,
+        CancellationToken cancellationToken)
+    {
+        using var request = CreateChronoStorageRequest(
+            HttpMethod.Get,
+            CreateChronoStorageUri(
+                context,
+                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
+                $"key={Uri.EscapeDataString(objectKey)}&expiresIn={context.PresignedUrlExpiresInSeconds}"),
+            context.StaticBearerToken);
+        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
+        var downloadUrl = string.IsNullOrWhiteSpace(envelope?.Data?.PresignedUrl)
+            ? envelope?.Data?.Url?.Trim()
+            : envelope.Data.PresignedUrl.Trim();
+        if (string.IsNullOrWhiteSpace(downloadUrl))
+        {
+            throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
+        }
+
+        var downloadUri = ResolveDownloadUri(context, downloadUrl);
+        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUri);
+        using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
+        if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new CatalogDownloadUnavailableException(
+                $"Chrono-storage download URL returned 404 for object '{objectKey}'. The catalog object exists but could not be downloaded.");
+        }
+
+        downloadResponse.EnsureSuccessStatusCode();
+        return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+    }
+
+    private HttpClient GetDownloadClient(RemoteScopeContext context, Uri downloadUri) =>
+        IsSameAuthority(downloadUri, context.BaseUri)
+            ? GetCatalogApiClient(context)
+            : _httpClientFactory.CreateClient();
+
+    private static Uri ResolveDownloadUri(RemoteScopeContext context, string downloadUrl)
+    {
+        var trimmed = downloadUrl.Trim();
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
+        {
+            return absoluteUri;
+        }
+
+        if (Uri.TryCreate(context.BaseUri, trimmed, out var relativeUri))
+        {
+            return relativeUri;
+        }
+
+        throw new InvalidOperationException(
+            $"Chrono-storage presigned URL response returned an invalid download URL '{downloadUrl}'.");
+    }
+
+    private static bool IsSameAuthority(Uri left, Uri right) =>
+        string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Host, right.Host, StringComparison.OrdinalIgnoreCase) &&
+        left.Port == right.Port;
+
     private static Uri CreateChronoStorageUri(RemoteScopeContext context, string relativePath, string? query = null)
     {
         var builder = new UriBuilder(new Uri(context.BaseUri, CombineRelativePath(context.ApiRoutePrefix, relativePath)))
@@ -304,11 +372,21 @@ internal sealed class ChronoStorageCatalogBlobClient
             (prefix ?? string.Empty)
             .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
-    private static string CreateOwnerKey(string scopeId, string masterKey)
+    private static IEnumerable<string> EnumerateCandidateObjectKeys(RemoteScopeContext context)
+    {
+        yield return context.ObjectKey;
+        foreach (var legacyObjectKey in context.LegacyObjectKeys)
+            yield return legacyObjectKey;
+    }
+
+    private static string CreateOwnerKey(string scopeId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()))).ToLowerInvariant();
+
+    private static string CreateLegacyOwnerKey(string scopeId, string masterKey)
     {
         var ownerKeyBytes = HMACSHA256.HashData(
             DeriveKeyMaterial(masterKey, "catalog-owner"),
-            Encoding.UTF8.GetBytes(scopeId));
+            Encoding.UTF8.GetBytes(scopeId.Trim()));
         return Convert.ToHexString(ownerKeyBytes).ToLowerInvariant();
     }
 
@@ -318,8 +396,8 @@ internal sealed class ChronoStorageCatalogBlobClient
         return HMACSHA256.HashData(seed, Encoding.UTF8.GetBytes(purpose));
     }
 
-    private static string GetAssociatedData(RemoteScopeContext context) =>
-        $"{context.Bucket}|{context.ObjectKey}|v1";
+    private static string GetAssociatedData(RemoteScopeContext context, string objectKey) =>
+        $"{context.Bucket}|{objectKey}|v1";
 
     internal sealed record RemoteScopeContext(
         AppScopeContext Scope,
@@ -330,10 +408,15 @@ internal sealed class ChronoStorageCatalogBlobClient
         string MasterKey,
         string OwnerKey,
         string ObjectKey,
+        IReadOnlyList<string> LegacyObjectKeys,
         int PresignedUrlExpiresInSeconds,
         bool CreateBucketIfMissing,
         bool UseNyxProxy,
         string? StaticBearerToken);
+
+    internal sealed record DownloadedCatalogPayload(
+        byte[] Payload,
+        string ObjectKey);
 
     private sealed record ChronoStorageApiEndpoint(
         Uri BaseUri,
@@ -368,5 +451,13 @@ internal sealed class ChronoStorageCatalogBlobClient
 
         [JsonPropertyName("tag")]
         public string Tag { get; set; } = string.Empty;
+    }
+
+    private sealed class CatalogDownloadUnavailableException : InvalidOperationException
+    {
+        public CatalogDownloadUnavailableException(string message)
+            : base(message)
+        {
+        }
     }
 }

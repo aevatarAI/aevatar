@@ -46,6 +46,7 @@ public sealed class WorkflowActorBindingProjector
             document.RunId = string.Empty;
             document.WorkflowName = NormalizeWorkflowName(evt.WorkflowName);
             document.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+            document.ScopeId = evt.ScopeId?.Trim() ?? string.Empty;
             ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
             ApplyProjectionMetadata(document, eventId, stateVersion, updatedAt);
             await _writeDispatcher.UpsertAsync(document, ct);
@@ -64,6 +65,7 @@ public sealed class WorkflowActorBindingProjector
         runDocument.RunId = ResolveRunId(bindRun.RunId, context.RootActorId);
         runDocument.WorkflowName = NormalizeWorkflowName(bindRun.WorkflowName);
         runDocument.WorkflowYaml = bindRun.WorkflowYaml ?? string.Empty;
+        runDocument.ScopeId = bindRun.ScopeId?.Trim() ?? string.Empty;
         ReplaceInlineWorkflowYamls(runDocument.InlineWorkflowYamls, bindRun.InlineWorkflowYamls);
         ApplyProjectionMetadata(runDocument, eventId, stateVersion, updatedAt);
         await _writeDispatcher.UpsertAsync(runDocument, ct);

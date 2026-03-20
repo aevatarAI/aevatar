@@ -15,6 +15,10 @@ namespace Aevatar.Integration.Tests;
 [Trait("Feature", "ScriptingReadModelProviders")]
 public sealed class ScriptReadModelProductionProvidersIntegrationTests
 {
+    private static readonly TimeSpan ElasticsearchClientTimeout = TimeSpan.FromSeconds(60);
+    private const int ElasticsearchRequestTimeoutMs = 30000;
+    private const int Neo4jRequestTimeoutMs = 15000;
+
     [ElasticsearchIntegrationFact]
     public async Task RunClaimAsync_ShouldPersistSemanticAndNativeDocumentsIntoElasticsearch()
     {
@@ -348,6 +352,8 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
                 values["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = indexPrefix;
                 values["Projection:Document:Providers:Elasticsearch:AutoCreateIndex"] = "true";
+                values["Projection:Document:Providers:Elasticsearch:RequestTimeoutMs"] =
+                    ElasticsearchRequestTimeoutMs.ToString();
 
                 var username = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_USERNAME");
                 var password = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_PASSWORD");
@@ -365,6 +371,8 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_NEO4J_USERNAME");
                 values["Projection:Graph:Providers:Neo4j:Password"] =
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_NEO4J_PASSWORD");
+                values["Projection:Graph:Providers:Neo4j:RequestTimeoutMs"] =
+                    Neo4jRequestTimeoutMs.ToString();
 
                 var database = Environment.GetEnvironmentVariable("AEVATAR_TEST_NEO4J_DATABASE");
                 if (!string.IsNullOrWhiteSpace(database))
@@ -382,7 +390,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             var client = new HttpClient
             {
                 BaseAddress = endpoint,
-                Timeout = TimeSpan.FromSeconds(30),
+                Timeout = ElasticsearchClientTimeout,
             };
             var username = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_USERNAME");
             if (!string.IsNullOrWhiteSpace(username))

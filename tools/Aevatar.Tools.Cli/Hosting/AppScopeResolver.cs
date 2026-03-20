@@ -36,6 +36,7 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IConfiguration _configuration;
+    private readonly bool _nyxIdAuthEnabled;
 
     public DefaultAppScopeResolver(
         IHttpContextAccessor httpContextAccessor,
@@ -43,6 +44,7 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
     {
         _httpContextAccessor = httpContextAccessor ?? throw new ArgumentNullException(nameof(httpContextAccessor));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _nyxIdAuthEnabled = _configuration.GetSection(NyxIdAppAuthOptions.SectionName).Get<NyxIdAppAuthOptions>()?.Enabled ?? true;
     }
 
     public AppScopeContext? Resolve(HttpContext? httpContext = null)
@@ -67,6 +69,9 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
                 if (genericIdClaim != null)
                     return new AppScopeContext(genericIdClaim.Value.Trim(), $"claim:{genericIdClaim.Type}");
             }
+
+            if (_nyxIdAuthEnabled)
+                return null;
 
             foreach (var headerName in ScopeHeaders)
             {

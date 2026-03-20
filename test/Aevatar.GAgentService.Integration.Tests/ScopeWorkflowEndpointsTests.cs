@@ -13,6 +13,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Security.Claims;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -21,14 +22,15 @@ public sealed class ScopeWorkflowEndpointsTests
     [Fact]
     public async Task HandleUpsertWorkflowAsync_ShouldReturnBadRequest_WhenServiceRejectsRequest()
     {
+        var http = CreateHttpContext();
         var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
             "user-1",
             "approval",
             new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(string.Empty),
             BuildCommandPort(),
             CancellationToken.None);
 
-        var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
@@ -55,8 +57,29 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowStreamAsync_ShouldReturnForbidden_WhenAuthenticatedScopeClaimMismatchesPath()
+    {
+        var http = CreateAuthenticatedHttpContext("user-2");
+        var interactionService = new FakeCommandInteractionService();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("actor-1", "hello"),
+            BuildQueryPort(),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleGetWorkflowDetailAsync_ShouldPreferWorkflowBindingSource_WhenBindingExists()
     {
+        var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
             "tenant-a:workflow-app:user:token:approval",
             "tenant-a",
@@ -109,6 +132,7 @@ public sealed class ScopeWorkflowEndpointsTests
             CancellationToken.None);
 
         var result = await ScopeWorkflowEndpoints.HandleGetWorkflowDetailAsync(
+            http,
             "user-1",
             "approval",
             BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
@@ -116,7 +140,6 @@ public sealed class ScopeWorkflowEndpointsTests
             artifactStore,
             CancellationToken.None);
 
-        var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
@@ -130,6 +153,7 @@ public sealed class ScopeWorkflowEndpointsTests
     [Fact]
     public async Task HandleListWorkflowsAsync_ShouldIncludeWorkflowSources_WhenRequested()
     {
+        var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
             "tenant-a:workflow-app:user:token:approval",
             "tenant-a",
@@ -160,6 +184,7 @@ public sealed class ScopeWorkflowEndpointsTests
             new Dictionary<string, string>());
 
         var result = await ScopeWorkflowEndpoints.HandleListWorkflowsAsync(
+            http,
             "user-1",
             includeSource: true,
             BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
@@ -167,7 +192,6 @@ public sealed class ScopeWorkflowEndpointsTests
             artifactStore: null,
             CancellationToken.None);
 
-        var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
@@ -240,7 +264,10 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.SessionId.Should().Be("session-1");
+        interactionService.LastRequest.ScopeId.Should().Be("user-1");
         interactionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -330,7 +357,9 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"humanInputRequest\": { \"stepId\": \"approve\"");
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
-        interactionService.LastRequest.Metadata.Should().ContainKey("scope_id").WhoseValue.Should().Be("aevatar");
+        interactionService.LastRequest.ScopeId.Should().Be("user-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
@@ -389,12 +418,18 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("WorkflowRunExecutionStartedEvent");
         body.Should().Contain("\"runId\": \"run-1\"");
         body.Should().NotContain("EXECUTION_FAILED");
+        interactionService.LastRequest.Should().NotBeNull();
+        interactionService.LastRequest!.ScopeId.Should().Be("user-1");
+        interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
     }
 
     [Fact]
     public async Task HandleStopWorkflowRunAsync_ShouldReturnNotFound_WhenRunDoesNotBelongToScope()
     {
+        var http = CreateHttpContext();
         var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
+            http,
             "user-1",
             new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest("run-actor-1", "run-1"),
             BuildQueryPort(),
@@ -415,7 +450,6 @@ public sealed class ScopeWorkflowEndpointsTests
             new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>(),
             CancellationToken.None);
 
-        var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
@@ -426,6 +460,7 @@ public sealed class ScopeWorkflowEndpointsTests
     [Fact]
     public async Task HandleStopWorkflowRunAsync_ShouldDispatchStop_WhenRunBelongsToScope()
     {
+        var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
             "tenant-a:workflow-app:user:token:approval",
             "tenant-a",
@@ -452,6 +487,7 @@ public sealed class ScopeWorkflowEndpointsTests
         };
 
         var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
+            http,
             "user-1",
             new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest(
                 "run-actor-1",
@@ -476,7 +512,6 @@ public sealed class ScopeWorkflowEndpointsTests
             stopService,
             CancellationToken.None);
 
-        var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
@@ -540,6 +575,16 @@ public sealed class ScopeWorkflowEndpointsTests
                 .BuildServiceProvider(),
         };
         http.Response.Body = new MemoryStream();
+        return http;
+    }
+
+    private static DefaultHttpContext CreateAuthenticatedHttpContext(string scopeId)
+    {
+        var http = CreateHttpContext();
+        http.User = new ClaimsPrincipal(
+            new ClaimsIdentity(
+                [new Claim("scope_id", scopeId)],
+                authenticationType: "test"));
         return http;
     }
 

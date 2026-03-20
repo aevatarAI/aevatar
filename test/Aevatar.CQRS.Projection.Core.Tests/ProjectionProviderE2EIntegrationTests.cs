@@ -8,6 +8,8 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 [Trait("Feature", "ProjectionProviders")]
 public sealed class ProjectionProviderE2EIntegrationTests
 {
+    private const int ElasticsearchRequestTimeoutMs = 30000;
+
     [ElasticsearchIntegrationFact]
     public async Task ElasticsearchStore_ShouldRoundtripUpsertAndOverwrite()
     {
@@ -17,7 +19,7 @@ public sealed class ProjectionProviderE2EIntegrationTests
             Endpoints = [endpoint],
             IndexPrefix = "aevatar-e2e",
             AutoCreateIndex = true,
-            RequestTimeoutMs = 10000,
+            RequestTimeoutMs = ElasticsearchRequestTimeoutMs,
         };
         var indexScope = "projection-provider-e2e-" + Guid.NewGuid().ToString("N");
         using var store = new ElasticsearchProjectionDocumentStore<TestProviderStoreSmokeReadModel, string>(

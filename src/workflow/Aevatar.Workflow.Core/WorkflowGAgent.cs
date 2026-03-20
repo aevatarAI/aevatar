@@ -20,6 +20,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         string workflowYaml,
         string? workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+        string? scopeId = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -27,6 +28,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
+            ScopeId = scopeId?.Trim() ?? string.Empty,
         };
         if (inlineWorkflowYamls != null)
         {
@@ -39,7 +41,11 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     [EventHandler]
     public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
-        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls);
+        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls, request.ScopeId);
+
+    [EventHandler]
+    public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
+        HandleSubWorkflowDefinitionResolveRequestedAsync(request, CancellationToken.None);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -75,6 +81,8 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             : evt.WorkflowName.Trim();
         if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
             next.WorkflowName = incomingWorkflowName;
+        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+            next.ScopeId = evt.ScopeId.Trim();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
@@ -130,5 +138,116 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
         public static WorkflowCompilationResult Invalid(string error) =>
             new(false, error ?? string.Empty, null);
+    }
+
+    private async Task HandleSubWorkflowDefinitionResolveRequestedAsync(
+        SubWorkflowDefinitionResolveRequestedEvent request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var invocationId = request.InvocationId?.Trim() ?? string.Empty;
+        var parentActorId = request.ParentActorId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(invocationId) || string.IsNullOrWhiteSpace(parentActorId))
+            return;
+
+        var requestedDefinitionActorId = request.RequestedDefinitionActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(requestedDefinitionActorId) &&
+            !string.Equals(requestedDefinitionActorId, Id, StringComparison.Ordinal))
+        {
+            await SendResolveFailedAsync(
+                parentActorId,
+                invocationId,
+                request.WorkflowName,
+                requestedDefinitionActorId,
+                $"workflow_call requested definition actor '{requestedDefinitionActorId}', but current actor is '{Id}'.",
+                ct);
+            return;
+        }
+
+        var requestedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(request.WorkflowName);
+        var currentWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(State.WorkflowName);
+        if (string.IsNullOrWhiteSpace(currentWorkflowName))
+        {
+            await SendResolveFailedAsync(
+                parentActorId,
+                invocationId,
+                request.WorkflowName,
+                Id,
+                $"WorkflowGAgent '{Id}' is not bound to a workflow definition.",
+                ct);
+            return;
+        }
+
+        if (!string.Equals(currentWorkflowName, requestedWorkflowName, StringComparison.OrdinalIgnoreCase))
+        {
+            await SendResolveFailedAsync(
+                parentActorId,
+                invocationId,
+                request.WorkflowName,
+                Id,
+                $"WorkflowGAgent '{Id}' is bound to workflow '{State.WorkflowName}', not '{request.WorkflowName}'.",
+                ct);
+            return;
+        }
+
+        if (!State.Compiled || string.IsNullOrWhiteSpace(State.WorkflowYaml))
+        {
+            await SendResolveFailedAsync(
+                parentActorId,
+                invocationId,
+                request.WorkflowName,
+                Id,
+                string.IsNullOrWhiteSpace(State.CompilationError)
+                    ? $"WorkflowGAgent '{Id}' does not have a compiled workflow definition."
+                    : State.CompilationError,
+                ct);
+            return;
+        }
+
+        var resolved = new SubWorkflowDefinitionResolvedEvent
+        {
+            InvocationId = invocationId,
+            Definition = BuildDefinitionSnapshot(),
+        };
+
+        await SendToAsync(parentActorId, resolved, ct);
+    }
+
+    private WorkflowDefinitionSnapshot BuildDefinitionSnapshot()
+    {
+        var snapshot = new WorkflowDefinitionSnapshot
+        {
+            DefinitionActorId = Id,
+            WorkflowName = State.WorkflowName ?? string.Empty,
+            WorkflowYaml = State.WorkflowYaml ?? string.Empty,
+            ScopeId = State.ScopeId ?? string.Empty,
+            DefinitionVersion = State.Version,
+        };
+
+        foreach (var (workflowName, workflowYaml) in State.InlineWorkflowYamls)
+            snapshot.InlineWorkflowYamls[workflowName] = workflowYaml;
+
+        return snapshot;
+    }
+
+    private Task SendResolveFailedAsync(
+        string parentActorId,
+        string invocationId,
+        string? workflowName,
+        string? definitionActorId,
+        string error,
+        CancellationToken ct)
+    {
+        return SendToAsync(
+            parentActorId,
+            new SubWorkflowDefinitionResolveFailedEvent
+            {
+                InvocationId = invocationId,
+                WorkflowName = workflowName ?? string.Empty,
+                DefinitionActorId = definitionActorId ?? string.Empty,
+                Error = error ?? string.Empty,
+            },
+            ct);
     }
 }

@@ -77,7 +77,7 @@ services:
       Projection__Graph__Providers__Neo4j__Enabled: "true"
       Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
       Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19081:8080"
@@ -124,7 +124,7 @@ services:
       Projection__Graph__Providers__Neo4j__Enabled: "true"
       Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
       Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19082:8080"
@@ -171,7 +171,7 @@ services:
       Projection__Graph__Providers__Neo4j__Enabled: "true"
       Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
       Projection__Graph__Providers__Neo4j__Username: neo4j
-      Projection__Graph__Providers__Neo4j__Password: password
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
       Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19083:8080"

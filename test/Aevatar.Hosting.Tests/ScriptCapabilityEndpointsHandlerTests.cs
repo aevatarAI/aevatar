@@ -126,6 +126,28 @@ public class ScriptCapabilityEndpointsHandlerTests
         service.LastRequest.ProposalId.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleProposeEvolution_ShouldForwardScopeId_WhenProvided()
+    {
+        var service = new RecordingService();
+        var result = await InvokeHandleProposeEvolutionAsync(
+            new ProposeScriptEvolutionHttpRequest(
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source",
+                CandidateSourceHash: "hash",
+                Reason: "reason",
+                ProposalId: "proposal-1",
+                ScopeId: "scope-1"),
+            service);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastRequest.Should().NotBeNull();
+        service.LastRequest!.ScopeId.Should().Be("scope-1");
+    }
+
     private static async Task<IResult> InvokeHandleProposeEvolutionAsync(
         ProposeScriptEvolutionHttpRequest request,
         IScriptEvolutionApplicationService service)

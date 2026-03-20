@@ -717,6 +717,7 @@ docker compose up -d kafka garnet
 **3 节点集群**（`docker-compose.mainnet-cluster.yml`）：
 
 ```bash
+export NEO4J_PASSWORD="<set-a-password>"
 bash tools/cluster/start-mainnet-cluster.sh
 ```
 
@@ -1608,6 +1609,7 @@ flowchart LR
 | `AEVATAR_ActorRuntime__KafkaBootstrapServers` | Kafka 地址 |
 | `AEVATAR_ActorRuntime__KafkaTopicName` | Kafka Topic 名称 |
 | `AEVATAR_ActorRuntime__KafkaConsumerGroup` | Kafka 消费组 |
+| `AEVATAR_Projection__Graph__Providers__Neo4j__Password` | Mainnet Host 连接 Neo4j 的密码 |
 | `AEVATAR_Orleans__ClusteringMode` | `Localhost` / `Development` |
 | `AEVATAR_Orleans__ClusterId` | Orleans 集群 ID |
 | `AEVATAR_Orleans__ServiceId` | Orleans 服务 ID |
@@ -1623,9 +1625,12 @@ dotnet run --project src/Aevatar.Mainnet.Host.Api
 
 # 本地分布式（Docker Compose 基础设施）
 docker compose up -d kafka garnet
+export NEO4J_PASSWORD="<set-a-password>"
+export AEVATAR_Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 
 # 3 节点集群
+export NEO4J_PASSWORD="<set-a-password>"
 bash tools/cluster/start-mainnet-cluster.sh
 
 # 验证

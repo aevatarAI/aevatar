@@ -430,14 +430,18 @@ public class WorkflowGAgentCoverageTests
     [Fact]
     public async Task WorkflowRunGAgent_WhenSingletonSubWorkflowInvoked_ShouldPersistPendingAndReuseChildActor()
     {
-        var publisher = new RecordingEventPublisher();
         var runtime = new RecordingActorRuntime();
-        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
-        {
-            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
-        });
-        var agent = CreateRunAgent(runtime: runtime, workflowResolver: resolver);
-        agent.EventPublisher = publisher;
+        var runPublisher = new RecordingEventPublisher();
+        var definitionPublisher = new RecordingEventPublisher();
+        var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+            runtime,
+            definitionPublisher,
+            "workflow-definition:sub_flow",
+            "sub_flow",
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-parent-singleton");
+        agent.EventPublisher = runPublisher;
 
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
@@ -448,6 +452,25 @@ public class WorkflowGAgentCoverageTests
             Input = "payload-a",
             Lifecycle = "singleton",
         });
+
+        agent.State.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-1");
+        runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Should().ContainSingle();
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
+        runtime.CreateCalls.Should().Be(1);
+        agent.State.SubWorkflowBindings.Should().ContainSingle(x =>
+            x.DefinitionActorId == "workflow-definition:sub_flow" &&
+            x.DefinitionVersion == definitionAgent.State.Version);
+        agent.State.PendingSubWorkflowDefinitionResolutions.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocations.Should().ContainSingle(x =>
+            x.InvocationId == "invoke-1" &&
+            x.DefinitionActorId == "workflow-definition:sub_flow" &&
+            x.DefinitionVersion == definitionAgent.State.Version);
+        runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
+
+        runPublisher.Sent.Clear();
+        definitionPublisher.Sent.Clear();
+
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
             InvocationId = "invoke-2",
@@ -458,14 +481,16 @@ public class WorkflowGAgentCoverageTests
             Lifecycle = "singleton",
         });
 
+        agent.State.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-2");
+        runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Should().ContainSingle();
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
         runtime.CreateCalls.Should().Be(1);
         agent.State.SubWorkflowBindings.Should().ContainSingle();
         agent.State.PendingSubWorkflowInvocations.Should().HaveCount(2);
         agent.State.PendingSubWorkflowInvocations.Select(x => x.ChildActorId).Distinct().Should().ContainSingle();
         agent.State.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-run");
-        publisher.Sent.Should().HaveCount(2);
-        publisher.Sent.Select(x => x.targetActorId).Distinct().Should().ContainSingle();
-        publisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().HaveCount(2);
+        runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
 
         var childAgent = runtime.CreatedChildWorkflowAgents.Single();
         childAgent.BindEvents.Should().ContainSingle();
@@ -475,14 +500,18 @@ public class WorkflowGAgentCoverageTests
     [Fact]
     public async Task WorkflowRunGAgent_WhenChildWorkflowCompletes_ShouldTranslateToParentStepCompleted()
     {
-        var publisher = new RecordingEventPublisher();
         var runtime = new RecordingActorRuntime();
-        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
-        {
-            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
-        });
-        var agent = CreateRunAgent(runtime: runtime, workflowResolver: resolver);
-        agent.EventPublisher = publisher;
+        var runPublisher = new RecordingEventPublisher();
+        var definitionPublisher = new RecordingEventPublisher();
+        var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+            runtime,
+            definitionPublisher,
+            "workflow-definition:sub_flow",
+            "sub_flow",
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-parent-completion");
+        agent.EventPublisher = runPublisher;
 
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
@@ -493,6 +522,7 @@ public class WorkflowGAgentCoverageTests
             Input = "payload",
             Lifecycle = "singleton",
         });
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
 
         var pending = agent.State.PendingSubWorkflowInvocations.Single();
         await agent.HandleWorkflowCompletionEnvelope(Envelope(
@@ -510,24 +540,30 @@ public class WorkflowGAgentCoverageTests
         agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
         agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
 
-        var parentCompletion = publisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        var parentCompletion = runPublisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         parentCompletion.StepId.Should().Be("step-child");
         parentCompletion.RunId.Should().Be("parent-run");
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("child-done");
         parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
-        publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
+        runPublisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
     }
 
     [Fact]
     public async Task WorkflowRunGAgent_WhenParentRunCompletes_ShouldCleanupPendingInvocationsAndDestroyNonSingletonChildren()
     {
         var runtime = new RecordingActorRuntime();
-        var resolver = new StaticWorkflowDefinitionResolver(new Dictionary<string, string>
-        {
-            ["sub_flow"] = BuildValidWorkflowYaml("sub_role", "SubRole"),
-        });
-        var agent = CreateRunAgent(runtime: runtime, workflowResolver: resolver);
+        var runPublisher = new RecordingEventPublisher();
+        var definitionPublisher = new RecordingEventPublisher();
+        var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+            runtime,
+            definitionPublisher,
+            "workflow-definition:sub_flow",
+            "sub_flow",
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-parent-cleanup");
+        agent.EventPublisher = runPublisher;
 
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
@@ -538,6 +574,11 @@ public class WorkflowGAgentCoverageTests
             Input = "payload-singleton",
             Lifecycle = "singleton",
         });
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
+        runPublisher.Sent.Clear();
+        definitionPublisher.Sent.Clear();
+
         await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
         {
             InvocationId = "invoke-transient",
@@ -547,6 +588,7 @@ public class WorkflowGAgentCoverageTests
             Input = "payload-transient",
             Lifecycle = "transient",
         });
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
 
         var childActorByLifecycle = agent.State.PendingSubWorkflowInvocations
             .ToDictionary(x => x.Lifecycle, x => x.ChildActorId, StringComparer.OrdinalIgnoreCase);
@@ -1091,6 +1133,21 @@ public class WorkflowGAgentCoverageTests
         return agent;
     }
 
+    private static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
+        RecordingActorRuntime runtime,
+        RecordingEventPublisher publisher,
+        string actorId,
+        string workflowName,
+        string workflowYaml)
+    {
+        var agent = CreateDefinitionAgent();
+        SetAgentId(agent, actorId);
+        agent.EventPublisher = publisher;
+        await agent.BindWorkflowDefinitionAsync(workflowYaml, workflowName);
+        runtime.RegisterAgent(actorId, agent);
+        return agent;
+    }
+
     private static WorkflowRunGAgent CreateRunAgent(
         RecordingActorRuntime? runtime = null,
         IRoleAgentTypeResolver? roleResolver = null,
@@ -1150,7 +1207,31 @@ public class WorkflowGAgentCoverageTests
         };
     }
 
-    private static void SetAgentId(WorkflowRunGAgent agent, string agentId)
+    private static async Task ResolveLatestDefinitionRequestAsync(
+        WorkflowRunGAgent runAgent,
+        RecordingEventPublisher runPublisher,
+        WorkflowGAgent definitionAgent,
+        RecordingEventPublisher definitionPublisher)
+    {
+        var request = runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Last();
+        await definitionAgent.HandleSubWorkflowDefinitionResolveRequested(request);
+
+        var reply = definitionPublisher.Sent.Select(x => x.evt).Last();
+        switch (reply)
+        {
+            case SubWorkflowDefinitionResolvedEvent resolved:
+                await runAgent.HandleSubWorkflowDefinitionResolved(resolved);
+                break;
+            case SubWorkflowDefinitionResolveFailedEvent failed:
+                await runAgent.HandleSubWorkflowDefinitionResolveFailed(failed);
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unexpected workflow definition reply '{reply.Descriptor.FullName}'.");
+        }
+    }
+
+    private static void SetAgentId(GAgentBase agent, string agentId)
     {
         var setIdMethod = typeof(GAgentBase).GetMethod(
             "SetId",
@@ -1163,12 +1244,14 @@ public class WorkflowGAgentCoverageTests
         string roleId,
         string roleName,
         string? provider = null,
-        string? model = null)
+        string? model = null,
+        string? workflowName = null)
     {
+        var name = workflowName ?? "wf_valid";
         var providerLine = string.IsNullOrWhiteSpace(provider) ? string.Empty : $"\n    provider: \"{provider}\"";
         var modelLine = string.IsNullOrWhiteSpace(model) ? string.Empty : $"\n    model: \"{model}\"";
         return $$"""
-                 name: wf_valid
+                 name: {{name}}
                  roles:
                    - id: "{{roleId}}"
                      name: "{{roleName}}"
@@ -1262,6 +1345,12 @@ public class WorkflowGAgentCoverageTests
         public List<string> Unlinked { get; } = [];
         public string? ThrowOnGetAsyncActorId { get; set; }
 
+        public void RegisterAgent(string actorId, IAgent agent)
+        {
+            CreatedActors.RemoveAll(x => string.Equals(x.Id, actorId, StringComparison.Ordinal));
+            CreatedActors.Add(new FakeActor(actorId, agent));
+        }
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
         {
             return CreateAsync(typeof(TAgent), id, ct);
@@ -1328,16 +1417,6 @@ public class WorkflowGAgentCoverageTests
             var child = new FakeWorkflowRunChildAgent(actorId);
             CreatedChildWorkflowAgents.Add(child);
             return child;
-        }
-    }
-
-    private sealed class StaticWorkflowDefinitionResolver(IReadOnlyDictionary<string, string> definitions)
-        : IWorkflowDefinitionResolver
-    {
-        public Task<string?> GetWorkflowYamlAsync(string workflowName, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(definitions.TryGetValue(workflowName, out var yaml) ? yaml : null);
         }
     }
 

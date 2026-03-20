@@ -322,6 +322,61 @@ export const assistant = {
 
     return text;
   },
+  authorScript: async (
+    data: {
+      prompt: string;
+      currentSource?: string;
+      currentPackage?: any;
+      currentFilePath?: string;
+      metadata?: Record<string, string>;
+    },
+    options?: {
+      signal?: AbortSignal;
+      onText?: (text: string) => void;
+      onReasoning?: (text: string) => void;
+    },
+  ) => {
+    let text = '';
+    let reasoning = '';
+    let scriptPackage: any = null;
+    let currentFilePath = '';
+    await streamSse('/app/scripts/generator', data, frame => {
+      const normalized = normalizeAssistantFrame(frame);
+      if (!normalized) {
+        return;
+      }
+
+      if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
+        text += normalized.delta || '';
+        options?.onText?.(text);
+        return;
+      }
+
+      if (normalized.type === 'TEXT_MESSAGE_REASONING') {
+        reasoning += normalized.delta || '';
+        options?.onReasoning?.(reasoning);
+        return;
+      }
+
+      if (normalized.type === 'TEXT_MESSAGE_END') {
+        text = text || normalized.message || normalized.delta || '';
+        scriptPackage = normalized.scriptPackage || null;
+        currentFilePath = normalized.currentFilePath || '';
+        options?.onText?.(text);
+        return;
+      }
+
+      if (normalized.type === 'RUN_ERROR') {
+        throw new Error(normalized.message || 'Assistant run failed.');
+      }
+    }, options?.signal);
+
+    return {
+      text,
+      scriptPackage,
+      currentFilePath,
+    };
+  },
 };
 
 export const auth = {
@@ -330,4 +385,18 @@ export const auth = {
 
 export const app = {
   getContext: () => request<any>('/app/context'),
+  validateDraftScript: (data: any, signal?: AbortSignal) => request<any>('/app/scripts/validate', { method: 'POST', body: JSON.stringify(data), signal }),
+  listScripts: (includeSource = false) => request<any>(`/app/scripts?includeSource=${includeSource ? 'true' : 'false'}`),
+  getScript: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}`),
+  getScriptCatalog: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}/catalog`),
+  listScriptRuntimes: (take = 24) => request<any>(`/app/scripts/runtimes?take=${take}`),
+  getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
+  getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
+  saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
+  runDraftScript: (data: any) => request<any>('/app/scripts/draft-run', { method: 'POST', body: JSON.stringify(data) }),
+};
+
+export const scripts = {
+  getReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
+  proposeEvolution: (data: any) => request<any>('/app/scripts/evolutions/proposals', { method: 'POST', body: JSON.stringify(data) }),
 };

@@ -34,6 +34,7 @@ public sealed class RuntimeScriptPromotionCompensationService : IScriptPromotion
                 "compensate promotion failure",
                 proposal.ProposalId ?? string.Empty,
                 proposal.CandidateRevision ?? string.Empty,
+                proposal.ScopeId,
                 ct);
             return "rollback_to_previous_active_revision_success";
         }

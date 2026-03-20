@@ -107,6 +107,81 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectBlankPrompt()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "   ",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldExtractLegacyScopeIdIntoTypedField()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Metadata = new Dictionary<string, string>
+            {
+                ["scope_id"] = "user-1",
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().Be("user-1");
+        result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        result.Request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldExtractScopeIdCaseInsensitively()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            Metadata = new Dictionary<string, string>
+            {
+                ["Scope_Id"] = "user-1",
+                ["WORKFLOW.SCOPE_ID"] = "user-1",
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().Be("user-1");
+        result.Request.Metadata.Should().NotContainKey("Scope_Id");
+        result.Request.Metadata.Should().NotContainKey("WORKFLOW.SCOPE_ID");
+        result.Request.Metadata.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectConflictingScopeIds()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+            ScopeId = "scope-a",
+            Metadata = new Dictionary<string, string>
+            {
+                ["Scope_Id"] = "scope-b",
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ConflictingScopeId);
+    }
+
+    [Fact]
     public void CapabilityTraceContext_CreateAcceptedPayload_ShouldUseReceiptValues()
     {
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");

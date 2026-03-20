@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.Tools.Cli.Studio.Application.Abstractions;
+using Aevatar.Tools.Cli.Studio.Application.Contracts;
 using Aevatar.Tools.Cli.Studio.Application.Services;
 using FluentAssertions;
 
@@ -68,6 +69,50 @@ public sealed class CatalogImportServiceTests
     }
 
     [Fact]
+    public async Task ConnectorSaveCatalogAsync_WhenCatalogReadFails_ShouldPersistUploadedCatalog()
+    {
+        var store = new StubConnectorCatalogStore
+        {
+            ThrowOnGet = true,
+        };
+        var service = new ConnectorService(store, new StubConnectorCatalogImportParser([]));
+
+        var response = await service.SaveCatalogAsync(new SaveConnectorCatalogRequest(
+        [
+            new ConnectorDefinitionDto(
+                Name: "scope_web",
+                Type: "http",
+                Enabled: true,
+                TimeoutMs: 30_000,
+                Retry: 1,
+                Http: new HttpConnectorDefinitionDto(
+                    BaseUrl: "https://example.com/api",
+                    AllowedMethods: ["POST"],
+                    AllowedPaths: ["/"],
+                    AllowedInputKeys: ["input"],
+                    DefaultHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                Cli: new CliConnectorDefinitionDto(
+                    Command: string.Empty,
+                    FixedArguments: [],
+                    AllowedOperations: [],
+                    AllowedInputKeys: [],
+                    WorkingDirectory: string.Empty,
+                    Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+                Mcp: new McpConnectorDefinitionDto(
+                    ServerName: string.Empty,
+                    Command: string.Empty,
+                    Arguments: [],
+                    Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    DefaultTool: string.Empty,
+                    AllowedTools: [],
+                    AllowedInputKeys: [])),
+        ]));
+
+        response.Connectors.Should().ContainSingle().Which.Name.Should().Be("scope_web");
+        store.Catalog.Connectors.Should().ContainSingle().Which.Name.Should().Be("scope_web");
+    }
+
+    [Fact]
     public async Task RoleImportCatalogAsync_ShouldPersistUploadedCatalog()
     {
         var store = new StubRoleCatalogStore();
@@ -107,8 +152,34 @@ public sealed class CatalogImportServiceTests
             .WithMessage("Role catalog file 'broken-roles.json' is not valid JSON.");
     }
 
+    [Fact]
+    public async Task RoleSaveCatalogAsync_WhenCatalogReadFails_ShouldPersistUploadedCatalog()
+    {
+        var store = new StubRoleCatalogStore
+        {
+            ThrowOnGet = true,
+        };
+        var service = new RoleCatalogService(store, new StubRoleCatalogImportParser([]));
+
+        var response = await service.SaveCatalogAsync(new SaveRoleCatalogRequest(
+        [
+            new RoleDefinitionDto(
+                Id: "assistant",
+                Name: "Assistant",
+                SystemPrompt: "You are helpful.",
+                Provider: "openai-main",
+                Model: "gpt-test",
+                Connectors: ["scope_web"]),
+        ]));
+
+        response.Roles.Should().ContainSingle().Which.Id.Should().Be("assistant");
+        store.Catalog.Roles.Should().ContainSingle().Which.Id.Should().Be("assistant");
+    }
+
     private sealed class StubConnectorCatalogStore : IConnectorCatalogStore
     {
+        public bool ThrowOnGet { get; set; }
+
         public StoredConnectorCatalog Catalog { get; private set; } = new(
             HomeDirectory: "chrono-storage://studio-catalogs",
             FilePath: "chrono-storage://studio-catalogs/aevatar/connectors/v1/test/catalog.json.enc",
@@ -116,7 +187,9 @@ public sealed class CatalogImportServiceTests
             Connectors: []);
 
         public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(Catalog);
+            ThrowOnGet
+                ? Task.FromException<StoredConnectorCatalog>(new InvalidOperationException("simulated remote read failure"))
+                : Task.FromResult(Catalog);
 
         public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(
             StoredConnectorCatalog catalog,
@@ -143,6 +216,8 @@ public sealed class CatalogImportServiceTests
 
     private sealed class StubRoleCatalogStore : IRoleCatalogStore
     {
+        public bool ThrowOnGet { get; set; }
+
         public StoredRoleCatalog Catalog { get; private set; } = new(
             HomeDirectory: "chrono-storage://studio-catalogs",
             FilePath: "chrono-storage://studio-catalogs/aevatar/roles/v1/test/catalog.json.enc",
@@ -150,7 +225,9 @@ public sealed class CatalogImportServiceTests
             Roles: []);
 
         public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(Catalog);
+            ThrowOnGet
+                ? Task.FromException<StoredRoleCatalog>(new InvalidOperationException("simulated remote read failure"))
+                : Task.FromResult(Catalog);
 
         public Task<StoredRoleCatalog> SaveRoleCatalogAsync(
             StoredRoleCatalog catalog,

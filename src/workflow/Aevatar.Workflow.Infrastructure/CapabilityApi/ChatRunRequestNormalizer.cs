@@ -19,6 +19,14 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
+    private readonly record struct NormalizedChatContext(
+        IReadOnlyDictionary<string, string> Metadata,
+        string? ScopeId,
+        WorkflowChatRunStartError Error)
+    {
+        public bool Succeeded => Error == WorkflowChatRunStartError.None;
+    }
+
     public static ChatRunRequestNormalizationResult Normalize(
         ChatInput input,
         WorkflowCapabilitiesDocument? capabilities = null,
@@ -27,12 +35,19 @@ internal static class ChatRunRequestNormalizer
         ArgumentNullException.ThrowIfNull(input);
 
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
-        var normalizedMetadata = NormalizeMetadata(input.Metadata, defaultMetadata);
+        var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
+        if (!normalizedContext.Succeeded)
+            return ChatRunRequestNormalizationResult.Failed(normalizedContext.Error);
+
+        var normalizedMetadata = normalizedContext.Metadata;
         var requestedWorkflowName = NormalizeWorkflowName(input.Workflow);
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(input.WorkflowYamls);
         var legacyWorkflowYaml = input.WorkflowYaml;
         var hasLegacyWorkflowYaml = legacyWorkflowYaml != null;
         var normalizedPromptInput = string.IsNullOrWhiteSpace(input.Prompt) ? string.Empty : input.Prompt.Trim();
+
+        if (normalizedPromptInput.Length == 0)
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
         if (hasLegacyWorkflowYaml && string.IsNullOrWhiteSpace(legacyWorkflowYaml))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidWorkflowYaml);
@@ -59,7 +74,8 @@ internal static class ChatRunRequestNormalizer
                     ActorId: normalizedAgentId,
                     SessionId: NormalizeSessionId(input.SessionId),
                     WorkflowYamls: inlineWorkflowYamls,
-                    Metadata: normalizedMetadata));
+                    Metadata: normalizedMetadata,
+                    ScopeId: normalizedContext.ScopeId));
         }
 
         if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
@@ -71,7 +87,8 @@ internal static class ChatRunRequestNormalizer
                     ActorId: normalizedAgentId,
                     SessionId: NormalizeSessionId(input.SessionId),
                     WorkflowYamls: null,
-                    Metadata: normalizedMetadata));
+                    Metadata: normalizedMetadata,
+                    ScopeId: normalizedContext.ScopeId));
         }
 
         return ChatRunRequestNormalizationResult.Success(
@@ -81,7 +98,8 @@ internal static class ChatRunRequestNormalizer
                 ActorId: normalizedAgentId,
                 SessionId: NormalizeSessionId(input.SessionId),
                 WorkflowYamls: null,
-                Metadata: normalizedMetadata));
+                Metadata: normalizedMetadata,
+                ScopeId: normalizedContext.ScopeId));
     }
 
     private static IReadOnlyList<string> NormalizeInlineWorkflowYamls(IReadOnlyList<string>? workflowYamls)
@@ -98,38 +116,75 @@ internal static class ChatRunRequestNormalizer
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 
-    private static IReadOnlyDictionary<string, string> NormalizeMetadata(
+    private static NormalizedChatContext NormalizeContext(
+        string? explicitScopeId,
         IDictionary<string, string>? metadata,
         IReadOnlyDictionary<string, string>? defaultMetadata)
     {
         var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        var normalizedScopeId = NormalizeScopeId(explicitScopeId);
         if (defaultMetadata is { Count: > 0 })
         {
             foreach (var (key, value) in defaultMetadata)
-                AddNormalizedMetadataEntry(normalized, key, value);
+            {
+                if (!AddNormalizedMetadataEntry(normalized, ref normalizedScopeId, key, value))
+                    return new NormalizedChatContext(normalized, null, WorkflowChatRunStartError.ConflictingScopeId);
+            }
         }
 
         if (metadata is { Count: > 0 })
         {
             foreach (var (key, value) in metadata)
-                AddNormalizedMetadataEntry(normalized, key, value);
+            {
+                if (!AddNormalizedMetadataEntry(normalized, ref normalizedScopeId, key, value))
+                    return new NormalizedChatContext(normalized, null, WorkflowChatRunStartError.ConflictingScopeId);
+            }
         }
 
-        return normalized;
+        return new NormalizedChatContext(normalized, normalizedScopeId, WorkflowChatRunStartError.None);
     }
 
-    private static void AddNormalizedMetadataEntry(
+    private static bool AddNormalizedMetadataEntry(
         IDictionary<string, string> metadata,
+        ref string? scopeId,
         string key,
         string value)
     {
         var normalizedKey = string.IsNullOrWhiteSpace(key) ? string.Empty : key.Trim();
         var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
         if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
-            return;
+            return true;
+
+        if (IsScopeMetadataKey(normalizedKey))
+        {
+            return TryAssignScopeId(ref scopeId, normalizedValue);
+        }
 
         metadata[normalizedKey] = normalizedValue;
+        return true;
     }
+
+    private static bool IsScopeMetadataKey(string key) =>
+        string.Equals(key, "scope_id", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryAssignScopeId(ref string? currentScopeId, string? candidateScopeId)
+    {
+        var normalizedCandidate = NormalizeScopeId(candidateScopeId);
+        if (normalizedCandidate == null)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(currentScopeId))
+        {
+            currentScopeId = normalizedCandidate;
+            return true;
+        }
+
+        return string.Equals(currentScopeId, normalizedCandidate, StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? null : scopeId.Trim();
 
     private static string? NormalizeAgentId(string? agentId) =>
         string.IsNullOrWhiteSpace(agentId) ? null : agentId.Trim();

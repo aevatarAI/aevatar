@@ -12,4 +12,22 @@ public interface IScriptRuntimeCommandPort
         string definitionActorId,
         string requestedEventType,
         CancellationToken ct);
+
+    Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        string? scopeId,
+        CancellationToken ct) =>
+        RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            ct);
 }

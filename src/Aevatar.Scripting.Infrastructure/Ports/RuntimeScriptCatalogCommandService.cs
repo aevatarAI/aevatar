@@ -41,10 +41,31 @@ public sealed class RuntimeScriptCatalogCommandService
         string definitionActorId,
         string sourceHash,
         string proposalId,
+        CancellationToken ct) =>
+        await PromoteCatalogRevisionAsync(
+            catalogActorId,
+            scriptId,
+            expectedBaseRevision,
+            revision,
+            definitionActorId,
+            sourceHash,
+            proposalId,
+            scopeId: null,
+            ct);
+
+    public async Task PromoteCatalogRevisionAsync(
+        string? catalogActorId,
+        string scriptId,
+        string expectedBaseRevision,
+        string revision,
+        string definitionActorId,
+        string sourceHash,
+        string proposalId,
+        string? scopeId,
         CancellationToken ct)
     {
         var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(scopeId)
             : catalogActorId;
         _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
             resolvedCatalogActorId,
@@ -60,7 +81,8 @@ public sealed class RuntimeScriptCatalogCommandService
                 revision,
                 definitionActorId,
                 sourceHash,
-                proposalId),
+                proposalId,
+                scopeId),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script catalog promotion dispatch failed.");
@@ -85,10 +107,29 @@ public sealed class RuntimeScriptCatalogCommandService
         string reason,
         string proposalId,
         string expectedCurrentRevision,
+        CancellationToken ct) =>
+        await RollbackCatalogRevisionAsync(
+            catalogActorId,
+            scriptId,
+            targetRevision,
+            reason,
+            proposalId,
+            expectedCurrentRevision,
+            scopeId: null,
+            ct);
+
+    public async Task RollbackCatalogRevisionAsync(
+        string? catalogActorId,
+        string scriptId,
+        string targetRevision,
+        string reason,
+        string proposalId,
+        string expectedCurrentRevision,
+        string? scopeId,
         CancellationToken ct)
     {
         var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(scopeId)
             : catalogActorId;
         _ = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
             resolvedCatalogActorId,
@@ -103,7 +144,8 @@ public sealed class RuntimeScriptCatalogCommandService
                 targetRevision,
                 reason,
                 proposalId,
-                expectedCurrentRevision),
+                expectedCurrentRevision,
+                scopeId),
             ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script catalog rollback dispatch failed.");

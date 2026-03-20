@@ -53,6 +53,29 @@ public class ScriptEvolutionApplicationServiceTests
             .WithMessage("ScriptId is required.");
     }
 
+    [Fact]
+    public async Task ProposeAsync_ShouldPropagateScopeId_AndPrefixGeneratedProposalId()
+    {
+        var port = new FakeScriptEvolutionProposalPort();
+        var service = new ScriptEvolutionApplicationService(port);
+
+        _ = await service.ProposeAsync(
+            new ProposeScriptEvolutionRequest(
+                ScriptId: "inventory-script",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "public sealed class InventoryScriptV2 {}",
+                CandidateSourceHash: string.Empty,
+                Reason: "external update",
+                ProposalId: string.Empty,
+                ScopeId: "nyx-user-1"),
+            CancellationToken.None);
+
+        port.CapturedProposal.Should().NotBeNull();
+        port.CapturedProposal!.ScopeId.Should().Be("nyx-user-1");
+        port.CapturedProposal.ProposalId.Should().StartWith("nyx-user-1:");
+    }
+
     private sealed class FakeScriptEvolutionProposalPort : IScriptEvolutionProposalPort
     {
         public ScriptEvolutionProposal? CapturedProposal { get; private set; }

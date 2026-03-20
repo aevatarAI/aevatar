@@ -60,6 +60,7 @@ public sealed class ScriptDefinitionSnapshotProjector
                 StateDescriptorFullName = state.StateDescriptorFullName ?? string.Empty,
                 ReadModelDescriptorFullName = state.ReadModelDescriptorFullName ?? string.Empty,
                 RuntimeSemantics = state.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+                ScopeId = state.ScopeId ?? string.Empty,
                 StateVersion = stateEvent.Version,
                 LastEventId = stateEvent.EventId ?? string.Empty,
                 CreatedAt = updatedAt,

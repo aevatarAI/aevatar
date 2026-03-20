@@ -69,6 +69,13 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         CancellationToken ct)
     {
         ValidateBinding(evt);
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(evt.ScopeId) &&
+            !string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script behavior actor `{Id}` is already bound to scope `{State.ScopeId}` and cannot switch to `{evt.ScopeId}`.");
+        }
 
         if (IsSameBinding(evt))
             return;
@@ -91,6 +98,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty,
             ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty,
             RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+            ScopeId = evt.ScopeId ?? string.Empty,
         }, ct);
     }
 
@@ -116,14 +124,24 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 throw new InvalidOperationException(
                     $"Runtime actor `{Id}` is bound to revision `{State.Revision}`, but run targeted `{run.ScriptRevision}`.");
             }
+
+            if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+                !string.IsNullOrWhiteSpace(run.ScopeId) &&
+                !string.Equals(run.ScopeId, State.ScopeId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Runtime actor `{Id}` is bound to scope `{State.ScopeId}`, but run targeted `{run.ScopeId}`.");
+            }
         }
 
+        var scopeId = ResolveScopeId(envelope, State.ScopeId);
         var capabilities = _capabilityFactory.Create(
             new ScriptBehaviorRuntimeCapabilityContext(
                 ActorId: Id,
                 ScriptId: State.ScriptId ?? string.Empty,
                 Revision: State.Revision ?? string.Empty,
                 DefinitionActorId: State.DefinitionActorId ?? string.Empty,
+                ScopeId: scopeId,
                 RunId: ResolveRunId(envelope),
                 CorrelationId: ResolveCorrelationId(envelope)),
             publishAsync: (message, audience, token) => PublishAsync(message, audience, token),
@@ -141,6 +159,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 DefinitionActorId: State.DefinitionActorId ?? string.Empty,
                 ScriptId: State.ScriptId ?? string.Empty,
                 Revision: State.Revision ?? string.Empty,
+                ScopeId: scopeId,
                 SourceText: State.SourceText ?? string.Empty,
                 SourceHash: State.SourceHash ?? string.Empty,
                 ScriptPackage: ScriptPackageModel.ResolveDeclaredPackage(
@@ -184,6 +203,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
         next.RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = string.Concat(evt.Revision ?? string.Empty, ":binding");
         return next;
@@ -251,6 +271,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         next.ReadModelTypeUrl = string.IsNullOrWhiteSpace(evt.ReadModelTypeUrl)
             ? next.ReadModelTypeUrl
             : evt.ReadModelTypeUrl;
+        if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
+            next.ScopeId = evt.ScopeId;
         return next;
     }
 
@@ -258,7 +280,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     {
         return string.Equals(State.DefinitionActorId, evt.DefinitionActorId, StringComparison.Ordinal) &&
                string.Equals(State.Revision, evt.Revision, StringComparison.Ordinal) &&
-               string.Equals(State.SourceHash, evt.SourceHash, StringComparison.Ordinal);
+               string.Equals(State.SourceHash, evt.SourceHash, StringComparison.Ordinal) &&
+               string.Equals(State.ScopeId ?? string.Empty, evt.ScopeId ?? string.Empty, StringComparison.Ordinal);
     }
 
     private static void ValidateBinding(BindScriptBehaviorRequestedEvent evt)
@@ -325,5 +348,24 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         }
 
         return ResolveRunId(envelope);
+    }
+
+    private static string ResolveScopeId(EventEnvelope envelope, string? fallbackScopeId)
+    {
+        if (envelope.Payload?.Is(RunScriptRequestedEvent.Descriptor) == true)
+        {
+            var run = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            if (!string.IsNullOrWhiteSpace(run.ScopeId))
+                return run.ScopeId.Trim();
+        }
+
+        if (envelope.Payload?.Is(BindScriptBehaviorRequestedEvent.Descriptor) == true)
+        {
+            var bind = envelope.Payload.Unpack<BindScriptBehaviorRequestedEvent>();
+            if (!string.IsNullOrWhiteSpace(bind.ScopeId))
+                return bind.ScopeId.Trim();
+        }
+
+        return fallbackScopeId?.Trim() ?? string.Empty;
     }
 }

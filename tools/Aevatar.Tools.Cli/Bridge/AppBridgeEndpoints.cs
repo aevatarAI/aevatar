@@ -27,6 +27,10 @@ internal static class AppBridgeEndpoints
         app.MapPut("/api/scopes/{scopeId}/workflows/{workflowId}", HandleBackendProxyAsync);
         app.MapPost("/api/scopes/{scopeId}/workflows/{workflowId}/runs:stream", HandleBackendProxyAsync);
         app.MapPost("/api/scopes/{scopeId}/workflow-runs:stream", HandleBackendProxyAsync);
+        app.MapGet("/api/scopes/{scopeId}/scripts", HandleBackendProxyAsync);
+        app.MapGet("/api/scopes/{scopeId}/scripts/{scriptId}", HandleBackendProxyAsync);
+        app.MapPut("/api/scopes/{scopeId}/scripts/{scriptId}", HandleBackendProxyAsync);
+        app.MapPost("/api/scopes/{scopeId}/scripts/{scriptId}/evolutions/proposals", HandleBackendProxyAsync);
     }
 
     private static async Task HandleBackendProxyAsync(

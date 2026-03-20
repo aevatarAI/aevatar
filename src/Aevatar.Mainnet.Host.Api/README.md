@@ -17,9 +17,11 @@
 docker compose up -d kafka garnet
 ```
 
-2. 以 Distributed 环境启动：
+2. 注入 Neo4j 密码并以 Distributed 环境启动：
 
 ```bash
+export NEO4J_PASSWORD="<set-a-password>"
+export AEVATAR_Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
@@ -31,6 +33,7 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `Orleans:ClusteringMode=Localhost`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
+`Projection:Graph:Providers:Neo4j:Password` 不再在仓库内提供默认明文值，需通过环境变量注入。
 
 `Orleans:ClusteringMode` 支持：
 
@@ -52,6 +55,7 @@ export AEVATAR_Orleans__GatewayPort=30000
 仓库提供的集群启动脚本会拉起 3 节点 Mainnet + Kafka + Garnet + Elasticsearch + Neo4j。
 
 ```bash
+export NEO4J_PASSWORD="<set-a-password>"
 bash tools/cluster/start-mainnet-cluster.sh
 ```
 

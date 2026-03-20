@@ -36,15 +36,15 @@ public sealed class RoleCatalogService
         var roles = request.Roles ?? [];
         EnsureUniqueIds(roles);
 
-        var existing = await _store.GetRoleCatalogAsync(cancellationToken);
         var saved = await _store.SaveRoleCatalogAsync(
-            existing with
-            {
-                Roles = roles
+            new StoredRoleCatalog(
+                HomeDirectory: string.Empty,
+                FilePath: string.Empty,
+                FileExists: false,
+                Roles: roles
                     .Where(role => !string.IsNullOrWhiteSpace(role.Id))
                     .Select(ToStoredRole)
-                    .ToList(),
-            },
+                    .ToList()),
             cancellationToken);
 
         return ToResponse(saved);

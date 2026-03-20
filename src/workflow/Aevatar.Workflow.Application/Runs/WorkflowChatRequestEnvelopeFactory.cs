@@ -18,6 +18,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             Prompt = command.Prompt,
             SessionId = sessionId,
+            ScopeId = command.ScopeId ?? string.Empty,
         };
         AppendMetadata(chatRequest.Metadata, context.Headers);
         AppendMetadata(chatRequest.Metadata, command.Metadata);
@@ -51,8 +52,14 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
+            if (IsScopeMetadataKey(normalizedKey))
+                continue;
 
             destination[normalizedKey] = normalizedValue;
         }
     }
+
+    private static bool IsScopeMetadataKey(string key) =>
+        string.Equals(key, "scope_id", StringComparison.Ordinal) ||
+        string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 }

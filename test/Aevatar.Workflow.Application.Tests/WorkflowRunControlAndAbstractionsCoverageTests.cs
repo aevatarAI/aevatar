@@ -791,6 +791,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 

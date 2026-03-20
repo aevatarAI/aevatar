@@ -25,6 +25,7 @@ public sealed class UpsertScriptDefinitionCommandEnvelopeFactory
                 ScriptRevision = command.ScriptRevision ?? string.Empty,
                 SourceText = command.SourceText ?? string.Empty,
                 SourceHash = command.SourceHash ?? string.Empty,
+                ScopeId = command.ScopeId ?? string.Empty,
             });
     }
 }

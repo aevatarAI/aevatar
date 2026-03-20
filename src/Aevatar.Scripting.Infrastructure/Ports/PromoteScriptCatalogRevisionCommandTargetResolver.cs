@@ -32,7 +32,7 @@ public sealed class PromoteScriptCatalogRevisionCommandTargetResolver
                 ScriptingCommandStartError.InvalidArgument("revision", "Revision is required."));
 
         var actorId = string.IsNullOrWhiteSpace(command.CatalogActorId)
-            ? _addressResolver.GetCatalogActorId()
+            ? _addressResolver.GetCatalogActorId(command.ScopeId)
             : command.CatalogActorId;
         var actor = await _actorAccessor.GetOrCreateAsync<ScriptCatalogGAgent>(
             actorId,
