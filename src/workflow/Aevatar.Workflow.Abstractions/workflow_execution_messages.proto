@@ -93,6 +93,15 @@ message SubWorkflowDefinitionResolveFailedEvent
   string definition_actor_id = 3;
   string error = 4;
 }
+message SubWorkflowDefinitionResolutionTimeoutFiredEvent
+{
+  string invocation_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string workflow_name = 4;
+  string definition_actor_id = 5;
+  int32 timeout_ms = 6;
+}
 message SubWorkflowDefinitionResolutionRegisteredEvent
 {
   string invocation_id = 1;
@@ -102,6 +111,11 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   string definition_actor_id = 5;
   string input = 6;
   string lifecycle = 7;
+  string timeout_callback_id = 8;
+  int64 timeout_callback_generation = 9;
+  string timeout_callback_actor_id = 10;
+  int32 timeout_callback_backend = 11;
+  int32 timeout_ms = 12;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {

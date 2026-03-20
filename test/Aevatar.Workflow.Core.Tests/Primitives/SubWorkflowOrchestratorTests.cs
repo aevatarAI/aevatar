@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
@@ -11,6 +12,28 @@ namespace Aevatar.Workflow.Core.Tests.Primitives;
 
 public sealed class SubWorkflowOrchestratorTests
 {
+    private const string ValidSubFlowYaml = """
+                                           name: sub_flow
+                                           roles:
+                                             - id: role_a
+                                               name: RoleA
+                                               system_prompt: "helpful role"
+                                           steps:
+                                             - id: step_1
+                                               type: transform
+                                           """;
+
+    private const string ValidSubFlowWithSpaceYaml = """
+                                                    name: sub flow
+                                                    roles:
+                                                      - id: role_a
+                                                        name: RoleA
+                                                        system_prompt: "helpful role"
+                                                    steps:
+                                                      - id: step_1
+                                                        type: transform
+                                                    """;
+
     [Fact]
     public async Task HandleInvokeRequestedAsync_WhenParentStepMissing_ShouldPublishFailure()
     {
@@ -81,7 +104,7 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
-    public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMissing_ShouldPublishFailure()
+    public async Task HandleInvokeRequestedAsync_WhenDefinitionActorMustBeResolved_ShouldRegisterResolutionAndScheduleTimeout()
     {
         var harness = CreateHarness();
 
@@ -96,11 +119,44 @@ public sealed class SubWorkflowOrchestratorTests
             new WorkflowRunState(),
             CancellationToken.None);
 
-        harness.Published.Should().ContainSingle();
-        harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Which.Error
-            .Should().Contain("definition actor");
+        harness.Published.Should().BeEmpty();
         harness.Runtime.CreateRequests.Should().BeEmpty();
-        harness.Persisted.Should().BeEmpty();
+        var registered = harness.Persisted.Should().ContainSingle()
+            .Subject.Should().BeOfType<SubWorkflowDefinitionResolutionRegisteredEvent>().Subject;
+        registered.InvocationId.Should().Be("invoke-1");
+        registered.DefinitionActorId.Should().Be("workflow-definition:sub_flow");
+        registered.TimeoutCallbackId.Should().NotBeNullOrWhiteSpace();
+        registered.TimeoutMs.Should().Be(30_000);
+        harness.ScheduledTimeouts.Should().ContainSingle(x =>
+            x.CallbackId == registered.TimeoutCallbackId &&
+            x.DueTime == TimeSpan.FromMilliseconds(30_000));
+        harness.Sent.Should().ContainSingle(x => x.TargetActorId == "workflow-definition:sub_flow");
+    }
+
+    [Fact]
+    public async Task HandleInvokeRequestedAsync_WhenInlineWorkflowYamlIsEmpty_ShouldPublishValidationFailure()
+    {
+        var harness = CreateHarness();
+        var state = new WorkflowRunState();
+        state.InlineWorkflowYamls["sub_flow"] = " ";
+
+        await harness.Orchestrator.HandleInvokeRequestedAsync(
+            new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-inline",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-inline",
+                WorkflowName = "sub_flow",
+            },
+            state,
+            CancellationToken.None);
+
+        harness.ScheduledTimeouts.Should().BeEmpty();
+        harness.Sent.Should().BeEmpty();
+        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowDefinitionResolutionClearedEvent);
+        var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("inline workflow 'sub_flow' YAML is empty");
     }
 
     [Fact]
@@ -150,19 +206,21 @@ public sealed class SubWorkflowOrchestratorTests
                 InvocationId = "invoke-1",
                 Definition = new WorkflowDefinitionSnapshot
                 {
-                    DefinitionActorId = definitionActorId,
-                    WorkflowName = "sub_flow",
-                    WorkflowYaml = "name: sub_flow\nroles: []\nsteps: []\n",
-                    DefinitionVersion = 7,
-                },
+                DefinitionActorId = definitionActorId,
+                WorkflowName = "sub_flow",
+                WorkflowYaml = ValidSubFlowYaml,
+                DefinitionVersion = 7,
+            },
             },
             resolutionState,
             CancellationToken.None);
 
         harness.Runtime.CreateRequests.Should().BeEmpty();
         harness.Runtime.Linked.Should().BeEmpty();
-        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowInvocationRegisteredEvent);
+        harness.Persisted.OfType<SubWorkflowDefinitionResolvedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
+        harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-1");
         harness.Persisted.Should().NotContain(x => x is SubWorkflowBindingUpsertedEvent);
+        harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == resolutionState.PendingSubWorkflowDefinitionResolutions[0].TimeoutCallbackId);
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
         var start = harness.Sent.Single().Message.Should().BeOfType<StartWorkflowEvent>().Subject;
         start.RunId.Should().Be("invoke-1");
@@ -176,7 +234,7 @@ public sealed class SubWorkflowOrchestratorTests
         const string definitionActorId = "workflow-definition:sub flow";
         var harness = CreateHarness();
         var state = new WorkflowRunState();
-        state.InlineWorkflowYamls["sub flow"] = "name: inline\nroles: []\nsteps: []\n";
+        state.InlineWorkflowYamls["sub flow"] = ValidSubFlowWithSpaceYaml;
         state.PendingSubWorkflowDefinitionResolutions.Add(new WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution
         {
             InvocationId = "invoke-2",
@@ -205,7 +263,7 @@ public sealed class SubWorkflowOrchestratorTests
                 {
                     DefinitionActorId = definitionActorId,
                     WorkflowName = "sub flow",
-                    WorkflowYaml = "name: sub flow\nroles: []\nsteps: []\n",
+                    WorkflowYaml = ValidSubFlowWithSpaceYaml,
                     ScopeId = "scope-a",
                     DefinitionVersion = 2,
                 },
@@ -225,6 +283,7 @@ public sealed class SubWorkflowOrchestratorTests
             x.ChildActorId == "owner-1:workflow:workflow-definition-sub-flow" &&
             x.DefinitionActorId == definitionActorId &&
             x.DefinitionVersion == 2);
+        harness.Persisted.OfType<SubWorkflowDefinitionResolvedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-2");
         harness.Persisted.OfType<SubWorkflowInvocationRegisteredEvent>().Should().ContainSingle(x =>
             x.ChildRunId == "invoke-2" &&
             x.DefinitionActorId == definitionActorId &&
@@ -247,7 +306,7 @@ public sealed class SubWorkflowOrchestratorTests
         var racedActor = new RecordingActor(childActorId);
         var harness = CreateHarness();
         var state = new WorkflowRunState();
-        state.InlineWorkflowYamls["sub_flow"] = "name: sub_flow\nroles: []\nsteps: []\n";
+        state.InlineWorkflowYamls["sub_flow"] = ValidSubFlowYaml;
         harness.Runtime.EnqueueGet(childActorId, null);
         harness.Runtime.EnqueueGet(childActorId, racedActor);
         harness.Runtime.FailCreateActorIds.Add(childActorId);
@@ -271,6 +330,66 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task HandleDefinitionResolutionTimeoutFiredAsync_WhenLeaseMatches_ShouldClearAndPublishFailure()
+    {
+        var harness = CreateHarness();
+        var state = SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered(
+            new WorkflowRunState(),
+            new SubWorkflowDefinitionResolutionRegisteredEvent
+            {
+                InvocationId = "invoke-timeout",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-timeout",
+                WorkflowName = "sub_flow",
+                DefinitionActorId = "workflow-definition:sub_flow",
+                Lifecycle = WorkflowCallLifecycle.Singleton,
+                TimeoutCallbackId = "cb-timeout",
+                TimeoutCallbackActorId = "owner-1",
+                TimeoutCallbackGeneration = 7,
+                TimeoutCallbackBackend = (int)WorkflowRuntimeCallbackBackendState.InMemory,
+                TimeoutMs = 30_000,
+            });
+        var inboundEnvelope = new EventEnvelope
+        {
+            Payload = Any.Pack(new SubWorkflowDefinitionResolutionTimeoutFiredEvent
+            {
+                InvocationId = "invoke-timeout",
+                TimeoutMs = 30_000,
+            }),
+            Runtime = new EnvelopeRuntime
+            {
+                Callback = new EnvelopeCallbackContext
+                {
+                    CallbackId = "cb-timeout",
+                    Generation = 7,
+                },
+            },
+        };
+
+        await harness.Orchestrator.HandleDefinitionResolutionTimeoutFiredAsync(
+            new SubWorkflowDefinitionResolutionTimeoutFiredEvent
+            {
+                InvocationId = "invoke-timeout",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-timeout",
+                WorkflowName = "sub_flow",
+                DefinitionActorId = "workflow-definition:sub_flow",
+                TimeoutMs = 30_000,
+            },
+            inboundEnvelope,
+            state,
+            CancellationToken.None);
+
+        harness.Persisted.OfType<SubWorkflowDefinitionResolutionTimeoutFiredEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-timeout");
+        harness.Persisted.OfType<SubWorkflowDefinitionResolutionClearedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-timeout");
+        var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        failure.RunId.Should().Be("parent-run");
+        failure.StepId.Should().Be("step-timeout");
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("timed out waiting for definition resolution");
+    }
+
+    [Fact]
     public async Task HandleDefinitionResolveFailedAsync_WhenPendingResolutionExists_ShouldClearAndPublishFailure()
     {
         var harness = CreateHarness();
@@ -283,6 +402,13 @@ public sealed class SubWorkflowOrchestratorTests
             WorkflowName = "sub_flow",
             DefinitionActorId = "workflow-definition:sub_flow",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            TimeoutLease = new WorkflowRuntimeCallbackLeaseState
+            {
+                ActorId = "owner-1",
+                CallbackId = "cb-failed",
+                Generation = 3,
+                Backend = WorkflowRuntimeCallbackBackendState.InMemory,
+            },
         });
         state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId["invoke-failed"] = 0;
 
@@ -295,7 +421,9 @@ public sealed class SubWorkflowOrchestratorTests
             state,
             CancellationToken.None);
 
-        harness.Persisted.Should().ContainSingle(x => x is SubWorkflowDefinitionResolutionClearedEvent);
+        harness.Persisted.OfType<SubWorkflowDefinitionResolveFailedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-failed");
+        harness.Persisted.OfType<SubWorkflowDefinitionResolutionClearedEvent>().Should().ContainSingle(x => x.InvocationId == "invoke-failed");
+        harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == "cb-failed" && x.Generation == 3);
         var failure = harness.Published.Should().ContainSingle().Subject.Message.Should().BeOfType<StepCompletedEvent>().Subject;
         failure.RunId.Should().Be("parent-run");
         failure.StepId.Should().Be("step-failed");
@@ -511,9 +639,16 @@ public sealed class SubWorkflowOrchestratorTests
             DefinitionActorId = "workflow-definition:sub_flow",
             Input = "payload-a",
             Lifecycle = WorkflowCallLifecycle.Singleton,
+            TimeoutCallbackId = "cb-a",
+            TimeoutCallbackActorId = "owner-1",
+            TimeoutCallbackGeneration = 11,
+            TimeoutCallbackBackend = (int)WorkflowRuntimeCallbackBackendState.InMemory,
+            TimeoutMs = 30_000,
         });
         state.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-a");
         state.PendingSubWorkflowDefinitionResolutionIndexByInvocationId["invoke-a"].Should().Be(0);
+        state.PendingSubWorkflowDefinitionResolutions.Single().TimeoutCallbackId.Should().Be("cb-a");
+        state.PendingSubWorkflowDefinitionResolutions.Single().TimeoutMs.Should().Be(30_000);
 
         state = SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered(state, new SubWorkflowInvocationRegisteredEvent
         {
@@ -658,6 +793,8 @@ public sealed class SubWorkflowOrchestratorTests
         var persisted = new List<IMessage>();
         var published = new List<PublishedMessage>();
         var sent = new List<SentMessage>();
+        var scheduledTimeouts = new List<ScheduledTimeout>();
+        var cancelledLeases = new List<RuntimeCallbackLease>();
 
         var orchestrator = new SubWorkflowOrchestrator(
             runtime,
@@ -683,9 +820,20 @@ public sealed class SubWorkflowOrchestratorTests
             {
                 sent.Add(new SentMessage(targetActorId, evt));
                 return Task.CompletedTask;
+            },
+            (callbackId, dueTime, evt, _) =>
+            {
+                var lease = new RuntimeCallbackLease("owner-1", callbackId, scheduledTimeouts.Count + 1, RuntimeCallbackBackend.InMemory);
+                scheduledTimeouts.Add(new ScheduledTimeout(callbackId, dueTime, evt, lease));
+                return Task.FromResult(lease);
+            },
+            (lease, _) =>
+            {
+                cancelledLeases.Add(lease);
+                return Task.CompletedTask;
             });
 
-        return new OrchestratorHarness(orchestrator, runtime, persisted, published, sent);
+        return new OrchestratorHarness(orchestrator, runtime, persisted, published, sent, scheduledTimeouts, cancelledLeases);
     }
 
     private static WorkflowRunState BuildStateWithPending(
@@ -720,7 +868,9 @@ public sealed class SubWorkflowOrchestratorTests
         RecordingActorRuntime Runtime,
         List<IMessage> Persisted,
         List<PublishedMessage> Published,
-        List<SentMessage> Sent);
+        List<SentMessage> Sent,
+        List<ScheduledTimeout> ScheduledTimeouts,
+        List<RuntimeCallbackLease> CancelledLeases);
 
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
@@ -862,4 +1012,10 @@ public sealed class SubWorkflowOrchestratorTests
     private sealed record SentMessage(
         string TargetActorId,
         IMessage Message);
+
+    private sealed record ScheduledTimeout(
+        string CallbackId,
+        TimeSpan DueTime,
+        IMessage Message,
+        RuntimeCallbackLease Lease);
 }

@@ -36,7 +36,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             : hasRequestedWorkflowName
                 ? requestedWorkflowName
                 : ResolveDefaultWorkflowName();
-        var scopeIdForRun = ResolveScopeId(request.Metadata);
+        var scopeIdForRun = ResolveScopeId(request.ScopeId);
         var workflowYamlForRun = string.Empty;
         WorkflowDefinitionRegistration? registryDefinitionForRun = null;
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun =
@@ -288,16 +288,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         return registryDefinition?.DefinitionActorId ?? string.Empty;
     }
 
-    private static string ResolveScopeId(IReadOnlyDictionary<string, string>? metadata)
-    {
-        if (metadata == null || metadata.Count == 0)
-            return string.Empty;
-
-        return metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
-               !string.IsNullOrWhiteSpace(workflowScopeId)
-            ? workflowScopeId.Trim()
-            : string.Empty;
-    }
+    private static string ResolveScopeId(string? scopeId) =>
+        string.IsNullOrWhiteSpace(scopeId) ? string.Empty : scopeId.Trim();
 
     private static string ResolveScopeId(string? sourceScopeId, string? scopeIdHint) =>
         !string.IsNullOrWhiteSpace(sourceScopeId)

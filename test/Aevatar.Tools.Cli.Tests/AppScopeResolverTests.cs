@@ -37,11 +37,40 @@ public sealed class AppScopeResolverTests
             ["Cli:App:ScopeId"] = "configured-scope",
         });
 
-        var scope = resolver.Resolve(new DefaultHttpContext());
+        var scope = resolver.Resolve();
 
         scope.Should().NotBeNull();
         scope!.ScopeId.Should().Be("configured-scope");
         scope.Source.Should().Be("config:Cli:App:ScopeId");
+    }
+
+    [Fact]
+    public void Resolve_ShouldNotUseHeaderWhenNyxIdAuthIsEnabled()
+    {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Headers["X-Aevatar-Scope-Id"] = "header-scope";
+        var resolver = CreateResolver();
+
+        var scope = resolver.Resolve(httpContext);
+
+        scope.Should().BeNull();
+    }
+
+    [Fact]
+    public void Resolve_ShouldUseHeaderWhenNyxIdAuthIsDisabled()
+    {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Headers["X-Aevatar-Scope-Id"] = "header-scope";
+        var resolver = CreateResolver(new Dictionary<string, string?>
+        {
+            ["Cli:App:NyxId:Enabled"] = "false",
+        });
+
+        var scope = resolver.Resolve(httpContext);
+
+        scope.Should().NotBeNull();
+        scope!.ScopeId.Should().Be("header-scope");
+        scope.Source.Should().Be("header:X-Aevatar-Scope-Id");
     }
 
     private static DefaultAppScopeResolver CreateResolver(

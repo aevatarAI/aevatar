@@ -88,7 +88,9 @@ public sealed class WorkflowRunGAgent
             (evt, token) => PersistDomainEventAsync(evt, token),
             (events, token) => PersistDomainEventsAsync(events, token),
             (evt, direction, token) => PublishAsync(evt, direction, token),
-            (actorId, evt, token) => SendToAsync(actorId, evt, token));
+            (actorId, evt, token) => SendToAsync(actorId, evt, token),
+            (callbackId, dueTime, evt, token) => ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, ct: token),
+            (lease, token) => CancelDurableCallbackAsync(lease, token));
     }
 
     public string RunId => string.IsNullOrWhiteSpace(State.RunId)
@@ -175,6 +177,7 @@ public sealed class WorkflowRunGAgent
     {
         EnsureWorkflowNameCanBind(workflowName);
         var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
+        var stateBeforeBind = State.Clone();
         var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = definitionActorId ?? string.Empty,
@@ -190,6 +193,7 @@ public sealed class WorkflowRunGAgent
         }
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
+        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
         RebuildCompiledWorkflowCache();
         await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
@@ -246,7 +250,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.Metadata, State.ScopeId),
+            ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -319,6 +323,16 @@ public sealed class WorkflowRunGAgent
         await _subWorkflowOrchestrator.HandleDefinitionResolveFailedAsync(failed, State, CancellationToken.None);
     }
 
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleSubWorkflowDefinitionResolutionTimeoutFired(SubWorkflowDefinitionResolutionTimeoutFiredEvent timeout)
+    {
+        await _subWorkflowOrchestrator.HandleDefinitionResolutionTimeoutFiredAsync(
+            timeout,
+            ActiveInboundEnvelope,
+            State,
+            CancellationToken.None);
+    }
+
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
     public async Task HandleWorkflowCompletionEnvelope(EventEnvelope envelope)
     {
@@ -350,8 +364,10 @@ public sealed class WorkflowRunGAgent
 
     public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
     {
+        var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
-        await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, State, CancellationToken.None);
+        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeCompletion, CancellationToken.None);
+        await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _executionItems.Clear();
         DisableExecutionModules();
@@ -614,6 +630,9 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
             .On<SubWorkflowDefinitionResolutionRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered)
+            .On<SubWorkflowDefinitionResolvedEvent>(KeepCurrentState)
+            .On<SubWorkflowDefinitionResolveFailedEvent>(KeepCurrentState)
+            .On<SubWorkflowDefinitionResolutionTimeoutFiredEvent>(KeepCurrentState)
             .On<SubWorkflowDefinitionResolutionClearedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionCleared)
             .On<SubWorkflowBindingUpsertedEvent>(SubWorkflowOrchestrator.ApplySubWorkflowBindingUpserted)
             .On<SubWorkflowInvocationRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowInvocationRegistered)
@@ -753,6 +772,12 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolvedEvent _) => current;
+
+    private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolveFailedEvent _) => current;
+
+    private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolutionTimeoutFiredEvent _) => current;
+
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
@@ -807,6 +832,7 @@ public sealed class WorkflowRunGAgent
 
         var stateBeforeStop = State.Clone();
         await persistAsync(ct);
+        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeStop, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, stateBeforeStop, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _executionItems.Clear();
@@ -877,6 +903,7 @@ public sealed class WorkflowRunGAgent
         CancellationToken ct = default)
     {
         var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
+        var stateBeforeBind = State.Clone();
         WorkflowDefinition parsed;
         try
         {
@@ -902,6 +929,7 @@ public sealed class WorkflowRunGAgent
             ScopeId = State.ScopeId ?? string.Empty,
             InlineWorkflowYamls = { State.InlineWorkflowYamls },
         }, ct);
+        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
         RebuildCompiledWorkflowCache();
         await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
@@ -909,14 +937,25 @@ public sealed class WorkflowRunGAgent
     }
 
     private static string ResolveScopeId(
+        string? requestedScopeId,
         Google.Protobuf.Collections.MapField<string, string>? metadata,
         string? fallbackScopeId)
     {
+        if (!string.IsNullOrWhiteSpace(requestedScopeId))
+            return requestedScopeId.Trim();
+
         if (metadata != null &&
             metadata.TryGetValue(WorkflowScopeIdMetadataKey, out var workflowScopeId) &&
             !string.IsNullOrWhiteSpace(workflowScopeId))
         {
             return workflowScopeId.Trim();
+        }
+
+        if (metadata != null &&
+            metadata.TryGetValue("scope_id", out var legacyScopeId) &&
+            !string.IsNullOrWhiteSpace(legacyScopeId))
+        {
+            return legacyScopeId.Trim();
         }
 
         return fallbackScopeId?.Trim() ?? string.Empty;

@@ -38,6 +38,9 @@ message WorkflowState
     string definition_actor_id = 5;
     string input = 6;
     string lifecycle = 7;
+    WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+    string timeout_callback_id = 9;
+    int32 timeout_ms = 10;
   }
 
   message ChildRunIdSet
@@ -95,6 +98,9 @@ message WorkflowRunState
     string definition_actor_id = 5;
     string input = 6;
     string lifecycle = 7;
+    WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+    string timeout_callback_id = 9;
+    int32 timeout_ms = 10;
   }
 
   message ChildRunIdSet

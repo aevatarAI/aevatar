@@ -1,5 +1,8 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -13,6 +16,8 @@ namespace Aevatar.Workflow.Core.Primitives;
 /// </summary>
 internal sealed class SubWorkflowOrchestrator
 {
+    private static readonly WorkflowParser DefinitionParser = new();
+    private const int DefaultDefinitionResolutionTimeoutMs = 30_000;
     private const string WorkflowCallMetadataPrefix = "workflow_call.";
     private const string WorkflowCallInvocationIdMetadataKey = WorkflowCallMetadataPrefix + "invocation_id";
     private const string WorkflowCallWorkflowNameMetadataKey = WorkflowCallMetadataPrefix + "workflow_name";
@@ -30,6 +35,8 @@ internal sealed class SubWorkflowOrchestrator
     private readonly Func<IReadOnlyList<IMessage>, CancellationToken, Task> _persistDomainEventsAsync;
     private readonly Func<IMessage, TopologyAudience, CancellationToken, Task> _publishAsync;
     private readonly Func<string, IMessage, CancellationToken, Task> _sendToAsync;
+    private readonly Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> _scheduleSelfTimeoutAsync;
+    private readonly Func<RuntimeCallbackLease, CancellationToken, Task> _cancelDurableCallbackAsync;
 
     public SubWorkflowOrchestrator(
         IActorRuntime runtime,
@@ -39,7 +46,9 @@ internal sealed class SubWorkflowOrchestrator
         Func<IMessage, CancellationToken, Task> persistDomainEventAsync,
         Func<IReadOnlyList<IMessage>, CancellationToken, Task> persistDomainEventsAsync,
         Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
-        Func<string, IMessage, CancellationToken, Task> sendToAsync)
+        Func<string, IMessage, CancellationToken, Task> sendToAsync,
+        Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> scheduleSelfTimeoutAsync,
+        Func<RuntimeCallbackLease, CancellationToken, Task> cancelDurableCallbackAsync)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -49,6 +58,8 @@ internal sealed class SubWorkflowOrchestrator
         _persistDomainEventsAsync = persistDomainEventsAsync ?? throw new ArgumentNullException(nameof(persistDomainEventsAsync));
         _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
         _sendToAsync = sendToAsync ?? throw new ArgumentNullException(nameof(sendToAsync));
+        _scheduleSelfTimeoutAsync = scheduleSelfTimeoutAsync ?? throw new ArgumentNullException(nameof(scheduleSelfTimeoutAsync));
+        _cancelDurableCallbackAsync = cancelDurableCallbackAsync ?? throw new ArgumentNullException(nameof(cancelDurableCallbackAsync));
     }
 
     public async Task HandleInvokeRequestedAsync(
@@ -91,6 +102,7 @@ internal sealed class SubWorkflowOrchestrator
         var invocationId = string.IsNullOrWhiteSpace(request.InvocationId)
             ? WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId)
             : request.InvocationId.Trim();
+        RuntimeCallbackLease? timeoutLease = null;
 
         try
         {
@@ -110,16 +122,21 @@ internal sealed class SubWorkflowOrchestrator
             }
 
             var definitionActorId = BuildDefinitionActorId(workflowName);
-            var definitionActor = await _runtime.GetAsync(definitionActorId);
-            if (definitionActor == null)
-            {
-                await PublishWorkflowCallFailureAsync(
-                    parentStepId,
-                    parentRunId,
-                    $"workflow_call definition actor '{definitionActorId}' was not found for workflow '{workflowName}'",
-                    ct);
-                return;
-            }
+            var timeoutMs = DefaultDefinitionResolutionTimeoutMs;
+            var timeoutCallbackId = BuildDefinitionResolutionTimeoutCallbackId(invocationId);
+            timeoutLease = await _scheduleSelfTimeoutAsync(
+                timeoutCallbackId,
+                TimeSpan.FromMilliseconds(timeoutMs),
+                new SubWorkflowDefinitionResolutionTimeoutFiredEvent
+                {
+                    InvocationId = invocationId,
+                    ParentRunId = parentRunId,
+                    ParentStepId = parentStepId,
+                    WorkflowName = workflowName,
+                    DefinitionActorId = definitionActorId,
+                    TimeoutMs = timeoutMs,
+                },
+                ct);
 
             await _persistDomainEventAsync(new SubWorkflowDefinitionResolutionRegisteredEvent
             {
@@ -130,6 +147,15 @@ internal sealed class SubWorkflowOrchestrator
                 DefinitionActorId = definitionActorId,
                 Input = request.Input ?? string.Empty,
                 Lifecycle = lifecycle,
+                TimeoutCallbackId = timeoutCallbackId,
+                TimeoutCallbackGeneration = timeoutLease.Generation,
+                TimeoutCallbackActorId = timeoutLease.ActorId,
+                TimeoutCallbackBackend = timeoutLease.Backend switch
+                {
+                    RuntimeCallbackBackend.Dedicated => (int)WorkflowRuntimeCallbackBackendState.Dedicated,
+                    _ => (int)WorkflowRuntimeCallbackBackendState.InMemory,
+                },
+                TimeoutMs = timeoutMs,
             }, ct);
 
             await _sendToAsync(
@@ -154,18 +180,68 @@ internal sealed class SubWorkflowOrchestrator
                 workflowName,
                 parentRunId,
                 parentStepId);
-            await _persistDomainEventAsync(
-                new SubWorkflowDefinitionResolutionClearedEvent
-                {
-                    InvocationId = invocationId,
-                },
+            await _persistDomainEventsAsync(
+                [
+                    new SubWorkflowDefinitionResolutionClearedEvent
+                    {
+                        InvocationId = invocationId,
+                    },
+                ],
                 ct);
+            await TryCancelDefinitionResolutionTimeoutAsync(timeoutLease, CancellationToken.None);
             await PublishWorkflowCallFailureAsync(
                 parentStepId,
                 parentRunId,
                 $"workflow_call invocation failed: {ex.Message}",
                 ct);
         }
+    }
+
+    public async Task HandleDefinitionResolutionTimeoutFiredAsync(
+        SubWorkflowDefinitionResolutionTimeoutFiredEvent timeout,
+        EventEnvelope? inboundEnvelope,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(timeout);
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!TryGetPendingDefinitionResolution(state, timeout.InvocationId, out var pending))
+            return;
+
+        if (!MatchesDefinitionResolutionTimeout(inboundEnvelope, pending))
+        {
+            _loggerAccessor().LogDebug(
+                "Ignore workflow_call definition timeout without matching lease. invocation={InvocationId}",
+                timeout.InvocationId);
+            return;
+        }
+
+        await _persistDomainEventsAsync(
+            [
+                timeout,
+                new SubWorkflowDefinitionResolutionClearedEvent
+                {
+                    InvocationId = pending.InvocationId,
+                },
+            ],
+            ct);
+
+            await PublishWorkflowCallFailureAsync(
+                pending.ParentStepId,
+                pending.ParentRunId,
+                $"workflow_call timed out waiting for definition resolution after {timeout.TimeoutMs}ms.",
+                ct);
+    }
+
+    public async Task CancelPendingDefinitionResolutionTimeoutsAsync(
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        foreach (var pending in state.PendingSubWorkflowDefinitionResolutions)
+            await TryCancelDefinitionResolutionTimeoutAsync(pending, ct);
     }
 
     public async Task HandleDefinitionResolvedAsync(
@@ -178,6 +254,8 @@ internal sealed class SubWorkflowOrchestrator
 
         if (!TryGetPendingDefinitionResolution(state, resolved.InvocationId, out var pending))
             return;
+
+        await _persistDomainEventAsync(resolved, ct);
 
         var definition = resolved.Definition;
         if (definition == null)
@@ -213,6 +291,7 @@ internal sealed class SubWorkflowOrchestrator
                 definition,
                 state,
                 ct);
+            await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -239,6 +318,8 @@ internal sealed class SubWorkflowOrchestrator
         if (!TryGetPendingDefinitionResolution(state, failed.InvocationId, out var pending))
             return;
 
+        await _persistDomainEventAsync(failed, ct);
+
         var error = string.IsNullOrWhiteSpace(failed.Error)
             ? $"workflow_call failed to resolve workflow '{pending.WorkflowName}'."
             : failed.Error;
@@ -250,17 +331,20 @@ internal sealed class SubWorkflowOrchestrator
         string error,
         CancellationToken ct)
     {
-        await _persistDomainEventAsync(
-            new SubWorkflowDefinitionResolutionClearedEvent
-            {
-                InvocationId = pending.InvocationId,
-            },
+        await _persistDomainEventsAsync(
+            [
+                new SubWorkflowDefinitionResolutionClearedEvent
+                {
+                    InvocationId = pending.InvocationId,
+                },
+            ],
             ct);
         await PublishWorkflowCallFailureAsync(
             pending.ParentStepId,
             pending.ParentRunId,
             error,
             ct);
+        await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
     }
 
     private async Task StartSubWorkflowAsync(
@@ -278,6 +362,7 @@ internal sealed class SubWorkflowOrchestrator
         ArgumentException.ThrowIfNullOrWhiteSpace(parentStepId);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(state);
+        ValidateDefinitionSnapshotOrThrow(definition);
 
         var childRunId = invocationId;
         var childActor = await ResolveOrCreateSubWorkflowActorAsync(definition, lifecycle, state, childRunId, ct);
@@ -500,6 +585,19 @@ internal sealed class SubWorkflowOrchestrator
             DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty,
             Input = evt.Input ?? string.Empty,
             Lifecycle = WorkflowCallLifecycle.Normalize(evt.Lifecycle),
+            TimeoutLease = string.IsNullOrWhiteSpace(evt.TimeoutCallbackId)
+                ? null
+                : new WorkflowRuntimeCallbackLeaseState
+                {
+                    ActorId = evt.TimeoutCallbackActorId?.Trim() ?? string.Empty,
+                    CallbackId = evt.TimeoutCallbackId?.Trim() ?? string.Empty,
+                    Generation = evt.TimeoutCallbackGeneration,
+                    Backend = evt.TimeoutCallbackBackend == (int)WorkflowRuntimeCallbackBackendState.Dedicated
+                        ? WorkflowRuntimeCallbackBackendState.Dedicated
+                        : WorkflowRuntimeCallbackBackendState.InMemory,
+                },
+            TimeoutCallbackId = evt.TimeoutCallbackId?.Trim() ?? string.Empty,
+            TimeoutMs = evt.TimeoutMs,
         };
 
         RemovePendingDefinitionResolution(next, invocationId);
@@ -716,6 +814,50 @@ internal sealed class SubWorkflowOrchestrator
         return null;
     }
 
+    private static void ValidateDefinitionSnapshotOrThrow(WorkflowDefinitionSnapshot definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName);
+        var sourceDescription = string.IsNullOrWhiteSpace(definition.DefinitionActorId)
+            ? $"inline workflow '{normalizedWorkflowName}'"
+            : $"workflow '{normalizedWorkflowName}' from definition actor '{definition.DefinitionActorId.Trim()}'";
+        if (string.IsNullOrWhiteSpace(normalizedWorkflowName))
+            throw new InvalidOperationException("workflow_call definition snapshot is missing workflow_name.");
+
+        var workflowYaml = definition.WorkflowYaml ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(workflowYaml))
+            throw new InvalidOperationException($"workflow_call {sourceDescription} YAML is empty.");
+
+        try
+        {
+            var workflow = DefinitionParser.Parse(workflowYaml);
+            var errors = WorkflowValidator.Validate(
+                workflow,
+                new WorkflowValidator.WorkflowValidationOptions
+                {
+                    RequireKnownStepTypes = false,
+                },
+                availableWorkflowNames: null);
+            if (errors.Count > 0)
+                throw new InvalidOperationException($"workflow_call {sourceDescription} is invalid: {string.Join("; ", errors)}");
+
+            if (!string.Equals(
+                    WorkflowRunIdNormalizer.NormalizeWorkflowName(workflow.Name),
+                    normalizedWorkflowName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"workflow_call definition snapshot name mismatch. expected '{normalizedWorkflowName}', got '{workflow.Name}'.");
+            }
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException invalidOperation ||
+                                   !invalidOperation.Message.StartsWith("workflow_call ", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"workflow_call {sourceDescription} is invalid: {ex.Message}", ex);
+        }
+    }
+
     private async Task PublishWorkflowCallFailureAsync(
         string parentStepId,
         string parentRunId,
@@ -757,6 +899,36 @@ internal sealed class SubWorkflowOrchestrator
                 ex,
                 "Ignore non-singleton child cleanup failure for actor {ChildActorId}.",
                 pending.ChildActorId);
+        }
+    }
+
+    private async Task TryCancelDefinitionResolutionTimeoutAsync(
+        WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution pending,
+        CancellationToken ct)
+    {
+        await TryCancelDefinitionResolutionTimeoutAsync(
+            WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(pending.TimeoutLease),
+            ct);
+    }
+
+    private async Task TryCancelDefinitionResolutionTimeoutAsync(
+        RuntimeCallbackLease? lease,
+        CancellationToken ct)
+    {
+        if (lease == null)
+            return;
+
+        try
+        {
+            await _cancelDurableCallbackAsync(lease, ct);
+        }
+        catch (Exception ex)
+        {
+            _loggerAccessor().LogDebug(
+                ex,
+                "Ignore workflow_call definition timeout cancellation failure. callback={CallbackId} generation={Generation}",
+                lease.CallbackId,
+                lease.Generation);
         }
     }
 
@@ -903,6 +1075,28 @@ internal sealed class SubWorkflowOrchestrator
             throw new ArgumentException("Workflow name is required.", nameof(workflowName));
 
         return "workflow-definition:" + workflowName.Trim().ToLowerInvariant();
+    }
+
+    private string BuildDefinitionResolutionTimeoutCallbackId(string invocationId)
+    {
+        return RuntimeCallbackKeyComposer.BuildCallbackId(
+            "workflow-definition-resolution-timeout",
+            _ownerActorIdAccessor(),
+            invocationId);
+    }
+
+    private static bool MatchesDefinitionResolutionTimeout(
+        EventEnvelope? inboundEnvelope,
+        WorkflowRunState.Types.PendingSubWorkflowDefinitionResolution pending)
+    {
+        if (inboundEnvelope == null)
+            return false;
+
+        if (pending.TimeoutLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(inboundEnvelope, pending.TimeoutLease);
+
+        return RuntimeCallbackEnvelopeStateReader.TryRead(inboundEnvelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, pending.TimeoutCallbackId, StringComparison.Ordinal);
     }
 
     private static bool HasPendingInvocationForChildActor(

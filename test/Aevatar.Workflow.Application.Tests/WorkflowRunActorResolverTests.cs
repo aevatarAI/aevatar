@@ -30,7 +30,7 @@ public sealed class WorkflowRunActorResolverTests
     }
 
     [Fact]
-    public async Task ResolveOrCreateAsync_ShouldForwardScopeIdFromMetadata()
+    public async Task ResolveOrCreateAsync_ShouldForwardScopeIdFromTypedRequest()
     {
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
@@ -43,10 +43,7 @@ public sealed class WorkflowRunActorResolverTests
                 "hello",
                 "direct",
                 null,
-                Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    [WorkflowRunCommandMetadataKeys.ScopeId] = "scope-user-1",
-                }),
+                ScopeId: "scope-user-1"),
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.None);

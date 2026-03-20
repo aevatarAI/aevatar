@@ -9,11 +9,18 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using System.Security.Claims;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
+    private static readonly string[] ScopeClaimTypes =
+    [
+        WorkflowRunCommandMetadataKeys.ScopeId,
+        "scope_id",
+    ];
+
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeWorkflows");
@@ -43,6 +50,7 @@ public static class ScopeWorkflowEndpoints
     }
 
     internal static async Task<IResult> HandleUpsertWorkflowAsync(
+        HttpContext http,
         string scopeId,
         string workflowId,
         UpsertScopeWorkflowHttpRequest request,
@@ -51,6 +59,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
             var result = await workflowCommandPort.UpsertAsync(new ScopeWorkflowUpsertRequest(
                 scopeId,
                 workflowId,
@@ -72,6 +83,7 @@ public static class ScopeWorkflowEndpoints
     }
 
     internal static async Task<IResult> HandleListWorkflowsAsync(
+        HttpContext http,
         string scopeId,
         bool includeSource,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
@@ -81,6 +93,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
             var workflows = await workflowQueryPort.ListAsync(scopeId, ct);
             if (!includeSource)
                 return Results.Ok(workflows);
@@ -102,6 +117,7 @@ public static class ScopeWorkflowEndpoints
     }
 
     internal static async Task<IResult> HandleGetWorkflowDetailAsync(
+        HttpContext http,
         string scopeId,
         string workflowId,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
@@ -111,6 +127,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
             if (workflow == null)
             {
@@ -144,6 +163,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (await TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
             if (workflow == null)
             {
@@ -188,6 +210,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (await TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
             var workflow = await workflowQueryPort.GetByActorIdAsync(scopeId, request.ActorId, ct);
             if (workflow == null)
             {
@@ -223,6 +248,7 @@ public static class ScopeWorkflowEndpoints
     }
 
     internal static async Task<IResult> HandleStopWorkflowRunAsync(
+        HttpContext http,
         string scopeId,
         StopScopeWorkflowRunHttpRequest request,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
@@ -232,6 +258,9 @@ public static class ScopeWorkflowEndpoints
     {
         try
         {
+            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
             var actorId = NormalizeRequired(request.ActorId, nameof(request.ActorId));
             _ = NormalizeRequired(request.RunId, nameof(request.RunId));
 
@@ -318,6 +347,7 @@ public static class ScopeWorkflowEndpoints
                     Prompt = prompt,
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
+                    ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
                     Metadata = BuildScopedHeaders(scopeId, headers),
                 },
                 chatRunService,
@@ -327,6 +357,7 @@ public static class ScopeWorkflowEndpoints
 
         await HandleAguiStreamAsync(
             http,
+            scopeId,
             workflow,
             prompt,
             sessionId,
@@ -337,6 +368,7 @@ public static class ScopeWorkflowEndpoints
 
     private static async Task HandleAguiStreamAsync(
         HttpContext http,
+        string scopeId,
         ScopeWorkflowSummary workflow,
         string prompt,
         string? sessionId,
@@ -373,9 +405,8 @@ public static class ScopeWorkflowEndpoints
                     workflow.ActorId,
                     sessionId,
                     WorkflowYamls: null,
-                    Metadata: headers == null
-                        ? null
-                        : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase)),
+                    Metadata: BuildScopedHeaders(scopeId, headers),
+                    ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
                 async (frame, token) =>
                 {
                     if (!ScopeWorkflowAguiEventMapper.TryMap(frame, out var aguiEvent) || aguiEvent == null)
@@ -501,9 +532,8 @@ public static class ScopeWorkflowEndpoints
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
-        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         scopedHeaders.Remove("scope_id");
-        scopedHeaders[WorkflowRunCommandMetadataKeys.ScopeId] = normalizedScopeId;
+        scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         return scopedHeaders;
     }
 
@@ -519,8 +549,82 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => (StatusCodes.Status409Conflict, "AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
+            WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
+            WorkflowChatRunStartError.ConflictingScopeId => (StatusCodes.Status400BadRequest, "CONFLICTING_SCOPE_ID", "Conflicting scope_id values were provided."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
+    }
+
+    private static bool TryCreateScopeAccessDeniedResult(
+        HttpContext http,
+        string scopeId,
+        out IResult denied)
+    {
+        if (!TryGetAuthenticatedScopeGuardFailure(http, scopeId, out var message))
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        denied = Results.Json(
+            new
+            {
+                code = "SCOPE_ACCESS_DENIED",
+                message,
+            },
+            statusCode: StatusCodes.Status403Forbidden);
+        return true;
+    }
+
+    private static async Task<bool> TryWriteScopeAccessDeniedAsync(
+        HttpContext http,
+        string scopeId,
+        CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedScopeGuardFailure(http, scopeId, out var message))
+            return false;
+
+        await WriteJsonErrorResponseAsync(
+            http,
+            StatusCodes.Status403Forbidden,
+            "SCOPE_ACCESS_DENIED",
+            message,
+            ct);
+        return true;
+    }
+
+    private static bool TryGetAuthenticatedScopeGuardFailure(
+        HttpContext http,
+        string requestedScopeId,
+        out string message)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+
+        message = string.Empty;
+        if (http.User?.Identity?.IsAuthenticated != true)
+            return false;
+
+        var normalizedRequestedScopeId = NormalizeRequired(requestedScopeId, nameof(requestedScopeId));
+        var claimedScopeIds = http.User.Claims
+            .Where(static claim => ScopeClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
+            .Select(static claim => claim.Value?.Trim())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (claimedScopeIds.Count == 0)
+            return false;
+
+        if (claimedScopeIds.Count > 1)
+        {
+            message = "Authenticated scope is ambiguous.";
+            return true;
+        }
+
+        if (string.Equals(claimedScopeIds[0], normalizedRequestedScopeId, StringComparison.Ordinal))
+            return false;
+
+        message = "Authenticated scope does not match requested scope.";
+        return true;
     }
 
     private static async Task WriteJsonErrorResponseAsync(

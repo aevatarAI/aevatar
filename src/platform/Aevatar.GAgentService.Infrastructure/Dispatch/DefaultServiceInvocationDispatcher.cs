@@ -85,7 +85,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveScopeId(chatRequest.Metadata)),
+                ResolveScopeId(chatRequest)),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
@@ -153,10 +153,14 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ? commandId
             : request.CorrelationId;
 
-    private static string ResolveScopeId(Google.Protobuf.Collections.MapField<string, string>? metadata)
+    private static string ResolveScopeId(ChatRequestEvent chatRequest)
     {
-        if (metadata == null)
-            return string.Empty;
+        ArgumentNullException.ThrowIfNull(chatRequest);
+
+        if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
+            return chatRequest.ScopeId.Trim();
+
+        var metadata = chatRequest.Metadata;
 
         if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
             !string.IsNullOrWhiteSpace(workflowScopeId))

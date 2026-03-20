@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Claims;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -337,8 +338,13 @@ internal static class NyxIdAppAuthentication
             return false;
 
         var token = provided.ToString().Trim();
-        return !string.IsNullOrWhiteSpace(token) &&
-               string.Equals(token, credentials.Token, StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(credentials.Token))
+            return false;
+
+        var providedBytes = Encoding.UTF8.GetBytes(token);
+        var expectedBytes = Encoding.UTF8.GetBytes(credentials.Token);
+        return providedBytes.Length == expectedBytes.Length &&
+               CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes);
     }
 
     private static IEnumerable<string> ParseScopes(string rawScope)
