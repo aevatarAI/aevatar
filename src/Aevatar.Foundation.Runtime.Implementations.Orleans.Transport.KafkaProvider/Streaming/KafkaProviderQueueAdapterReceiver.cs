@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
 using Confluent.Kafka;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Providers.Streams.Common;
 using Orleans.Streams;
 
@@ -16,6 +18,7 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private readonly string _actorEventNamespace;
     private readonly ConcurrentQueue<IBatchContainer> _messages = new();
     private readonly Lock _stateLock = new();
+    private readonly ILogger _logger;
 
     private readonly HashSet<long> _inflightOffsets = [];
     private readonly HashSet<long> _ackedOffsets = [];
@@ -30,33 +33,45 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
     private IConsumer<Ignore, byte[]>? _consumer;
     private CancellationTokenSource? _consumeLoopCts;
     private Task? _consumeLoopTask;
+    private readonly SemaphoreSlim _initGate = new(1, 1);
+    private bool _initialized;
 
     public KafkaProviderQueueAdapterReceiver(
         QueueId queueId,
         KafkaProviderProducer producer,
         KafkaProviderTransportOptions transportOptions,
         KafkaQueuePartitionMapper mapper,
-        string actorEventNamespace)
+        string actorEventNamespace,
+        ILoggerFactory? loggerFactory = null)
     {
         _partitionId = mapper.GetPartitionId(queueId);
         _producer = producer;
         _transportOptions = transportOptions;
         _actorEventNamespace = actorEventNamespace;
         _topicPartition = new TopicPartition(_transportOptions.TopicName, new Partition(_partitionId));
+        _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaProviderQueueAdapterReceiver>();
     }
 
     public Task Initialize(TimeSpan timeout)
     {
-        _ = timeout;
-        return InitializeAsync();
+        return InitializeAsync(timeout);
     }
 
-    private Task InitializeAsync()
+    private async Task InitializeAsync(TimeSpan timeout)
     {
-        if (_consumer != null)
-            return Task.CompletedTask;
+        await _initGate.WaitAsync(timeout);
+        try
+        {
+            if (_initialized)
+                return;
 
-        return InitializeCoreAsync();
+            await InitializeCoreAsync();
+            _initialized = true;
+        }
+        finally
+        {
+            _initGate.Release();
+        }
     }
 
     private async Task InitializeCoreAsync()
@@ -148,7 +163,20 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         {
             while (!ct.IsCancellationRequested)
             {
-                var consumeResult = consumer.Consume(ConsumePollInterval);
+                ConsumeResult<Ignore, byte[]>? consumeResult = null;
+                try
+                {
+                    consumeResult = consumer.Consume(ConsumePollInterval);
+                }
+                catch (ConsumeException ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Kafka consume error on partition {Partition}, will retry. Code={ErrorCode}",
+                        _partitionId, ex.Error.Code);
+                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                    continue;
+                }
+
                 if (consumeResult?.Message != null)
                 {
                     RegisterOffset(consumeResult.Offset.Value);
@@ -170,7 +198,16 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
         finally
         {
-            TryCommitContiguousOffsets(consumer);
+            try
+            {
+                TryCommitContiguousOffsets(consumer);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to commit offsets during consume loop shutdown on partition {Partition}.",
+                    _partitionId);
+            }
         }
     }
 
@@ -183,8 +220,8 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         }
 
         var headers = consumeResult.Message.Headers;
-        var streamNamespace = TryGetHeaderValue(headers, "aevatar-stream-namespace");
-        var streamIdValue = TryGetHeaderValue(headers, "aevatar-stream-id");
+        var streamNamespace = TryGetHeaderValue(headers, KafkaProviderHeaderConstants.StreamNamespace);
+        var streamIdValue = TryGetHeaderValue(headers, KafkaProviderHeaderConstants.StreamId);
         if (!string.Equals(streamNamespace, _actorEventNamespace, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(streamIdValue))
         {
@@ -196,17 +233,15 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
         {
             envelope = EventEnvelope.Parser.ParseFrom(consumeResult.Message.Value);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex,
+                "Failed to parse EventEnvelope from Kafka message at offset {Offset} on partition {Partition}. Message will be skipped.",
+                consumeResult.Offset.Value, _partitionId);
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(streamNamespace))
-        {
-            return null;
-        }
-
-        var streamId = StreamId.Create(streamNamespace, streamIdValue);
+        var streamId = StreamId.Create(streamNamespace!, streamIdValue);
         var sequence = Interlocked.Increment(ref _sequence);
         var token = new EventSequenceTokenV2(sequence);
         return new KafkaProviderBatchContainer(streamId, envelope, token, consumeResult.Offset.Value);
@@ -254,6 +289,29 @@ internal sealed class KafkaProviderQueueAdapterReceiver : IQueueAdapterReceiver
                 _inflightOffsets.Remove(nextOffset);
                 _lastCommittedOffset = nextOffset;
                 committedInclusive = nextOffset;
+            }
+
+            // Bound inflight/acked sets: if the gap between the earliest inflight
+            // and lastCommitted is too large, drop stale entries to prevent unbounded growth.
+            if (_inflightOffsets.Count > 0)
+            {
+                var minInflight = long.MaxValue;
+                foreach (var o in _inflightOffsets)
+                {
+                    if (o < minInflight) minInflight = o;
+                }
+
+                const int maxInflightGap = 100_000;
+                if (_inflightOffsets.Count > maxInflightGap)
+                {
+                    // Evict offsets that are far behind the watermark — they'll never be acked.
+                    var evictionThreshold = minInflight + maxInflightGap;
+                    _inflightOffsets.RemoveWhere(o => o > evictionThreshold && !_ackedOffsets.Contains(o));
+                    _ackedOffsets.RemoveWhere(o => !_inflightOffsets.Contains(o));
+                    _logger.LogWarning(
+                        "Evicted stale inflight offsets on partition {Partition}. InflightCount={InflightCount}, AckedCount={AckedCount}.",
+                        _partitionId, _inflightOffsets.Count, _ackedOffsets.Count);
+                }
             }
 
             _commitDirty = _ackedOffsets.Count > 0;

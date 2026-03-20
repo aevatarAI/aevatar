@@ -362,13 +362,12 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var configuration = BuildConfiguration(new Dictionary<string, string?>
         {
             [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
-            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
             [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379",
-            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"] = AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
-            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"] = "kafka.local:9092",
-            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"] = "events",
-            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"] = "group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"] = "kafka.local:9092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"] = "events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"] = "group",
             [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Production",
         });
 

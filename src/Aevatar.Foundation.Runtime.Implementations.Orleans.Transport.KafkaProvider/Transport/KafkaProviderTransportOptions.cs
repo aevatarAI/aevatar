@@ -9,4 +9,6 @@ public sealed class KafkaProviderTransportOptions
     public string ConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
 
     public int TopicPartitionCount { get; set; } = 8;
+
+    public TimeSpan MetadataTimeout { get; set; } = TimeSpan.FromSeconds(5);
 }

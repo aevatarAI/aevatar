@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -12,19 +13,22 @@ internal sealed class KafkaProviderQueueAdapter : IQueueAdapter
     private readonly KafkaProviderProducer _producer;
     private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
+    private readonly ILoggerFactory? _loggerFactory;
 
     public KafkaProviderQueueAdapter(
         string providerName,
         KafkaProviderProducer producer,
         KafkaProviderTransportOptions transportOptions,
         KafkaQueuePartitionMapper mapper,
-        string actorEventNamespace)
+        string actorEventNamespace,
+        ILoggerFactory? loggerFactory = null)
     {
         _providerName = providerName;
         _producer = producer;
         _transportOptions = transportOptions;
         Mapper = mapper;
         _actorEventNamespace = actorEventNamespace;
+        _loggerFactory = loggerFactory;
     }
 
     public string Name => _providerName;
@@ -77,5 +81,6 @@ internal sealed class KafkaProviderQueueAdapter : IQueueAdapter
             _producer,
             _transportOptions,
             Mapper,
-            _actorEventNamespace);
+            _actorEventNamespace,
+            _loggerFactory);
 }

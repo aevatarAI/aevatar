@@ -1,7 +1,6 @@
 using System.Text;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -12,8 +11,8 @@ public sealed class KafkaProviderProducer :
     IHostedService,
     IAsyncDisposable
 {
-    private const string StreamNamespaceHeader = "aevatar-stream-namespace";
-    private const string StreamIdHeader = "aevatar-stream-id";
+    private const string StreamNamespaceHeader = KafkaProviderHeaderConstants.StreamNamespace;
+    private const string StreamIdHeader = KafkaProviderHeaderConstants.StreamId;
 
     private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly KafkaQueuePartitionMapper _mapper;
@@ -25,13 +24,11 @@ public sealed class KafkaProviderProducer :
 
     public KafkaProviderProducer(
         KafkaProviderTransportOptions transportOptions,
-        AevatarOrleansRuntimeOptions runtimeOptions,
+        KafkaQueuePartitionMapper mapper,
         ILoggerFactory? loggerFactory = null)
     {
         _transportOptions = transportOptions;
-        _mapper = new KafkaQueuePartitionMapper(
-            runtimeOptions.StreamProviderName,
-            Math.Max(1, runtimeOptions.QueueCount));
+        _mapper = mapper;
         _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<KafkaProviderProducer>();
     }
 
@@ -148,7 +145,7 @@ public sealed class KafkaProviderProducer :
         {
         }
 
-        var metadata = admin.GetMetadata(_transportOptions.TopicName, TimeSpan.FromSeconds(5));
+        var metadata = admin.GetMetadata(_transportOptions.TopicName, _transportOptions.MetadataTimeout);
         var topicMetadata = metadata.Topics.FirstOrDefault(x => string.Equals(x.Topic, _transportOptions.TopicName, StringComparison.Ordinal));
         if (topicMetadata == null)
         {
