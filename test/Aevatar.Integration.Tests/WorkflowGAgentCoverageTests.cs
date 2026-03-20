@@ -460,7 +460,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-singleton");
         agent.EventPublisher = runPublisher;
@@ -530,7 +530,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-completion");
         agent.EventPublisher = runPublisher;
@@ -582,7 +582,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-cleanup");
         agent.EventPublisher = runPublisher;
@@ -1266,12 +1266,14 @@ public class WorkflowGAgentCoverageTests
         string roleId,
         string roleName,
         string? provider = null,
-        string? model = null)
+        string? model = null,
+        string? workflowName = null)
     {
+        var name = workflowName ?? "wf_valid";
         var providerLine = string.IsNullOrWhiteSpace(provider) ? string.Empty : $"\n    provider: \"{provider}\"";
         var modelLine = string.IsNullOrWhiteSpace(model) ? string.Empty : $"\n    model: \"{model}\"";
         return $$"""
-                 name: wf_valid
+                 name: {{name}}
                  roles:
                    - id: "{{roleId}}"
                      name: "{{roleName}}"
