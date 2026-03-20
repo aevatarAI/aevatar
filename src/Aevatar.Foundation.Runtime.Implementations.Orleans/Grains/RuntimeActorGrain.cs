@@ -214,6 +214,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     if (ShouldAllowForwardedAudience(envelope, selfActorId))
                         break;
 
+                    if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                        return true;
+
                     if (!string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
                         break;
 
@@ -227,8 +230,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     }
 
     private static bool ShouldAllowForwardedAudience(EventEnvelope envelope, string selfActorId) =>
-        StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId) &&
-        !StreamForwardingRules.IsTransitOnlyForwarding(envelope);
+        StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId)
+        && !StreamForwardingRules.IsTransitOnlyForwarding(envelope);
 
     private async Task DispatchEnvelopeToAgentAsync(
         EventEnvelope envelope,
