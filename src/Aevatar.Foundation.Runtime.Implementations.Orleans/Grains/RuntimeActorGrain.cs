@@ -136,48 +136,71 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     private async Task HandleEnvelopeAsyncCore(byte[] envelopeBytes, bool propagateFailure)
     {
-        if (_agent == null)
-        {
-            if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
-            {
-                var initialized = await InitializeAgentInternalAsync(_state.State.AgentTypeName);
-                if (!initialized || _agent == null)
-                {
-                    _logger.LogWarning("Dropping envelope for actor {ActorId}: initialization failed", this.GetPrimaryKeyString());
-                    return;
-                }
-            }
-            else
-            {
-                _logger.LogDebug("Dropping envelope for actor {ActorId}: no agent type configured", this.GetPrimaryKeyString());
-                return;
-            }
-        }
+        if (!await EnsureAgentInitializedAsync())
+            return;
 
         var envelope = EventEnvelope.Parser.ParseFrom(envelopeBytes);
         propagateFailure = propagateFailure || ShouldPropagateDirectDispatchFailure(envelope);
         if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
 
-        if (_deduplicator != null &&
-            RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
-        {
-            if (!await _deduplicator.TryRecordAsync(dedupKey))
-                return;
-        }
+        if (!await TryDeduplicateEnvelopeAsync(envelope))
+            return;
 
         if (VisitedActorChain.ShouldDropForReceiver(envelope, this.GetPrimaryKeyString()))
             return;
 
-        var selfActorId = this.GetPrimaryKeyString();
+        if (ShouldDropByTopology(envelope, this.GetPrimaryKeyString()))
+            return;
+
+        using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
+        await DispatchEnvelopeToAgentAsync(envelope, propagateFailure, scope);
+    }
+
+    private async Task<bool> EnsureAgentInitializedAsync()
+    {
+        if (_agent != null)
+            return true;
+
+        if (string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
+        {
+            _logger.LogDebug(
+                "Dropping envelope for actor {ActorId}: no agent type configured",
+                this.GetPrimaryKeyString());
+            return false;
+        }
+
+        var initialized = await InitializeAgentInternalAsync(_state.State.AgentTypeName);
+        if (initialized && _agent != null)
+            return true;
+
+        _logger.LogWarning(
+            "Dropping envelope for actor {ActorId}: initialization failed",
+            this.GetPrimaryKeyString());
+        return false;
+    }
+
+    private async Task<bool> TryDeduplicateEnvelopeAsync(EventEnvelope envelope)
+    {
+        if (_deduplicator == null)
+            return true;
+
+        if (!RuntimeEnvelopeDeduplication.TryBuildDedupKey(this.GetPrimaryKeyString(), envelope, out var dedupKey))
+            return true;
+
+        return await _deduplicator.TryRecordAsync(dedupKey);
+    }
+
+    private bool ShouldDropByTopology(EventEnvelope envelope, string selfActorId)
+    {
         var route = envelope.Route;
         if (route.IsObserverPublication())
-            return;
+            return true;
 
         if (route.IsDirect())
         {
             if (!string.Equals(route.GetTargetActorId(), selfActorId, StringComparison.Ordinal))
-                return;
+                return true;
         }
         else
         {
@@ -188,24 +211,30 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     break;
                 case TopologyAudience.Children:
                 case TopologyAudience.ParentAndChildren:
-                    if (StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId))
-                    {
-                        if (StreamForwardingRules.IsTransitOnlyForwarding(envelope))
-                            return;
+                    if (ShouldAllowForwardedAudience(envelope, selfActorId))
                         break;
-                    }
 
-                    if (string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
-                    {
-                        return;
-                    }
-                    break;
+                    if (!string.Equals(envelope.Runtime?.SourceActorId, selfActorId, StringComparison.Ordinal))
+                        break;
+
+                    return true;
                 default:
-                    return;
+                    return true;
             }
         }
 
-        using var scope = EventHandleScope.Begin(_logger, this.GetPrimaryKeyString(), envelope);
+        return false;
+    }
+
+    private static bool ShouldAllowForwardedAudience(EventEnvelope envelope, string selfActorId) =>
+        StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId) &&
+        !StreamForwardingRules.IsTransitOnlyForwarding(envelope);
+
+    private async Task DispatchEnvelopeToAgentAsync(
+        EventEnvelope envelope,
+        bool propagateFailure,
+        EventHandleScope scope)
+    {
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
