@@ -1,36 +1,29 @@
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
-internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
+internal sealed class KafkaProviderQueueAdapter : IQueueAdapter
 {
     private readonly string _providerName;
-    private readonly Lazy<IMassTransitEnvelopeTransport> _transport;
-    private readonly IStreamQueueMapper _queueMapper;
+    private readonly KafkaProviderProducer _producer;
+    private readonly KafkaProviderTransportOptions _transportOptions;
     private readonly string _actorEventNamespace;
 
-    public OrleansMassTransitQueueAdapter(
+    public KafkaProviderQueueAdapter(
         string providerName,
-        IMassTransitEnvelopeTransport transport,
-        IStreamQueueMapper queueMapper,
-        string actorEventNamespace)
-        : this(providerName, () => transport, queueMapper, actorEventNamespace)
-    {
-    }
-
-    public OrleansMassTransitQueueAdapter(
-        string providerName,
-        Func<IMassTransitEnvelopeTransport> resolveTransport,
-        IStreamQueueMapper queueMapper,
+        KafkaProviderProducer producer,
+        KafkaProviderTransportOptions transportOptions,
+        KafkaQueuePartitionMapper mapper,
         string actorEventNamespace)
     {
         _providerName = providerName;
-        _transport = new Lazy<IMassTransitEnvelopeTransport>(resolveTransport);
-        _queueMapper = queueMapper;
+        _producer = producer;
+        _transportOptions = transportOptions;
+        Mapper = mapper;
         _actorEventNamespace = actorEventNamespace;
     }
 
@@ -39,6 +32,8 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
     public bool IsRewindable => false;
 
     public StreamProviderDirection Direction => StreamProviderDirection.ReadWrite;
+
+    internal KafkaQueuePartitionMapper Mapper { get; }
 
     public async Task QueueMessageBatchAsync<T>(
         StreamId streamId,
@@ -68,7 +63,7 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
                 continue;
 
             var streamNamespace = streamId.GetNamespace() ?? OrleansRuntimeConstants.ActorEventStreamNamespace;
-            await _transport.Value.PublishAsync(
+            await _producer.PublishAsync(
                 streamNamespace,
                 streamId.GetKeyAsString(),
                 envelope.ToByteArray(),
@@ -77,9 +72,10 @@ internal sealed class OrleansMassTransitQueueAdapter : IQueueAdapter
     }
 
     public IQueueAdapterReceiver CreateReceiver(QueueId queueId) =>
-        new OrleansMassTransitQueueAdapterReceiver(
+        new KafkaProviderQueueAdapterReceiver(
             queueId,
-            _queueMapper,
-            () => _transport.Value,
+            _producer,
+            _transportOptions,
+            Mapper,
             _actorEventNamespace);
 }

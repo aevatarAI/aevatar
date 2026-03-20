@@ -1,17 +1,16 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
-using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-
 namespace Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 
 public static class ServiceCollectionExtensions
 {
+    private const string EventSourcingSection = "EventSourcing";
+
     public static IServiceCollection AddAevatarActorRuntime(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -20,49 +19,7 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var options = new AevatarActorRuntimeOptions();
-        var configuredProvider = configuration[$"{AevatarActorRuntimeOptions.SectionName}:Provider"];
-        if (!string.IsNullOrWhiteSpace(configuredProvider))
-            options.Provider = configuredProvider;
-        var configuredMassTransitTransportBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"];
-        if (!string.IsNullOrWhiteSpace(configuredMassTransitTransportBackend))
-            options.MassTransitTransportBackend = configuredMassTransitTransportBackend;
-        var configuredMassTransitKafkaBootstrap = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"];
-        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaBootstrap))
-            options.MassTransitKafkaBootstrapServers = configuredMassTransitKafkaBootstrap;
-        var configuredMassTransitKafkaTopic = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"];
-        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaTopic))
-            options.MassTransitKafkaTopicName = configuredMassTransitKafkaTopic;
-        var configuredMassTransitKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"];
-        if (!string.IsNullOrWhiteSpace(configuredMassTransitKafkaConsumerGroup))
-            options.MassTransitKafkaConsumerGroup = configuredMassTransitKafkaConsumerGroup;
-        var configuredOrleansStreamBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"];
-        if (!string.IsNullOrWhiteSpace(configuredOrleansStreamBackend))
-            options.OrleansStreamBackend = configuredOrleansStreamBackend;
-        var configuredOrleansStreamProvider = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamProviderName"];
-        if (!string.IsNullOrWhiteSpace(configuredOrleansStreamProvider))
-            options.OrleansStreamProviderName = configuredOrleansStreamProvider;
-        var configuredOrleansActorNamespace = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansActorEventNamespace"];
-        if (!string.IsNullOrWhiteSpace(configuredOrleansActorNamespace))
-            options.OrleansActorEventNamespace = configuredOrleansActorNamespace;
-        var configuredOrleansPersistenceBackend = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"];
-        if (!string.IsNullOrWhiteSpace(configuredOrleansPersistenceBackend))
-            options.OrleansPersistenceBackend = configuredOrleansPersistenceBackend;
-        var configuredOrleansGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
-        if (!string.IsNullOrWhiteSpace(configuredOrleansGarnetConnectionString))
-            options.OrleansGarnetConnectionString = configuredOrleansGarnetConnectionString;
-        var configuredEventSourcingEnableSnapshots = configuration[$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableSnapshots"];
-        if (bool.TryParse(configuredEventSourcingEnableSnapshots, out var eventSourcingEnableSnapshots))
-            options.EventSourcingEnableSnapshots = eventSourcingEnableSnapshots;
-        var configuredEventSourcingSnapshotInterval = configuration[$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:SnapshotInterval"];
-        if (int.TryParse(configuredEventSourcingSnapshotInterval, out var eventSourcingSnapshotInterval))
-            options.EventSourcingSnapshotInterval = eventSourcingSnapshotInterval;
-        var configuredEventSourcingEnableCompaction = configuration[$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:EnableEventCompaction"];
-        if (bool.TryParse(configuredEventSourcingEnableCompaction, out var eventSourcingEnableCompaction))
-            options.EventSourcingEnableEventCompaction = eventSourcingEnableCompaction;
-        var configuredEventSourcingRetainedEvents = configuration[$"{AevatarActorRuntimeOptions.SectionName}:EventSourcing:RetainedEventsAfterSnapshot"];
-        if (int.TryParse(configuredEventSourcingRetainedEvents, out var eventSourcingRetainedEvents))
-            options.EventSourcingRetainedEventsAfterSnapshot = eventSourcingRetainedEvents;
+        var options = ReadRuntimeOptionsFromConfiguration(configuration);
         configure?.Invoke(options);
 
         EnforceActorRuntimeInMemoryPolicy(configuration, options);
@@ -71,50 +28,118 @@ public static class ServiceCollectionExtensions
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderInMemory, StringComparison.OrdinalIgnoreCase))
         {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options);
-            return services;
-        }
-
-        if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderMassTransit, StringComparison.OrdinalIgnoreCase))
-        {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options);
-            ConfigureMassTransitTransport(services, options);
-            services.AddAevatarMassTransitStreamProvider();
-            return services;
+            return AddInMemoryRuntime(services, options);
         }
 
         if (string.Equals(options.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
         {
-            AddAevatarRuntimeWithEventSourcingOptions(services, options);
-            services.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
-            {
-                orleansOptions.StreamBackend = options.OrleansStreamBackend;
-                orleansOptions.StreamProviderName = options.OrleansStreamProviderName;
-                orleansOptions.ActorEventNamespace = options.OrleansActorEventNamespace;
-                orleansOptions.PersistenceBackend = options.OrleansPersistenceBackend;
-                orleansOptions.GarnetConnectionString = options.OrleansGarnetConnectionString;
-            });
-
-            if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
-                return services;
-
-            if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
-            {
-                ConfigureMassTransitTransport(services, options);
-                services.AddAevatarMassTransitStreamProvider(streamOptions =>
-                {
-                    streamOptions.StreamNamespace = options.OrleansActorEventNamespace;
-                });
-                services.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
-                return services;
-            }
-
-            throw new InvalidOperationException(
-                $"Unsupported Orleans stream backend '{options.OrleansStreamBackend}'.");
+            return AddOrleansRuntime(services, options);
         }
 
         throw new InvalidOperationException(
             $"Unsupported ActorRuntime provider '{options.Provider}'.");
+    }
+
+    private static AevatarActorRuntimeOptions ReadRuntimeOptionsFromConfiguration(IConfiguration configuration)
+    {
+        var section = configuration.GetSection(AevatarActorRuntimeOptions.SectionName);
+        var options = new AevatarActorRuntimeOptions();
+        section.Bind(options);
+
+        var eventSourcingSection = section.GetSection(EventSourcingSection);
+        options.EventSourcingEnableSnapshots = ReadBool(
+            eventSourcingSection,
+            nameof(AevatarActorRuntimeOptions.EventSourcingEnableSnapshots),
+            options.EventSourcingEnableSnapshots);
+        ReadInt(
+            eventSourcingSection,
+            nameof(AevatarActorRuntimeOptions.EventSourcingSnapshotInterval),
+            value => options.EventSourcingSnapshotInterval = value,
+            "snapshot interval");
+        options.EventSourcingEnableEventCompaction = ReadBool(
+            eventSourcingSection,
+            nameof(AevatarActorRuntimeOptions.EventSourcingEnableEventCompaction),
+            options.EventSourcingEnableEventCompaction);
+        ReadInt(
+            eventSourcingSection,
+            nameof(AevatarActorRuntimeOptions.EventSourcingRetainedEventsAfterSnapshot),
+            value => options.EventSourcingRetainedEventsAfterSnapshot = value,
+            "retained events after snapshot");
+
+        return options;
+    }
+
+    private static bool ReadBool(
+        IConfigurationSection section,
+        string key,
+        bool defaultValue)
+    {
+        var nestedKey = ResolveNestedEventSourcingKey(key);
+        return section.GetValue(nestedKey, section.GetValue(key, defaultValue));
+    }
+
+    private static void ReadInt(
+        IConfigurationSection section,
+        string key,
+        Action<int> setValue,
+        string settingName)
+    {
+        var value = section[ResolveNestedEventSourcingKey(key)] ?? section[key];
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        if (!int.TryParse(value, out var parsed))
+        {
+            throw new FormatException($"Invalid {settingName} value '{value}'.");
+        }
+
+        setValue(parsed);
+    }
+
+    private static string ResolveNestedEventSourcingKey(string key)
+    {
+        return key.StartsWith(EventSourcingSection, StringComparison.Ordinal)
+            ? key[EventSourcingSection.Length..]
+            : key;
+    }
+
+    private static IServiceCollection AddInMemoryRuntime(IServiceCollection services, AevatarActorRuntimeOptions options)
+    {
+        AddAevatarRuntimeWithEventSourcingOptions(services, options);
+        return services;
+    }
+
+    private static IServiceCollection AddOrleansRuntime(IServiceCollection services, AevatarActorRuntimeOptions options)
+    {
+        AddAevatarRuntimeWithEventSourcingOptions(services, options);
+        services.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
+        {
+            orleansOptions.StreamBackend = options.OrleansStreamBackend;
+            orleansOptions.StreamProviderName = options.OrleansStreamProviderName;
+            orleansOptions.ActorEventNamespace = options.OrleansActorEventNamespace;
+            orleansOptions.PersistenceBackend = options.OrleansPersistenceBackend;
+            orleansOptions.GarnetConnectionString = options.OrleansGarnetConnectionString;
+            orleansOptions.QueueCount = options.OrleansQueueCount;
+            orleansOptions.QueueCacheSize = options.OrleansQueueCacheSize;
+        });
+
+        if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendInMemory, StringComparison.OrdinalIgnoreCase))
+            return services;
+
+        if (string.Equals(options.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(transportOptions =>
+            {
+                transportOptions.BootstrapServers = options.KafkaBootstrapServers;
+                transportOptions.TopicName = options.KafkaTopicName;
+                transportOptions.ConsumerGroup = options.KafkaConsumerGroup;
+                transportOptions.TopicPartitionCount = options.OrleansQueueCount;
+            });
+            return services;
+        }
+
+        throw new InvalidOperationException(
+            $"Unsupported Orleans stream backend '{options.OrleansStreamBackend}'.");
     }
 
     private static void AddAevatarRuntimeWithEventSourcingOptions(
@@ -191,26 +216,5 @@ public static class ServiceCollectionExtensions
             throw new InvalidOperationException($"Invalid boolean value '{rawValue}'.");
 
         return parsed;
-    }
-
-    private static void ConfigureMassTransitTransport(
-        IServiceCollection services,
-        AevatarActorRuntimeOptions options)
-    {
-        if (!string.Equals(
-                options.MassTransitTransportBackend,
-                AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"Unsupported MassTransit transport backend '{options.MassTransitTransportBackend}'.");
-        }
-
-        services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(transportOptions =>
-        {
-            transportOptions.BootstrapServers = options.MassTransitKafkaBootstrapServers;
-            transportOptions.TopicName = options.MassTransitKafkaTopicName;
-            transportOptions.ConsumerGroup = options.MassTransitKafkaConsumerGroup;
-        });
     }
 }
