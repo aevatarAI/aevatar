@@ -417,6 +417,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [promotionPending, setPromotionPending] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
   const [askAiOpen, setAskAiOpen] = useState(false);
   const [askAiPrompt, setAskAiPrompt] = useState('');
@@ -1549,7 +1550,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       ? `Latest proposal · ${activeCatalog.lastProposalId}`
       : 'Submit a promotion proposal when this draft is ready.';
   const scopeSelectionId = selectedDraft.scopeDetail?.script?.scriptId || '';
-  const showFilesPane = editorView === 'source' && filesPaneOpen;
+  const showFilesPane = filesPaneOpen;
+  const packageModalOpen = editorView === 'package';
   const surfaceActionClass = (active = false) => `rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] transition-colors ${
     active
       ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]'
@@ -1892,49 +1894,18 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               <div>
                 <div className="panel-eyebrow">Editor</div>
                 <div className="mt-1 text-[15px] font-semibold text-gray-800">
-                  {editorView === 'source'
-                    ? (selectedPackageEntry?.path || selectedDraft.selectedFilePath || 'Behavior.cs')
-                    : 'Package manifest'}
+                  {selectedPackageEntry?.path || selectedDraft.selectedFilePath || 'Behavior.cs'}
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <div className="mr-1 flex items-center rounded-full border border-[#E5DED3] bg-white p-1">
-                  <button
-                    type="button"
-                    onClick={() => setEditorView('source')}
-                    className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
-                      editorView === 'source'
-                        ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
-                        : 'text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    Source
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditorView('package')}
-                    className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.14em] transition-colors ${
-                      editorView === 'package'
-                        ? 'bg-[#FFF4F1] text-[color:var(--accent-text)]'
-                        : 'text-gray-400 hover:text-gray-600'
-                    }`}
-                  >
-                    Package
-                  </button>
-                </div>
-                {editorView === 'source' ? (
-                  <button type="button" onClick={() => setFilesPaneOpen(value => !value)} className={surfaceActionClass(showFilesPane)}>
-                    {showFilesPane ? 'Hide files' : 'Files'}
-                  </button>
-                ) : null}
-                <button type="button" onClick={() => setLibraryOpen(true)} className={surfaceActionClass(libraryOpen)}>
-                  Library
+                <button type="button" onClick={() => setFilesPaneOpen(value => !value)} className={surfaceActionClass(showFilesPane)}>
+                  {showFilesPane ? 'Hide files' : 'Files'}
                 </button>
-                <button type="button" onClick={() => setActivityOpen(true)} className={surfaceActionClass(activityOpen)}>
-                  Activity
+                <button type="button" onClick={() => setWorkspacePanelOpen(true)} className={surfaceActionClass(workspacePanelOpen || libraryOpen || activityOpen || detailsOpen)}>
+                  Panels
                 </button>
-                <button type="button" onClick={() => setDetailsOpen(true)} className={surfaceActionClass(detailsOpen)}>
-                  Details
+                <button type="button" onClick={() => setEditorView('package')} className={surfaceActionClass(packageModalOpen)}>
+                  Package
                 </button>
                 <button type="button" onClick={() => setAskAiOpen(true)} className={surfaceActionClass(askAiOpen)}>
                   Ask AI
@@ -1951,126 +1922,77 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
             </div>
 
             <div className="min-h-0 flex-1 bg-[#FCFBF8]">
-              {editorView === 'source' ? (
-                <div className="flex h-full min-h-0">
-                  {showFilesPane ? (
-                    <div className="w-[268px] min-w-[240px] max-w-[320px]">
-                      <PackageFileTree
-                        entries={selectedPackageEntries}
-                        selectedFilePath={selectedPackageEntry?.path || selectedDraft.selectedFilePath}
-                        entrySourcePath={selectedDraft.package.entrySourcePath}
-                        onSelectFile={handleSelectDraftFile}
-                        onAddFile={handleAddPackageFile}
-                        onRenameFile={handleRenamePackageFile}
-                        onRemoveFile={handleRemovePackageFile}
-                        onSetEntry={handleSetEntryFile}
-                      />
-                    </div>
-                  ) : null}
-                  <div className="min-h-0 flex-1">
-                    <Editor
-                      path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
-                      language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
-                      theme="aevatar-script-light"
-                      value={selectedPackageEntry?.content || ''}
-                      beforeMount={handleMonacoBeforeMount}
-                      onMount={handleEditorMount}
-                      onChange={value => updateDraft(selectedDraft.key, draft => ({
-                        ...draft,
-                        package: updatePackageFileContent(
-                          draft.package,
-                          draft.selectedFilePath,
-                          value ?? '',
-                        ),
-                      }))}
-                      loading={(
-                        <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
-                          Loading
-                        </div>
-                      )}
-                      options={{
-                        automaticLayout: true,
-                        minimap: { enabled: false },
-                        scrollBeyondLastLine: false,
-                        smoothScrolling: true,
-                        fontSize: 13,
-                        lineHeight: 23,
-                        fontLigatures: true,
-                        tabSize: 4,
-                        insertSpaces: true,
-                        renderWhitespace: 'selection',
-                        renderValidationDecorations: 'on',
-                        lineNumbersMinChars: 3,
-                        quickSuggestions: false,
-                        suggestOnTriggerCharacters: false,
-                        wordWrap: 'off',
-                        stickyScroll: { enabled: false },
-                        bracketPairColorization: { enabled: true },
-                        guides: {
-                          indentation: true,
-                          bracketPairs: true,
-                        },
-                        folding: true,
-                        padding: {
-                          top: 18,
-                          bottom: 18,
-                        },
-                        scrollbar: {
-                          verticalScrollbarSize: 10,
-                          horizontalScrollbarSize: 10,
-                        },
-                      }}
+              <div className="flex h-full min-h-0">
+                {showFilesPane ? (
+                  <div className="w-[268px] min-w-[240px] max-w-[320px]">
+                    <PackageFileTree
+                      entries={selectedPackageEntries}
+                      selectedFilePath={selectedPackageEntry?.path || selectedDraft.selectedFilePath}
+                      entrySourcePath={selectedDraft.package.entrySourcePath}
+                      onSelectFile={handleSelectDraftFile}
+                      onAddFile={handleAddPackageFile}
+                      onRenameFile={handleRenamePackageFile}
+                      onRemoveFile={handleRemovePackageFile}
+                      onSetEntry={handleSetEntryFile}
                     />
                   </div>
-                </div>
-              ) : (
-                <div className="h-full overflow-y-auto bg-[#FCFBF8] p-5">
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                      <div className="section-heading">Entry contract</div>
-                      <div className="mt-3 space-y-3">
-                        <div>
-                          <label className="field-label">Entry Behavior Type</label>
-                          <input
-                            className="panel-input mt-1"
-                            placeholder="DraftBehavior"
-                            value={selectedDraft.package.entryBehaviorTypeName}
-                            onChange={event => updateDraft(selectedDraft.key, draft => ({
-                              ...draft,
-                              package: updateEntryBehaviorTypeName(draft.package, event.target.value),
-                            }))}
-                          />
-                        </div>
-                        <div>
-                          <label className="field-label">Entry Source Path</label>
-                          <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
-                            {selectedDraft.package.entrySourcePath || '-'}
-                          </div>
-                        </div>
+                ) : null}
+                <div className="min-h-0 flex-1">
+                  <Editor
+                    path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
+                    language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
+                    theme="aevatar-script-light"
+                    value={selectedPackageEntry?.content || ''}
+                    beforeMount={handleMonacoBeforeMount}
+                    onMount={handleEditorMount}
+                    onChange={value => updateDraft(selectedDraft.key, draft => ({
+                      ...draft,
+                      package: updatePackageFileContent(
+                        draft.package,
+                        draft.selectedFilePath,
+                        value ?? '',
+                      ),
+                    }))}
+                    loading={(
+                      <div className="flex h-full items-center justify-center text-[12px] uppercase tracking-[0.14em] text-gray-400">
+                        Loading
                       </div>
-                    </div>
-
-                    <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-                      <div className="section-heading">Package summary</div>
-                      <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
-                        <div>format: {selectedDraft.package.format}</div>
-                        <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
-                        <div>proto files: {selectedDraft.package.protoFiles.length}</div>
-                        <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <details className="mt-4 rounded-[20px] border border-[#EEEAE4] bg-white px-4 py-4">
-                    <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-                      Persisted source preview
-                    </summary>
-                    <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                      {serializePersistedSource(selectedDraft.package) || '-'}
-                    </pre>
-                  </details>
+                    )}
+                    options={{
+                      automaticLayout: true,
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      smoothScrolling: true,
+                      fontSize: 13,
+                      lineHeight: 23,
+                      fontLigatures: true,
+                      tabSize: 4,
+                      insertSpaces: true,
+                      renderWhitespace: 'selection',
+                      renderValidationDecorations: 'on',
+                      lineNumbersMinChars: 3,
+                      quickSuggestions: false,
+                      suggestOnTriggerCharacters: false,
+                      wordWrap: 'off',
+                      stickyScroll: { enabled: false },
+                      bracketPairColorization: { enabled: true },
+                      guides: {
+                        indentation: true,
+                        bracketPairs: true,
+                      },
+                      folding: true,
+                      padding: {
+                        top: 18,
+                        bottom: 18,
+                      },
+                      scrollbar: {
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10,
+                      },
+                    }}
+                  />
                 </div>
-              )}
+              </div>
             </div>
 
             <div className="border-t border-[#EEEAE4] bg-[#FFFCF8] px-4 py-3">
@@ -2103,6 +2025,112 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
           </section>
         </div>
       </section>
+
+      <ScriptsStudioModal
+        open={workspacePanelOpen}
+        eyebrow="Workspace"
+        title="Panels"
+        onClose={() => setWorkspacePanelOpen(false)}
+        width="min(680px, 100%)"
+        actions={<button type="button" onClick={() => setWorkspacePanelOpen(false)} className="ghost-action">Close</button>}
+      >
+        <div className="grid gap-3 md:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspacePanelOpen(false);
+              setLibraryOpen(true);
+            }}
+            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
+          >
+            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Library</div>
+            <div className="mt-2 text-[14px] font-semibold text-gray-800">Drafts and saved scripts</div>
+            <div className="mt-2 text-[12px] leading-6 text-gray-500">Browse local drafts, scope scripts, runtimes, and proposal decisions.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspacePanelOpen(false);
+              setActivityOpen(true);
+            }}
+            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
+          >
+            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Activity</div>
+            <div className="mt-2 text-[14px] font-semibold text-gray-800">Run, save, promote</div>
+            <div className="mt-2 text-[12px] leading-6 text-gray-500">Inspect runtime output, catalog state, and promotion results.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspacePanelOpen(false);
+              setDetailsOpen(true);
+            }}
+            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
+          >
+            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Details</div>
+            <div className="mt-2 text-[14px] font-semibold text-gray-800">Metadata and contract</div>
+            <div className="mt-2 text-[12px] leading-6 text-gray-500">Check actor ids, app contract, package facts, and saved scope state.</div>
+          </button>
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={packageModalOpen}
+        eyebrow="Package"
+        title="Package manifest"
+        onClose={() => setEditorView('source')}
+        width="min(980px, 100%)"
+        actions={<button type="button" onClick={() => setEditorView('source')} className="ghost-action">Close</button>}
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Entry contract</div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label className="field-label">Entry Behavior Type</label>
+                  <input
+                    className="panel-input mt-1"
+                    placeholder="DraftBehavior"
+                    value={selectedDraft.package.entryBehaviorTypeName}
+                    onChange={event => updateDraft(selectedDraft.key, draft => ({
+                      ...draft,
+                      package: updateEntryBehaviorTypeName(draft.package, event.target.value),
+                    }))}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Entry Source Path</label>
+                  <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
+                    {selectedDraft.package.entrySourcePath || '-'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Package summary</div>
+              <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
+                <div>format: {selectedDraft.package.format}</div>
+                <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
+                <div>proto files: {selectedDraft.package.protoFiles.length}</div>
+                <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
+              </div>
+            </div>
+          </div>
+
+          <details className="rounded-[20px] border border-[#EEEAE4] bg-white px-4 py-4">
+            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+              Persisted source preview
+            </summary>
+            <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+              {serializePersistedSource(selectedDraft.package) || '-'}
+            </pre>
+          </details>
+        </div>
+      </ScriptsStudioModal>
 
       <ScriptsStudioModal
         open={activityOpen}
