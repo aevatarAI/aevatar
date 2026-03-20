@@ -16,7 +16,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
-    private IReadOnlyDictionary<string, IAgentTool>? _toolIndex;
+    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
@@ -65,7 +65,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
         }, TopologyAudience.Self, ct);
 
-        var toolIndex = await ResolveToolIndexAsync(ct);
+        var toolIndex = await GetOrDiscoverAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
         {
             const string notFound = "tool not found or no tool sources configured";
@@ -99,17 +99,20 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task<IReadOnlyDictionary<string, IAgentTool>> ResolveToolIndexAsync(CancellationToken ct)
+    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
-        var cached = _toolIndex;
-        if (cached != null)
-            return cached;
+        while (true)
+        {
+            var current = _toolIndex;
+            if (current != null && !current.IsFaulted && !current.IsCanceled)
+                return current;
 
-        var discovered = await DiscoverAllToolsAsync(_toolSources, _logger, ct);
-        Interlocked.CompareExchange(ref _toolIndex, discovered, null);
-        return _toolIndex ?? discovered;
+            var discoveryTask = DiscoverAllToolsAsync(_toolSources, _logger, ct);
+            var winner = Interlocked.CompareExchange(ref _toolIndex, discoveryTask, current);
+            if (winner == current)
+                return discoveryTask;
+        }
     }
-
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger logger,
