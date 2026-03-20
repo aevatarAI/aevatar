@@ -124,7 +124,7 @@ public interface IWorkflowActorBindingReader
 
 ### 5.1 Named workflow
 
-- `workflow` 仅按 `IWorkflowDefinitionRegistry` 解析。
+- `workflow` 仅按 `IWorkflowDefinitionCatalog` 解析。
 - registry-backed workflow 必须映射到单一规范 definition actor id：`workflow-definition:{workflow_name_lower}`。
 - 默认按 workflow name 启动时，必须复用该 canonical definition actor。
 

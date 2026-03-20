@@ -11,8 +11,8 @@ public abstract class ServiceProjectionPortBase<TContext>
 
     protected ServiceProjectionPortBase(
         ServiceProjectionOptions options,
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<TContext>> activationService,
-        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<TContext>> releaseService,
+        IProjectionScopeActivationService<ServiceProjectionRuntimeLease<TContext>> activationService,
+        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<TContext>> releaseService,
         string projectionName)
         : base(
             () => options?.Enabled ?? false,
@@ -29,10 +29,11 @@ public abstract class ServiceProjectionPortBase<TContext>
             return;
 
         _ = await EnsureProjectionAsync(
-            new ProjectionMaterializationStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = _projectionName,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
     }

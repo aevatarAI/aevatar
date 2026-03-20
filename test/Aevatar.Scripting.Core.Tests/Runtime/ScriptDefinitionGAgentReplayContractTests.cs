@@ -7,7 +7,6 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -86,7 +85,6 @@ public class ScriptDefinitionGAgentReplayContractTests
         var trackingCompiler = new DisposableTrackingCompiler();
         var agent = new ScriptDefinitionGAgent(
             trackingCompiler,
-            new ScriptReadModelMaterializationCompiler(),
             new DefaultScriptReadModelSchemaActivationPolicy())
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
@@ -102,27 +100,6 @@ public class ScriptDefinitionGAgentReplayContractTests
         });
 
         trackingCompiler.DisposeCalled.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task HandleUpsertRequested_ShouldRejectInvalidReadModelPaths_BeforePersistingDefinitionState()
-    {
-        var invalidPackage = CreateInvalidSchemaPackage();
-        var agent = CreateAgent();
-
-        var act = () => agent.HandleUpsertScriptDefinitionRequested(new UpsertScriptDefinitionRequestedEvent
-        {
-            ScriptId = "script-invalid-schema",
-            ScriptRevision = "rev-invalid",
-            SourceText = invalidPackage.GetPrimaryCSharpSource(),
-            ScriptPackage = invalidPackage,
-            SourceHash = ScriptPackageModel.ComputePackageHash(invalidPackage),
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*references path `search.lookup`*");
-        agent.State.ScriptId.Should().BeEmpty();
-        agent.State.Revision.Should().BeEmpty();
     }
 
     [Fact]
@@ -172,7 +149,6 @@ public class ScriptDefinitionGAgentReplayContractTests
     {
         return new ScriptDefinitionGAgent(
             new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()),
-            new ScriptReadModelMaterializationCompiler(),
             activationPolicy ?? new DefaultScriptReadModelSchemaActivationPolicy([ScriptReadModelStoreKind.Document, ScriptReadModelStoreKind.Graph]))
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptDefinitionState>(
@@ -225,159 +201,6 @@ public class ScriptDefinitionGAgentReplayContractTests
                 Current = snapshot.CurrentReadModel ?? new ScriptProfileReadModel(),
             });
         }
-    }
-
-    private static ScriptPackageSpec CreateInvalidSchemaPackage()
-    {
-        const string behaviorSource =
-            """
-            using System.Threading;
-            using System.Threading.Tasks;
-            using Aevatar.Scripting.Abstractions;
-            using Aevatar.Scripting.Abstractions.Behaviors;
-            using Dynamic.InvalidSchema;
-
-            public sealed class InvalidSchemaBehavior : ScriptBehavior<InvalidProfileState, InvalidProfileReadModel>
-            {
-                protected override void Configure(IScriptBehaviorBuilder<InvalidProfileState, InvalidProfileReadModel> builder)
-                {
-                    builder
-                        .OnCommand<InvalidProfileCommand>(HandleAsync)
-                        .OnEvent<InvalidProfileUpdated>(
-                            apply: static (_, evt, _) => new InvalidProfileState { CommandCount = 1 })
-                        .ProjectState(static (_, _) => new InvalidProfileReadModel());
-                }
-
-                private static Task HandleAsync(
-                    InvalidProfileCommand inbound,
-                    ScriptCommandContext<InvalidProfileState> context,
-                    CancellationToken ct)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    context.Emit(new InvalidProfileUpdated
-                    {
-                        CommandId = inbound.CommandId ?? string.Empty,
-                        Current = new InvalidProfileReadModel
-                        {
-                            ActorId = inbound.ActorId ?? string.Empty,
-                            Search = new InvalidProfileSearch
-                            {
-                                LookupKey = inbound.ActorId ?? string.Empty,
-                            },
-                        },
-                    });
-                    return Task.CompletedTask;
-                }
-
-                private static Task<InvalidProfileQueryResponded?> HandleQueryAsync(
-                    InvalidProfileQueryRequested query,
-                    ScriptQueryContext<InvalidProfileReadModel> snapshot,
-                    CancellationToken ct)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    return Task.FromResult<InvalidProfileQueryResponded?>(new InvalidProfileQueryResponded
-                    {
-                        RequestId = query.RequestId ?? string.Empty,
-                        Current = snapshot.CurrentReadModel ?? new InvalidProfileReadModel(),
-                    });
-                }
-            }
-            """;
-
-        const string protoSource =
-            """
-            syntax = "proto3";
-
-            package dynamic.invalidschema;
-
-            option csharp_namespace = "Dynamic.InvalidSchema";
-
-            import "scripting_schema_options.proto";
-            import "scripting_runtime_options.proto";
-
-            message InvalidProfileState {
-              int32 command_count = 1;
-            }
-
-            message InvalidProfileSearch {
-              string lookup_key = 1;
-            }
-
-            message InvalidProfileReadModel {
-              option (aevatar.scripting.schema.scripting_read_model) = {
-                schema_id: "invalid_profile"
-                schema_version: "1"
-                store_kinds: "document"
-                document_indexes: {
-                  name: "idx_bad_path"
-                  paths: "search.lookup"
-                  provider: "document"
-                }
-              };
-
-              string actor_id = 1 [(aevatar.scripting.schema.scripting_field) = { storage_type: "keyword" }];
-              InvalidProfileSearch search = 2;
-            }
-
-            message InvalidProfileCommand {
-              option (aevatar.scripting.runtime.scripting_runtime) = {
-                kind: SCRIPTING_MESSAGE_KIND_COMMAND
-                command_id_field: "command_id"
-                aggregate_id_field: "actor_id"
-              };
-              string command_id = 1;
-              string actor_id = 2;
-            }
-
-            message InvalidProfileUpdated {
-              option (aevatar.scripting.runtime.scripting_runtime) = {
-                kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
-                projectable: true
-                replay_safe: true
-                command_id_field: "command_id"
-                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
-              };
-              string command_id = 1;
-              InvalidProfileReadModel current = 2;
-            }
-
-            message InvalidProfileQueryRequested {
-              option (aevatar.scripting.runtime.scripting_runtime) = {
-                kind: SCRIPTING_MESSAGE_KIND_QUERY_REQUEST
-                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
-              };
-              option (aevatar.scripting.runtime.scripting_query) = {
-                result_full_name: "dynamic.invalidschema.InvalidProfileQueryResponded"
-              };
-              string request_id = 1;
-            }
-
-            message InvalidProfileQueryResponded {
-              option (aevatar.scripting.runtime.scripting_runtime) = {
-                kind: SCRIPTING_MESSAGE_KIND_QUERY_RESULT
-                read_model_scope: "dynamic.invalidschema.InvalidProfileReadModel"
-              };
-              string request_id = 1;
-              InvalidProfileReadModel current = 2;
-            }
-            """;
-
-        var package = new ScriptPackageSpec
-        {
-            EntryBehaviorTypeName = "InvalidSchemaBehavior",
-            EntrySourcePath = "Behavior.cs",
-        };
-        package.CsharpSources.Add(new ScriptPackageFile
-        {
-            Path = "Behavior.cs",
-            Content = behaviorSource,
-        });
-        package.ProtoFiles.Add(new ScriptPackageFile
-        {
-            Path = "invalid_schema.proto",
-            Content = protoSource,
-        });
-        return package;
     }
 
     private const string DefinitionBehaviorSource =

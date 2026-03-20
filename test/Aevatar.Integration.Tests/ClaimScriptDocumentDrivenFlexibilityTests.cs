@@ -7,7 +7,6 @@ using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Schema;
 using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
@@ -55,7 +54,6 @@ public class ClaimScriptDocumentDrivenFlexibilityTests
 
             var definition = new ScriptDefinitionGAgent(
                 new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()),
-                new ScriptReadModelMaterializationCompiler(),
                 new DefaultScriptReadModelSchemaActivationPolicy())
             {
                 EventSourcingBehaviorFactory =

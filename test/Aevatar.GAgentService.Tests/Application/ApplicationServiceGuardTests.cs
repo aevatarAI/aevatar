@@ -62,14 +62,14 @@ public sealed class ApplicationServiceGuardTests
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpTrafficViewQueryReader(),
-                new InMemoryServiceRevisionArtifactStore()),
+                new ConfiguredServiceRevisionArtifactStore()),
             null!,
             new NoOpInvocationDispatcher());
         Action nullDispatcher = () => new ServiceInvocationApplicationService(
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
                 new NoOpTrafficViewQueryReader(),
-                new InMemoryServiceRevisionArtifactStore()),
+                new ConfiguredServiceRevisionArtifactStore()),
             new NoOpInvokeAdmissionAuthorizer(),
             null!);
 
@@ -145,11 +145,11 @@ public sealed class ApplicationServiceGuardTests
         Action nullCatalogReader = () => new ActivationCapabilityViewAssembler(
             null!,
             new NoOpConfigurationQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
         Action nullConfigurationReader = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
             null!,
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
         Action nullArtifactStore = () => new ActivationCapabilityViewAssembler(
             new NoOpCatalogQueryReader(),
             new NoOpConfigurationQueryReader(),

@@ -114,10 +114,10 @@
     <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
+    <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
     <Project Path="tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
-    <Project Path="tools\Aevatar.Tools.CodeMetrics\Aevatar.Tools.CodeMetrics.csproj" />
   </Folder>
 </Solution>

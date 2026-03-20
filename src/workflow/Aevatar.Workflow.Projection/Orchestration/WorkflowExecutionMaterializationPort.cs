@@ -10,8 +10,8 @@ public sealed class WorkflowExecutionMaterializationPort
 {
     public WorkflowExecutionMaterializationPort(
         WorkflowExecutionProjectionOptions options,
-        IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease> activationService,
-        IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease> releaseService)
+        IProjectionScopeActivationService<WorkflowExecutionMaterializationRuntimeLease> activationService,
+        IProjectionScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease> releaseService)
         : base(
             () => options.Enabled,
             activationService,
@@ -23,10 +23,11 @@ public sealed class WorkflowExecutionMaterializationPort
         string rootActorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionMaterializationStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = rootActorId,
                 ProjectionKind = WorkflowProjectionKinds.ExecutionMaterialization,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
             },
             ct);
 

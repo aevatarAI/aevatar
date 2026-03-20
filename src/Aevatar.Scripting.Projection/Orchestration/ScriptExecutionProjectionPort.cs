@@ -13,8 +13,8 @@ public sealed class ScriptExecutionProjectionPort
 {
     public ScriptExecutionProjectionPort(
         ScriptExecutionProjectionOptions options,
-        IProjectionSessionActivationService<ScriptExecutionRuntimeLease> activationService,
-        IProjectionSessionReleaseService<ScriptExecutionRuntimeLease> releaseService,
+        IProjectionScopeActivationService<ScriptExecutionRuntimeLease> activationService,
+        IProjectionScopeReleaseService<ScriptExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<EventEnvelope> sessionEventHub)
         : base(
             () => options?.Enabled ?? false,
@@ -28,10 +28,11 @@ public sealed class ScriptExecutionProjectionPort
         string actorId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionSessionStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = actorId,
                 ProjectionKind = ScriptProjectionKinds.ExecutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
                 SessionId = actorId,
             },
             ct);

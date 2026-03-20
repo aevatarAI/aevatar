@@ -6,6 +6,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -22,6 +23,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
     [InlineData("dispatcher")]
     [InlineData("capabilityFactory")]
     [InlineData("artifactResolver")]
+    [InlineData("materializationCompiler")]
     [InlineData("codec")]
     public void Ctor_ShouldRejectNullDependencies(string parameterName)
     {
@@ -31,21 +33,31 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
                 null!,
                 new NoOpCapabilityFactory(),
                 CreateArtifactResolver(),
+                new ScriptReadModelMaterializationCompiler(),
                 new ProtobufMessageCodec()),
             "capabilityFactory" => () => _ = new ScriptBehaviorGAgent(
                 new NoOpDispatcher(),
                 null!,
                 CreateArtifactResolver(),
+                new ScriptReadModelMaterializationCompiler(),
                 new ProtobufMessageCodec()),
             "artifactResolver" => () => _ = new ScriptBehaviorGAgent(
                 new NoOpDispatcher(),
                 new NoOpCapabilityFactory(),
+                null!,
+                new ScriptReadModelMaterializationCompiler(),
+                new ProtobufMessageCodec()),
+            "materializationCompiler" => () => _ = new ScriptBehaviorGAgent(
+                new NoOpDispatcher(),
+                new NoOpCapabilityFactory(),
+                CreateArtifactResolver(),
                 null!,
                 new ProtobufMessageCodec()),
             "codec" => () => _ = new ScriptBehaviorGAgent(
                 new NoOpDispatcher(),
                 new NoOpCapabilityFactory(),
                 CreateArtifactResolver(),
+                new ScriptReadModelMaterializationCompiler(),
                 null!),
             _ => throw new InvalidOperationException("Unexpected parameter name."),
         };
@@ -480,6 +492,7 @@ public sealed class ScriptRuntimeGAgentBranchCoverageTests
             dispatcher ?? new NoOpDispatcher(),
             capabilityFactory ?? new NoOpCapabilityFactory(),
             CreateArtifactResolver(),
+            new ScriptReadModelMaterializationCompiler(),
             new ProtobufMessageCodec())
         {
             EventPublisher = new RecordingEventPublisher(),

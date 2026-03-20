@@ -130,7 +130,7 @@ public class RoslynScriptBehaviorCompilerTests
             x.Kind == ScriptMessageKind.DomainEvent &&
             x.Projectable);
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "contract-hash",
             schemaVersion: "3");

@@ -84,9 +84,9 @@ public sealed class WorkflowExecutionProjectionPortTests
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
     }
 
-    private sealed class RecordingActivationService : IProjectionSessionActivationService<WorkflowExecutionRuntimeLease>
+    private sealed class RecordingActivationService : IProjectionScopeActivationService<WorkflowExecutionRuntimeLease>
     {
-        public List<ProjectionSessionStartRequest> Requests { get; } = [];
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
 
         public WorkflowExecutionRuntimeLease LeaseToReturn { get; } = new(new WorkflowExecutionProjectionContext
         {
@@ -96,7 +96,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         });
 
         public Task<WorkflowExecutionRuntimeLease> EnsureAsync(
-            ProjectionSessionStartRequest request,
+            ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
@@ -104,7 +104,7 @@ public sealed class WorkflowExecutionProjectionPortTests
         }
     }
 
-    private sealed class RecordingReleaseService : IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease>
+    private sealed class RecordingReleaseService : IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease>
     {
         public List<WorkflowExecutionRuntimeLease> Leases { get; } = [];
 
