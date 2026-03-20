@@ -43,15 +43,15 @@ public sealed class ConnectorService
         var connectors = request.Connectors ?? [];
         EnsureUniqueNames(connectors);
 
-        var existing = await _store.GetConnectorCatalogAsync(cancellationToken);
         var saved = await _store.SaveConnectorCatalogAsync(
-            existing with
-            {
-                Connectors = connectors
+            new StoredConnectorCatalog(
+                HomeDirectory: string.Empty,
+                FilePath: string.Empty,
+                FileExists: false,
+                Connectors: connectors
                     .Where(connector => !string.IsNullOrWhiteSpace(connector.Name))
                     .Select(ToStoredConnector)
-                    .ToList(),
-            },
+                    .ToList()),
             cancellationToken);
 
         return ToResponse(saved);

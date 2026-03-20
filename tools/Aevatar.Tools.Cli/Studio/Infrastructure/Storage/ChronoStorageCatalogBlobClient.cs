@@ -90,13 +90,26 @@ internal sealed class ChronoStorageCatalogBlobClient
         RemoteScopeContext context,
         CancellationToken cancellationToken)
     {
+        CatalogDownloadUnavailableException? downloadUnavailable = null;
         foreach (var objectKey in EnumerateCandidateObjectKeys(context))
         {
-            var payload = await TryDownloadEncryptedCoreAsync(context, objectKey, cancellationToken);
-            if (payload != null)
+            try
             {
-                return new DownloadedCatalogPayload(payload, objectKey);
+                var payload = await TryDownloadEncryptedCoreAsync(context, objectKey, cancellationToken);
+                if (payload != null)
+                {
+                    return new DownloadedCatalogPayload(payload, objectKey);
+                }
             }
+            catch (CatalogDownloadUnavailableException exception)
+            {
+                downloadUnavailable ??= exception;
+            }
+        }
+
+        if (downloadUnavailable != null)
+        {
+            throw downloadUnavailable;
         }
 
         return null;
@@ -297,7 +310,7 @@ internal sealed class ChronoStorageCatalogBlobClient
         using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
         if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
         {
-            throw new InvalidOperationException(
+            throw new CatalogDownloadUnavailableException(
                 $"Chrono-storage download URL returned 404 for object '{objectKey}'. The catalog object exists but could not be downloaded.");
         }
 
@@ -438,5 +451,13 @@ internal sealed class ChronoStorageCatalogBlobClient
 
         [JsonPropertyName("tag")]
         public string Tag { get; set; } = string.Empty;
+    }
+
+    private sealed class CatalogDownloadUnavailableException : InvalidOperationException
+    {
+        public CatalogDownloadUnavailableException(string message)
+            : base(message)
+        {
+        }
     }
 }

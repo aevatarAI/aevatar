@@ -174,6 +174,44 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     }
 
     [Fact]
+    public async Task GetConnectorCatalogAsync_WhenCurrentDownloadFails_ShouldFallbackToLegacyObject()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var scopeResolver = new StubAppScopeResolver("scope-fallback-download");
+        var storageServer = new MixedDownloadChronoStorageServer();
+        var blobClient = CreateBlobClient(scopeResolver, storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
+        var remoteContext = blobClient.TryResolveContext("aevatar/connectors/v1", "catalog.json.enc")
+                           ?? throw new InvalidOperationException("Expected remote context.");
+        remoteContext.LegacyObjectKeys.Should().ContainSingle();
+
+        storageServer.MarkBrokenDownload(remoteContext.Bucket, remoteContext.ObjectKey);
+
+        await using var stream = new MemoryStream();
+        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(
+            stream,
+            [CreateConnector("legacy_connector", "https://legacy.example.com")],
+            CancellationToken.None);
+        storageServer.Store(
+            remoteContext.Bucket,
+            remoteContext.LegacyObjectKeys[0],
+            blobClient.EncryptPayload(remoteContext, stream.ToArray(), remoteContext.LegacyObjectKeys[0]));
+
+        var store = new ChronoStorageConnectorCatalogStore(
+            new InMemoryStudioWorkspaceStore(),
+            blobClient,
+            CreateOptions(),
+            Options.Create(new StudioStorageOptions
+            {
+                RootDirectory = workspaceRoot.Path,
+            }));
+
+        var catalog = await store.GetConnectorCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Connectors.Should().ContainSingle(x => x.Name == "legacy_connector");
+    }
+
+    [Fact]
     public async Task DraftOperations_WhenRemoteEnabled_ShouldUseScopeScopedLocalDraftFiles()
     {
         using var workspaceRoot = new TemporaryDirectory();
@@ -684,6 +722,125 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
                 if (string.Equals(uri.Host, "download.local", StringComparison.OrdinalIgnoreCase))
                 {
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                }
+
+                throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+            }
+
+            private static string GetRequiredQueryValue(Uri uri, string key)
+            {
+                var query = uri.Query.TrimStart('?')
+                    .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(pair => pair.Split('=', 2))
+                    .ToDictionary(
+                        pair => Uri.UnescapeDataString(pair[0]),
+                        pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1]) : string.Empty,
+                        StringComparer.Ordinal);
+                return query.TryGetValue(key, out var value)
+                    ? value
+                    : throw new InvalidOperationException($"Missing query key '{key}'.");
+            }
+
+            private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, object payload) =>
+                new(statusCode)
+                {
+                    Content = JsonContent.Create(payload),
+                };
+        }
+    }
+
+    private sealed class MixedDownloadChronoStorageServer
+    {
+        private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _brokenDownloads = [];
+
+        public void Store(string bucket, string objectKey, byte[] payload) =>
+            _objects[$"{bucket}:{objectKey}"] = payload;
+
+        public void MarkBrokenDownload(string bucket, string objectKey) =>
+            _brokenDownloads.Add($"{bucket}:{objectKey}");
+
+        public IHttpClientFactory CreateHttpClientFactory()
+        {
+            var client = new HttpClient(new Handler(_objects, _brokenDownloads))
+            {
+                BaseAddress = new Uri("https://nyx.test/"),
+            };
+            return new StubHttpClientFactory(client);
+        }
+
+        private sealed class Handler : HttpMessageHandler
+        {
+            private readonly IReadOnlyDictionary<string, byte[]> _objects;
+            private readonly IReadOnlySet<string> _brokenDownloads;
+
+            public Handler(
+                IReadOnlyDictionary<string, byte[]> objects,
+                IReadOnlySet<string> brokenDownloads)
+            {
+                _objects = objects;
+                _brokenDownloads = brokenDownloads;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+                if (request.Method == HttpMethod.Get &&
+                    uri.AbsolutePath.Contains("/presigned-url", StringComparison.Ordinal))
+                {
+                    var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    var bucket = segments[^2];
+                    var key = GetRequiredQueryValue(uri, "key");
+                    var objectId = $"{bucket}:{key}";
+                    if (_objects.ContainsKey(objectId))
+                    {
+                        return Task.FromResult(CreateJsonResponse(
+                            HttpStatusCode.OK,
+                            new
+                            {
+                                data = new
+                                {
+                                    presignedUrl = $"https://download.local/ok/{bucket}/{Uri.EscapeDataString(key)}",
+                                },
+                                error = (object?)null,
+                            }));
+                    }
+
+                    if (_brokenDownloads.Contains(objectId))
+                    {
+                        return Task.FromResult(CreateJsonResponse(
+                            HttpStatusCode.OK,
+                            new
+                            {
+                                data = new
+                                {
+                                    presignedUrl = $"https://download.local/missing/{bucket}/{Uri.EscapeDataString(key)}",
+                                },
+                                error = (object?)null,
+                            }));
+                    }
+
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                }
+
+                if (string.Equals(uri.Host, "download.local", StringComparison.OrdinalIgnoreCase))
+                {
+                    var segments = uri.AbsolutePath.Trim('/').Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
+                    var mode = segments[0];
+                    var bucket = segments[1];
+                    var key = Uri.UnescapeDataString(segments[2]);
+                    if (!string.Equals(mode, "ok", StringComparison.Ordinal))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    }
+
+                    return Task.FromResult(
+                        _objects.TryGetValue($"{bucket}:{key}", out var payload)
+                            ? new HttpResponseMessage(HttpStatusCode.OK)
+                            {
+                                Content = new ByteArrayContent(payload),
+                            }
+                            : new HttpResponseMessage(HttpStatusCode.NotFound));
                 }
 
                 throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");

@@ -1,14 +1,17 @@
 import Editor, { loader, type BeforeMount, type OnMount } from '@monaco-editor/react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Bot,
+  ChevronLeft,
   Check,
   Code2,
   Copy,
+  FileText,
   Play,
-  Plus,
   RefreshCw,
+  Rows3,
   Save,
+  X,
 } from 'lucide-react';
 import * as monacoEditor from 'monaco-editor/esm/vs/editor/editor.api.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker.js?worker';
@@ -113,6 +116,20 @@ if (!monacoHost.MonacoEnvironment) {
 }
 
 loader.config({ monaco: monacoEditor });
+
+function DrawerToggleButton(props: { active: boolean; label: string; icon: ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      title={props.label}
+      aria-label={props.label}
+      className={`drawer-icon-button ${props.active ? 'active' : ''}`}
+    >
+      {props.icon}
+    </button>
+  );
+}
 
 function normalizeStudioId(value: string, fallbackPrefix: string) {
   const normalized = String(value || '')
@@ -415,9 +432,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [snapshotPending, setSnapshotPending] = useState(false);
   const [savePending, setSavePending] = useState(false);
   const [promotionPending, setPromotionPending] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [workspaceSection, setWorkspaceSection] = useState<'library' | 'activity' | 'details'>('library');
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
   const [askAiOpen, setAskAiOpen] = useState(false);
   const [askAiPrompt, setAskAiPrompt] = useState('');
@@ -433,8 +449,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [validationPending, setValidationPending] = useState(false);
   const [validationResult, setValidationResult] = useState<ScriptValidationResult | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
-  const [filesPaneOpen, setFilesPaneOpen] = useState(false);
+  const [filesPaneOpen, setFilesPaneOpen] = useState(true);
   const [editorView, setEditorView] = useState<StudioEditorView>('source');
   const [resultView, setResultView] = useState<StudioResultView>('runtime');
   const [selectedRuntimeActorId, setSelectedRuntimeActorId] = useState('');
@@ -821,8 +836,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     const nextDraft = createDraft(drafts.length + 1);
     setDrafts(prev => [nextDraft, ...prev]);
     setSelectedDraftKey(nextDraft.key);
-    setLibraryOpen(false);
-    setActivityOpen(false);
   }
 
   function handleSelectDraftFile(filePath: string) {
@@ -1060,8 +1073,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     setResultView('save');
     setSelectedProposalId(scopeCatalogsByScriptId[scriptId]?.lastProposalId || '');
-    setLibraryOpen(false);
-    setActivityOpen(false);
     onFlash('Saved script loaded into the editor', 'success');
   }
 
@@ -1092,7 +1103,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       setSelectedRuntimeActorId(snapshot.actorId || normalizedActorId);
       setResultView('runtime');
       if (!silent) {
-        setActivityOpen(true);
+        openWorkspaceSection('activity');
       }
 
       if (!silent) {
@@ -1132,7 +1143,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   async function handleSelectRuntime(actorId: string) {
     setSelectedRuntimeActorId(actorId);
     setResultView('runtime');
-    setActivityOpen(true);
+    openWorkspaceSection('activity');
 
     const knownSnapshot = runtimeSnapshots.find(snapshot => snapshot.actorId === actorId);
     if (!knownSnapshot) {
@@ -1143,7 +1154,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   function handleSelectProposal(proposalId: string) {
     setSelectedProposalId(proposalId);
     setResultView('promotion');
-    setActivityOpen(true);
+    openWorkspaceSection('activity');
   }
 
   async function refreshCurrentCatalog() {
@@ -1242,7 +1253,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         scopeDetail: detail,
       }));
       setResultView('save');
-      setActivityOpen(true);
+      openWorkspaceSection('activity');
       setSelectedProposalId('');
       await loadScopeScripts(true);
       onFlash('Script saved to the current scope', 'success');
@@ -1349,7 +1360,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       setRunModalOpen(false);
       setResultView('runtime');
-      setActivityOpen(true);
+      openWorkspaceSection('activity');
       setSelectedRuntimeActorId(response.runtimeActorId || '');
       const snapshot = await waitForSnapshot(response.runtimeActorId || '');
       await loadRuntimeSnapshots(true);
@@ -1404,7 +1415,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       setPromotionModalOpen(false);
       setResultView('promotion');
-      setActivityOpen(true);
+      openWorkspaceSection('activity');
       if (scopeBacked) {
         await loadScopeScripts(true);
       }
@@ -1499,7 +1510,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }));
     setSelectedDraftKey(targetKey);
     setEditorView('source');
-    setAskAiOpen(false);
     onFlash(askAiGeneratedPackage ? 'AI package applied to the editor' : 'AI source applied to the editor', 'success');
   }
 
@@ -1552,11 +1562,49 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const scopeSelectionId = selectedDraft.scopeDetail?.script?.scriptId || '';
   const showFilesPane = filesPaneOpen;
   const packageModalOpen = editorView === 'package';
+  const rightDrawerTab = packageModalOpen ? 'package' : workspacePanelOpen ? 'panels' : null;
+  const rightDrawerOpen = rightDrawerTab !== null;
   const surfaceActionClass = (active = false) => `rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] transition-colors ${
     active
       ? 'border-[color:var(--accent-border)] bg-[#FFF4F1] text-[color:var(--accent-text)]'
       : 'border-[#E5DED3] bg-white text-gray-500 hover:bg-[#F9F6F0]'
   }`;
+
+  function openWorkspaceSection(section: 'library' | 'activity' | 'details') {
+    setWorkspaceSection(section);
+    setWorkspacePanelOpen(true);
+    setEditorView('source');
+  }
+
+  function toggleRightDrawer(tab: 'panels' | 'package') {
+    if (tab === 'panels') {
+      if (workspacePanelOpen && !packageModalOpen) {
+        setWorkspacePanelOpen(false);
+        return;
+      }
+
+      setEditorView('source');
+      setWorkspacePanelOpen(true);
+      return;
+    }
+
+    if (packageModalOpen) {
+      setEditorView('source');
+      return;
+    }
+
+    setWorkspacePanelOpen(false);
+    setEditorView('package');
+  }
+
+  function closeRightDrawer() {
+    if (packageModalOpen) {
+      setEditorView('source');
+      return;
+    }
+
+    setWorkspacePanelOpen(false);
+  }
 
   function renderResultDetailContent() {
     if (resultView === 'runtime') {
@@ -1813,6 +1861,141 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     );
   }
 
+  function renderWorkspacePanelContent() {
+    if (workspaceSection === 'library') {
+      return (
+        <div className="h-full min-h-0 overflow-hidden p-4">
+          <ResourceRail
+            drafts={drafts}
+            filteredDrafts={filteredDrafts}
+            filteredScopeScripts={filteredScopeScripts}
+            runtimeSnapshots={runtimeSnapshots}
+            proposalDecisions={proposalDecisions}
+            scopeCatalogsByScriptId={scopeCatalogsByScriptId}
+            selectedDraft={selectedDraft}
+            scopeSelectionId={scopeSelectionId}
+            selectedRuntimeActorId={selectedRuntimeActorId}
+            selectedProposalId={selectedProposalId}
+            search={search}
+            scopeBacked={scopeBacked}
+            scopeId={appContext.scopeId}
+            scopeScriptsPending={scopeScriptsPending}
+            runtimeSnapshotsPending={runtimeSnapshotsPending}
+            proposalDecisionsPending={proposalDecisionsPending}
+            onSearchChange={setSearch}
+            onCreateDraft={handleCreateDraft}
+            onSelectDraft={setSelectedDraftKey}
+            onOpenScopeScript={openScopeScript}
+            onRefreshScopeScripts={() => { void loadScopeScripts(); }}
+            onSelectRuntime={actorId => { void handleSelectRuntime(actorId); }}
+            onRefreshRuntimeSnapshots={() => { void loadRuntimeSnapshots(); }}
+            onSelectProposal={handleSelectProposal}
+          />
+        </div>
+      );
+    }
+
+    if (workspaceSection === 'details') {
+      return (
+        <div className="h-full min-h-0 overflow-hidden p-4">
+          <InspectorPanel
+            selectedDraft={selectedDraft}
+            scopeBacked={scopeBacked}
+            appContext={appContext}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="space-y-3">
+          <StudioResultCard
+            active={resultView === 'runtime'}
+            title="Draft Run"
+            meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
+            summary={runtimeSummary}
+            status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
+            onClick={() => setResultView('runtime')}
+          />
+          <StudioResultCard
+            active={resultView === 'save'}
+            title="Catalog"
+            meta={activeCatalog ? formatDateTime(activeCatalog.updatedAt) : selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
+            summary={saveSummary}
+            status={scopeBacked ? (hasScopeChanges ? 'dirty' : activeCatalog || selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
+            onClick={() => setResultView('save')}
+          />
+          <StudioResultCard
+            active={resultView === 'promotion'}
+            title="Promotion"
+            meta={activeProposal?.candidateRevision || activeCatalog?.lastProposalId || 'No candidate'}
+            summary={promotionSummary}
+            status={activeProposal?.status || ''}
+            onClick={() => setResultView('promotion')}
+          />
+
+          <div className="rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
+            {renderResultDetailContent()}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderPackagePanelContent() {
+    return (
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="space-y-4">
+          <div className="grid gap-4">
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Entry contract</div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label className="field-label">Entry Behavior Type</label>
+                  <input
+                    className="panel-input mt-1"
+                    placeholder="DraftBehavior"
+                    value={selectedDraft.package.entryBehaviorTypeName}
+                    onChange={event => updateDraft(selectedDraft.key, draft => ({
+                      ...draft,
+                      package: updateEntryBehaviorTypeName(draft.package, event.target.value),
+                    }))}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Entry Source Path</label>
+                  <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
+                    {selectedDraft.package.entrySourcePath || '-'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+              <div className="section-heading">Package summary</div>
+              <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
+                <div>format: {selectedDraft.package.format}</div>
+                <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
+                <div>proto files: {selectedDraft.package.protoFiles.length}</div>
+                <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
+              </div>
+            </div>
+          </div>
+
+          <details className="rounded-[20px] border border-[#EEEAE4] bg-white px-4 py-4" open>
+            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
+              Persisted source preview
+            </summary>
+            <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+              {serializePersistedSource(selectedDraft.package) || '-'}
+            </pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <header className="studio-editor-header">
@@ -1898,18 +2081,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <button type="button" onClick={() => setFilesPaneOpen(value => !value)} className={surfaceActionClass(showFilesPane)}>
-                  {showFilesPane ? 'Hide files' : 'Files'}
-                </button>
-                <button type="button" onClick={() => setWorkspacePanelOpen(true)} className={surfaceActionClass(workspacePanelOpen || libraryOpen || activityOpen || detailsOpen)}>
-                  Panels
-                </button>
-                <button type="button" onClick={() => setEditorView('package')} className={surfaceActionClass(packageModalOpen)}>
-                  Package
-                </button>
-                <button type="button" onClick={() => setAskAiOpen(true)} className={surfaceActionClass(askAiOpen)}>
-                  Ask AI
-                </button>
                 <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-gray-400">
                   {hasScopeChanges ? (
                     <span className="rounded-full border border-[#E9D6AE] bg-[#FFF7E6] px-3 py-1 text-[#9B6A1C]">
@@ -1923,21 +2094,35 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
             <div className="min-h-0 flex-1 bg-[#FCFBF8]">
               <div className="flex h-full min-h-0">
-                {showFilesPane ? (
-                  <div className="w-[268px] min-w-[240px] max-w-[320px]">
-                    <PackageFileTree
-                      entries={selectedPackageEntries}
-                      selectedFilePath={selectedPackageEntry?.path || selectedDraft.selectedFilePath}
-                      entrySourcePath={selectedDraft.package.entrySourcePath}
-                      onSelectFile={handleSelectDraftFile}
-                      onAddFile={handleAddPackageFile}
-                      onRenameFile={handleRenamePackageFile}
-                      onRemoveFile={handleRemovePackageFile}
-                      onSetEntry={handleSetEntryFile}
+                <div className={showFilesPane ? 'w-[268px] min-w-[240px] max-w-[320px]' : 'w-[56px] min-w-[56px] max-w-[56px]'}>
+                  <PackageFileTree
+                    entries={selectedPackageEntries}
+                    selectedFilePath={selectedPackageEntry?.path || selectedDraft.selectedFilePath}
+                    entrySourcePath={selectedDraft.package.entrySourcePath}
+                    collapsed={!showFilesPane}
+                    onToggleCollapsed={() => setFilesPaneOpen(value => !value)}
+                    onSelectFile={handleSelectDraftFile}
+                    onAddFile={handleAddPackageFile}
+                    onRenameFile={handleRenamePackageFile}
+                    onRemoveFile={handleRemovePackageFile}
+                    onSetEntry={handleSetEntryFile}
+                  />
+                </div>
+                <div className="relative min-h-0 flex-1">
+                  <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
+                    <DrawerToggleButton
+                      active={rightDrawerOpen && rightDrawerTab === 'panels'}
+                      label="Panels"
+                      icon={<Rows3 size={16} />}
+                      onClick={() => toggleRightDrawer('panels')}
+                    />
+                    <DrawerToggleButton
+                      active={rightDrawerOpen && rightDrawerTab === 'package'}
+                      label="Package"
+                      icon={<FileText size={16} />}
+                      onClick={() => toggleRightDrawer('package')}
                     />
                   </div>
-                ) : null}
-                <div className="min-h-0 flex-1">
                   <Editor
                     path={`file:///scripts/${selectedDraft.key}/${selectedPackageEntry?.path || validationResult?.primarySourcePath || 'Behavior.cs'}`}
                     language={selectedPackageEntry?.kind === 'proto' ? 'plaintext' : 'csharp'}
@@ -2024,155 +2209,168 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
             </div>
           </section>
         </div>
-      </section>
 
-      <ScriptsStudioModal
-        open={workspacePanelOpen}
-        eyebrow="Workspace"
-        title="Panels"
-        onClose={() => setWorkspacePanelOpen(false)}
-        width="min(680px, 100%)"
-        actions={<button type="button" onClick={() => setWorkspacePanelOpen(false)} className="ghost-action">Close</button>}
-      >
-        <div className="grid gap-3 md:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => {
-              setWorkspacePanelOpen(false);
-              setLibraryOpen(true);
-            }}
-            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
-          >
-            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Library</div>
-            <div className="mt-2 text-[14px] font-semibold text-gray-800">Drafts and saved scripts</div>
-            <div className="mt-2 text-[12px] leading-6 text-gray-500">Browse local drafts, scope scripts, runtimes, and proposal decisions.</div>
-          </button>
+        <aside className={`right-drawer ${rightDrawerOpen ? 'open' : ''}`}>
+          <div className="panel-header border-b border-[#F1ECE5]">
+            <div>
+              <div className="panel-eyebrow">{rightDrawerTab === 'package' ? 'Package' : 'Panels'}</div>
+              <div className="panel-title">
+                {rightDrawerTab === 'package'
+                  ? 'Manifest'
+                  : workspaceSection === 'library'
+                    ? 'Library'
+                    : workspaceSection === 'activity'
+                      ? 'Activity'
+                      : 'Details'}
+              </div>
+            </div>
+            <button type="button" onClick={closeRightDrawer} title="Close drawer." className="panel-icon-button">
+              <ChevronLeft size={16} />
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setWorkspacePanelOpen(false);
-              setActivityOpen(true);
-            }}
-            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
-          >
-            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Activity</div>
-            <div className="mt-2 text-[14px] font-semibold text-gray-800">Run, save, promote</div>
-            <div className="mt-2 text-[12px] leading-6 text-gray-500">Inspect runtime output, catalog state, and promotion results.</div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setWorkspacePanelOpen(false);
-              setDetailsOpen(true);
-            }}
-            className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-4 text-left transition-colors hover:bg-white"
-          >
-            <div className="text-[11px] uppercase tracking-[0.14em] text-gray-400">Details</div>
-            <div className="mt-2 text-[14px] font-semibold text-gray-800">Metadata and contract</div>
-            <div className="mt-2 text-[12px] leading-6 text-gray-500">Check actor ids, app contract, package facts, and saved scope state.</div>
-          </button>
-        </div>
-      </ScriptsStudioModal>
-
-      <ScriptsStudioModal
-        open={packageModalOpen}
-        eyebrow="Package"
-        title="Package manifest"
-        onClose={() => setEditorView('source')}
-        width="min(980px, 100%)"
-        actions={<button type="button" onClick={() => setEditorView('source')} className="ghost-action">Close</button>}
-      >
-        <div className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-              <div className="section-heading">Entry contract</div>
-              <div className="mt-3 space-y-3">
-                <div>
-                  <label className="field-label">Entry Behavior Type</label>
-                  <input
-                    className="panel-input mt-1"
-                    placeholder="DraftBehavior"
-                    value={selectedDraft.package.entryBehaviorTypeName}
-                    onChange={event => updateDraft(selectedDraft.key, draft => ({
-                      ...draft,
-                      package: updateEntryBehaviorTypeName(draft.package, event.target.value),
-                    }))}
-                  />
+          {rightDrawerTab === 'panels' ? (
+            <>
+              <div className="border-b border-[#F1ECE5] px-4 py-3">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceSection('library')}
+                    className={surfaceActionClass(workspaceSection === 'library')}
+                  >
+                    Library
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceSection('activity')}
+                    className={surfaceActionClass(workspaceSection === 'activity')}
+                  >
+                    Activity
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceSection('details')}
+                    className={surfaceActionClass(workspaceSection === 'details')}
+                  >
+                    Details
+                  </button>
                 </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {renderWorkspacePanelContent()}
+              </div>
+            </>
+          ) : (
+            renderPackagePanelContent()
+          )}
+        </aside>
+
+        <div className="absolute bottom-6 right-6 z-30 flex items-end gap-3">
+          {askAiOpen ? (
+            <div className="ask-ai-surface flex max-h-[calc(100%-136px)] w-[420px] flex-col overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-[#F1ECE5] px-4 py-4">
                 <div>
-                  <label className="field-label">Entry Source Path</label>
-                  <div className="mt-1 break-all text-[13px] leading-6 text-gray-700">
-                    {selectedDraft.package.entrySourcePath || '-'}
+                  <div className="panel-eyebrow">Source</div>
+                  <div className="panel-title !mt-0">Ask AI</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAskAiOpen(false)}
+                  title="Close Ask AI."
+                  className="panel-icon-button"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <p className="text-[12px] leading-6 text-gray-500">
+                  Describe the script change you want. Closing this panel does not stop an in-flight generation.
+                </p>
+
+                <textarea
+                  rows={5}
+                  className="panel-textarea mt-4"
+                  placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
+                  value={askAiPrompt}
+                  onChange={event => setAskAiPrompt(event.target.value)}
+                />
+
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-gray-400">
+                    {askAiPending
+                      ? 'Generating and compiling file content...'
+                      : askAiGeneratedSource
+                        ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
+                        : 'Return format: script package JSON'}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void handleCopyAskAiSource(); }}
+                      className="ghost-action !px-3"
+                      disabled={!askAiGeneratedSource.trim()}
+                    >
+                      <Copy size={14} /> Copy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleApplyAskAiSource}
+                      className="ghost-action !px-3"
+                      disabled={!askAiGeneratedSource.trim()}
+                    >
+                      <Check size={14} /> Apply
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void handleAskAiGenerate(); }}
+                      className="ghost-action !px-3"
+                      disabled={askAiPending}
+                    >
+                      <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
+                    </button>
                   </div>
                 </div>
+
+                <div className="mt-4 rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
+                  <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
+                    {askAiReasoning || 'LLM reasoning will stream here.'}
+                  </pre>
+                </div>
+
+                <div className="mt-4 rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Preview</div>
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-gray-400">
+                      {askAiGeneratedSource ? 'Ready to apply' : 'Waiting for generated package'}
+                    </div>
+                  </div>
+                  {askAiGeneratedPackage ? (
+                    <div className="mt-2 text-[11px] leading-5 text-gray-400">
+                      {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} · {askAiGeneratedPackage.csharpSources.length} C# · {askAiGeneratedPackage.protoFiles.length} proto
+                    </div>
+                  ) : null}
+                  <pre className="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
+                    {askAiGeneratedSource || askAiAnswer || 'Generated file content will appear here.'}
+                  </pre>
+                </div>
               </div>
             </div>
+          ) : null}
 
-            <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
-              <div className="section-heading">Package summary</div>
-              <div className="mt-3 space-y-2 text-[12px] leading-6 text-gray-600">
-                <div>format: {selectedDraft.package.format}</div>
-                <div>csharp files: {selectedDraft.package.csharpSources.length}</div>
-                <div>proto files: {selectedDraft.package.protoFiles.length}</div>
-                <div>selected file: {selectedDraft.selectedFilePath || '-'}</div>
-              </div>
-            </div>
-          </div>
-
-          <details className="rounded-[20px] border border-[#EEEAE4] bg-white px-4 py-4">
-            <summary className="cursor-pointer text-[12px] font-semibold uppercase tracking-[0.14em] text-gray-400">
-              Persisted source preview
-            </summary>
-            <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-              {serializePersistedSource(selectedDraft.package) || '-'}
-            </pre>
-          </details>
+          <button
+            type="button"
+            onClick={() => setAskAiOpen(value => !value)}
+            title="Ask AI to generate script code."
+            className={`ask-ai-trigger flex h-14 w-14 items-center justify-center rounded-[20px] border transition-transform hover:-translate-y-0.5 ${
+              askAiOpen || askAiPending ? 'border-[color:var(--accent-border)] text-[color:var(--accent-text)]' : 'border-[#E8E2D9]'
+            }`}
+          >
+            <Bot size={20} />
+          </button>
         </div>
-      </ScriptsStudioModal>
-
-      <ScriptsStudioModal
-        open={activityOpen}
-        eyebrow="Activity"
-        title="Draft activity"
-        onClose={() => setActivityOpen(false)}
-        width="min(1180px, 100%)"
-        actions={<button type="button" onClick={() => setActivityOpen(false)} className="ghost-action">Close</button>}
-      >
-        <div className="min-h-[620px] grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
-          <div className="space-y-3">
-            <StudioResultCard
-              active={resultView === 'runtime'}
-              title="Draft Run"
-              meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
-              summary={runtimeSummary}
-              status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
-              onClick={() => setResultView('runtime')}
-            />
-            <StudioResultCard
-              active={resultView === 'save'}
-              title="Catalog"
-              meta={activeCatalog ? formatDateTime(activeCatalog.updatedAt) : selectedDraft.scopeDetail?.script ? formatDateTime(selectedDraft.scopeDetail.script.updatedAt) : scopeBacked ? 'Not saved yet' : 'Local only'}
-              summary={saveSummary}
-              status={scopeBacked ? (hasScopeChanges ? 'dirty' : activeCatalog || selectedDraft.scopeDetail?.script ? 'saved' : 'pending') : 'local'}
-              onClick={() => setResultView('save')}
-            />
-            <StudioResultCard
-              active={resultView === 'promotion'}
-              title="Promotion"
-              meta={activeProposal?.candidateRevision || activeCatalog?.lastProposalId || 'No candidate'}
-              summary={promotionSummary}
-              status={activeProposal?.status || ''}
-              onClick={() => setResultView('promotion')}
-            />
-          </div>
-
-          <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-            {renderResultDetailContent()}
-          </div>
-        </div>
-      </ScriptsStudioModal>
+      </section>
 
       <ScriptsStudioModal
         open={diagnosticsOpen}
@@ -2214,163 +2412,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
           ) : (
             <EmptyState title="No diagnostics" copy="The current draft validated cleanly." />
           )}
-        </div>
-      </ScriptsStudioModal>
-
-      <ScriptsStudioModal
-        open={askAiOpen}
-        eyebrow="Source"
-        title="Ask AI"
-        onClose={() => setAskAiOpen(false)}
-        width="min(1040px, 100%)"
-        actions={
-          <>
-            <button type="button" onClick={() => setAskAiOpen(false)} className="ghost-action">Close</button>
-            <button type="button" onClick={() => { void handleAskAiGenerate(); }} className="solid-action" disabled={askAiPending}>
-              <Bot size={14} /> {askAiPending ? 'Thinking' : 'Generate'}
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <p className="text-[12px] leading-6 text-gray-500">
-            Describe the script change you want. Ask AI returns a full script package and keeps the generated file preview here until you apply it.
-          </p>
-
-          <textarea
-            rows={5}
-            className="panel-textarea"
-            placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
-            value={askAiPrompt}
-            onChange={event => setAskAiPrompt(event.target.value)}
-          />
-
-          <div className="text-[11px] text-gray-400">
-            {askAiPending
-              ? 'Generating and compiling file content...'
-              : askAiGeneratedSource
-                ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
-                : 'Return format: script package JSON'}
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Thinking</div>
-              <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-600">
-                {askAiReasoning || 'LLM reasoning will stream here.'}
-              </pre>
-            </div>
-
-            <div className="rounded-[20px] border border-[#F1ECE5] bg-[#FAF8F4] p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-gray-400">Generated Preview</div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleApplyAskAiSource}
-                    disabled={!askAiGeneratedSource.trim()}
-                    title="Apply generated source to the editor."
-                    aria-label="Apply generated source to the editor"
-                    className="panel-icon-button"
-                  >
-                    <Check size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleCopyAskAiSource(); }}
-                    disabled={!askAiGeneratedSource.trim()}
-                    title="Copy generated source."
-                    aria-label="Copy generated source"
-                    className="panel-icon-button"
-                  >
-                    <Copy size={14} />
-                  </button>
-                </div>
-              </div>
-              {askAiGeneratedPackage ? (
-                <div className="mt-2 text-[11px] leading-5 text-gray-400">
-                  {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} · {askAiGeneratedPackage.csharpSources.length} C# · {askAiGeneratedPackage.protoFiles.length} proto
-                </div>
-              ) : null}
-              <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">
-                {askAiGeneratedSource || askAiAnswer || 'Generated file content will appear here.'}
-              </pre>
-            </div>
-          </div>
-        </div>
-      </ScriptsStudioModal>
-
-      <ScriptsStudioModal
-        open={libraryOpen}
-        eyebrow="Scripts Studio"
-        title="Draft library"
-        onClose={() => setLibraryOpen(false)}
-        width="min(980px, 100%)"
-        actions={(
-          <>
-            <button type="button" onClick={() => setLibraryOpen(false)} className="ghost-action">Close</button>
-            <button type="button" onClick={handleCreateDraft} className="solid-action">
-              <Plus size={14} /> New draft
-            </button>
-          </>
-        )}
-      >
-        <div className="min-h-[560px]">
-          <ResourceRail
-            drafts={drafts}
-            filteredDrafts={filteredDrafts}
-            filteredScopeScripts={filteredScopeScripts}
-            runtimeSnapshots={runtimeSnapshots}
-            proposalDecisions={proposalDecisions}
-            scopeCatalogsByScriptId={scopeCatalogsByScriptId}
-            selectedDraft={selectedDraft}
-            scopeSelectionId={scopeSelectionId}
-            selectedRuntimeActorId={selectedRuntimeActorId}
-            selectedProposalId={selectedProposalId}
-            search={search}
-            scopeBacked={scopeBacked}
-            scopeId={appContext.scopeId}
-            scopeScriptsPending={scopeScriptsPending}
-            runtimeSnapshotsPending={runtimeSnapshotsPending}
-            proposalDecisionsPending={proposalDecisionsPending}
-            onSearchChange={setSearch}
-            onCreateDraft={handleCreateDraft}
-            onSelectDraft={draftKey => {
-              setSelectedDraftKey(draftKey);
-              setLibraryOpen(false);
-            }}
-            onOpenScopeScript={detail => {
-              openScopeScript(detail);
-              setLibraryOpen(false);
-            }}
-            onRefreshScopeScripts={() => { void loadScopeScripts(); }}
-            onSelectRuntime={actorId => {
-              void handleSelectRuntime(actorId);
-              setLibraryOpen(false);
-            }}
-            onRefreshRuntimeSnapshots={() => { void loadRuntimeSnapshots(); }}
-            onSelectProposal={proposalId => {
-              handleSelectProposal(proposalId);
-              setLibraryOpen(false);
-            }}
-          />
-        </div>
-      </ScriptsStudioModal>
-
-      <ScriptsStudioModal
-        open={detailsOpen}
-        eyebrow="Script"
-        title="Draft details"
-        onClose={() => setDetailsOpen(false)}
-        width="min(880px, 100%)"
-        actions={<button type="button" onClick={() => setDetailsOpen(false)} className="ghost-action">Close</button>}
-      >
-        <div className="min-h-[520px]">
-          <InspectorPanel
-            selectedDraft={selectedDraft}
-            scopeBacked={scopeBacked}
-            appContext={appContext}
-          />
         </div>
       </ScriptsStudioModal>
 
