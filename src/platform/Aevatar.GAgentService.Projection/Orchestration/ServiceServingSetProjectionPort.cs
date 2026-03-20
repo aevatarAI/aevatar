@@ -10,8 +10,8 @@ public sealed class ServiceServingSetProjectionPort
 {
     public ServiceServingSetProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>> activationService,
-        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>> releaseService)
+        IProjectionScopeActivationService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>> activationService,
+        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<ServiceServingSetProjectionContext>> releaseService)
         : base(options, activationService, releaseService, ServiceProjectionKinds.Serving)
     {
     }

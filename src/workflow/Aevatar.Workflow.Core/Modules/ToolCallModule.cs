@@ -15,15 +15,15 @@ namespace Aevatar.Workflow.Core.Modules;
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private readonly IEnumerable<IAgentToolSource> _toolSources;
-    private readonly ILogger _logger;
+    private readonly ILogger<ToolCallModule> _logger;
     private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger<ToolCallModule> logger)
     {
-        _toolSources = toolSources;
-        _logger = logger;
+        _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public string Name => "tool_call";
@@ -101,13 +101,18 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
     private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
-        var current = _toolIndex;
-        if (current is { IsCompletedSuccessfully: true }) return current;
-        var task = DiscoverAllToolsAsync(_toolSources, _logger, ct);
-        var winner = Interlocked.CompareExchange(ref _toolIndex, task, current);
-        return ReferenceEquals(winner, current) ? task : winner!;
-    }
+        while (true)
+        {
+            var current = _toolIndex;
+            if (current != null && !current.IsFaulted && !current.IsCanceled)
+                return current;
 
+            var discoveryTask = DiscoverAllToolsAsync(_toolSources, _logger, ct);
+            var winner = Interlocked.CompareExchange(ref _toolIndex, discoveryTask, current);
+            if (winner == current)
+                return discoveryTask;
+        }
+    }
     private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
         IEnumerable<IAgentToolSource> toolSources,
         ILogger logger,
@@ -120,6 +125,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             try
             {
                 tools = await source.DiscoverToolsAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

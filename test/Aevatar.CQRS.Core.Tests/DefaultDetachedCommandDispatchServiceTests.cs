@@ -134,7 +134,6 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         public string TargetId { get; } = targetId;
 
         public List<(DetachedReceipt Receipt, CommandInteractionCleanupContext<string> Cleanup)> ReleaseCalls { get; } = [];
-
         public TaskCompletionSource<bool> ReleaseObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IEventSink<string> RequireLiveSink() => sink;
@@ -184,7 +183,6 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
             var prepared = await PrepareAsync(command, ct);
             if (!prepared.Succeeded || prepared.Target == null)
                 return prepared;
-
             await DispatchPreparedAsync(prepared.Target, ct);
             return prepared;
         }

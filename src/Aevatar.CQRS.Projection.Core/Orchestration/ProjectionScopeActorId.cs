@@ -25,10 +25,17 @@ public static class ProjectionScopeActorId
 internal static class ProjectionScopeModeMapper
 {
     public static ProjectionScopeMode ToProto(ProjectionRuntimeMode mode) =>
-        (ProjectionScopeMode)(mode == ProjectionRuntimeMode.DurableMaterialization ? 1 : 2);
+        mode switch
+        {
+            ProjectionRuntimeMode.DurableMaterialization => ProjectionScopeMode.DurableMaterialization,
+            ProjectionRuntimeMode.SessionObservation => ProjectionScopeMode.SessionObservation,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
+        };
 
     public static ProjectionRuntimeMode ToRuntime(ProjectionScopeMode mode) =>
-        (int)mode == 1
-            ? ProjectionRuntimeMode.DurableMaterialization
-            : ProjectionRuntimeMode.SessionObservation;
+        mode switch
+        {
+            ProjectionScopeMode.DurableMaterialization => ProjectionRuntimeMode.DurableMaterialization,
+            _ => ProjectionRuntimeMode.SessionObservation,
+        };
 }

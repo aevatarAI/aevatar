@@ -1,19 +1,14 @@
 #pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Persistence;
-using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Abstractions;
-using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
-using Aevatar.GAgentService.Governance.Infrastructure.Migration;
 using Aevatar.GAgentService.Governance.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
@@ -185,13 +180,11 @@ public sealed class GovernanceInfrastructureTests
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var runtime = new RecordingActorRuntime();
-        var importer = new RecordingLegacyImporter();
-        var provisioner = new DefaultServiceGovernanceCommandTargetProvisioner(runtime, importer);
+        var provisioner = new DefaultServiceGovernanceCommandTargetProvisioner(runtime);
 
         var configurationTarget = await provisioner.EnsureConfigurationTargetAsync(identity);
 
         configurationTarget.Should().Be(ServiceActorIds.Configuration(identity));
-        importer.Requests.Should().ContainSingle(x => x.ServiceId == identity.ServiceId);
         runtime.CreateCalls.Should().ContainSingle()
             .Which.Should().Be((typeof(ServiceConfigurationGAgent), ServiceActorIds.Configuration(identity)));
 
@@ -207,12 +200,9 @@ public sealed class GovernanceInfrastructureTests
     public async Task DefaultServiceGovernanceCommandTargetProvisioner_ShouldValidateInputs()
     {
         var runtime = new RecordingActorRuntime();
-        var importer = new RecordingLegacyImporter();
-        Action nullImporter = () => new DefaultServiceGovernanceCommandTargetProvisioner(runtime, null!);
-        var provisioner = new DefaultServiceGovernanceCommandTargetProvisioner(runtime, importer);
+        var provisioner = new DefaultServiceGovernanceCommandTargetProvisioner(runtime);
         var act = () => provisioner.EnsureConfigurationTargetAsync(null!);
 
-        nullImporter.Should().Throw<ArgumentNullException>();
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
@@ -230,321 +220,6 @@ public sealed class GovernanceInfrastructureTests
 
         await missing.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*was not found after existence check*");
-    }
-
-    [Fact]
-    public async Task DefaultServiceGovernanceLegacyImporter_ShouldImportLegacyGovernanceStreams()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await AppendLegacyGovernanceEventsAsync(eventStore, identity);
-        var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingDispatchPort();
-        var projectionPort = new RecordingConfigurationProjectionPort();
-        var importer = new DefaultServiceGovernanceLegacyImporter(eventStore, runtime, dispatchPort, projectionPort);
-
-        var imported = await importer.ImportIfNeededAsync(identity);
-
-        imported.Should().BeTrue();
-        runtime.CreateCalls.Should().ContainSingle()
-            .Which.Should().Be((typeof(ServiceConfigurationGAgent), ServiceActorIds.Configuration(identity)));
-        projectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Configuration(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-        dispatchPort.Calls[0].actorId.Should().Be(ServiceActorIds.Configuration(identity));
-        dispatchPort.Calls[0].command.State.Bindings.Should().ContainKey("binding-a");
-        dispatchPort.Calls[0].command.State.EndpointCatalog!.Endpoints.Should().ContainSingle(x => x.EndpointId == "invoke");
-        dispatchPort.Calls[0].command.State.Policies.Should().ContainKey("policy-a");
-    }
-
-    [Fact]
-    public async Task DefaultServiceGovernanceLegacyImporter_ShouldSkipWhenConfigurationAlreadyExists()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await AppendLegacyGovernanceEventsAsync(eventStore, identity);
-        await eventStore.AppendAsync(
-            ServiceActorIds.Configuration(identity),
-            [
-                new StateEvent
-                {
-                    AgentId = ServiceActorIds.Configuration(identity),
-                    EventId = "evt-1",
-                    EventType = LegacyServiceConfigurationImportedEvent.Descriptor.FullName,
-                    Version = 1,
-                    EventData = Any.Pack(new LegacyServiceConfigurationImportedEvent
-                    {
-                        State = new ServiceConfigurationState
-                        {
-                            Identity = identity.Clone(),
-                        },
-                    }),
-                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-                },
-            ],
-            expectedVersion: 0);
-
-        var importer = new DefaultServiceGovernanceLegacyImporter(
-            eventStore,
-            new RecordingActorRuntime(),
-            new RecordingDispatchPort(),
-            new RecordingConfigurationProjectionPort());
-
-        var imported = await importer.ImportIfNeededAsync(identity);
-
-        imported.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task DefaultServiceGovernanceLegacyImporter_ShouldSkipWhenNoLegacyStateExists()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingDispatchPort();
-        var projectionPort = new RecordingConfigurationProjectionPort();
-        var importer = new DefaultServiceGovernanceLegacyImporter(
-            new InMemoryEventStore(),
-            runtime,
-            dispatchPort,
-            projectionPort);
-
-        var imported = await importer.ImportIfNeededAsync(identity);
-
-        imported.Should().BeFalse();
-        runtime.CreateCalls.Should().BeEmpty();
-        dispatchPort.Calls.Should().BeEmpty();
-        projectionPort.ActorIds.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task DefaultServiceGovernanceLegacyImporter_ShouldReuseExistingConfigurationActor()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await AppendLegacyGovernanceEventsAsync(eventStore, identity);
-        var runtime = new RecordingActorRuntime();
-        runtime.MarkExisting(ServiceActorIds.Configuration(identity));
-        var dispatchPort = new RecordingDispatchPort();
-        var projectionPort = new RecordingConfigurationProjectionPort();
-        var importer = new DefaultServiceGovernanceLegacyImporter(eventStore, runtime, dispatchPort, projectionPort);
-
-        var imported = await importer.ImportIfNeededAsync(identity);
-
-        imported.Should().BeTrue();
-        runtime.CreateCalls.Should().BeEmpty();
-        dispatchPort.Calls.Should().ContainSingle();
-        projectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Configuration(identity));
-    }
-
-    [Fact]
-    public async Task DefaultServiceGovernanceLegacyImporter_ShouldFoldUpdatedAndRetiredLegacyRecords()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var eventStore = new InMemoryEventStore();
-        await eventStore.AppendAsync(
-            ServiceActorIds.Bindings(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.Bindings(identity),
-                    1,
-                    new ServiceBindingCreatedEvent
-                    {
-                        Spec = new ServiceBindingSpec
-                        {
-                            Identity = identity.Clone(),
-                            BindingId = "binding-a",
-                            DisplayName = "Binding A",
-                            BindingKind = ServiceBindingKind.Service,
-                            ServiceRef = new BoundServiceRef
-                            {
-                                Identity = GAgentServiceTestKit.CreateIdentity(serviceId: "dependency"),
-                                EndpointId = "run",
-                            },
-                        },
-                    }),
-                BuildStateEvent(
-                    ServiceActorIds.Bindings(identity),
-                    2,
-                    new ServiceBindingRetiredEvent
-                    {
-                        Identity = identity.Clone(),
-                        BindingId = "binding-a",
-                    }),
-            ],
-            expectedVersion: 0);
-        await eventStore.AppendAsync(
-            ServiceActorIds.EndpointCatalog(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.EndpointCatalog(identity),
-                    1,
-                    new ServiceEndpointCatalogCreatedEvent
-                    {
-                        Spec = new ServiceEndpointCatalogSpec
-                        {
-                            Identity = identity.Clone(),
-                            Endpoints =
-                            {
-                                new ServiceEndpointExposureSpec
-                                {
-                                    EndpointId = "invoke",
-                                    DisplayName = "Invoke",
-                                    Kind = ServiceEndpointKind.Command,
-                                    RequestTypeUrl = "type.googleapis.com/demo.Invoke",
-                                    ExposureKind = ServiceEndpointExposureKind.Internal,
-                                },
-                            },
-                        },
-                    }),
-                BuildStateEvent(
-                    ServiceActorIds.EndpointCatalog(identity),
-                    2,
-                    new ServiceEndpointCatalogUpdatedEvent
-                    {
-                        Spec = new ServiceEndpointCatalogSpec
-                        {
-                            Identity = identity.Clone(),
-                            Endpoints =
-                            {
-                                new ServiceEndpointExposureSpec
-                                {
-                                    EndpointId = "chat",
-                                    DisplayName = "Chat",
-                                    Kind = ServiceEndpointKind.Chat,
-                                    RequestTypeUrl = "type.googleapis.com/demo.Chat",
-                                    ResponseTypeUrl = "type.googleapis.com/demo.ChatResult",
-                                    ExposureKind = ServiceEndpointExposureKind.Public,
-                                },
-                            },
-                        },
-                    }),
-            ],
-            expectedVersion: 0);
-        await eventStore.AppendAsync(
-            ServiceActorIds.Policies(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.Policies(identity),
-                    1,
-                    new ServicePolicyCreatedEvent
-                    {
-                        Spec = new ServicePolicySpec
-                        {
-                            Identity = identity.Clone(),
-                            PolicyId = "policy-a",
-                            DisplayName = "Policy A",
-                        },
-                    }),
-                BuildStateEvent(
-                    ServiceActorIds.Policies(identity),
-                    2,
-                    new ServicePolicyRetiredEvent
-                    {
-                        Identity = identity.Clone(),
-                        PolicyId = "policy-a",
-                    }),
-            ],
-            expectedVersion: 0);
-
-        var dispatchPort = new RecordingDispatchPort();
-        var importer = new DefaultServiceGovernanceLegacyImporter(
-            eventStore,
-            new RecordingActorRuntime(),
-            dispatchPort,
-            new RecordingConfigurationProjectionPort());
-
-        var imported = await importer.ImportIfNeededAsync(identity);
-
-        imported.Should().BeTrue();
-        dispatchPort.Calls.Should().ContainSingle();
-        dispatchPort.Calls[0].command.State.Bindings["binding-a"].Retired.Should().BeTrue();
-        dispatchPort.Calls[0].command.State.EndpointCatalog!.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
-        dispatchPort.Calls[0].command.State.Policies["policy-a"].Retired.Should().BeTrue();
-    }
-
-    private static async Task AppendLegacyGovernanceEventsAsync(IEventStore eventStore, ServiceIdentity identity)
-    {
-        await eventStore.AppendAsync(
-            ServiceActorIds.Bindings(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.Bindings(identity),
-                    1,
-                    new ServiceBindingCreatedEvent
-                    {
-                        Spec = new ServiceBindingSpec
-                        {
-                            Identity = identity.Clone(),
-                            BindingId = "binding-a",
-                            DisplayName = "Binding A",
-                            BindingKind = ServiceBindingKind.Service,
-                            ServiceRef = new BoundServiceRef
-                            {
-                                Identity = GAgentServiceTestKit.CreateIdentity(serviceId: "dependency"),
-                                EndpointId = "run",
-                            },
-                        },
-                    }),
-            ],
-            expectedVersion: 0);
-
-        await eventStore.AppendAsync(
-            ServiceActorIds.EndpointCatalog(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.EndpointCatalog(identity),
-                    1,
-                    new ServiceEndpointCatalogCreatedEvent
-                    {
-                        Spec = new ServiceEndpointCatalogSpec
-                        {
-                            Identity = identity.Clone(),
-                            Endpoints =
-                            {
-                                new ServiceEndpointExposureSpec
-                                {
-                                    EndpointId = "invoke",
-                                    DisplayName = "Invoke",
-                                    Kind = ServiceEndpointKind.Command,
-                                    RequestTypeUrl = "type.googleapis.com/demo.Invoke",
-                                    ExposureKind = ServiceEndpointExposureKind.Public,
-                                },
-                            },
-                        },
-                    }),
-            ],
-            expectedVersion: 0);
-
-        await eventStore.AppendAsync(
-            ServiceActorIds.Policies(identity),
-            [
-                BuildStateEvent(
-                    ServiceActorIds.Policies(identity),
-                    1,
-                    new ServicePolicyCreatedEvent
-                    {
-                        Spec = new ServicePolicySpec
-                        {
-                            Identity = identity.Clone(),
-                            PolicyId = "policy-a",
-                            DisplayName = "Policy A",
-                            ActivationRequiredBindingIds = { "binding-a" },
-                        },
-                    }),
-            ],
-            expectedVersion: 0);
-    }
-
-    private static StateEvent BuildStateEvent(string agentId, long version, Google.Protobuf.IMessage payload)
-    {
-        return new StateEvent
-        {
-            AgentId = agentId,
-            EventId = $"{agentId}:{version}",
-            EventType = payload.Descriptor.FullName,
-            Version = version,
-            EventData = Any.Pack(payload),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-        };
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime
@@ -594,17 +269,6 @@ public sealed class GovernanceInfrastructureTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingLegacyImporter : IServiceGovernanceLegacyImporter
-    {
-        public List<ServiceIdentity> Requests { get; } = [];
-
-        public Task<bool> ImportIfNeededAsync(ServiceIdentity identity, CancellationToken ct = default)
-        {
-            Requests.Add(identity.Clone());
-            return Task.FromResult(false);
-        }
-    }
-
     private sealed class TestProvisioner : ActorTargetProvisionerBase
     {
         public TestProvisioner(IActorRuntime runtime)
@@ -615,28 +279,6 @@ public sealed class GovernanceInfrastructureTests
         public Task<string> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
             where TAgent : IAgent =>
             EnsureActorAsync<TAgent>(actorId, ct);
-    }
-
-    private sealed class RecordingDispatchPort : IActorDispatchPort
-    {
-        public List<(string actorId, ImportLegacyServiceConfigurationCommand command)> Calls { get; } = [];
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            Calls.Add((actorId, envelope.Payload.Unpack<ImportLegacyServiceConfigurationCommand>()));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingConfigurationProjectionPort : IServiceConfigurationProjectionPort
-    {
-        public List<string> ActorIds { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            ActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class RecordingActor : IActor

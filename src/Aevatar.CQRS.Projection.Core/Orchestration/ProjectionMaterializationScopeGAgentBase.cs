@@ -47,7 +47,7 @@ public abstract class ProjectionMaterializationScopeGAgentBase<TContext>
                 context,
                 envelope,
                 ct);
-            return ProjectionScopeDispatchResult.Success(observedVersion, observedVersion, eventType);
+            return ProjectionScopeDispatchResult.Success(observedVersion, eventType);
         }
         catch (Exception ex)
         {

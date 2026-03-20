@@ -132,6 +132,51 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldHonorDiscoveryCancellation_AndRetryOnNextCall()
+    {
+        var source = new CancellableToolSource(
+            [
+                new FakeAgentTool("delayed_echo", args => args),
+            ]);
+        var module = new ToolCallModule([source], NullLogger<ToolCallModule>.Instance);
+        var cancelledContext = CreateContext();
+        using var cts = new CancellationTokenSource();
+
+        var cancelledAttempt = module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "step-cancelled",
+                StepType = "tool_call",
+                Input = """{"msg":"cancel"}""",
+                Parameters = { ["tool"] = "delayed_echo" },
+            }),
+            cancelledContext,
+            cts.Token);
+
+        await source.FirstDiscoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+
+        await source.FirstDiscoveryCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledAttempt);
+
+        var retryContext = CreateContext();
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "step-retry",
+                StepType = "tool_call",
+                Input = """{"msg":"retry"}""",
+                Parameters = { ["tool"] = "delayed_echo" },
+            }),
+            retryContext,
+            CancellationToken.None);
+
+        source.DiscoverCalls.Should().Be(2);
+        retryContext.Published.Select(x => x.evt).OfType<ToolResultEvent>().Should().ContainSingle()
+            .Which.ResultJson.Should().Be("""{"msg":"retry"}""");
+    }
+
+    [Fact]
     public async Task ToolCallModule_WhenToolThrows_ShouldPublishFailedStepCompleted()
     {
         var source = new CountingToolSource(
@@ -1232,6 +1277,30 @@ public sealed class WorkflowCoreModulesCoverageTests
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
         {
             throw new InvalidOperationException("discovery failed");
+        }
+    }
+
+    private sealed class CancellableToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public int DiscoverCalls { get; private set; }
+        public TaskCompletionSource<bool> FirstDiscoveryStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> FirstDiscoveryCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            DiscoverCalls++;
+            if (DiscoverCalls > 1)
+                return tools;
+
+            FirstDiscoveryStarted.TrySetResult(true);
+            var pending = new TaskCompletionSource<IReadOnlyList<IAgentTool>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() =>
+            {
+                FirstDiscoveryCancelled.TrySetResult(true);
+                pending.TrySetCanceled(ct);
+            });
+
+            return await pending.Task;
         }
     }
 }

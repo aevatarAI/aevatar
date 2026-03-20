@@ -7,170 +7,58 @@ public sealed class ProjectionStoreDispatcher<TReadModel>
     : IProjectionWriteDispatcher<TReadModel>
     where TReadModel : class, IProjectionReadModel
 {
-    private readonly IReadOnlyList<IProjectionWriteSink<TReadModel>> _bindings;
-    private readonly IProjectionStoreDispatchCompensator<TReadModel> _compensator;
-    private readonly ProjectionStoreDispatchOptions _options;
+    private readonly IProjectionWriteSink<TReadModel> _binding;
     private readonly ILogger<ProjectionStoreDispatcher<TReadModel>> _logger;
 
     public ProjectionStoreDispatcher(
         IEnumerable<IProjectionWriteSink<TReadModel>> bindings,
-        IProjectionStoreDispatchCompensator<TReadModel>? compensator = null,
-        ProjectionStoreDispatchOptions? options = null,
         ILogger<ProjectionStoreDispatcher<TReadModel>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(bindings);
-        _compensator = compensator ?? NoOpProjectionStoreDispatchCompensator.Instance;
-        _options = options ?? new ProjectionStoreDispatchOptions();
         _logger = logger ?? NullLogger<ProjectionStoreDispatcher<TReadModel>>.Instance;
 
-        var configuredBindings = new List<IProjectionWriteSink<TReadModel>>();
-        var skippedBindings = new List<SkippedBindingInfo>();
+        var enabledBindings = new List<IProjectionWriteSink<TReadModel>>();
         foreach (var binding in bindings)
         {
-            if (!binding.IsEnabled)
+            if (binding.IsEnabled)
             {
-                skippedBindings.Add(new SkippedBindingInfo(binding.SinkName, binding.DisabledReason));
-                continue;
+                enabledBindings.Add(binding);
             }
-
-            configuredBindings.Add(binding);
+            else
+            {
+                _logger.LogInformation(
+                    "Projection binding skipped. readModelType={ReadModelType} store={Store} reason={Reason}",
+                    typeof(TReadModel).FullName,
+                    binding.SinkName,
+                    binding.DisabledReason);
+            }
         }
 
-        foreach (var skipped in skippedBindings)
+        if (enabledBindings.Count == 0)
         {
-            _logger.LogInformation(
-                "Projection binding skipped. readModelType={ReadModelType} store={Store} reason={Reason}",
-                typeof(TReadModel).FullName,
-                skipped.StoreName,
-                skipped.Reason);
-        }
-
-        _bindings = configuredBindings.ToArray();
-        if (_bindings.Count == 0)
-        {
-            var skipSummary = skippedBindings.Count == 0
-                ? "none"
-                : string.Join("; ", skippedBindings.Select(x => $"{x.StoreName}: {x.Reason}"));
             throw new InvalidOperationException(
-                $"No configured projection store bindings are registered for read model '{typeof(TReadModel).FullName}'. skippedBindings={skipSummary}");
+                $"No configured projection store bindings are registered for read model '{typeof(TReadModel).FullName}'.");
         }
+
+        if (enabledBindings.Count > 1)
+        {
+            var names = string.Join(", ", enabledBindings.Select(b => b.SinkName));
+            throw new InvalidOperationException(
+                $"Multiple projection store bindings registered for read model '{typeof(TReadModel).FullName}': {names}. Only one binding is supported.");
+        }
+
+        _binding = enabledBindings[0];
 
         _logger.LogInformation(
-            "Projection store dispatcher initialized. readModelType={ReadModelType} bindingCount={BindingCount}",
+            "Projection store dispatcher initialized. readModelType={ReadModelType} binding={Binding}",
             typeof(TReadModel).FullName,
-            _bindings.Count);
+            _binding.SinkName);
     }
 
-    public async Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+    public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(readModel);
         ct.ThrowIfCancellationRequested();
-
-        var succeededBindings = new List<IProjectionWriteSink<TReadModel>>();
-        foreach (var binding in _bindings)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                var result = await UpsertWithRetryAsync(binding, readModel, ct);
-                if (result.IsNonTerminal)
-                    return result;
-                if (result.IsRejected)
-                {
-                    throw new InvalidOperationException(
-                        $"Projection binding '{binding.SinkName}' rejected read model '{typeof(TReadModel).FullName}' with '{result.Disposition}'.");
-                }
-
-                succeededBindings.Add(binding);
-            }
-            catch (Exception ex)
-            {
-                await CompensateAsync(
-                    operation: "upsert",
-                    readModel,
-                    succeededBindings,
-                    binding,
-                    ex,
-                    ct);
-                throw;
-            }
-        }
-
-        return ProjectionWriteResult.Applied();
-    }
-
-    private async Task<ProjectionWriteResult> UpsertWithRetryAsync(
-        IProjectionWriteSink<TReadModel> binding,
-        TReadModel readModel,
-        CancellationToken ct)
-    {
-        var maxAttempts = Math.Max(1, _options.MaxWriteAttempts);
-        Exception? lastException = null;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                return await binding.UpsertAsync(readModel, ct);
-            }
-            catch (Exception ex) when (attempt < maxAttempts)
-            {
-                lastException = ex;
-                _logger.LogWarning(
-                    ex,
-                    "Projection binding write failed and will retry. readModelType={ReadModelType} store={Store} attempt={Attempt}/{MaxAttempts}",
-                    typeof(TReadModel).FullName,
-                    binding.SinkName,
-                    attempt,
-                    maxAttempts);
-            }
-            catch (Exception ex)
-            {
-                lastException = ex;
-                break;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Projection binding write failed for store '{binding.SinkName}' after {maxAttempts} attempt(s).",
-            lastException);
-    }
-    private Task CompensateAsync(
-        string operation,
-        TReadModel readModel,
-        IReadOnlyList<IProjectionWriteSink<TReadModel>> succeededBindings,
-        IProjectionWriteSink<TReadModel> failedBinding,
-        Exception exception,
-        CancellationToken ct)
-    {
-        var context = new ProjectionStoreDispatchCompensationContext<TReadModel>
-        {
-            DispatchId = Guid.NewGuid().ToString("N"),
-            Operation = operation,
-            ReadModel = readModel,
-            FailedStore = failedBinding.SinkName,
-            SucceededStores = succeededBindings.Select(x => x.SinkName).ToList(),
-            Exception = exception,
-            ReadModelType = typeof(TReadModel).FullName ?? typeof(TReadModel).Name,
-            OccurredAtUtc = DateTimeOffset.UtcNow,
-        };
-        return _compensator.CompensateAsync(context, ct);
-    }
-
-    private sealed record SkippedBindingInfo(string StoreName, string Reason);
-
-    private sealed class NoOpProjectionStoreDispatchCompensator
-        : IProjectionStoreDispatchCompensator<TReadModel>
-    {
-        public static NoOpProjectionStoreDispatchCompensator Instance { get; } = new();
-
-        public Task CompensateAsync(
-            ProjectionStoreDispatchCompensationContext<TReadModel> context,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+        return _binding.UpsertAsync(readModel, ct);
     }
 }

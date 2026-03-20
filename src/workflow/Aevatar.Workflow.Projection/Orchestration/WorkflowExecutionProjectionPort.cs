@@ -12,8 +12,8 @@ public sealed class WorkflowExecutionProjectionPort
 {
     public WorkflowExecutionProjectionPort(
         WorkflowExecutionProjectionOptions options,
-        IProjectionSessionActivationService<WorkflowExecutionRuntimeLease> activationService,
-        IProjectionSessionReleaseService<WorkflowExecutionRuntimeLease> releaseService,
+        IProjectionScopeActivationService<WorkflowExecutionRuntimeLease> activationService,
+        IProjectionScopeReleaseService<WorkflowExecutionRuntimeLease> releaseService,
         IProjectionSessionEventHub<WorkflowRunEventEnvelope> sessionEventHub)
         : base(
             () => options.Enabled,
@@ -28,10 +28,11 @@ public sealed class WorkflowExecutionProjectionPort
         string commandId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionSessionStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = rootActorId,
                 ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
+                Mode = ProjectionRuntimeMode.SessionObservation,
                 SessionId = commandId,
             },
             ct);

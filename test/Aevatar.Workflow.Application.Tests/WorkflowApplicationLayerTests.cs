@@ -224,65 +224,19 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldReleaseAndDestroyActorsInBackground_WhenTerminalEventIsObserved()
-    {
-        var projectionPort = new FakeProjectionPort();
-        var actorPort = new FakeWorkflowRunActorPort
-        {
-            ExpectedDestroyCount = 2,
-        };
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
-        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var outputStream = new FakeEventOutputStream
-        {
-            Events = [BuildEvent("progress"), BuildEvent("done")],
-        };
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) },
-            outputStream,
-            new FakeWorkflowRunCompletionPolicy
-            {
-                TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
-                TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
-            },
-            new FakeDurableCompletionResolver());
-
-        var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
-
-        result.Succeeded.Should().BeTrue();
-        result.Receipt.Should().Be(receipt);
-        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await actorPort.DestroyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().ContainSingle();
-        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
-    }
-
-    [Fact]
-    public async Task DetachedCommandDispatchService_ShouldReleaseWithoutDestroy_WhenRunRemainsNonTerminal()
+    public async Task DetachedCommandDispatchService_ShouldReturnReceipt_WhenDispatchSucceeds()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
         var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var outputStream = new FakeEventOutputStream
-        {
-            Events = [BuildEvent("progress")],
-        };
         var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) },
-            outputStream,
-            new FakeWorkflowRunCompletionPolicy { TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished },
-            new FakeDurableCompletionResolver());
+            new FakeDispatchPipeline { Result = Success(target, receipt) });
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
 
         result.Succeeded.Should().BeTrue();
-        await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await projectionPort.Released.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        projectionPort.DetachCalls.Should().ContainSingle();
-        projectionPort.ReleaseCalls.Should().ContainSingle();
-        actorPort.DestroyCalls.Should().BeEmpty();
+        result.Receipt.Should().Be(receipt);
     }
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
@@ -299,15 +253,12 @@ public sealed class WorkflowApplicationLayerTests
             durableCompletionResolver);
 
     private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
-        ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline,
-        IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>? outputStream = null,
-        ICommandCompletionPolicy<WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>? completionPolicy = null,
-        ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>? durableCompletionResolver = null) =>
+        ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline) =>
         new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
             pipeline,
-            outputStream ?? new FakeEventOutputStream(),
-            completionPolicy ?? new FakeWorkflowRunCompletionPolicy(),
-            durableCompletionResolver ?? new FakeDurableCompletionResolver());
+            new FakeEventOutputStream(),
+            new FakeWorkflowRunCompletionPolicy(),
+            new FakeDurableCompletionResolver());
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
         WorkflowRunCommandTarget target,
