@@ -4,8 +4,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
-using Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Scripting.Application;
 using Aevatar.Scripting.Abstractions.Queries;
@@ -34,7 +33,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
         var streamProviderName = $"aevatar-script-provider-{Guid.NewGuid():N}";
         var actorEventNamespace = $"aevatar.script.cluster.{Guid.NewGuid():N}";
         var kafkaTopicName = $"aevatar-script-cluster-topic-{Guid.NewGuid():N}";
-        var consumerGroupPrefix = $"aevatar-script-cluster-consumer-{Guid.NewGuid():N}";
+        var consumerGroup = $"aevatar-script-cluster-consumer-{Guid.NewGuid():N}";
         var projectionIndexPrefix = $"aevatar-script-cluster-{Guid.NewGuid():N}";
 
         var node1SiloPort = ReserveTcpPort();
@@ -56,7 +55,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             garnetConnectionString,
             kafkaBootstrapServers,
             kafkaTopicName,
-            $"{consumerGroupPrefix}-node1",
+            consumerGroup,
             projectionIndexPrefix);
         var node2 = await StartSiloHostAsync(
             clusterId,
@@ -69,7 +68,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             garnetConnectionString,
             kafkaBootstrapServers,
             kafkaTopicName,
-            $"{consumerGroupPrefix}-node2",
+            consumerGroup,
             projectionIndexPrefix);
         var node3 = await StartSiloHostAsync(
             clusterId,
@@ -82,7 +81,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             garnetConnectionString,
             kafkaBootstrapServers,
             kafkaTopicName,
-            $"{consumerGroupPrefix}-node3",
+            consumerGroup,
             projectionIndexPrefix);
 
         try
@@ -348,23 +347,25 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                     clusterId);
                 siloBuilder.AddAevatarFoundationRuntimeOrleans(options =>
                 {
-                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter;
+                    options.StreamBackend = AevatarOrleansRuntimeOptions.StreamBackendKafkaProvider;
                     options.StreamProviderName = streamProviderName;
                     options.ActorEventNamespace = actorEventNamespace;
                     options.PersistenceBackend = AevatarOrleansRuntimeOptions.PersistenceBackendGarnet;
                     options.GarnetConnectionString = garnetConnectionString;
+                    options.QueueCount = 4;
                 });
-                siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
+                siloBuilder.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport();
                 siloBuilder.ConfigureServices(services =>
                     services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer()));
             })
             .ConfigureServices((context, services) =>
             {
-                services.AddAevatarFoundationRuntimeMassTransitKafkaTransport(options =>
+                services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                 {
                     options.BootstrapServers = kafkaBootstrapServers;
                     options.TopicName = kafkaTopicName;
                     options.ConsumerGroup = kafkaConsumerGroup;
+                    options.TopicPartitionCount = 4;
                 });
                 services.AddScriptCapability(context.Configuration);
             })

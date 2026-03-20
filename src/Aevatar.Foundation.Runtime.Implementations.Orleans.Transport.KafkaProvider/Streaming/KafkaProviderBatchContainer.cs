@@ -1,11 +1,12 @@
+using Aevatar.Foundation.Abstractions;
 using Orleans.Providers.Streams.Common;
 using Orleans.Runtime;
 using Orleans.Streams;
 
-namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit;
+namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 
 [GenerateSerializer]
-internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
+internal sealed class KafkaProviderBatchContainer : IBatchContainer
 {
     [Id(0)]
     public StreamId StreamId { get; private set; } = default!;
@@ -16,18 +17,23 @@ internal sealed class OrleansMassTransitBatchContainer : IBatchContainer
     [Id(2)]
     public EventSequenceTokenV2 BatchSequenceToken { get; private set; } = default!;
 
-    private OrleansMassTransitBatchContainer()
+    [Id(3)]
+    public long KafkaOffset { get; private set; }
+
+    private KafkaProviderBatchContainer()
     {
     }
 
-    public OrleansMassTransitBatchContainer(
+    public KafkaProviderBatchContainer(
         StreamId streamId,
         EventEnvelope envelope,
-        EventSequenceTokenV2 sequenceToken)
+        EventSequenceTokenV2 sequenceToken,
+        long kafkaOffset)
     {
         StreamId = streamId;
         Envelope = envelope;
         BatchSequenceToken = sequenceToken;
+        KafkaOffset = kafkaOffset;
     }
 
     public StreamSequenceToken SequenceToken => BatchSequenceToken;

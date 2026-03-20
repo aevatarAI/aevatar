@@ -144,26 +144,76 @@ wait_kafka_health() {
   return 1
 }
 
+require_bootstrapped_docker_infra_defaults() {
+  local scope="$1"
+  shift
+
+  local failed=0
+  local entry
+  for entry in "$@"; do
+    local name="${entry%%=*}"
+    local remainder="${entry#*=}"
+    local actual="${remainder%%|*}"
+    local expected="${remainder#*|}"
+
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "Docker-bootstrap validation failed for ${scope}: ${name}='${actual}' must stay '${expected}' while AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA=true." >&2
+      failed=1
+    fi
+  done
+
+  if (( failed != 0 )); then
+    echo "Use the compose defaults above, or set AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA=false and point the script at external infrastructure explicitly." >&2
+    return 1
+  fi
+}
+
+wait_tcp_endpoint() {
+  local host="$1"
+  local port="$2"
+  local label="$3"
+  local attempts="${4:-30}"
+  local sleep_seconds="${5:-1}"
+  local try=0
+
+  while (( try < attempts )); do
+    if python3 - "${host}" "${port}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(1.0)
+try:
+    sock.connect((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+    then
+      echo "${label} is reachable on ${host}:${port}."
+      return 0
+    fi
+
+    echo "Waiting for ${label} on ${host}:${port}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "${label} failed to become reachable on ${host}:${port}."
+  return 1
+}
+
 wait_garnet_health() {
   local host="${1:-127.0.0.1}"
   local port="${2:-6379}"
   local attempts="${3:-30}"
   local sleep_seconds="${4:-1}"
-  local try=0
 
-  while (( try < attempts )); do
-    if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
-      echo "Garnet is reachable on ${host}:${port}."
-      return 0
-    fi
-
-    echo "Waiting for Garnet on ${host}:${port}..."
-    sleep "${sleep_seconds}"
-    try=$((try + 1))
-  done
-
-  echo "Garnet failed to become reachable."
-  return 1
+  wait_tcp_endpoint "${host}" "${port}" "Garnet" "${attempts}" "${sleep_seconds}"
 }
 
 wait_elasticsearch_health() {
@@ -194,19 +244,6 @@ wait_neo4j_bolt() {
   local port="${2:-7687}"
   local attempts="${3:-90}"
   local sleep_seconds="${4:-2}"
-  local try=0
 
-  while (( try < attempts )); do
-    if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
-      echo "Neo4j bolt endpoint is reachable on ${host}:${port}."
-      return 0
-    fi
-
-    echo "Waiting for Neo4j bolt endpoint on ${host}:${port}..."
-    sleep "${sleep_seconds}"
-    try=$((try + 1))
-  done
-
-  echo "Neo4j failed to become reachable."
-  return 1
+  wait_tcp_endpoint "${host}" "${port}" "Neo4j bolt endpoint" "${attempts}" "${sleep_seconds}"
 }

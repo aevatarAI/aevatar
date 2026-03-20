@@ -6,6 +6,7 @@ using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyIn
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.DependencyInjection;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -84,7 +85,7 @@ public static class ServiceCollectionExtensions
         ConfigureReminderService(builder, options);
         EnsurePersistentStreamPubSubStorage(builder, options);
 
-        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter))
+        if (IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaProvider))
         {
             builder.AddPersistentStreams(
                 options.StreamProviderName,
@@ -116,14 +117,17 @@ public static class ServiceCollectionExtensions
     private static void ValidateOptions(AevatarOrleansRuntimeOptions options)
     {
         var isInMemoryStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendInMemory);
-        var isMassTransitAdapterStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendMassTransitAdapter);
-        if (!isInMemoryStream && !isMassTransitAdapterStream)
+        var isKafkaProviderStream = IsStreamBackend(options, AevatarOrleansRuntimeOptions.StreamBackendKafkaProvider);
+        if (!isInMemoryStream && !isKafkaProviderStream)
             throw new InvalidOperationException($"Unsupported Orleans stream backend '{options.StreamBackend}'.");
 
         var isInMemoryPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendInMemory);
         var isGarnetPersistence = IsPersistenceBackend(options, AevatarOrleansRuntimeOptions.PersistenceBackendGarnet);
         if (!isInMemoryPersistence && !isGarnetPersistence)
             throw new InvalidOperationException($"Unsupported Orleans persistence backend '{options.PersistenceBackend}'.");
+
+        if (isKafkaProviderStream && !isGarnetPersistence)
+            throw new InvalidOperationException("Kafka strict provider Orleans stream backend requires Garnet persistence for distributed stream pub/sub correctness.");
 
         if (isGarnetPersistence && string.IsNullOrWhiteSpace(options.GarnetConnectionString))
             throw new InvalidOperationException("ActorRuntime Orleans Garnet connection string is required.");
@@ -188,8 +192,7 @@ public static class ServiceCollectionExtensions
             return queueAdapterFactory;
 
         throw new InvalidOperationException(
-            "Missing Orleans stream queue adapter factory for MassTransitAdapter backend. " +
-            "Register it via AddAevatarFoundationRuntimeOrleansMassTransitAdapter().");
+            "Missing Orleans stream queue adapter factory for the selected persistent stream backend.");
     }
 
 }
