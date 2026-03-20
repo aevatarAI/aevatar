@@ -46,12 +46,12 @@ public sealed class ProjectionScriptAuthorityReadModelActivationPortTests
             new StubReleaseService());
 
     private sealed class StubActivationService(object? leaseMarker)
-        : IProjectionMaterializationActivationService<ScriptAuthorityRuntimeLease>
+        : IProjectionScopeActivationService<ScriptAuthorityRuntimeLease>
     {
         public List<string> ActorIds { get; } = [];
 
         public Task<ScriptAuthorityRuntimeLease> EnsureAsync(
-            ProjectionMaterializationStartRequest request,
+            ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             ActorIds.Add(request.RootActorId);
@@ -68,7 +68,7 @@ public sealed class ProjectionScriptAuthorityReadModelActivationPortTests
         }
     }
 
-    private sealed class StubReleaseService : IProjectionMaterializationReleaseService<ScriptAuthorityRuntimeLease>
+    private sealed class StubReleaseService : IProjectionScopeReleaseService<ScriptAuthorityRuntimeLease>
     {
         public Task ReleaseIfIdleAsync(ScriptAuthorityRuntimeLease runtimeLease, CancellationToken ct = default) =>
             Task.CompletedTask;

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -18,10 +19,8 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
     private readonly string? _defaultTool;
     private readonly HashSet<string> _allowedTools;
     private readonly HashSet<string> _allowedInputKeys;
-    private readonly SemaphoreSlim _initLock = new(1, 1);
-    private readonly Dictionary<string, IAgentTool> _tools = new(StringComparer.OrdinalIgnoreCase);
+    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _tools;
     private readonly ILogger _logger;
-    private volatile bool _initialized;
 
     public MCPConnector(
         string name,
@@ -54,7 +53,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         var sw = Stopwatch.StartNew();
         try
         {
-            await EnsureConnectedAsync(ct);
+            var tools = await GetOrConnectAsync(ct);
 
             var toolName = ResolveToolName(request);
             if (string.IsNullOrWhiteSpace(toolName))
@@ -75,7 +74,7 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
                 };
             }
 
-            if (!_tools.TryGetValue(toolName, out var tool))
+            if (!tools.TryGetValue(toolName, out var tool))
             {
                 return new ConnectorResponse
                 {
@@ -133,26 +132,19 @@ public sealed class MCPConnector : IConnector, IAsyncDisposable
         return _defaultTool ?? "";
     }
 
-    private async Task EnsureConnectedAsync(CancellationToken ct)
+    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrConnectAsync(CancellationToken ct)
     {
-        if (_initialized) return;
+        var current = _tools;
+        if (current is { IsCompletedSuccessfully: true }) return current;
+        var task = ConnectAndIndexToolsAsync(ct);
+        var winner = Interlocked.CompareExchange(ref _tools, task, current);
+        return ReferenceEquals(winner, current) ? task : winner!;
+    }
 
-        await _initLock.WaitAsync(ct);
-        try
-        {
-            if (_initialized) return;
-
-            var tools = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
-            _tools.Clear();
-            foreach (var tool in tools)
-                _tools[tool.Name] = tool;
-
-            _initialized = true;
-        }
-        finally
-        {
-            _initLock.Release();
-        }
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> ConnectAndIndexToolsAsync(CancellationToken ct)
+    {
+        var discovered = await _clientManager.ConnectAndDiscoverAsync(_serverConfig, ct);
+        return discovered.ToFrozenDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <inheritdoc />

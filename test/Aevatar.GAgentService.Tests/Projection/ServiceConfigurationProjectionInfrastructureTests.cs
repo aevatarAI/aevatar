@@ -186,12 +186,12 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         act.Should().Throw<ArgumentNullException>();
     }
 
-    private sealed class RecordingConfigurationActivationService : IProjectionMaterializationActivationService<ServiceConfigurationRuntimeLease>
+    private sealed class RecordingConfigurationActivationService : IProjectionScopeActivationService<ServiceConfigurationRuntimeLease>
     {
         public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
         public Task<ServiceConfigurationRuntimeLease> EnsureAsync(
-            ProjectionMaterializationStartRequest request,
+            ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             Calls.Add((request.RootActorId, request.ProjectionKind));

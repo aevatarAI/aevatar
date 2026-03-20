@@ -590,12 +590,12 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     private sealed class RecordingMaterializationActivationService
-        : IProjectionMaterializationActivationService<WorkflowExecutionMaterializationRuntimeLease>
+        : IProjectionScopeActivationService<WorkflowExecutionMaterializationRuntimeLease>
     {
-        public List<ProjectionMaterializationStartRequest> Requests { get; } = [];
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
 
         public Task<WorkflowExecutionMaterializationRuntimeLease> EnsureAsync(
-            ProjectionMaterializationStartRequest request,
+            ProjectionScopeStartRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
@@ -608,7 +608,7 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     private sealed class RecordingMaterializationReleaseService
-        : IProjectionMaterializationReleaseService<WorkflowExecutionMaterializationRuntimeLease>
+        : IProjectionScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease>
     {
         public Task ReleaseIfIdleAsync(WorkflowExecutionMaterializationRuntimeLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;

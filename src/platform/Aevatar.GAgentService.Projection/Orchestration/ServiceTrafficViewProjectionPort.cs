@@ -10,8 +10,8 @@ public sealed class ServiceTrafficViewProjectionPort
 {
     public ServiceTrafficViewProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> activationService,
-        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> releaseService)
+        IProjectionScopeActivationService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> activationService,
+        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<ServiceTrafficViewProjectionContext>> releaseService)
         : base(options, activationService, releaseService, ServiceProjectionKinds.Traffic)
     {
     }

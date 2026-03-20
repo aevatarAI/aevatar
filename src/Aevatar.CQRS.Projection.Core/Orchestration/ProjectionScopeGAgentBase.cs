@@ -14,12 +14,18 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 {
     private readonly ProjectionObservationSubscriber _subscriber = new();
     private ILogger _logger = NullLogger.Instance;
+    private ProjectionScopeFailureTracker? _failureTracker;
 
     protected abstract ProjectionRuntimeMode RuntimeMode { get; }
 
     protected override Task OnActivateAsync(CancellationToken ct)
     {
         _logger = Services.GetService<ILoggerFactory>()?.CreateLogger(GetType()) ?? NullLogger.Instance;
+        _failureTracker = new ProjectionScopeFailureTracker(
+            evt => PersistDomainEventAsync(evt),
+            () => Services.GetService<IProjectionFailureAlertSink>(),
+            BuildScopeKey,
+            () => State.Failures.Count);
 
         if (!State.Active || State.Released)
             return Task.CompletedTask;
@@ -97,27 +103,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released || State.Failures.Count == 0)
             return;
 
-        var failures = ProjectionScopeFailureLog.GetPendingFailures(State, command.MaxItems);
-        foreach (var failure in failures)
-        {
-            if (failure.Envelope == null)
-                continue;
-
-            try
-            {
-                var result = await DispatchObservationAsync(failure.Envelope, CancellationToken.None);
-                if (result.Handled)
-                {
-                    await PersistDomainEventAsync(
-                        ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, true));
-                }
-            }
-            catch (Exception ex)
-            {
-                await PersistDomainEventAsync(
-                    ProjectionScopeFailureLog.BuildReplayResultEvent(failure.FailureId, false, ex.Message));
-            }
-        }
+        await _failureTracker!.ReplayAsync(State, command.MaxItems, DispatchObservationAsync);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -178,7 +164,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await PersistDomainEventAsync(new ProjectionScopeWatermarkAdvancedEvent
         {
             LastObservedVersion = result.LastObservedVersion,
-            LastSuccessfulVersion = result.LastSuccessfulVersion,
+            LastSuccessfulVersion = result.LastObservedVersion,
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
         });
         return result;
@@ -186,8 +172,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     private TContext ResolveScopeContext()
     {
-        var factory = Services.GetRequiredService<IProjectionScopeContextFactory<TContext>>();
-        return factory.Create(BuildScopeKey());
+        var factory = Services.GetRequiredService<Func<ProjectionRuntimeScopeKey, TContext>>();
+        return factory(BuildScopeKey());
     }
 
     private async Task ForwardObservationAsync(EventEnvelope envelope)
@@ -211,7 +197,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
     }
 
-    protected async ValueTask RecordDispatchFailureAsync(
+    protected ValueTask RecordDispatchFailureAsync(
         string stage,
         string eventId,
         string eventType,
@@ -219,53 +205,20 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         string reason,
         EventEnvelope envelope)
     {
-        var evt = ProjectionScopeFailureLog.BuildFailureEvent(
-            stage, eventId, eventType, sourceVersion, reason, envelope);
-        await PersistDomainEventAsync(evt);
-
-        var alertSink = Services.GetService<IProjectionFailureAlertSink>();
-        if (alertSink == null)
-            return;
-
-        try
-        {
-            await alertSink.PublishAsync(
-                new ProjectionFailureAlert(
-                    BuildScopeKey(),
-                    evt.FailureId,
-                    stage,
-                    eventId,
-                    eventType,
-                    sourceVersion,
-                    reason,
-                    Math.Min(ProjectionFailureRetentionPolicy.DefaultMaxRetainedFailures, State.Failures.Count + 1),
-                    DateTimeOffset.UtcNow),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Projection failure alert publishing failed. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
-                Id,
-                State.ProjectionKind,
-                State.SessionId);
-        }
+        return _failureTracker!.RecordAsync(stage, eventId, eventType, sourceVersion, reason, envelope, _logger);
     }
 }
 
 public readonly record struct ProjectionScopeDispatchResult(
     bool Handled,
     long LastObservedVersion,
-    long LastSuccessfulVersion,
     string EventType)
 {
     public static ProjectionScopeDispatchResult Skip(string eventType = "") =>
-        new(false, 0, 0, eventType);
+        new(false, 0, eventType);
 
     public static ProjectionScopeDispatchResult Success(
         long observedVersion,
-        long successfulVersion,
         string eventType) =>
-        new(true, observedVersion, successfulVersion, eventType);
+        new(true, observedVersion, eventType);
 }

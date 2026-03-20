@@ -253,7 +253,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 HttpMethod.Get,
                 $"{indexName}/_doc/{Uri.EscapeDataString(documentId)}");
             using var response = await client.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.NotFound)
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
                 continue;
 
             var payload = await response.Content.ReadAsStringAsync(ct);

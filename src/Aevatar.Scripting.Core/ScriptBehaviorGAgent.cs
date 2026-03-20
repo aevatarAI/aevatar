@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Compilation;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
 using Google.Protobuf;
@@ -16,17 +17,26 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     private readonly IScriptBehaviorDispatcher _dispatcher;
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IProtobufMessageCodec _codec;
+
+    /// <summary>
+    /// Transient actor-scoped cache of the compiled materialization plan.
+    /// Rebuilt lazily on first dispatch after activation or rebind; not persisted.
+    /// </summary>
+    private ScriptReadModelMaterializationPlan? _cachedMaterializationPlan;
 
     public ScriptBehaviorGAgent(
         IScriptBehaviorDispatcher dispatcher,
         IScriptBehaviorRuntimeCapabilityFactory capabilityFactory,
         IScriptBehaviorArtifactResolver artifactResolver,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
         IProtobufMessageCodec codec)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
         InitializeId();
     }
@@ -69,6 +79,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
 
         if (IsSameBinding(evt))
             return;
+
+        _cachedMaterializationPlan = null;
 
         await PersistDomainEventAsync(new ScriptBehaviorBoundEvent
         {
@@ -139,6 +151,8 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, message, ct: token),
             cancelCallbackAsync: CancelDurableCallbackAsync);
 
+        var materializationPlan = EnsureMaterializationPlan();
+
         var facts = await _dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
                 ActorId: Id,
@@ -160,6 +174,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             {
                 ReadModelSchemaVersion = State.ReadModelSchemaVersion ?? string.Empty,
                 ReadModelSchemaHash = State.ReadModelSchemaHash ?? string.Empty,
+                CachedMaterializationPlan = materializationPlan,
             },
             ct);
 
@@ -289,6 +304,27 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         {
             throw new InvalidOperationException($"Script behavior actor `{Id}` is not bound.");
         }
+    }
+
+    private ScriptReadModelMaterializationPlan EnsureMaterializationPlan()
+    {
+        if (_cachedMaterializationPlan != null)
+            return _cachedMaterializationPlan;
+
+        var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
+            State.ScriptId ?? string.Empty,
+            State.Revision ?? string.Empty,
+            ScriptPackageModel.ResolveDeclaredPackage(
+                State.ScriptPackage,
+                State.SourceText ?? string.Empty),
+            State.SourceHash ?? string.Empty));
+
+        _cachedMaterializationPlan = _materializationCompiler.Compile(
+            artifact,
+            State.ReadModelSchemaHash ?? string.Empty,
+            State.ReadModelSchemaVersion ?? string.Empty);
+
+        return _cachedMaterializationPlan;
     }
 
     private static string ResolveRunId(EventEnvelope envelope)

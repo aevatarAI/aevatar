@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
-using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.DependencyInjection;
-using Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -36,16 +35,18 @@ public static class MainnetDistributedHostBuilderExtensions
                 orleansOptions.QueueCacheSize = hostOptions.QueueCacheSize;
             });
 
-            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(runtimeOptions.OrleansStreamBackend, AevatarActorRuntimeOptions.OrleansStreamBackendKafkaProvider, StringComparison.OrdinalIgnoreCase))
             {
                 siloBuilder.ConfigureServices(services =>
                 {
-                    services.AddAevatarMassTransitStreamProvider(streamOptions =>
+                    services.AddAevatarFoundationRuntimeOrleansKafkaProviderTransport(options =>
                     {
-                        streamOptions.StreamNamespace = runtimeOptions.OrleansActorEventNamespace;
+                        options.BootstrapServers = runtimeOptions.KafkaBootstrapServers;
+                        options.TopicName = runtimeOptions.KafkaTopicName;
+                        options.ConsumerGroup = runtimeOptions.KafkaConsumerGroup;
+                        options.TopicPartitionCount = hostOptions.QueueCount;
                     });
                 });
-                siloBuilder.AddAevatarFoundationRuntimeOrleansMassTransitAdapter();
             }
         });
 
@@ -116,6 +117,15 @@ public static class MainnetDistributedHostBuilderExtensions
         var configuredGarnetConnectionString = configuration[$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"];
         if (!string.IsNullOrWhiteSpace(configuredGarnetConnectionString))
             options.OrleansGarnetConnectionString = configuredGarnetConnectionString;
+        var configuredKafkaBootstrapServers = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaBootstrapServers"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaBootstrapServers))
+            options.KafkaBootstrapServers = configuredKafkaBootstrapServers;
+        var configuredKafkaTopicName = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaTopicName"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaTopicName))
+            options.KafkaTopicName = configuredKafkaTopicName;
+        var configuredKafkaConsumerGroup = configuration[$"{AevatarActorRuntimeOptions.SectionName}:KafkaConsumerGroup"];
+        if (!string.IsNullOrWhiteSpace(configuredKafkaConsumerGroup))
+            options.KafkaConsumerGroup = configuredKafkaConsumerGroup;
 
         return options;
     }

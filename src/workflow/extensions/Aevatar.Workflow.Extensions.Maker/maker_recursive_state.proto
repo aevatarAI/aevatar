@@ -1,0 +1,63 @@
+syntax = "proto3";
+package aevatar.workflow.extensions.maker;
+option csharp_namespace = "Aevatar.Workflow.Extensions.Maker";
+
+enum MakerInternalStageState
+{
+  MAKER_INTERNAL_STAGE_STATE_UNSPECIFIED = 0;
+  MAKER_INTERNAL_STAGE_STATE_ATOMIC_VOTE = 1;
+  MAKER_INTERNAL_STAGE_STATE_DECOMPOSE_VOTE = 2;
+  MAKER_INTERNAL_STAGE_STATE_LEAF_SOLVE_VOTE = 3;
+  MAKER_INTERNAL_STAGE_STATE_COMPOSE_VOTE = 4;
+}
+
+message MakerChildResultState
+{
+  string step_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  string worker_id = 5;
+  map<string, string> annotations = 6;
+}
+
+message MakerNodeState
+{
+  string run_id = 1;
+  string step_id = 2;
+  string original_task = 3;
+  map<string, string> original_parameters = 4;
+  int32 depth = 5;
+  int32 max_depth = 6;
+  int32 max_subtasks = 7;
+  string delimiter = 8;
+  int32 k = 9;
+  int32 max_response_length = 10;
+  string parallel_step_type = 11;
+  string vote_step_type = 12;
+  string atomic_workers = 13;
+  string decompose_workers = 14;
+  string solve_workers = 15;
+  string compose_workers = 16;
+  string atomic_prompt = 17;
+  string decompose_prompt = 18;
+  string solve_prompt = 19;
+  string compose_prompt = 20;
+  bool atomic_decision = 21;
+  repeated string child_step_ids = 22;
+  map<string, MakerChildResultState> child_results = 23;
+}
+
+message MakerInternalStageRefState
+{
+  string node_run_id = 1;
+  string node_step_id = 2;
+  MakerInternalStageState stage = 3;
+}
+
+message MakerRecursiveModuleState
+{
+  map<string, MakerNodeState> nodes = 1;
+  map<string, MakerInternalStageRefState> internal_stages = 2;
+  map<string, string> child_to_parent = 3;
+}

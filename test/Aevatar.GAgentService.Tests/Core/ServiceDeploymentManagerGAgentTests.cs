@@ -19,7 +19,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldPersistAndReplayDeploymentRecord()
     {
         var eventStore = new InMemoryEventStore();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         var identity = GAgentServiceTestKit.CreateIdentity();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
@@ -53,7 +53,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldKeepMultipleActiveDeploymentsForDifferentRevisions()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r2", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r2"));
         var activator = new RecordingRuntimeActivator();
@@ -82,7 +82,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleActivateAsync_ShouldBeIdempotentForActiveRevision()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
@@ -109,7 +109,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new InMemoryServiceRevisionArtifactStore(),
+            new ConfiguredServiceRevisionArtifactStore(),
             new RecordingRuntimeActivator(),
             ServiceActorIds.Deployment(identity));
 
@@ -127,7 +127,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleDeactivateAsync_ShouldDeactivateSpecificActiveDeployment()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
@@ -152,7 +152,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     public async Task HandleDeactivateAsync_ShouldIgnoreUnknownOrInactiveDeployment_WhenStateAlreadyExists()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
@@ -190,7 +190,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new InMemoryServiceRevisionArtifactStore(),
+            new ConfiguredServiceRevisionArtifactStore(),
             new RecordingRuntimeActivator(),
             ServiceActorIds.Deployment(identity));
 
@@ -210,7 +210,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity();
         var agent = CreateAgent(
             new InMemoryEventStore(),
-            new InMemoryServiceRevisionArtifactStore(),
+            new ConfiguredServiceRevisionArtifactStore(),
             new RecordingRuntimeActivator(),
             ServiceActorIds.Deployment(identity));
 
@@ -229,7 +229,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var otherIdentity = GAgentServiceTestKit.CreateIdentity(serviceId: "svc-other");
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(ServiceKeys.Build(identity), "r1", GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
@@ -252,7 +252,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
     private static ServiceDeploymentManagerGAgent CreateAgent(
         InMemoryEventStore eventStore,
-        InMemoryServiceRevisionArtifactStore artifactStore,
+        ConfiguredServiceRevisionArtifactStore artifactStore,
         RecordingRuntimeActivator activator,
         string actorId)
     {

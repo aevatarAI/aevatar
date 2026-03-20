@@ -27,6 +27,12 @@ public sealed partial record ScriptBehaviorDispatchRequest
 
     public string ReadModelSchemaHash { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Pre-compiled materialization plan cached by the calling actor.
+    /// When non-null the dispatcher skips compilation; when null the dispatcher compiles on the fly.
+    /// </summary>
+    public Materialization.ScriptReadModelMaterializationPlan? CachedMaterializationPlan { get; init; }
+
     public ScriptBehaviorDispatchRequest(
         string ActorId,
         string DefinitionActorId,

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 
@@ -13,14 +15,15 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     where TEvent : class
 {
     private readonly Func<bool> _projectionEnabledAccessor;
-    private readonly IProjectionSessionActivationService<TRuntimeLease> _activationService;
-    private readonly IProjectionSessionReleaseService<TRuntimeLease> _releaseService;
+    private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
+    private readonly IProjectionScopeReleaseService<TRuntimeLease> _releaseService;
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
+    private readonly ConcurrentDictionary<int, IAsyncDisposable> _sinkSubscriptions = new();
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
-        IProjectionSessionActivationService<TRuntimeLease> activationService,
-        IProjectionSessionReleaseService<TRuntimeLease> releaseService,
+        IProjectionScopeActivationService<TRuntimeLease> activationService,
+        IProjectionScopeReleaseService<TRuntimeLease> releaseService,
         IProjectionSessionEventHub<TEvent> sessionEventHub)
     {
         _projectionEnabledAccessor = projectionEnabledAccessor ?? throw new ArgumentNullException(nameof(projectionEnabledAccessor));
@@ -32,7 +35,7 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     public bool ProjectionEnabled => _projectionEnabledAccessor();
 
     protected async Task<TLeaseContract?> EnsureProjectionAsync(
-        ProjectionSessionStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         if (!ProjectionEnabled || request == null || string.IsNullOrWhiteSpace(request.RootActorId))
@@ -54,11 +57,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
             return;
 
         var runtimeLease = ResolveRuntimeLease(lease);
-        if (runtimeLease is not EventSinkProjectionRuntimeLeaseBase<TEvent> sessionLease ||
-            runtimeLease is not IProjectionPortSessionLease portLease)
+        if (runtimeLease is not IProjectionPortSessionLease portLease)
         {
             throw new InvalidOperationException(
-                $"Runtime lease `{runtimeLease.GetType().FullName}` must implement `{typeof(IProjectionPortSessionLease).FullName}` and inherit `{typeof(EventSinkProjectionRuntimeLeaseBase<TEvent>).FullName}`.");
+                $"Runtime lease `{runtimeLease.GetType().FullName}` must implement `{typeof(IProjectionPortSessionLease).FullName}`.");
         }
 
         var subscription = await _sessionEventHub.SubscribeAsync(
@@ -66,7 +68,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
             portLease.SessionId,
             evt => sink.PushAsync(evt, CancellationToken.None),
             ct).ConfigureAwait(false);
-        var previous = sessionLease.AttachOrReplaceLiveSinkSubscription(sink, subscription);
+
+        var sinkKey = RuntimeHelpers.GetHashCode(sink);
+        var previous = _sinkSubscriptions.TryGetValue(sinkKey, out var existing) ? existing : null;
+        _sinkSubscriptions[sinkKey] = subscription;
         if (previous != null)
             await previous.DisposeAsync().ConfigureAwait(false);
     }
@@ -83,15 +88,8 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return;
 
-        var runtimeLease = ResolveRuntimeLease(lease);
-        if (runtimeLease is not EventSinkProjectionRuntimeLeaseBase<TEvent> sessionLease)
-        {
-            throw new InvalidOperationException(
-                $"Runtime lease `{runtimeLease.GetType().FullName}` must inherit `{typeof(EventSinkProjectionRuntimeLeaseBase<TEvent>).FullName}`.");
-        }
-
-        var subscription = sessionLease.DetachLiveSinkSubscription(sink);
-        if (subscription != null)
+        var sinkKey = RuntimeHelpers.GetHashCode(sink);
+        if (_sinkSubscriptions.TryRemove(sinkKey, out var subscription))
             await subscription.DisposeAsync().ConfigureAwait(false);
     }
 
