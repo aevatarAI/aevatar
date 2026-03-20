@@ -10,8 +10,8 @@ public sealed class ServiceDeploymentCatalogProjectionPort
 {
     public ServiceDeploymentCatalogProjectionPort(
         ServiceProjectionOptions options,
-        IProjectionMaterializationActivationService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>> activationService,
-        IProjectionMaterializationReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>> releaseService)
+        IProjectionScopeActivationService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>> activationService,
+        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>> releaseService)
         : base(options, activationService, releaseService, ServiceProjectionKinds.Deployments)
     {
     }

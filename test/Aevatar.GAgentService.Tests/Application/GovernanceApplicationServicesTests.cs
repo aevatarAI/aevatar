@@ -23,7 +23,7 @@ public sealed class GovernanceApplicationServicesTests
     public async Task ActivationCapabilityViewAssembler_ShouldComposeConfigurationAndArtifactFallback()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "r1",
@@ -102,7 +102,7 @@ public sealed class GovernanceApplicationServicesTests
         var assembler = new ActivationCapabilityViewAssembler(
             new RecordingCatalogQueryReader(),
             new RecordingConfigurationQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var blankRevision = () => assembler.GetAsync(identity, " ");
         var missingDefinition = () => assembler.GetAsync(identity, "r1");
@@ -121,7 +121,7 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateConfigurationSnapshot(identity),
             },
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var missingArtifact = () => missingArtifactAssembler.GetAsync(identity, "r1");
 

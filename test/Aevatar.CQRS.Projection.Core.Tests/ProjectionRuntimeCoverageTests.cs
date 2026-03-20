@@ -5,44 +5,15 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionRuntimeCoverageTests
 {
     [Fact]
-    public async Task LoggingProjectionStoreDispatchCompensator_WhenContextIsNull_ShouldThrowArgumentNullException()
+    public void ProjectionStoreDispatcher_WhenNoBindings_ShouldThrow()
     {
-        var compensator = new LoggingProjectionStoreDispatchCompensator<TestReadModel>();
+        var bindings = Array.Empty<IProjectionWriteSink<TestReadModel>>();
 
-        Func<Task> act = () => compensator.CompensateAsync(null!);
+        Action act = () => new ProjectionStoreDispatcher<TestReadModel>(bindings);
 
-        await act.Should().ThrowAsync<ArgumentNullException>();
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*No configured projection store bindings*");
     }
-
-    [Fact]
-    public async Task LoggingProjectionStoreDispatchCompensator_WhenTokenCanceled_ShouldThrowOperationCanceledException()
-    {
-        var compensator = new LoggingProjectionStoreDispatchCompensator<TestReadModel>();
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Func<Task> act = () => compensator.CompensateAsync(CreateContext(), cts.Token);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-    }
-
-    [Fact]
-    public async Task LoggingProjectionStoreDispatchCompensator_ShouldCompleteForValidContext()
-    {
-        var compensator = new LoggingProjectionStoreDispatchCompensator<TestReadModel>();
-
-        await compensator.CompensateAsync(CreateContext());
-    }
-
-    private static ProjectionStoreDispatchCompensationContext<TestReadModel> CreateContext() =>
-        new()
-        {
-            Operation = "upsert",
-            FailedStore = "Graph",
-            SucceededStores = ["Document"],
-            ReadModel = new TestReadModel { Id = "id-1" },
-            Exception = new InvalidOperationException("dispatch failed"),
-        };
 
     private sealed class TestReadModel : IProjectionReadModel
     {

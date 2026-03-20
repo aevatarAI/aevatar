@@ -4,7 +4,7 @@ namespace Aevatar.Scripting.Core.Materialization;
 
 public interface IScriptReadModelMaterializationCompiler
 {
-    ScriptReadModelMaterializationPlan GetOrCompile(
+    ScriptReadModelMaterializationPlan Compile(
         ScriptBehaviorArtifact artifact,
         string schemaHash,
         string schemaVersion);

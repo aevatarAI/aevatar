@@ -58,7 +58,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkflowDefinitionRegistry>(new WorkflowDefinitionRegistry());
+        services.AddSingleton<IWorkflowDefinitionCatalog>(new WorkflowDefinitionCatalog());
 
         services.AddWorkflowDefinitionFileSource(options =>
         {
@@ -125,8 +125,8 @@ public sealed class WorkflowInfrastructureCoverageTests
             var options = new WorkflowDefinitionFileSourceOptions();
             options.WorkflowDirectories.Add(tempDir);
 
-            var registry = new WorkflowDefinitionRegistry();
-            registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+            var registry = new WorkflowDefinitionCatalog();
+            registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
             registry.Register("repo_install", File.ReadAllText(yamlPath));
 
             var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
@@ -199,7 +199,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     [Fact]
     public async Task RegistryWorkflowDefinitionResolver_ShouldTrimLookup_AndReturnNullForBlank()
     {
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new WorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct");
         var resolver = new RegistryWorkflowDefinitionResolver(registry);
 
@@ -210,7 +210,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     [Fact]
     public async Task RegistryWorkflowDefinitionResolver_ShouldHonorCancellation()
     {
-        var resolver = new RegistryWorkflowDefinitionResolver(new WorkflowDefinitionRegistry());
+        var resolver = new RegistryWorkflowDefinitionResolver(new WorkflowDefinitionCatalog());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -271,7 +271,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             var options = new WorkflowDefinitionFileSourceOptions
             {
                 DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,

@@ -128,7 +128,7 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
 
         await fixture.Service.DetachSinkPublicAsync(lease, sink, CancellationToken.None);
 
-        fixture.Service.ResolveRuntimeLeaseCalls.Should().Be(2);
+        fixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
         subscription.DisposeCalls.Should().Be(1);
     }
 
@@ -169,8 +169,8 @@ internal sealed class TestEventSinkProjectionLifecyclePort
 {
     public TestEventSinkProjectionLifecyclePort(
         Func<bool> projectionEnabledAccessor,
-        IProjectionSessionActivationService<TestPortRuntimeLease> activationService,
-        IProjectionSessionReleaseService<TestPortRuntimeLease> releaseService,
+        IProjectionScopeActivationService<TestPortRuntimeLease> activationService,
+        IProjectionScopeReleaseService<TestPortRuntimeLease> releaseService,
         IProjectionSessionEventHub<string> sessionEventHub)
         : base(
             projectionEnabledAccessor,
@@ -188,10 +188,11 @@ internal sealed class TestEventSinkProjectionLifecyclePort
         string sessionId,
         CancellationToken ct = default) =>
         EnsureProjectionAsync(
-            new ProjectionSessionStartRequest
+            new ProjectionScopeStartRequest
             {
                 RootActorId = rootActorId,
                 ProjectionKind = projectionKind,
+                Mode = ProjectionRuntimeMode.SessionObservation,
                 SessionId = sessionId,
             },
             ct);
@@ -238,16 +239,16 @@ internal sealed class TestPortRuntimeLease
     public string SessionId { get; }
 }
 
-internal sealed class TestActivationService : IProjectionSessionActivationService<TestPortRuntimeLease>
+internal sealed class TestActivationService : IProjectionScopeActivationService<TestPortRuntimeLease>
 {
     public int Calls { get; private set; }
 
-    public ProjectionSessionStartRequest? LastRequest { get; private set; }
+    public ProjectionScopeStartRequest? LastRequest { get; private set; }
 
     public TestPortRuntimeLease LeaseToReturn { get; } = new("lease-actor", "lease-session");
 
     public Task<TestPortRuntimeLease> EnsureAsync(
-        ProjectionSessionStartRequest request,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
         Calls++;
@@ -256,7 +257,7 @@ internal sealed class TestActivationService : IProjectionSessionActivationServic
     }
 }
 
-internal sealed class TestReleaseService : IProjectionSessionReleaseService<TestPortRuntimeLease>
+internal sealed class TestReleaseService : IProjectionScopeReleaseService<TestPortRuntimeLease>
 {
     public int Calls { get; private set; }
 

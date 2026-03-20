@@ -300,6 +300,99 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
             .WithMessage("*Garnet connection string is required*");
     }
 
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProductionAndProviderIsInMemory_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Production",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*InMemory actor runtime backends are not allowed in production*")
+            .WithMessage("*Provider*");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProductionAndOrleansWithInMemoryBackends_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendInMemory,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendInMemory,
+            [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Production",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*InMemory actor runtime backends are not allowed in production*")
+            .WithMessage("*OrleansStreamBackend*")
+            .WithMessage("*OrleansPersistenceBackend*");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenDenyInMemoryAndProviderIsInMemory_ShouldThrow()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Policies:DenyInMemoryBackends"] = "true",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*InMemory actor runtime backends are not allowed in production*")
+            .WithMessage("*Provider*");
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProductionAndOrleansDurableBackends_ShouldSucceed()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansStreamBackend"] = AevatarActorRuntimeOptions.OrleansStreamBackendMassTransitAdapter,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansPersistenceBackend"] = AevatarActorRuntimeOptions.OrleansPersistenceBackendGarnet,
+            [$"{AevatarActorRuntimeOptions.SectionName}:OrleansGarnetConnectionString"] = "garnet.local:6379",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitTransportBackend"] = AevatarActorRuntimeOptions.MassTransitTransportBackendKafka,
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaBootstrapServers"] = "kafka.local:9092",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaTopicName"] = "events",
+            [$"{AevatarActorRuntimeOptions.SectionName}:MassTransitKafkaConsumerGroup"] = "group",
+            [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Production",
+        });
+
+        var act = () => services.AddAevatarActorRuntime(configuration);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenNonProductionEnvironment_ShouldAllowInMemory()
+    {
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Policies:Environment"] = "Development",
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider
+            .Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
+    }
+
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)
     {
         var builder = new ConfigurationBuilder();

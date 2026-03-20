@@ -8,7 +8,7 @@ namespace Aevatar.Scripting.Core.Tests.Materialization;
 public sealed class ScriptReadModelMaterializationCompilerTests
 {
     [Fact]
-    public async Task GetOrCompile_ShouldBuildDocumentAndGraphPlans_ForStructuredProfileBehavior()
+    public async Task Compile_ShouldBuildDocumentAndGraphPlans_ForStructuredProfileBehavior()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -20,7 +20,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.Artifact.Should().NotBeNull();
 
         await using var artifact = compilation.Artifact!;
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "abc123schema",
             schemaVersion: "3");
@@ -43,7 +43,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldRejectDocumentIndex_WhenPathIsNotDeclaredByDescriptorSchema()
+    public async Task Compile_ShouldRejectDocumentIndex_WhenPathIsNotDeclaredByDescriptorSchema()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -55,7 +55,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.Artifact.Should().NotBeNull();
 
         await using var artifact = compilation.Artifact!;
-        var act = () => new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var act = () => new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "invalid",
             schemaVersion: "1");
@@ -80,7 +80,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldReturnEmptyPlan_WhenReadModelHasNoSchemaOptions()
+    public async Task Compile_ShouldReturnEmptyPlan_WhenReadModelHasNoSchemaOptions()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -91,7 +91,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: string.Empty,
             schemaVersion: string.Empty);
@@ -105,7 +105,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldUseFallbackSchemaHashAndVersion_WhenArgumentsAreBlank()
+    public async Task Compile_ShouldUseFallbackSchemaHashAndVersion_WhenArgumentsAreBlank()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -116,7 +116,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: string.Empty,
             schemaVersion: string.Empty);
@@ -127,26 +127,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldReuseCachedPlan_ForSameArtifactAndSchemaKey()
-    {
-        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
-        var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
-            "script-profile",
-            "rev-cache",
-            ScriptSources.StructuredProfileBehavior));
-
-        compilation.IsSuccess.Should().BeTrue();
-        await using var artifact = compilation.Artifact!;
-        var materializationCompiler = new ScriptReadModelMaterializationCompiler();
-
-        var first = materializationCompiler.GetOrCompile(artifact, "hash-1", "3");
-        var second = materializationCompiler.GetOrCompile(artifact, "hash-1", "3");
-
-        ReferenceEquals(first, second).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task GetOrCompile_ShouldIgnoreIndexesAndRelations_ForNonNativeProviders()
+    public async Task Compile_ShouldIgnoreIndexesAndRelations_ForNonNativeProviders()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -157,7 +138,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "provider-filter",
             schemaVersion: "1");
@@ -168,7 +149,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldRejectRelation_WhenNameIsMissing()
+    public async Task Compile_ShouldRejectRelation_WhenNameIsMissing()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -184,7 +165,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var act = () => new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var act = () => new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "relation-hash",
             schemaVersion: "1");
@@ -194,7 +175,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldRejectRelation_WhenRequiredFieldsAreMissing()
+    public async Task Compile_ShouldRejectRelation_WhenRequiredFieldsAreMissing()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -208,7 +189,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var act = () => new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var act = () => new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "relation-fields",
             schemaVersion: "1");
@@ -218,7 +199,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldRejectRepeatedNestedMessageTraversal()
+    public async Task Compile_ShouldRejectRepeatedNestedMessageTraversal()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -229,7 +210,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var act = () => new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var act = () => new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "repeated-message",
             schemaVersion: "1");
@@ -239,7 +220,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldMapAllSupportedLeafStorageTypes()
+    public async Task Compile_ShouldMapAllSupportedLeafStorageTypes()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -250,7 +231,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "field-types",
             schemaVersion: "1");
@@ -278,7 +259,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
     }
 
     [Fact]
-    public async Task GetOrCompile_ShouldRejectUnsupportedLeafStorageType()
+    public async Task Compile_ShouldRejectUnsupportedLeafStorageType()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var compilation = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -289,7 +270,7 @@ public sealed class ScriptReadModelMaterializationCompilerTests
         compilation.IsSuccess.Should().BeTrue();
         await using var artifact = compilation.Artifact!;
 
-        var act = () => new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var act = () => new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "unsupported-type",
             schemaVersion: "1");

@@ -24,10 +24,9 @@ public static class ProjectionMaterializationRuntimeRegistration
 
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
         services.TryAddSingleton<IProjectionFailureAlertSink, LoggingProjectionFailureAlertSink>();
-        services.TryAddSingleton<IProjectionScopeContextFactory<TContext>>(
-            _ => new ProjectionScopeContextFactory<TContext>(contextFactory));
-        services.TryAddSingleton<IProjectionMaterializationActivationService<TRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeActivationService<
+        services.TryAddSingleton<Func<ProjectionRuntimeScopeKey, TContext>>(_ => contextFactory);
+        services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
+            new ProjectionScopeActivationService<
                 TRuntimeLease,
                 TContext,
                 TScopeAgent>(
@@ -39,8 +38,8 @@ public static class ProjectionMaterializationRuntimeRegistration
                     ProjectionRuntimeMode.DurableMaterialization)),
                 (_, context) => leaseFactory(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionMaterializationReleaseService<TRuntimeLease>>(sp =>
-            new ProjectionMaterializationScopeReleaseService<
+        services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
+            new ProjectionScopeReleaseService<
                 TRuntimeLease,
                 TScopeAgent>(
                 sp.GetRequiredService<IActorRuntime>(),

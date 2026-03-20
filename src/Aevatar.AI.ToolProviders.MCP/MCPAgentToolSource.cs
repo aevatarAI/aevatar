@@ -13,8 +13,7 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     private readonly MCPToolsOptions _options;
     private readonly MCPClientManager _clientManager;
     private readonly ILogger _logger;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private IReadOnlyList<IAgentTool>? _cachedTools;
+    private volatile Task<IReadOnlyList<IAgentTool>>? _cachedTools;
 
     public MCPAgentToolSource(
         MCPToolsOptions options,
@@ -27,41 +26,36 @@ public sealed class MCPAgentToolSource : IAgentToolSource
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (_cachedTools != null) return _cachedTools;
+        var current = _cachedTools;
+        if (current is { IsCompletedSuccessfully: true }) return current;
+        var task = DiscoverAllAsync(_options, _clientManager, _logger, ct);
+        var winner = Interlocked.CompareExchange(ref _cachedTools, task, current);
+        return ReferenceEquals(winner, current) ? task : winner!;
+    }
 
-        await _lock.WaitAsync(ct);
-        try
+    private static async Task<IReadOnlyList<IAgentTool>> DiscoverAllAsync(
+        MCPToolsOptions options, MCPClientManager clientManager, ILogger logger, CancellationToken ct)
+    {
+        if (options.Servers.Count == 0)
+            return [];
+
+        var tools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var server in options.Servers)
         {
-            if (_cachedTools != null) return _cachedTools;
-            if (_options.Servers.Count == 0)
+            try
             {
-                _cachedTools = [];
-                return _cachedTools;
+                var discovered = await clientManager.ConnectAndDiscoverAsync(server, ct);
+                foreach (var tool in discovered)
+                    tools[tool.Name] = tool;
             }
-
-            var tools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-            foreach (var server in _options.Servers)
+            catch (Exception ex)
             {
-                try
-                {
-                    var discovered = await _clientManager.ConnectAndDiscoverAsync(server, ct);
-                    foreach (var tool in discovered)
-                        tools[tool.Name] = tool;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "MCP tool discovery failed for server {ServerName}", server.Name);
-                }
+                logger.LogWarning(ex, "MCP tool discovery failed for server {ServerName}", server.Name);
             }
+        }
 
-            _cachedTools = tools.Values.ToList();
-            return _cachedTools;
-        }
-        finally
-        {
-            _lock.Release();
-        }
+        return tools.Values.ToList();
     }
 }

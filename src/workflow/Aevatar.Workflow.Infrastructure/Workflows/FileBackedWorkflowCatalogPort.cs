@@ -71,7 +71,7 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
                 ]),
         };
 
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionCatalog _workflowRegistry;
     private readonly IOptions<WorkflowDefinitionFileSourceOptions> _options;
     private readonly WorkflowParser _parser = new();
     private readonly ILogger<FileBackedWorkflowCatalogPort> _logger;
@@ -80,7 +80,7 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
     private readonly Dictionary<string, ParsedWorkflowCacheEntry> _parsedWorkflowCache = new(StringComparer.OrdinalIgnoreCase);
 
     public FileBackedWorkflowCatalogPort(
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowDefinitionCatalog workflowRegistry,
         IOptions<WorkflowDefinitionFileSourceOptions> options,
         ILogger<FileBackedWorkflowCatalogPort>? logger = null)
     {

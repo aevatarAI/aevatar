@@ -8,13 +8,13 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
 {
     private readonly IWorkflowActorBindingReader _bindingReader;
     private readonly IWorkflowRunActorPort _actorPort;
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionCatalog _workflowRegistry;
     private readonly WorkflowRunBehaviorOptions _behaviorOptions;
 
     public WorkflowRunActorResolver(
         IWorkflowActorBindingReader bindingReader,
         IWorkflowRunActorPort actorPort,
-        IWorkflowDefinitionRegistry workflowRegistry,
+        IWorkflowDefinitionCatalog workflowRegistry,
         WorkflowRunBehaviorOptions? behaviorOptions = null)
     {
         _bindingReader = bindingReader ?? throw new ArgumentNullException(nameof(bindingReader));
