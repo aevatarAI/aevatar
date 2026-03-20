@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -59,6 +60,13 @@ public static class ServiceCollectionExtensions
             TopicName = "aevatar-foundation-agent-events",
             ConsumerGroup = "aevatar-foundation-kafka-streaming",
             TopicPartitionCount = 8,
+        });
+        services.TryAddSingleton<KafkaQueuePartitionMapper>(sp =>
+        {
+            var runtimeOptions = sp.GetRequiredService<AevatarOrleansRuntimeOptions>();
+            return new KafkaQueuePartitionMapper(
+                runtimeOptions.StreamProviderName,
+                Math.Max(1, runtimeOptions.QueueCount));
         });
         services.TryAddSingleton<IQueueAdapterFactory, KafkaProviderQueueAdapterFactory>();
     }

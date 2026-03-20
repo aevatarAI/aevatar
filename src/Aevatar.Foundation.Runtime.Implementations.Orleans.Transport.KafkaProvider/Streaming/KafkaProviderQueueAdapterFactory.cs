@@ -19,12 +19,10 @@ public sealed class KafkaProviderQueueAdapterFactory : IQueueAdapterFactory
         AevatarOrleansRuntimeOptions runtimeOptions,
         KafkaProviderProducer transport,
         KafkaProviderTransportOptions transportOptions,
+        KafkaQueuePartitionMapper mapper,
         ILoggerFactory? loggerFactory = null)
     {
         var providerName = runtimeOptions.StreamProviderName;
-        var mapper = new KafkaQueuePartitionMapper(
-            providerName,
-            Math.Max(1, runtimeOptions.QueueCount));
 
         var cacheOptions = new SimpleQueueCacheOptions
         {
@@ -41,7 +39,8 @@ public sealed class KafkaProviderQueueAdapterFactory : IQueueAdapterFactory
             transport,
             transportOptions,
             mapper,
-            actorEventNamespace);
+            actorEventNamespace,
+            loggerFactory);
     }
 
     public Task<IQueueAdapter> CreateAdapter() =>

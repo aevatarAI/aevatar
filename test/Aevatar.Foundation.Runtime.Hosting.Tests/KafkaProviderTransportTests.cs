@@ -123,7 +123,8 @@ public sealed class KafkaProviderTransportTests
             ConsumerGroup = "kafka-group-validation",
             TopicPartitionCount = 2,
         };
-        var producer = new KafkaProviderProducer(transportOptions, runtimeOptions);
+        var mapper = new KafkaQueuePartitionMapper(runtimeOptions.StreamProviderName, Math.Max(1, runtimeOptions.QueueCount));
+        var producer = new KafkaProviderProducer(transportOptions, mapper);
 
         var act = () => producer.StartAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -145,7 +146,8 @@ public sealed class KafkaProviderTransportTests
             ConsumerGroup = "kafka-group-validation",
             TopicPartitionCount = 4,
         };
-        var producer = new KafkaProviderProducer(transportOptions, runtimeOptions);
+        var mapper = new KafkaQueuePartitionMapper(runtimeOptions.StreamProviderName, Math.Max(1, runtimeOptions.QueueCount));
+        var producer = new KafkaProviderProducer(transportOptions, mapper);
 
         var emptyNamespace = () => producer.PublishAsync(string.Empty, "actor-id", [1, 2, 3]);
         var emptyStreamId = () => producer.PublishAsync("aevatar.events", "   ", [1, 2, 3]);
