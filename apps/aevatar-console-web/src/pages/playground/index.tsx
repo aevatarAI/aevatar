@@ -1,7 +1,7 @@
 import { PageContainer, ProCard } from '@ant-design/pro-components';
-import { history } from '@umijs/max';
 import { Alert, Button, Space } from 'antd';
 import React, { useEffect, useMemo } from 'react';
+import { history } from '@/shared/navigation/history';
 import { loadPlaygroundDraft } from '@/shared/playground/playgroundDraft';
 import { buildStudioRoute } from '@/shared/studio/navigation';
 import {

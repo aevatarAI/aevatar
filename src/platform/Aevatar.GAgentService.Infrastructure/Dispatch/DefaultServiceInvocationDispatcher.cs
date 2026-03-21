@@ -160,7 +160,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        var metadata = chatRequest.Metadata;
+        var metadata = chatRequest.Headers;
 
         if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
             !string.IsNullOrWhiteSpace(workflowScopeId))

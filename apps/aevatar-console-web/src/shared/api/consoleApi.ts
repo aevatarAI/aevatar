@@ -10,7 +10,6 @@ import type {
   PlaygroundWorkflowSaveResult,
   WorkflowActorGraphEdge,
   WorkflowActorGraphSubgraph,
-  WorkflowActorGraphEnrichedSnapshot,
   WorkflowActorSnapshot,
   WorkflowActorTimelineItem,
   WorkflowAgentSummary,
@@ -25,7 +24,6 @@ import {
   decodePlaygroundWorkflowParseResponse,
   decodePlaygroundWorkflowSaveResponse,
   decodeWorkflowActorGraphEdgesResponse,
-  decodeWorkflowActorGraphEnrichedResponse,
   decodeWorkflowActorGraphSubgraphResponse,
   decodeWorkflowActorSnapshotResponse,
   decodeWorkflowActorTimelineResponse,
@@ -210,39 +208,6 @@ export const consoleApi = {
     return requestJson(
       `/api/actors/${encodeURIComponent(actorId)}/timeline${suffix}`,
       decodeWorkflowActorTimelineResponse,
-    );
-  },
-
-  getActorGraphEnriched(
-    actorId: string,
-    options?: {
-      depth?: number;
-      take?: number;
-      direction?: 'Both' | 'Outbound' | 'Inbound';
-      edgeTypes?: string[];
-    },
-  ): Promise<WorkflowActorGraphEnrichedSnapshot> {
-    const params = new URLSearchParams();
-    if (options?.depth) {
-      params.set('depth', String(options.depth));
-    }
-    if (options?.take) {
-      params.set('take', String(options.take));
-    }
-    if (options?.direction) {
-      params.set('direction', options.direction);
-    }
-    for (const edgeType of options?.edgeTypes ?? []) {
-      const normalized = trimOptional(edgeType);
-      if (normalized) {
-        params.append('edgeTypes', normalized);
-      }
-    }
-
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
-    return requestJson(
-      `/api/actors/${encodeURIComponent(actorId)}/graph-enriched${suffix}`,
-      decodeWorkflowActorGraphEnrichedResponse,
     );
   },
 

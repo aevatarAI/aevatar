@@ -13,11 +13,25 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "hello",
             SessionId = "session-1",
-            Metadata = { ["correlation_id"] = "c-1" },
+            Headers = { ["correlation_id"] = "c-1" },
             TimeoutMs = 2500,
+            ScopeId = "scope-1",
+            InputParts =
+            {
+                new ChatContentPart
+                {
+                    Kind = ChatContentPartKind.Image,
+                    Uri = "https://example.com/cat.png",
+                    MediaType = "image/png",
+                    Name = "cat",
+                },
+            },
         }, ChatRequestEvent.Parser);
-        request.Metadata["correlation_id"].Should().Be("c-1");
+        request.Headers["correlation_id"].Should().Be("c-1");
         request.TimeoutMs.Should().Be(2500);
+        request.ScopeId.Should().Be("scope-1");
+        request.InputParts.Should().ContainSingle();
+        request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Image);
 
         var response = RoundTrip(new ChatResponseEvent
         {
@@ -75,8 +89,17 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             SessionId = "session-1",
             Prompt = "hello",
+            InputParts =
+            {
+                new ChatContentPart
+                {
+                    Kind = ChatContentPartKind.Text,
+                    Text = "hello",
+                },
+            },
         }, RoleChatSessionStartedEvent.Parser);
         sessionStarted.Prompt.Should().Be("hello");
+        sessionStarted.InputParts.Should().ContainSingle();
 
         var sessionCompleted = RoundTrip(new RoleChatSessionCompletedEvent
         {
@@ -94,11 +117,21 @@ public sealed class AIAbstractionsProtoCoverageTests
                     CallId = "call-1",
                 },
             },
+            OutputParts =
+            {
+                new ChatContentPart
+                {
+                    Kind = ChatContentPartKind.Image,
+                    Uri = "https://example.com/output.png",
+                    MediaType = "image/png",
+                },
+            },
         }, RoleChatSessionCompletedEvent.Parser);
         sessionCompleted.Content.Should().Be("done");
         sessionCompleted.ReasoningContent.Should().Be("thinking");
         sessionCompleted.ContentEmitted.Should().BeTrue();
         sessionCompleted.ToolCalls.Should().ContainSingle();
+        sessionCompleted.OutputParts.Should().ContainSingle();
 
         var initialize = RoundTrip(new InitializeRoleAgentEvent
         {
@@ -147,6 +180,23 @@ public sealed class AIAbstractionsProtoCoverageTests
                     FinalReasoningContent = "thinking",
                     Sequence = 7,
                     ContentEmitted = true,
+                    InputParts =
+                    {
+                        new ChatContentPart
+                        {
+                            Kind = ChatContentPartKind.Text,
+                            Text = "hello",
+                        },
+                    },
+                    OutputParts =
+                    {
+                        new ChatContentPart
+                        {
+                            Kind = ChatContentPartKind.Image,
+                            Uri = "https://example.com/output.png",
+                            MediaType = "image/png",
+                        },
+                    },
                     ToolCalls =
                     {
                         new ToolCallEvent
@@ -165,6 +215,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.EventRoutes.Should().Be("event.type == X -> demo");
         state.Sessions["session-1"].FinalContent.Should().Be("done");
         state.Sessions["session-1"].Sequence.Should().Be(7);
+        state.Sessions["session-1"].InputParts.Should().ContainSingle();
+        state.Sessions["session-1"].OutputParts.Should().ContainSingle();
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
     }
 
@@ -176,12 +228,12 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "p1",
             SessionId = "s1",
-            Metadata = { ["k1"] = "v1" },
+            Headers = { ["k1"] = "v1" },
         });
 
         target.Prompt.Should().Be("p1");
         target.SessionId.Should().Be("s1");
-        target.Metadata["k1"].Should().Be("v1");
+        target.Headers["k1"].Should().Be("v1");
 
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");

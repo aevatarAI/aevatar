@@ -31,7 +31,6 @@ import {
   ProTable,
 } from '@ant-design/pro-components';
 import { useQuery } from '@tanstack/react-query';
-import { history } from '@umijs/max';
 import {
   Alert,
   Badge,
@@ -55,6 +54,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   getLatestCustomEventData,
   parseStepRequestData,

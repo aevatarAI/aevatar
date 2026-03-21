@@ -2,23 +2,46 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+enum ChatContentPartKind {
+  CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
+  CHAT_CONTENT_PART_KIND_TEXT = 1;
+  CHAT_CONTENT_PART_KIND_IMAGE = 2;
+  CHAT_CONTENT_PART_KIND_AUDIO = 3;
+  CHAT_CONTENT_PART_KIND_VIDEO = 4;
+}
+
+message ChatContentPart {
+  ChatContentPartKind kind = 1;
+  string text = 2;
+  string data_base64 = 3;
+  string media_type = 4;
+  string uri = 5;
+  string name = 6;
+}
+
 message ChatRequestEvent  {
   string prompt = 1;
   string session_id = 2;
-  map<string, string> metadata = 3;
+  map<string, string> headers = 3;
   int32 timeout_ms = 4;
   string scope_id = 5;
+  repeated ChatContentPart input_parts = 6;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
 message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
+message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatContentPart part = 3; }
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
 message ToolResultEvent { string call_id = 1; string result_json = 2; bool success = 3; string error = 4; }
-message RoleChatSessionStartedEvent { string session_id = 1; string prompt = 2; }
+message RoleChatSessionStartedEvent {
+  string session_id = 1;
+  string prompt = 2;
+  repeated ChatContentPart input_parts = 3;
+}
 message RoleChatSessionCompletedEvent {
   string session_id = 1;
   string content = 2;
@@ -26,6 +49,7 @@ message RoleChatSessionCompletedEvent {
   repeated ToolCallEvent tool_calls = 4;
   string prompt = 5;
   bool content_emitted = 6;
+  repeated ChatContentPart output_parts = 7;
 }
 
 message InitializeRoleAgentEvent {
@@ -61,6 +85,8 @@ message RoleChatSessionState {
   repeated ToolCallEvent tool_calls = 5;
   int64 sequence = 6;
   bool content_emitted = 7;
+  repeated ChatContentPart input_parts = 8;
+  repeated ChatContentPart output_parts = 9;
 }
 
 message RoleGAgentState {

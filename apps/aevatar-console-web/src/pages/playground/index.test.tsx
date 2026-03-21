@@ -7,7 +7,7 @@ import PlaygroundPage from './index';
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 
-jest.mock('@umijs/max', () => ({
+jest.mock('@/shared/navigation/history', () => ({
   history: {
     replace: (...args: unknown[]) => mockReplace(...args),
     push: (...args: unknown[]) => mockPush(...args),

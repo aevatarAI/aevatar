@@ -22,7 +22,6 @@ import {
   ProTable,
 } from '@ant-design/pro-components';
 import { useQuery } from '@tanstack/react-query';
-import { history } from '@umijs/max';
 import type { MenuProps } from 'antd';
 import {
   Alert,
@@ -51,6 +50,7 @@ import React, {
   useState,
 } from 'react';
 import { consoleApi } from '@/shared/api/consoleApi';
+import { history } from '@/shared/navigation/history';
 import type { WorkflowCatalogRole } from '@/shared/api/models';
 import { buildWorkflowGraphElements } from '@/shared/graphs/buildGraphElements';
 import GraphCanvas from '@/shared/graphs/GraphCanvas';

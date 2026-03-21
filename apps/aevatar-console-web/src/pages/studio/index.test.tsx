@@ -576,12 +576,12 @@ jest.mock('@/shared/studio/api', () => ({
 
 jest.mock('./components/StudioBootstrapGate', () => ({
   __esModule: true,
-  default: ({ children }) => children,
+  default: ({ children }: { children: any }) => children,
 }));
 
 jest.mock('./components/StudioShell', () => ({
   __esModule: true,
-  default: ({ children }) => {
+  default: ({ children }: { children: any }) => {
     const React = require('react');
     return React.createElement(
       'div',
@@ -595,7 +595,12 @@ jest.mock('./components/StudioShell', () => ({
 jest.mock('./components/StudioWorkbenchSections', () => {
   const React = require('react');
 
-  const renderNoticeTitle = (key, notice, successTitle, errorTitle) => {
+  const renderNoticeTitle = (
+    key: string,
+    notice: { type?: string } | null | undefined,
+    successTitle: string,
+    errorTitle: string,
+  ) => {
     if (!notice) {
       return null;
     }
@@ -607,7 +612,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
     );
   };
 
-  const StudioWorkflowsPage = (props) =>
+  const StudioWorkflowsPage = (props: any) =>
     React.createElement(
       'div',
       null,
@@ -618,9 +623,9 @@ jest.mock('./components/StudioWorkbenchSections', () => {
           key: 'search',
           placeholder: 'Search workflows',
           value: props.workflowSearch ?? '',
-          onChange: (event) => props.onSetWorkflowSearch?.(event.target.value),
+          onChange: (event: any) => props.onSetWorkflowSearch?.(event.target.value),
         }),
-        ...((props.workflows.data ?? []).map((workflow) =>
+        ...((props.workflows.data ?? []).map((workflow: any) =>
           React.createElement(
             'button',
             {
@@ -643,7 +648,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
       ],
     );
 
-  const StudioEditorPage = (props) => {
+  const StudioEditorPage = (props: any) => {
     const [runOpen, setRunOpen] = React.useState(false);
     const [askAiOpen, setAskAiOpen] = React.useState(false);
     const title =
@@ -687,13 +692,14 @@ jest.mock('./components/StudioWorkbenchSections', () => {
           key: 'workflow-name',
           'aria-label': 'Workflow name',
           value: props.draftWorkflowName ?? '',
-          onChange: (event) => props.onSetDraftWorkflowName?.(event.target.value),
+          onChange: (event: any) =>
+            props.onSetDraftWorkflowName?.(event.target.value),
         }),
         React.createElement('textarea', {
           key: 'workflow-yaml',
           'aria-label': 'Workflow YAML',
           value: props.draftYaml ?? '',
-          onChange: (event) => props.onSetDraftYaml?.(event.target.value),
+          onChange: (event: any) => props.onSetDraftYaml?.(event.target.value),
         }),
         React.createElement(
           'button',
@@ -769,7 +775,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
                   key: 'run-prompt',
                   'aria-label': 'Studio execution prompt',
                   value: props.runPrompt ?? '',
-                  onChange: (event) =>
+                  onChange: (event: any) =>
                     props.onRunPromptChange?.(event.target.value),
                 }),
                 React.createElement(
@@ -802,7 +808,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
                   key: 'ask-ai-prompt',
                   'aria-label': 'Studio AI workflow prompt',
                   value: props.askAiPrompt ?? '',
-                  onChange: (event) =>
+                  onChange: (event: any) =>
                     props.onAskAiPromptChange?.(event.target.value),
                 }),
                 React.createElement(
@@ -821,7 +827,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
     );
   };
 
-  const StudioExecutionPage = (props) =>
+  const StudioExecutionPage = (props: any) =>
     React.createElement(
       'div',
       null,
@@ -845,7 +851,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
       ].filter(Boolean),
     );
 
-  const StudioRolesPage = (props) => {
+  const StudioRolesPage = (props: any) => {
     const selectedRole = props.selectedRole ?? props.roleCatalogDraft?.[0] ?? null;
     return React.createElement(
       'div',
@@ -862,15 +868,15 @@ jest.mock('./components/StudioWorkbenchSections', () => {
           key: 'search',
           placeholder: 'Search roles',
           value: props.roleSearch ?? '',
-          onChange: (event) => props.onRoleSearchChange?.(event.target.value),
+          onChange: (event: any) => props.onRoleSearchChange?.(event.target.value),
         }),
         selectedRole
           ? React.createElement('textarea', {
               key: 'system-prompt',
               'aria-label': 'System prompt',
               value: selectedRole.systemPrompt ?? '',
-              onChange: (event) =>
-                props.onUpdateRoleCatalog?.(selectedRole.key, (role) => ({
+              onChange: (event: any) =>
+                props.onUpdateRoleCatalog?.(selectedRole.key, (role: any) => ({
                   ...role,
                   systemPrompt: event.target.value,
                 })),
@@ -898,7 +904,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
     );
   };
 
-  const StudioConnectorsPage = (props) => {
+  const StudioConnectorsPage = (props: any) => {
     const selectedConnector =
       props.selectedConnector ?? props.connectorCatalogDraft?.[0] ?? null;
     return React.createElement(
@@ -915,7 +921,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
           key: 'search',
           placeholder: 'Search connectors',
           value: props.connectorSearch ?? '',
-          onChange: (event) =>
+          onChange: (event: any) =>
             props.onConnectorSearchChange?.(event.target.value),
         }),
         selectedConnector
@@ -923,10 +929,10 @@ jest.mock('./components/StudioWorkbenchSections', () => {
               key: 'base-url',
               'aria-label': 'Base URL',
               value: selectedConnector.http?.baseUrl ?? '',
-              onChange: (event) =>
+              onChange: (event: any) =>
                 props.onUpdateConnectorCatalog?.(
                   selectedConnector.key,
-                  (connector) => ({
+                  (connector: any) => ({
                     ...connector,
                     http: {
                       ...connector.http,
@@ -949,7 +955,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
     );
   };
 
-  const StudioSettingsPage = (props) =>
+  const StudioSettingsPage = (props: any) =>
     React.createElement(
       'div',
       null,
@@ -965,7 +971,7 @@ jest.mock('./components/StudioWorkbenchSections', () => {
           'aria-label': 'Studio runtime base URL',
           value: props.settingsDraft?.runtimeBaseUrl ?? '',
           disabled: props.hostMode !== 'proxy',
-          onChange: (event) => {
+          onChange: (event: any) => {
             const nextValue = event.target.value;
             props.onSetSettingsDraft?.(
               props.settingsDraft

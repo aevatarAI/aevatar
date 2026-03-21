@@ -62,7 +62,9 @@ public sealed class ChatHistory
         {
             Role = m.Role,
             Content = m.Content,
+            ContentParts = m.ContentParts?.Select(ClonePart).ToArray(),
             ToolCallId = m.ToolCallId,
+            ToolCalls = m.ToolCalls?.Select(CloneToolCall).ToArray(),
         }).ToList();
 
     /// <summary>
@@ -76,7 +78,9 @@ public sealed class ChatHistory
             {
                 Role = m.Role,
                 Content = m.Content,
+                ContentParts = m.ContentParts?.Select(ClonePart).ToArray(),
                 ToolCallId = m.ToolCallId,
+                ToolCalls = m.ToolCalls?.Select(CloneToolCall).ToArray(),
             });
     }
 
@@ -86,6 +90,23 @@ public sealed class ChatHistory
         var toRemove = _messages.Count - MaxMessages;
         _messages.RemoveRange(0, toRemove);
     }
+
+    private static ContentPart ClonePart(ContentPart source) => new()
+    {
+        Kind = source.Kind,
+        Text = source.Text,
+        DataBase64 = source.DataBase64,
+        MediaType = source.MediaType,
+        Uri = source.Uri,
+        Name = source.Name,
+    };
+
+    private static ToolCall CloneToolCall(ToolCall source) => new()
+    {
+        Id = source.Id,
+        Name = source.Name,
+        ArgumentsJson = source.ArgumentsJson,
+    };
 }
 
 /// <summary>可序列化的消息（用于 JSON 持久化）。</summary>
@@ -93,5 +114,7 @@ public sealed class SerializableMessage
 {
     public required string Role { get; init; }
     public string? Content { get; init; }
+    public IReadOnlyList<ContentPart>? ContentParts { get; init; }
     public string? ToolCallId { get; init; }
+    public IReadOnlyList<ToolCall>? ToolCalls { get; init; }
 }

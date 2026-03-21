@@ -10,7 +10,6 @@ import type {
   ProDescriptionsItemProps,
 } from '@ant-design/pro-components';
 import { useQuery } from '@tanstack/react-query';
-import { history } from '@umijs/max';
 import {
   Alert,
   Button,
@@ -29,6 +28,7 @@ import type {
   WorkflowPrimitiveDescriptor,
   WorkflowPrimitiveParameterDescriptor,
 } from '@/shared/api/models';
+import { history } from '@/shared/navigation/history';
 import { buildPlaygroundRoute } from '@/shared/playground/navigation';
 import { buildStudioRoute } from '@/shared/studio/navigation';
 import {

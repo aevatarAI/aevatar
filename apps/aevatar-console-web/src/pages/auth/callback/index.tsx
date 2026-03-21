@@ -1,17 +1,23 @@
 import { PageLoading } from '@ant-design/pro-components';
 import { Button, Result } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
-import { useModel } from '@umijs/max';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { loadStoredAuthSession } from '@/shared/auth/session';
 
 const CallbackPage: React.FC = () => {
-  const { initialState, setInitialState } = useModel('@@initialState');
   const [errorText, setErrorText] = useState<string | undefined>(undefined);
   const config = useMemo(() => getNyxIDRuntimeConfig(), []);
 
   useEffect(() => {
     let cancelled = false;
+
+    if (loadStoredAuthSession()) {
+      window.location.replace('/overview');
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const finishLogin = async () => {
       try {
@@ -21,19 +27,6 @@ const CallbackPage: React.FC = () => {
           return;
         }
 
-        setInitialState((current) =>
-          current
-            ? {
-                ...current,
-                auth: {
-                  enabled: true,
-                  isAuthenticated: true,
-                  config,
-                  session: result.session,
-                },
-              }
-            : current,
-        );
         window.location.replace(result.returnTo);
       } catch (error) {
         if (cancelled) {
@@ -44,16 +37,12 @@ const CallbackPage: React.FC = () => {
       }
     };
 
-    if (!initialState?.auth?.isAuthenticated) {
-      void finishLogin();
-    } else {
-      window.location.replace('/overview');
-    }
+    void finishLogin();
 
     return () => {
       cancelled = true;
     };
-  }, [config, initialState?.auth?.isAuthenticated, setInitialState]);
+  }, [config]);
 
   if (errorText) {
     return (

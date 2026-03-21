@@ -111,7 +111,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 Prompt = prompt,
                 SessionId = sessionId,
             };
-            CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+            CopyParametersToChatHeaders(request.Parameters, chatRequest.Headers);
             try
             {
                 if (!target.UseSelf)
@@ -215,9 +215,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }
 
-    private static void CopyParametersToChatMetadata(
+    private static void CopyParametersToChatHeaders(
         MapField<string, string> parameters,
-        MapField<string, string> metadata)
+        MapField<string, string> headers)
     {
         foreach (var (key, value) in parameters)
         {
@@ -229,7 +229,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 continue;
             }
 
-            metadata[key.Trim()] = value.Trim();
+            headers[key.Trim()] = value.Trim();
         }
     }
 
